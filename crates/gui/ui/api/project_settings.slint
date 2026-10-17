@@ -117,6 +117,10 @@ export global ViewportMemoryState {
     // The objects open as a table (not a list); the selected object's card.
     in-out property <bool> objects_as_table: false;
     in-out property <bool> object_card: false;
+    // An image opened the first time: auto-scaled (all channels); channels
+    // without a wavelength colored. Both kept in the project afterwards.
+    in-out property <bool> auto_scale_new_images: true;
+    in-out property <bool> color_channels_without_wavelength: false;
 
     // Show the settings in effect - each time the dialog opens, so edits
     // left by a Cancel are gone.

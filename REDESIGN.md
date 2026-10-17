@@ -98,6 +98,25 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   footer); only the selected channel's curve (each channel counts on its
   own axis - the others' curves didn't line up with the black / white
   lines).
+- **Histogram rework:** log counts (default; "Log" switches), the black
+  and white values at their lines, the axis' ends below, 120 px; the four
+  fields behind "Values ›"; double click: auto-scale; "Auto-scale" (the
+  channel) and "All channels".
+- **User settings (Settings › Viewport):** "Auto-scale new images" (on;
+  every channel of an image opened the first time - replaces the project
+  setting) and "Color channels without a wavelength" (off: white; on: a
+  wavelength is assigned and kept in the project, like the scaling).
+- **Results frame (H, L, M):** List / Plate / Charts, the analysis (a
+  menu of all) and the plate's breadcrumb in the top bar, Export and Z/T
+  on its right; the views as panels - settings left (280 px), content
+  beside, Plate's cell card right (300 px, always there so the grid
+  doesn't move); no analysis open: the analyses to pick one; List's
+  "Coloc details" and "Transpose" as switches.
+- **Fixed:** auto preview didn't run for another image or series; a
+  preview closed the open dialog (its pill used the dialog slot) and was
+  skipped while one was open; a new / opened project kept the last one's
+  steps and image; the steps panel showed an empty "pipeline 0" instead
+  of the list on first load.
 - **Add step stays open:** each added step goes in after the one added
   before, the footer says "✓ Added Threshold as step 3", Cancel turns
   Done. Adding from the command palette closes it.
@@ -158,6 +177,9 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
       decided against (TODO, IDEA).
 - [ ] **Charts (M):** a click on a scatter point (points carry no object
       yet) - boxes do.
+- [ ] **Charts (M):** the chart kinds as tiles, the small "same values"
+      previews (histogram, scatter) under the chart; the status bar's
+      "Analysis · 81 images · 1 disabled".
 - [ ] **List (L):** "Rows 1–200 of N" (the total isn't known; it shows the
       page's rows).
 - [ ] **About:** a redesign (not in this round's scope).

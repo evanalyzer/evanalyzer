@@ -69,6 +69,16 @@ impl ImagesListController {
         }
     }
 
+    /// Another project (new, opened, imported): no image shown - the
+    /// viewer, its objects and the image's info are emptied.
+    pub fn clear_shown_image(&self) {
+        self.viewport_controller.clear_shown_image();
+        self.object_list_controller.sync_objects_to_slint();
+        if self.image_meta_controller.sync_image_meta_to_slint().is_err() {
+            warn!("Failed to sync image meta to slint!");
+        }
+    }
+
     /// A new image has been selected. We update the project state accordingly.
     /// This method is called when the user selects a new image from the UI.
     ///
@@ -138,6 +148,7 @@ impl ImagesListController {
                 // sync instead of only starting once metadata sync (and the
                 // two calls after it) have already finished.
                 manager.viewport_controller.trigger_new_image_redraw();
+                manager.image_meta_controller.assign_missing_wavelengths();
                 if manager
                     .image_meta_controller
                     .sync_image_meta_to_slint()
@@ -146,6 +157,8 @@ impl ImagesListController {
                     warn!("Failed to sync image meta to slint!");
                 }
                 manager.object_list_controller.sync_objects_to_slint();
+                // E.g. the auto preview, for the new image.
+                manager.app_state.image_opened();
                 // The class counts belong to the image shown.
                 manager
                     .classification_controller
@@ -387,6 +400,7 @@ impl ImagesListController {
                     project.set_current_image_path(&path);
                 }
 
+                manager.image_meta_controller.assign_missing_wavelengths();
                 if manager
                     .image_meta_controller
                     .sync_image_meta_to_slint()
@@ -396,6 +410,8 @@ impl ImagesListController {
                 }
 
                 manager.object_list_controller.sync_objects_to_slint();
+                // E.g. the auto preview, for the new image.
+                manager.app_state.image_opened();
                 // The class counts belong to the image shown.
                 manager
                     .classification_controller

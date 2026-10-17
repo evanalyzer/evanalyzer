@@ -1978,10 +1978,6 @@ impl ResultsStateController {
                         let state = ui_ready.global::<ResultsState>();
                         state.set_list_with_coloc_details(false);
                         state.set_list_transpond(false);
-                        state.set_list_layout_summary("Rows".into());
-                        state.set_list_layout_items(ModelRc::from(Rc::new(VecModel::from(
-                            layout_items(false),
-                        ))));
                         state.set_list_group_by_summary("Objects".into());
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
                             group_by_items(false),
@@ -3983,26 +3979,6 @@ fn group_by_items(selected_images: bool) -> Vec<MultiSelectItem> {
             color: Color::default(),
             group: "".into(),
             selected: selected_images,
-        },
-    ]
-}
-
-/// The LAYOUT dropdown: rows, or the Side by side.
-fn layout_items(side_by_side: bool) -> Vec<MultiSelectItem> {
-    vec![
-        MultiSelectItem {
-            key: "rows".into(),
-            value: "Rows".into(),
-            color: Color::default(),
-            group: "".into(),
-            selected: !side_by_side,
-        },
-        MultiSelectItem {
-            key: "side-by-side".into(),
-            value: "Side by side".into(),
-            color: Color::default(),
-            group: "".into(),
-            selected: side_by_side,
         },
     ]
 }

@@ -94,17 +94,34 @@ component ChannelRow inherits Rectangle {
     }
 }
 
-// The histogram of the selected channel; drag the two handles to set the
-// black and white point.
-component Histogram inherits Rectangle {
+// Histogram values in the image's own units ("4095", like the footer),
+// from 0..1 - 3 decimals for float images.
+global HistogramText {
+    pure public function shown(v: float) -> string {
+        HistogramState.value-scale > 1.5 ? round(v * HistogramState.value-scale) : round(v * 1000) / 1000
+    }
+}
+
+// A value at its line, inside the box.
+component LineValue inherits Text {
+    font-size: Ink.fs-xs;
+    font-family: Ink.font-mono;
+    color: Ink.text-dim;
+}
+
+// The histogram of the selected channel (or, comparing, the breakpoint
+// image): drag the two lines to set the black and white point, their
+// values at them; the axis' ends below. A double click auto-scales.
+component Histogram inherits VerticalLayout {
     property <bool> dragging-min: false;
     property <bool> dragging-max: false;
 
-    height: 96px;
+    spacing: 2px;
     accessible-role: slider;
     accessible-label: "Histogram";
 
     face := Rectangle {
+        height: 120px;
         background: Ink.field;
         border-radius: Ink.radius-sm;
         border-width: 1px;
@@ -145,8 +162,24 @@ component Histogram inherits Rectangle {
             background: root.dragging-max ? Ink.focus : Ink.text;
         }
 
+        // The values at their lines: black right of its line, white left
+        // of its line - both inside the box.
+        LineValue {
+            x: clamp(parent.width * HistogramState.histogram_min_val + 4px, 2px, parent.width - self.width - 2px);
+            y: 3px;
+            text: HistogramText.shown(HistogramState.histogram_min_val_abs);
+        }
+        LineValue {
+            x: clamp(parent.width * HistogramState.histogram_max_val - self.width - 4px, 2px, parent.width - self.width - 2px);
+            y: 16px;
+            text: HistogramText.shown(HistogramState.histogram_max_val_abs);
+        }
+
         TouchArea {
             mouse-cursor: root.dragging-min || root.dragging-max ? col-resize : pointer;
+            double-clicked => {
+                HistogramState.auto_adjust_clicked();
+            }
             pointer-event(event) => {
                 if event.button == PointerEventButton.left {
                     if event.kind == PointerEventKind.down {
@@ -185,6 +218,21 @@ component Histogram inherits Rectangle {
             }
         }
     }
+
+    // The axis' ends.
+    HorizontalLayout {
+        LineValue {
+            text: HistogramText.shown(HistogramState.histogram_min_lim);
+            color: Ink.text-mute;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        LineValue {
+            text: HistogramText.shown(HistogramState.histogram_max_lim);
+            color: Ink.text-mute;
+        }
+    }
 }
 
 // "Label  [field]" in the panel's form layout.
@@ -217,11 +265,8 @@ export component ImageControlPanel inherits Rectangle {
         }
     }
 
-    // A value in the image's own units ("4095"), from 0..1 - 3 decimals
-    // for float images.
-    pure function shown(v: float) -> string {
-        HistogramState.value-scale > 1.5 ? round(v * HistogramState.value-scale) : round(v * 1000) / 1000
-    }
+    // The four values typed in (behind "Values ›").
+    property <bool> show-values: false;
     // Typed in the image's units, back to 0..1.
     pure function typed(t: string) -> float {
         t.to-float() / max(HistogramState.value-scale, 1.0)
@@ -375,6 +420,15 @@ export component ImageControlPanel inherits Rectangle {
                             HistogramState.auto_adjust_clicked();
                         }
                     }
+                    // Every channel (the original's).
+                    if HistogramState.side == 0: InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        text: "All channels";
+                        clicked => {
+                            HistogramState.auto_adjust_all_clicked();
+                        }
+                    }
                 }
 
                 // Comparing: whose histogram is shown and changed.
@@ -390,20 +444,30 @@ export component ImageControlPanel inherits Rectangle {
 
                 Histogram { }
 
-                // New images: auto-scaled or the project's scaling; this
-                // image's scaling for all (the original's only).
-                if HistogramState.side == 0: HorizontalLayout {
+                // Log counts; the values to type in; this image's scaling for
+                // all (the original's only).
+                HorizontalLayout {
                     spacing: 6px;
                     InkSwitch {
-                        horizontal-stretch: 1;
-                        text: "Auto-scale new images";
-                        checked: !HistogramState.auto-scale-off;
+                        text: "Log";
+                        checked: HistogramState.log-scale;
                         toggled(on) => {
-                            HistogramState.auto-scale-off = !on;
-                            HistogramState.auto-scale-off-toggled(!on);
+                            HistogramState.log-scale = on;
+                            HistogramState.log-scale-changed(on);
                         }
                     }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
                     InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        text: root.show-values ? "Values ‹" : "Values ›";
+                        clicked => {
+                            root.show-values = !root.show-values;
+                        }
+                    }
+                    if HistogramState.side == 0: InkButton {
                         small: true;
                         kind: InkButtonKind.quiet;
                         text: "Use for all images";
@@ -413,7 +477,7 @@ export component ImageControlPanel inherits Rectangle {
                     }
                 }
 
-                GridLayout {
+                if root.show-values: GridLayout {
                     spacing-horizontal: 6px;
                     spacing-vertical: 4px;
                     Row {
@@ -432,7 +496,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Black point";
-                            value: root.shown(HistogramState.histogram_min_val_abs);
+                            value: HistogramText.shown(HistogramState.histogram_min_val_abs);
                             accepted(t) => {
                                 root.set-black(root.typed(t));
                             }
@@ -440,7 +504,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Axis min";
-                            value: root.shown(HistogramState.histogram_min_lim);
+                            value: HistogramText.shown(HistogramState.histogram_min_lim);
                             accepted(t) => {
                                 root.set-axis(root.typed(t), HistogramState.histogram_max_lim);
                             }
@@ -450,7 +514,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "White point";
-                            value: root.shown(HistogramState.histogram_max_val_abs);
+                            value: HistogramText.shown(HistogramState.histogram_max_val_abs);
                             accepted(t) => {
                                 root.set-white(root.typed(t));
                             }
@@ -458,7 +522,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Axis max";
-                            value: root.shown(HistogramState.histogram_max_lim);
+                            value: HistogramText.shown(HistogramState.histogram_max_lim);
                             accepted(t) => {
                                 root.set-axis(HistogramState.histogram_min_lim, root.typed(t));
                             }

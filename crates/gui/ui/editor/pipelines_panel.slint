@@ -2039,25 +2039,28 @@ component StepRow inherits Rectangle {
                     // snapshot, off. Not for a component's inner steps.
                     gutter := Rectangle {
                         property <bool> can-break: PipelinesPanelState.open-component-name == "";
-                        width: max(28px, step-number.preferred-width + 12px);
+                        width: 28px;
                         accessible-role: button;
                         accessible-label: "Breakpoint at step \{root.step.step-id}";
+                        // A circle (a pill for longer ids), the number inside it.
                         Rectangle {
-                            width: step-number.preferred-width + 10px;
+                            width: max(18px, step-number.preferred-width + 8px);
                             height: 18px;
                             border-radius: 9px;
                             background: root.bp-state == 1 ? Ink.err : root.bp-state == 2 ? Ink.warn : transparent;
                             border-width: root.bp-state == 0 && gutter-ta.has-hover ? 1px : 0px;
                             border-color: Ink.err.with-alpha(0.7);
-                        }
-                        step-number := Text {
-                            text: root.step.step-id;
-                            color: root.bp-state != 0 ? #FFFFFF : gutter-ta.has-hover ? Ink.err : Ink.text-faint;
-                            font-size: Ink.fs-sm;
-                            font-family: Ink.font-mono;
-                            font-weight: root.bp-state != 0 ? 600 : 400;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                            step-number := Text {
+                                width: 100%;
+                                height: 100%;
+                                text: root.step.step-id;
+                                color: root.bp-state != 0 ? #FFFFFF : gutter-ta.has-hover ? Ink.err : Ink.text-faint;
+                                font-size: Ink.fs-sm;
+                                font-family: Ink.font-mono;
+                                font-weight: root.bp-state != 0 ? 600 : 400;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                         gutter-ta := TouchArea {
                             enabled: gutter.can-break;

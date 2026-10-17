@@ -6,7 +6,7 @@ use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo,
     WavelengthOption,
 };
-use evanalyzer_app::prelude::utils::channel_colors;
+use evanalyzer_app::prelude::utils::wavelength_colors;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::utils::{channel_display_name, wavelength_to_rgb_float};
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -198,6 +198,52 @@ impl ImageMetaController {
     /// # Threading
     /// The extraction logic runs on the caller's thread, while the UI property
     /// updates are dispatched to the main event loop via `slint::invoke_from_event_loop`.
+    /// The user setting "Color channels without a wavelength": the shown
+    /// image's channels the file gives none get one for the project (see
+    /// `ProjectExt::assign_missing_wavelengths`) - kept like a value the
+    /// user set, so the project looks the same everywhere afterwards.
+    pub(crate) fn assign_missing_wavelengths(&self) {
+        if !self
+            .viewport_controller
+            .memory_settings()
+            .color_channels_without_wavelength
+        {
+            return;
+        }
+        let (path, series) = {
+            let project = self.app_state.get_project();
+            (
+                project.get_current_image_path_cloned(),
+                project.get_selected_series_idx(),
+            )
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let Ok(meta) = self.app_state.get_image_meta(&path) else {
+            return;
+        };
+        let channels: Vec<(i32, f32)> = meta
+            .series
+            .get(&series)
+            .map(|s| {
+                s.channels
+                    .iter()
+                    .map(|(id, c)| (*id, c.emission_wave_length))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Not an undo step: it happens on opening, like the auto-scaling.
+        let assigned = self
+            .app_state
+            .get_project_runtime_write()
+            .assign_missing_wavelengths(&channels);
+        if assigned {
+            self.app_state.mark_dirty();
+            self.viewport_controller.trigger_image_redraw();
+        }
+    }
+
     pub(crate) fn sync_image_meta_to_slint(&self) -> Result<(), InternalErrors> {
         // --- Extract everything from project first, then drop the lock ---
         let (
@@ -243,7 +289,27 @@ impl ImageMetaController {
         }; // ← lock dropped here
 
         let Some(path) = image_path else {
-            warn!("No image path found in project, cannot sync metadata to UI.");
+            // No image (e.g. another project): nothing of the last one.
+            let ui_weak = self.ui.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let meta = ui.global::<ImageMetaData>();
+                    meta.set_image_name("No image opened".into());
+                    meta.set_dimensions_str("".into());
+                    meta.set_size("".into());
+                    meta.set_storage_size("".into());
+                    meta.set_magnification("".into());
+                    meta.set_pixel_type("".into());
+                    meta.set_nr_series(0);
+                    meta.set_nr_c_stacks(0);
+                    meta.set_nr_z_stacks(0);
+                    meta.set_nr_t_stacks(0);
+                    meta.set_series_list(slint::ModelRc::default());
+                    ui.global::<ChannelState>()
+                        .set_channels(slint::ModelRc::default());
+                }
+            })
+            .ok();
             return Ok(());
         };
 
@@ -301,7 +367,7 @@ impl ImageMetaController {
                         .collect()
                 })
                 .unwrap_or_default();
-            channel_colors(&channels)
+            wavelength_colors(&channels)
         };
         let ui_weak = self.ui.clone();
 

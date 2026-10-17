@@ -1115,11 +1115,6 @@
           "type": "boolean",
           "default": false
         },
-        "histogramAutoScaleOff": {
-          "description": "A newly opened image keeps the project's scaling (or the full value\nrange) instead of being auto-scaled.",
-          "type": "boolean",
-          "default": false
-        },
         "pixelSizes": {
           "anyOf": [
             {

@@ -95,6 +95,8 @@ impl ViewportImageController {
             state.set_edit_during_analysis(settings.edit_during_analysis);
             state.set_objects_as_table(settings.objects_as_table);
             state.set_object_card(settings.object_card);
+            state.set_auto_scale_new_images(settings.auto_scale_new_images);
+            state.set_color_channels_without_wavelength(settings.color_channels_without_wavelength);
         }
     }
 
@@ -117,6 +119,8 @@ impl ViewportImageController {
             edit_during_analysis: state.get_edit_during_analysis(),
             objects_as_table: state.get_objects_as_table(),
             object_card: state.get_object_card(),
+            auto_scale_new_images: state.get_auto_scale_new_images(),
+            color_channels_without_wavelength: state.get_color_channels_without_wavelength(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
         };
         let before = self.viewport_controller.memory_settings();
@@ -230,6 +234,8 @@ impl ViewportImageController {
             ui.global::<ChannelState>()
                 .on_active_series_changed(move |active_series| {
                     manager.update_active_series_in_project(&active_series);
+                    // E.g. the auto preview, for the new series.
+                    manager.app_state.image_opened();
                 });
 
             // Active channel changed
@@ -1249,6 +1255,8 @@ mod tests {
         state.set_edit_during_analysis(false);
         state.set_objects_as_table(true);
         state.set_object_card(true);
+        state.set_auto_scale_new_images(false);
+        state.set_color_channels_without_wavelength(true);
 
         state.invoke_apply();
         drain_ui_queue();
@@ -1264,6 +1272,8 @@ mod tests {
             edit_during_analysis: false,
             objects_as_table: true,
             object_card: true,
+            auto_scale_new_images: false,
+            color_channels_without_wavelength: true,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(

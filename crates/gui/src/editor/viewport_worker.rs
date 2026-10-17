@@ -138,7 +138,8 @@ impl ViewportWorker {
                 project.get_t_stack().cloned().unwrap_or_default(),
                 project.get_image_channel_histograms(),
                 project.get_selected_image_channel_idx(),
-                project.histogram_auto_scale_off(),
+                // The user's setting: a new image's channels auto-scaled.
+                !self.viewport_controller.memory_settings().auto_scale_new_images,
             )
         };
 
@@ -230,18 +231,22 @@ impl ViewportWorker {
                 // STEP 5: Auto-adjust - write lock acquired AFTER read lock
                 // dropped. Safe because we dropped the project read lock in
                 // STEP 1.
-                if task.auto_adjust_if_not_set || task.auto_adjust_selected {
+                if task.auto_adjust_if_not_set || task.auto_adjust_selected || task.auto_adjust_all {
                     for channel in render_src.iter() {
                         let idx = channel.c_stack;
                         if let Some(ch) = hist_settings.get(&idx) {
                             if (!ch.is_some() && task.auto_adjust_if_not_set)
                                 || (task.auto_adjust_selected && idx == selected_channel)
+                                || task.auto_adjust_all
                             {
                                 // Auto-scale off: a channel without any
                                 // scaling shows its full value range (the
                                 // values are normalized to 0..1).
                                 let (min, max, min_range, max_range) =
-                                    if auto_scale_off && !task.auto_adjust_selected {
+                                    if auto_scale_off
+                                        && !task.auto_adjust_selected
+                                        && !task.auto_adjust_all
+                                    {
                                         (0.0, 1.0, 0.0, 1.0)
                                     } else {
                                         auto_adjust_range(channel.slice(), channel.is_rgb)
@@ -412,6 +417,7 @@ impl ViewportWorker {
                         .map(|(h, c)| (h, c.color))
                         .collect(),
                     NUM_BINS,
+                    self.viewport_controller.histogram_log(),
                 );
                 histogram_scale = 2f32.powi(prepared.bit_depth as i32);
             }
@@ -540,6 +546,7 @@ impl ViewportWorker {
                 curves = histogram_to_svg_fast(
                     &hists.into_iter().map(|h| (h, color)).collect(),
                     NUM_BINS,
+                    self.viewport_controller.histogram_log(),
                 );
             }
         }
@@ -1154,9 +1161,13 @@ pub(crate) fn prepare_image_channels_for_slint(
 ///
 /// Each histogram is rendered as a filled path from bottom-left to bottom-right,
 /// with the curve following the histogram values scaled to a 100×100 viewBox.
+///
+/// `log`: the counts on a logarithmic scale (three decades below the
+/// fullest bin) - the background's peak no longer flattens the rest.
 pub(crate) fn histogram_to_svg_fast(
     histos: &Vec<(Vec<f32>, [f32; 3])>,
     bins: usize,
+    log: bool,
 ) -> Vec<HistogramData> {
     use std::fmt::Write;
 
@@ -1173,7 +1184,13 @@ pub(crate) fn histogram_to_svg_fast(
                 } else {
                     0.0
                 };
-                let y = (1.0 - val.clamp(0.0, 1.0)) * 100.0;
+                let val = val.clamp(0.0, 1.0);
+                let height = if log {
+                    (1.0 + 999.0 * val).ln() / 1000f32.ln()
+                } else {
+                    val
+                };
+                let y = (1.0 - height) * 100.0;
 
                 if i == 0 {
                     write!(path_data, " L {:.2} {:.2}", x, y).unwrap();
@@ -1511,17 +1528,36 @@ mod tests {
 
     // -- histogram_to_svg_fast -----------------------------------------------------
 
+    /// Log scale: a bin at a thousandth of the fullest still shows (about a
+    /// third up), the fullest reaches the top, an empty one the baseline.
+    #[test]
+    fn histogram_to_svg_fast_log_lifts_small_counts() {
+        let histos = vec![(vec![0.0, 0.001, 1.0], [1.0, 0.0, 0.0])];
+        let path = histogram_to_svg_fast(&histos, 3, true)[0].path.to_string();
+        let ys: Vec<f32> = path
+            .trim_start_matches("M 0 100 L ")
+            .trim_end_matches(" 100 100 Z")
+            .split(' ')
+            .skip(1)
+            .step_by(2)
+            .map(|y| y.parse().unwrap())
+            .collect();
+        assert_eq!(ys[0], 100.0);
+        assert!((ys[1] - 100.0 * (1.0 - 2f32.ln() / 1000f32.ln())).abs() < 0.1, "{path}");
+        assert_eq!(ys[2], 0.0);
+    }
+
     #[test]
     fn histogram_to_svg_fast_drops_empty_histograms() {
         let histos = vec![(vec![], [1.0, 0.0, 0.0]), (vec![0.5, 1.0], [0.0, 1.0, 0.0])];
-        let result = histogram_to_svg_fast(&histos, 2);
+        let result = histogram_to_svg_fast(&histos, 2, false);
         assert_eq!(result.len(), 1);
     }
 
     #[test]
     fn histogram_to_svg_fast_path_starts_and_ends_on_the_baseline() {
         let histos = vec![(vec![0.0, 1.0, 0.0], [1.0, 1.0, 1.0])];
-        let result = histogram_to_svg_fast(&histos, 3);
+        let result = histogram_to_svg_fast(&histos, 3, false);
         let path: String = result[0].path.to_string();
 
         assert!(path.starts_with("M 0 100"));
@@ -1531,7 +1567,7 @@ mod tests {
     #[test]
     fn histogram_to_svg_fast_a_full_bin_reaches_the_top_of_the_viewbox() {
         let histos = vec![(vec![1.0], [1.0, 1.0, 1.0])];
-        let result = histogram_to_svg_fast(&histos, 1);
+        let result = histogram_to_svg_fast(&histos, 1, false);
         let path: String = result[0].path.to_string();
 
         // val=1.0 -> y = (1.0 - 1.0) * 100.0 = 0.00 (top of a 100x100 viewBox)
@@ -1606,6 +1642,57 @@ mod tests {
             fit_to_screen: true,
             ..Default::default()
         }
+    }
+
+    /// "Auto-scale new images" off (user setting): a new image's channels
+    /// show their full value range, kept in the project.
+    #[test]
+    fn without_auto_scale_a_new_image_shows_the_full_range() {
+        let mut r = render_fixture(project_with_fixture_image());
+        let mut settings = r.worker.viewport_controller.memory_settings();
+        settings.auto_scale_new_images = false;
+        r.worker.viewport_controller.set_memory_settings(settings);
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let histograms = r.app_state.get_project().get_image_channel_histograms();
+        let window = histograms.values().flatten().next().expect("a window was kept");
+        assert_eq!(
+            (window.min, window.max, window.min_limit, window.max_limit),
+            (0.0, 1.0, 0.0, 1.0)
+        );
+    }
+
+    /// "Auto-scale all": every channel's window is auto-adjusted again -
+    /// also one the user set.
+    #[test]
+    fn auto_scale_all_adjusts_every_channel() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let channels: Vec<i32> = r
+            .app_state
+            .get_project()
+            .get_image_channel_histograms()
+            .keys()
+            .copied()
+            .collect();
+        for c in &channels {
+            r.app_state
+                .get_project_write()
+                .set_image_histogram_settings_for_channel(*c, 0.2, 0.3, 0.1, 0.4);
+        }
+        r.draw(
+            TaskDispatch::HighRes,
+            DrawingTask {
+                auto_adjust_all: true,
+                ..Default::default()
+            },
+        );
+        let histograms = r.app_state.get_project().get_image_channel_histograms();
+        let adjusted: Vec<_> = histograms
+            .values()
+            .flatten()
+            .filter(|w| (w.min, w.max, w.min_limit, w.max_limit) != (0.2, 0.3, 0.1, 0.4))
+            .collect();
+        assert_eq!(adjusted.len(), channels.len(), "{histograms:?}");
     }
 
     #[test]

@@ -12,7 +12,6 @@ import { PipelinesPanel, TuningPanel } from "../editor/pipelines_panel.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImagesListPanel } from "../editor/images_list_panel.slint";
 import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
-import { ResultsListPanel } from "../editor/results_list_panel.slint";
 import { ClassificationPanel } from "../editor/classification_panel.slint";
 import { ObjectListPanel } from "../editor/object_list_panel.slint";
 import { ObjectCard } from "../editor/object_card.slint";
@@ -22,7 +21,7 @@ import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
 import { AnalysisCard } from "../dialogs/pipeline_running_dialog.slint";
-import { PipelineRunningState } from "../api/pipeline_running.slint";
+import { PipelineRunningState, PreviewRunState } from "../api/pipeline_running.slint";
 
 // Gap between the panels and the edges.
 global Float {
@@ -119,7 +118,7 @@ export component Workspace inherits Rectangle {
     }
 
     // Covers only the image, never the bars.
-    if GlobalAppState.active_dialog == DialogType.preview-rendering: PreviewRendering {
+    if PreviewRunState.shown: PreviewRendering {
         width: 100%;
         height: 100%;
     }
@@ -162,29 +161,9 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    if LayoutState.mode == WorkspaceMode.results: Rectangle {
-        background: Ink.ground;
-        InkPanel {
-            x: Float.gap;
-            y: Float.gap;
-            width: Float.left-w - 60px;
-            height: parent.height - 2 * Float.gap;
-            ResultsListPanel {
-                vertical-stretch: 1;
-            }
-        }
-        Rectangle {
-            x: Float.left-w - 60px + 2 * Float.gap;
-            y: Float.gap;
-            width: parent.width - self.x - Float.gap;
-            height: parent.height - 2 * Float.gap;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            clip: true;
-            ResultsView { }
-        }
-    }
+    // The view's panels (boards H, L, M); the analysis is picked in the
+    // top bar.
+    if LayoutState.mode == WorkspaceMode.results: ResultsView { }
 
     // -- Right --
     if root.on-image: VerticalLayout {

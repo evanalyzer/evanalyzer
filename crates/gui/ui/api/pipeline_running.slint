@@ -26,6 +26,8 @@ export global PipelineRunningState {
 // The preview of the current image (the overlay over the image while it
 // renders).
 export global PreviewRunState {
+    // Its pill is on the image (not a dialog: dialogs stay open meanwhile).
+    in-out property <bool> shown: false;
     in-out property <int> processed: 0;
     in-out property <int> total: 0;
     in-out property <bool> done: false;

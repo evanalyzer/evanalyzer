@@ -477,15 +477,10 @@ impl PipelineWorker {
                         running.set_done(true);
                     });
 
-                    // The preview's overlay closes on success or cancel, and
-                    // stays open on an error - only that overlay, not
-                    // whatever dialog the user opened meanwhile.
-                    let app = ui.global::<GlobalAppState>();
-                    if is_preview
-                        && !is_error
-                        && app.get_active_dialog() == DialogType::PreviewRendering
-                    {
-                        app.set_active_dialog(DialogType::None);
+                    // The preview's pill goes on success or cancel, and stays
+                    // on an error. Open dialogs stay open.
+                    if is_preview && !is_error {
+                        ui.global::<PreviewRunState>().set_shown(false);
                     }
                 }
             });
@@ -809,18 +804,20 @@ mod tests {
     }
 
     #[test]
-    fn a_preview_run_closes_its_dialog_when_done() {
+    fn a_preview_run_hides_its_pill_when_done_and_leaves_an_open_dialog() {
         let f = fixture();
         f.ui.global::<GlobalAppState>()
-            .set_active_dialog(DialogType::PreviewRendering);
+            .set_active_dialog(DialogType::StepSettings);
+        f.ui.global::<PreviewRunState>().set_shown(true);
         f.worker.run_task(f.task(true));
         drain_ui_queue();
         let preview = f.ui.global::<PreviewRunState>();
         assert!(preview.get_done());
         assert!(!preview.get_has_error());
+        assert!(!preview.get_shown());
         assert_eq!(
             f.ui.global::<GlobalAppState>().get_active_dialog(),
-            DialogType::None
+            DialogType::StepSettings
         );
     }
 
