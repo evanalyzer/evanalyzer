@@ -82,11 +82,22 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   classes, area, circularity, mean per channel, change class, delete.
 - **Compare (C, changed):** the breakpoint image and the original side
   by side - a divider to drag (top bar button, only with a breakpoint
-  image), a click on its handle swaps the sides, hold Space for the whole
-  original. The original is the image, the breakpoint image a second
-  render over it (own buffers, only while comparing); dragging the
-  divider only moves the cut. Can be switched off (Settings › Viewport ›
-  Compare with the breakpoint).
+  image), a click on its handle swaps the sides, near an edge it snaps
+  there (only one side), hold Space for the whole original. The original
+  is the image, the breakpoint image a second render over it (own
+  buffers, only while comparing); dragging the divider only moves the
+  cut. It replaces the "Breakpoint image" switch (and its setting).
+  Histogram: "Original | Breakpoint" while comparing - the breakpoint
+  image has its own window (auto-adjusted for a new breakpoint, not
+  saved); the footer shows its value next to the channels'
+  ("Breakpoint: 128", "label 3").
+- **Breakpoints in the gutter:** the step's number at the far left of its
+  line is the breakpoint - a click: red stop, orange snapshot, off (like
+  a source editor's line numbers); the ● on the right is gone.
+- **Histogram:** values in the image's own units (2^bits, like the
+  footer); only the selected channel's curve (each channel counts on its
+  own axis - the others' curves didn't line up with the black / white
+  lines).
 - **Add step stays open:** each added step goes in after the one added
   before, the footer says "✓ Added Threshold as step 3", Cancel turns
   Done. Adding from the command palette closes it.

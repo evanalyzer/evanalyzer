@@ -2033,6 +2033,41 @@ component StepRow inherits Rectangle {
                 HorizontalLayout {
                     spacing: 0px;
 
+                    // The gutter: the step's id (what "#2 EV Detection"
+                    // elsewhere refers to) - a click sets its breakpoint, like
+                    // a source editor's line numbers: red stop, orange
+                    // snapshot, off. Not for a component's inner steps.
+                    gutter := Rectangle {
+                        property <bool> can-break: PipelinesPanelState.open-component-name == "";
+                        width: max(28px, step-number.preferred-width + 12px);
+                        accessible-role: button;
+                        accessible-label: "Breakpoint at step \{root.step.step-id}";
+                        Rectangle {
+                            width: step-number.preferred-width + 10px;
+                            height: 18px;
+                            border-radius: 9px;
+                            background: root.bp-state == 1 ? Ink.err : root.bp-state == 2 ? Ink.warn : transparent;
+                            border-width: root.bp-state == 0 && gutter-ta.has-hover ? 1px : 0px;
+                            border-color: Ink.err.with-alpha(0.7);
+                        }
+                        step-number := Text {
+                            text: root.step.step-id;
+                            color: root.bp-state != 0 ? #FFFFFF : gutter-ta.has-hover ? Ink.err : Ink.text-faint;
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            font-weight: root.bp-state != 0 ? 600 : 400;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        gutter-ta := TouchArea {
+                            enabled: gutter.can-break;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.toggle-breakpoint();
+                            }
+                        }
+                    }
+
                     // Category stripe.
                     Rectangle {
                         width: 3px;
@@ -2044,15 +2079,8 @@ component StepRow inherits Rectangle {
                         }
                     }
 
-                    // The step's id - what "#2 EV Detection" elsewhere refers to.
-                    step-number := Text {
-                        width: max(26px, self.preferred-width + 10px);
-                        text: root.step.step-id;
-                        color: Ink.text-faint;
-                        font-size: Ink.fs-sm;
-                        font-family: Ink.font-mono;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    Rectangle {
+                        width: 8px;
                     }
 
                     HorizontalLayout {
@@ -2148,33 +2176,6 @@ component StepRow inherits Rectangle {
                     HorizontalLayout {
                         spacing: 0px;
                         padding-right: 4px;
-
-                        // Breakpoint: off → stop (red) → snapshot (orange) → off.
-                        bp-btn := Rectangle {
-                            y: (parent.height - self.height) / 2;
-                            // Inner steps of a component can't be breakpoint targets.
-                            visible: PipelinesPanelState.open-component-name == "" && (root.hovered || step.expanded || root.bp-state != 0);
-                            width: 22px;
-                            height: 22px;
-                            border-radius: Ink.radius-sm;
-                            background: bp-btn-ta.has-hover ? Ink.border-soft : transparent;
-                            accessible-role: button;
-                            accessible-label: "Breakpoint";
-                            Rectangle {
-                                width: 9px;
-                                height: 9px;
-                                border-radius: 4.5px;
-                                background: root.bp-state == 1 ? Ink.err : root.bp-state == 2 ? Ink.warn : transparent;
-                                border-width: root.bp-state == 0 ? 1.5px : 0px;
-                                border-color: Ink.text-faint;
-                            }
-                            bp-btn-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.toggle-breakpoint();
-                                }
-                            }
-                        }
 
                         InkIconButton {
                             y: (parent.height - self.height) / 2;
@@ -3114,21 +3115,18 @@ export component PipelinesPanel inherits Rectangle {
             padding-bottom: 8px;
             spacing: 6px;
 
+            // The breakpoint image (compared with the original - top bar):
+            // what of it.
             if PipelinesPanelState.has-breakpoint-image: HorizontalLayout {
                 spacing: 6px;
-                InkSwitch {
-                    text: "Breakpoint image";
-                    checked: PipelinesPanelState.show-breakpoint-image;
-                    toggled(on) => {
-                        PipelinesPanelState.show-breakpoint-image = on;
-                        PipelinesPanelState.show-breakpoint-image-changed(on);
-                    }
-                }
-                Rectangle {
+                Text {
                     horizontal-stretch: 1;
+                    text: "Breakpoint image";
+                    font-size: Ink.fs-sm;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
                 }
-                // Also for the compare (its breakpoint side).
-                if PipelinesPanelState.show-breakpoint-image || ViewportObjectState.compare: InkSelect {
+                InkSelect {
                     width: 140px;
                     label: "Breakpoint shows";
                     model: ["Processed image", "Segmentation", "Instances"];

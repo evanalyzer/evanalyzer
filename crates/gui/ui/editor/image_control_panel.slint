@@ -6,6 +6,7 @@ import { ChannelState, HistogramState, IntensityProjection } from "../api/state.
 import { ImageMetaData, SeriesInfo } from "../api/image_meta.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState } from "../api/layout.slint";
+import { PipelinesPanelState } from "../api/pipelines.slint";
 import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkSelect, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
 
 global ImagePanelText {
@@ -207,6 +208,24 @@ export component ImageControlPanel inherits Rectangle {
     property <string> channel-name: ChannelState.channels.length > ChannelState.selected_channel_index
         ? ChannelState.channels[ChannelState.selected_channel_index].name : "";
     property <float> hist-range: HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
+    // Comparing: the histogram is the original's or the breakpoint's.
+    property <bool> comparing: ViewportObjectState.compare && PipelinesPanelState.has-breakpoint-image;
+    changed comparing => {
+        if !self.comparing && HistogramState.side != 0 {
+            HistogramState.side = 0;
+            HistogramState.side-changed(0);
+        }
+    }
+
+    // A value in the image's own units ("4095"), from 0..1 - 3 decimals
+    // for float images.
+    pure function shown(v: float) -> string {
+        HistogramState.value-scale > 1.5 ? round(v * HistogramState.value-scale) : round(v * 1000) / 1000
+    }
+    // Typed in the image's units, back to 0..1.
+    pure function typed(t: string) -> float {
+        t.to-float() / max(HistogramState.value-scale, 1.0)
+    }
 
     pure function fps-index(hz: int) -> int {
         hz >= 25 ? 5 : hz >= 20 ? 4 : hz >= 10 ? 3 : hz >= 5 ? 2 : hz >= 2 ? 1 : 0
@@ -344,9 +363,10 @@ export component ImageControlPanel inherits Rectangle {
                     spacing: 6px;
                     InkCaption {
                         horizontal-stretch: 1;
-                        text: "HISTOGRAM" + (root.channel-name != "" ? " · " + root.channel-name : "");
+                        text: "HISTOGRAM" + (HistogramState.side == 1 ? " · breakpoint" : root.channel-name != "" ? " · " + root.channel-name : "");
                         overflow: elide;
                     }
+
                     InkButton {
                         small: true;
                         kind: InkButtonKind.quiet;
@@ -357,11 +377,22 @@ export component ImageControlPanel inherits Rectangle {
                     }
                 }
 
+                // Comparing: whose histogram is shown and changed.
+                if root.comparing: InkSegmented {
+                    model: ["Original", "Breakpoint"];
+                    label: "Histogram of";
+                    selected: HistogramState.side;
+                    picked(i) => {
+                        HistogramState.side = i;
+                        HistogramState.side-changed(i);
+                    }
+                }
+
                 Histogram { }
 
                 // New images: auto-scaled or the project's scaling; this
-                // image's scaling for all.
-                HorizontalLayout {
+                // image's scaling for all (the original's only).
+                if HistogramState.side == 0: HorizontalLayout {
                     spacing: 6px;
                     InkSwitch {
                         horizontal-stretch: 1;
@@ -401,17 +432,17 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Black point";
-                            value: round(HistogramState.histogram_min_val_abs * 1000) / 1000;
+                            value: root.shown(HistogramState.histogram_min_val_abs);
                             accepted(t) => {
-                                root.set-black(t.to-float());
+                                root.set-black(root.typed(t));
                             }
                         }
                         InkTextField {
                             mono: true;
                             label: "Axis min";
-                            value: HistogramState.histogram_min_lim_txt;
+                            value: root.shown(HistogramState.histogram_min_lim);
                             accepted(t) => {
-                                root.set-axis(t.to-float(), HistogramState.histogram_max_lim);
+                                root.set-axis(root.typed(t), HistogramState.histogram_max_lim);
                             }
                         }
                     }
@@ -419,17 +450,17 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "White point";
-                            value: round(HistogramState.histogram_max_val_abs * 1000) / 1000;
+                            value: root.shown(HistogramState.histogram_max_val_abs);
                             accepted(t) => {
-                                root.set-white(t.to-float());
+                                root.set-white(root.typed(t));
                             }
                         }
                         InkTextField {
                             mono: true;
                             label: "Axis max";
-                            value: HistogramState.histogram_max_lim_txt;
+                            value: root.shown(HistogramState.histogram_max_lim);
                             accepted(t) => {
-                                root.set-axis(HistogramState.histogram_min_lim, t.to-float());
+                                root.set-axis(HistogramState.histogram_min_lim, root.typed(t));
                             }
                         }
                     }

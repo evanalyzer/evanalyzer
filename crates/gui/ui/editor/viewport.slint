@@ -4,7 +4,6 @@ import { ClassificationState } from "../api/classification.slint";
 import { Ink } from "../ink/palette.slint";
 import { InkIcons } from "../ink/icons.slint";
 import { LayoutState } from "../api/layout.slint";
-import { ViewportMemoryState } from "../api/project_settings.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 
 import { ScaleBar } from "viewport_scalebar.slint";
@@ -12,9 +11,8 @@ import { Navigator } from "viewport_navigator.slint";
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
-    // Compare is on (not switched off in the settings, with a breakpoint
-    // image to compare).
-    property <bool> comparing: ViewportObjectState.compare && ViewportMemoryState.before_after && PipelinesPanelState.has-breakpoint-image;
+    // Compare is on, with a breakpoint image to compare.
+    property <bool> comparing: ViewportObjectState.compare && PipelinesPanelState.has-breakpoint-image;
     changed comparing => {
         ViewportObjectState.compare-changed(self.comparing);
     }
@@ -497,7 +495,8 @@ export component Viewport inherits Rectangle {
     // Compare: the line between them, dragged sideways; a click on its
     // handle swaps the sides.
     if root.comparing && !ViewportObjectState.show-before: Rectangle {
-        x: root.width * ViewportObjectState.compare-at - self.width / 2;
+        // At an edge: still there to drag back.
+        x: clamp(root.width * ViewportObjectState.compare-at - self.width / 2, 0px, root.width - self.width);
         width: 24px;
         height: root.height;
 
@@ -544,7 +543,9 @@ export component Viewport inherits Rectangle {
             moved => {
                 if self.pressed {
                     self.dragged = true;
-                    ViewportObjectState.compare-at = clamp((self.absolute-position.x - root.absolute-position.x + self.mouse-x) / root.width, 0.02, 0.98);
+                    // Near an edge it snaps there: only one of the two.
+                    let at = (self.absolute-position.x - root.absolute-position.x + self.mouse-x) / root.width;
+                    ViewportObjectState.compare-at = at < 0.03 ? 0.0 : at > 0.97 ? 1.0 : at;
                 }
             }
             clicked => {
