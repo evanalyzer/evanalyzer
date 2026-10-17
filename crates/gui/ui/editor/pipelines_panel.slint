@@ -17,7 +17,7 @@ import {
     ImageAddressPicker,
     ChannelPicker,
 } from "channel_picker.slint";
-import { InkPickerField, InkPickerRow, InkSwatchName, InkDialogPlacement } from "../ink/ink.slint";
+import { InkPickerField, InkPickerRow, InkSwatchName, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
 
 import { FocusModeButton } from "pipeline_focus.slint";
 import { CommandPaletteState } from "../api/command_palette.slint";
@@ -363,10 +363,7 @@ component ClassDropdown inherits Rectangle {
                             }
                         }
 
-                        Rectangle {
-                            height: 1px;
-                            background: Ink.border-soft;
-                        }
+                        InkDivider { }
 
                         // The opened component's own classes.
                         for cls in ComponentClassesState.classes: InkPickerRow {
@@ -692,10 +689,7 @@ export component MultiClassDropdown inherits Rectangle {
                                 }
                             }
 
-                            Rectangle {
-                                height: 1px;
-                                background: Ink.border-soft;
-                            }
+                            InkDivider { }
 
                             // The opened component's classes - flags[33 + k].
                         for cls[k] in ComponentClassesState.classes: local-ta := TouchArea {
@@ -823,10 +817,7 @@ export component MultiClassDropdown inherits Rectangle {
                         }
                     }
 
-                    Rectangle {
-                        height: 1px;
-                        background: Ink.border-soft;
-                    }
+                    InkDivider { }
 
                     done-ta := TouchArea {
                         height: 28px;
@@ -1316,10 +1307,7 @@ component SectionHeader inherits VerticalLayout {
             overflow: elide;
         }
 
-        Rectangle {
-            height: 1px;
-            background: Ink.border-soft;
-        }
+        InkDivider { }
     }
 
 // A setting's name line: ◇/✎ inside an opened component, the name, and "?"
@@ -2616,59 +2604,6 @@ component InsertPoint inherits Rectangle {
 // Category filter chip
 
 /*
-component CategoryChip inherits Rectangle {
-    in property <StepCategory> category;
-    in property <int> count;
-    in property <bool> active;
-    callback clicked;
-
-    height: 24px;
-    border-radius: 12px;
-    border-width: 1px;
-    border-color: root.active ? Cat.color(category) : Ink.border-soft;
-    background: root.active ? Cat.tint(category) : transparent;
-    animate background { duration: 100ms; }
-
-    HorizontalLayout {
-        padding-left: 7px;
-        padding-right: 7px;
-        spacing: 5px;
-        alignment: center;
-
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 1.5px;
-                background: Cat.color(category);
-            }
-        }
-
-        Text {
-            text: Cat.name(category);
-            color: root.active ? Cat.color(category) : Ink.text-dim;
-            font-size: 10.5px;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-
-        Text {
-            text: count;
-            color: Ink.text-mute;
-            font-size: 10.5px;
-            font-family: Ink.font-mono;
-            vertical-alignment: center;
-        }
-    }
-
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
     */
 export component PipelinesPanel inherits Rectangle {
     property <bool> has-pipeline: PipelinesPanelState.pipelines.length > 0;

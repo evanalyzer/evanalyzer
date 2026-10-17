@@ -2005,6 +2005,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_recent_project_from_the_menu_asks_about_unsaved_changes_first() {
+        let w = with_window(project_with_pipeline("Mine"));
+        let path = w.saved_project("ev.evaproj", &project_with_pipeline("Recent"));
+        w.ui_state.update_app_settings(|s| {
+            s.remember_project(evanalyzer_app::global::RecentProject {
+                path: path.clone(),
+                name: "Recent".into(),
+                images: 0,
+                pipelines: 1,
+                opened_at: 0,
+            })
+        });
+        w.ui_state.mark_dirty();
+        w.ui.global::<crate::StartState>().invoke_open_recent(0);
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
+        assert_eq!(w.pipeline_names(), ["Mine"], "not replaced before the answer");
+    }
+
+    #[test]
     fn an_empty_project_leaves_the_start_page_for_pipelines() {
         let w = with_window(ProjectWithRuntime::default());
         w.start.show_start();

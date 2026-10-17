@@ -1,5 +1,5 @@
 import { Places } from "../api/layout.slint";
-import { InkButton, InkButtonKind, InkBanner, InkCaption, InkChip, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkBanner, InkCaption, InkChip, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
 import { ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "../api/create_component.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
@@ -370,6 +370,7 @@ component ParamListRow inherits Rectangle {
 }
 
 // A label of the parameter's form.
+// A form row's label - plain (InkLabel's elide costs ~2 KB a use).
 component FormLabel inherits Text {
     width: 72px;
     font-size: Ink.fs-sm;
@@ -735,10 +736,7 @@ export component ComponentSettingsDialog inherits InkDialog {
     }
 
     // The footer; this dialog pads its own content.
-    Rectangle {
-        height: 1px;
-        background: Ink.border-soft;
-    }
+    InkDivider { }
     HorizontalLayout {
         spacing: 6px;
         padding-left: Ink.pad-dialog;

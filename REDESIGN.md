@@ -221,6 +221,21 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   "Split view · list and image". Code: `results/results_split.slint`,
   `results_state_controller/split.rs`. Generated code +1.0 MB
   (36.81 → 37.83 MB).
+- **Start page (AA):** while nothing is open - at startup (or the last
+  project right away: "Open the last project when EVAnalyzer starts", a
+  user setting, off) and after File › New. Open image folder… (the main
+  way in, Ctrl+Shift+O), Open project… (Ctrl+O), Empty project (pipelines
+  without images), a template, connect; the recent projects (up to 12,
+  opened or saved, a user setting: name, path, images · pipelines, when;
+  a missing one "Locate…", ✕ off the list). Then the next step: Images
+  after opening images or a project, Pipelines for an empty project or a
+  template. Images and Results are greyed out on it; Pipelines starts an
+  empty project. Cells drift in the background like in About, stepped by
+  a 10 Hz timer (none with Reduce motion): a full repaint costs ~2.3 ms
+  (software renderer, 1500 × 900), ~2 % of a core. No drop zone: Slint
+  can't take dropped files. Code: `shell/start_page.slint`,
+  `editor/start_page_controller.rs`. Generated code +0.5 MB
+  (37.83 → 38.36 MB).
 - **Build:** generated code 34.9 MB → 32.78 MB → 34.0 MB → 34.98 MB
   (Results views, objects filter, dialogs as on the boards; before that:
   dialogs movable/non-modal ~0.33 MB - `InkDialog` is copied into each of

@@ -54,7 +54,7 @@
 
 ## Other
 
-- [ ] Add open recent files
+- [x] Add open recent files - the start page's list and RECENT in the EVA menu (2026-10-17)
 - [ ] **Log file for end users** — the log goes to stderr only (lost when started by double-click); only panics reach `<user folder>/crash.log`, which the GUI never mentions. Write a (size-limited) log file to the user folder and add "Help > Open log folder" so users can attach both to bug reports. (Default log level is `info` now, was `debug`.)
 - [ ] **Security: bump `quick-xml` to >= 0.41 in bioformats-rs** (RUSTSEC-2026-0194/0195: quadratic time / unbounded allocation on crafted XML - every opened image's metadata goes through it). Same fork: `lru` via `zarrs` is flagged unsound (RUSTSEC-2026-0253).
 - [x] **Image decoder can panic on real files, not just corrupt ones** — fixed: `nr_bits == 0` is rejected with a clean error before the decode path (`image_reader.rs`) — [`crates/core/src/image/image_reader.rs:970-984,1034-1036`](crates/core/src/image/image_reader.rs#L970-L1036)
@@ -182,20 +182,8 @@ Input images by pointer (no copy), params/results as postcard bytes, `catch_unwi
 
 ## UI component library
 
-Many Slint building blocks are written several times instead of shared (survey 2026-10-15). Goal: one library in `crates/gui/ui/components/` that every dialog/panel uses. Do it in stages, each making the copies use the library piece (existing tests guard behavior). Unifying changes the look where copies differ - decide the style per piece first.
+Done with the Ink redesign (2026-10-17): the old `components/` folder is gone - every dialog uses `InkDialog` (About is custom on purpose), buttons, fields, chips, menus, rows, settings rows, tabs and dividers come from `crates/gui/ui/ink/`. This round: `InkFact` (object card + objects panel), plain dividers → `InkDivider`, the AI dialog's private header/divider → `InkCaption`/`InkDivider`, dead `CategoryChip` removed (generated code −12 KB).
 
-Already shared: `components/settings_layout.slint` (NavItem, NavGroupLabel, SectionHeader, SettingsCard, SettingRow, SettingBlock - project + component settings), `components/picker_field.slint` (PickerField, PickerRow, SwatchName - channel + class dropdowns).
+Kept private on purpose (one screen's own, not a copy of an Ink piece): the step picker's category header and filter chips (category colours), pipeline step / parameter rows, the plate's wells, About's cards. `FormLabel` (AI training, component dialogs) stays a plain `Text` in Ink's style: `InkLabel`'s elide costs ~2 KB per use, 35 uses.
 
-Note: `components/new_components/` (Button/IconButton, Chip/ToggleChip/OverflowChip, TextField, CheckMark/Checkbox, DropdownField, MultiSelectDropdown) is almost unused - only `file_browser_dialog.slint` imports it; there are two `MultiSelectDropdown`s (`components/multi_select_dropdown.slint`, used by results; `new_components/…`, unused). Merge into one library.
-
-- [ ] **Decide the dialog look**: compact (radius 12, 16px/700 title, small ✕ - e.g. Component settings) vs header bar (radius 10, 56px header with divider - e.g. Export).
-- [ ] **Modal dialog shell** (~22 hand-built copies; `BaseDialog` in `dialogs/dialog_base.slint` only covers 10 confirm dialogs and looks different). Props: card width/height, title, subtitle, variant, show-close, dismiss-on-backdrop, close-requested, body (`@children`), footer. Copies e.g. `pipeline_edit_dialog.slint`, `template_meta_dialog.slint`, `create_component_dialog.slint` (5), `script_editor_panel.slint`, `StepSettingsDialog` in `pipelines_panel.slint`, `shortcuts_help_dialog.slint`, `export_dialog.slint`, `classification_class_edit_dialog.slint`, `ai_learning_dialog.slint`, `project_template_dialog.slint`, `command_selection_dialog.slint`, `about.slint`, `pipeline_running_dialog.slint`, `file_browser_dialog.slint`, `project_settings_dialog.slint`.
-- [ ] **Icon / ghost button** (~25 copies; private `ActionButton` in `classification_panel.slint` + `object_list_panel.slint`, `GhostIconBtn` in `pipelines_panel.slint`, `IconButton` in `file_browser_dialog.slint`, `RowButton` in `create_component_dialog.slint`, many inline ✕ close buttons). Extend `new_components` `IconButton`: icon or glyph, size, icon-size, radius, tint, hover-tint, active, enabled, danger.
-- [ ] **Horizontal divider** (~50 inline `Rectangle { height: 1px; background: Theme.border-soft }`, `Divider` in `ai_learning_dialog.slint`, `MenuSeparator` in `menu_bar.slint`; only `VerticalDivider` exists in `components/divider.slint`).
-- [ ] **Section label / title** (~8 private versions: `SectionHeader` in `pipelines_panel.slint` and `ai_learning_dialog.slint` and `command_selection_dialog.slint`, `SectionTitle` in `image_control_panel.slint`, inline letter-spaced labels in `image_meta_panel`, `results_common`, `results_matrix`, `histogram_panel`).
-- [ ] **Label + field** (~19 inline copies, `LabeledInput` in `pipeline_edit_dialog.slint`, `LabeledField` in `export_dialog.slint`, `FormLabel` in `ai_learning_dialog.slint`) - partly covered by `SettingRow`/`SettingBlock`.
-- [ ] **Popup panel / rows / help popover** (~10 PopupWindows with differing radius/shadow; three near-identical help popovers in `pipelines_panel.slint`; menus in `menu_bar.slint`; `series_combobox.slint`, `results_common.slint`). `PickerRow` covers picker rows.
-- [ ] **Chips** (`FilterChip` in `command_selection_dialog.slint`, `CategoryChip` in `pipelines_panel.slint`, `ModeChip` in `image_control_panel.slint`, `FilterPill` in `results_common.slint`) - exported `Chip`/`ToggleChip` unused.
-- [ ] **Checkbox** (`SquareCheck` in `pipelines_panel.slint`, `MultiSelectCheckMark` in `multi_select_dropdown.slint`, `new_components` `Checkbox`, std `CheckBox` in 4 files) - standardize on one.
-- [ ] **Tabs / segmented items / nav** (`TabButton` in `about.slint`, `ChartTab` in `results_charts.slint`, `PipelineTab`, `SectionNavItem` in `pipelines_panel.slint` duplicating `NavItem`).
-- [ ] Lower priority: search field (8 places), selectable list row base (`ImageListRow`, `ObjectListRow`, `ResultListRow`, `ClassListRow`, …), status dot (`DotPx`).
+- [ ] Lower priority: `std-widgets` `ScrollView` (14×) / `ListView` (6×) / `TextEdit` (2×) are still Slint's own - an Ink scroll bar would make scrolling look the same everywhere.

@@ -1,4 +1,4 @@
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDialogPlacement } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ProjectSettingsState, ViewportMemoryState } from "../api/project_settings.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -649,10 +649,7 @@ export component ProjectSettingsDialog inherits InkDialog {
             }
 
             // -- Footer ------------------------------------------------------
-            Rectangle {
-                height: 1px;
-                background: Ink.border-soft;
-            }
+            InkDivider { }
 
             Rectangle {
                 background: Ink.panel;

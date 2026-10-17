@@ -3,7 +3,7 @@
 
 import { ResultItemData, ResultsListState } from "../api/results_list.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkIconButton, InkHint, InkButton } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkIconButton, InkHint, InkButton, InkDivider } from "../ink/ink.slint";
 
 export component ResultsListPanel inherits Rectangle {
     VerticalLayout {
@@ -41,10 +41,7 @@ export component ResultsListPanel inherits Rectangle {
             }
         }
 
-        Rectangle {
-            height: 1px;
-            background: Ink.border-soft;
-        }
+        InkDivider { }
 
         Rectangle {
             vertical-stretch: 1;

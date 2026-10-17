@@ -388,7 +388,7 @@ export component TopBar inherits Rectangle {
 
         InkMenuFrame {
             open-y: root.absolute-position.y + Ink.bar-h - 2px;
-            menu-width: 260px;
+            menu-width: 290px;
 
             InkMenuCaption { text: "PROJECT"; }
             InkMenuItem {
@@ -422,6 +422,21 @@ export component TopBar inherits Rectangle {
                     ImagesListState.open_images_folder_clicked();
                 }
             }
+            // The last projects (the start page's list), one click away.
+            if StartState.recent.length > 0: InkMenuSeparator { }
+            if StartState.recent.length > 0: InkMenuCaption { text: "RECENT"; }
+            for project[i] in StartState.recent: InkMenuItem {
+                visible: i < 5;
+                height: i < 5 ? 28px : 0px;
+                icon: project.missing ? InkIcons.warning : InkIcons.project;
+                text: project.name;
+                shortcut: project.when;
+                enabled: !project.missing;
+                clicked => {
+                    StartState.open-recent(i);
+                }
+            }
+            if StartState.recent.length > 0: InkMenuSeparator { }
             InkMenuItem {
                 icon: InkIcons.save;
                 text: "Save";

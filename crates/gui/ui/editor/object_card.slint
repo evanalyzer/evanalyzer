@@ -6,32 +6,8 @@
 import { ChannelState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ObjectListState } from "../api/object_list.slint";
 import { ViewportState } from "../api/viewport.slint";
-import { Ink, InkButton, InkButtonKind, InkCaption, InkChip, InkIconButton, InkIcons } from "../ink/ink.slint";
+import { Ink, InkButton, InkButtonKind, InkCaption, InkChip, InkIconButton, InkIcons, InkFact } from "../ink/ink.slint";
 
-// "Area   1 204 px²".
-component Fact inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> value;
-    height: 20px;
-    spacing: 8px;
-    Text {
-        width: 76px;
-        text: root.label;
-        font-size: Ink.fs-sm;
-        color: Ink.text-dim;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-    Text {
-        horizontal-stretch: 1;
-        text: root.value == "" ? "–" : root.value;
-        font-size: Ink.fs-sm;
-        font-family: Ink.font-mono;
-        color: Ink.text;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-}
 
 export component ObjectCard inherits Rectangle {
     // The room the panels leave on the image (the viewport's insets).
@@ -97,19 +73,19 @@ export component ObjectCard inherits Rectangle {
                 }
             }
 
-            Fact {
+            InkFact {
                 label: "Area";
                 value: ObjectListState.selected_object.area > 0 ? ObjectListState.selected_object.area + " px²" : "";
             }
-            Fact {
+            InkFact {
                 label: "Circularity";
                 value: ObjectListState.selected_object.circularity;
             }
-            if ObjectListState.selected_object.coloc-with != "": Fact {
+            if ObjectListState.selected_object.coloc-with != "": InkFact {
                 label: "Coloc with";
                 value: ObjectListState.selected_object.coloc-with;
             }
-            for channel in ChannelState.channels: Fact {
+            for channel in ChannelState.channels: InkFact {
                 label: "Mean " + channel.name;
                 value: ObjectListState.selected_object.intensity_avgs.length > channel.idx ? ObjectListState.selected_object.intensity_avgs[channel.idx] : "";
             }

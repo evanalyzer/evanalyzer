@@ -4,13 +4,7 @@
 // Licenses (EVAnalyzer's own, then the third-party packages, searchable).
 // Only facts the app knows - no invented numbers.
 
-import {
-    InkButton,
-    InkButtonKind,
-    InkIconButton,
-    InkIcons,
-    InkSearchField,
-} from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkIconButton, InkIcons, InkSearchField, InkDivider } from "../ink/ink.slint";
 import { AppInfoState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
@@ -362,10 +356,7 @@ component LicenseRow inherits Rectangle {
             }
         }
 
-        Rectangle {
-            height: 1px;
-            background: Ink.border-soft;
-        }
+        InkDivider { }
     }
 }
 

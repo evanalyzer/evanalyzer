@@ -1,4 +1,4 @@
-import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkIcons, InkDialogPlacement, InkSegmented, InkHint, InkBanner, InkTone } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkIcons, InkDialogPlacement, InkSegmented, InkHint, InkBanner, InkTone, InkDivider } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { AiLearningState, ClassSelectionRowSlint, FeatureRowSlint, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint } from "../api/ai_learning.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
@@ -6,20 +6,12 @@ import { LineEdit, ComboBox, SpinBox, CheckBox } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
 
-// -- Wire structs ---------------------------------------------------------
-// ----------------------------------------------------------
-component SectionHeader inherits InkCaption { }
-
-component Divider inherits Rectangle {
-    height: 1px;
-    background: Ink.border-soft;
-}
-
+// A form row's label - plain (InkLabel's elide costs ~2 KB a use).
 component FormLabel inherits Text {
-    vertical-alignment: center;
     width: 120px;
-    color: Ink.text-dim;
     font-size: Ink.fs-sm;
+    color: Ink.text-dim;
+    vertical-alignment: center;
 }
 
 // ----------------------------------------------------------
@@ -341,7 +333,7 @@ export component AiLearningDialog inherits InkDialog {
 
                     VerticalLayout {
                         spacing: 2px;
-                        SectionHeader {
+                        InkCaption {
                             text: "CLASSES TO LEARN";
                         }
                         for data[index] in AiLearningState.class_selection: ClassSelectionRow {
@@ -355,7 +347,7 @@ export component AiLearningDialog inherits InkDialog {
 
                     VerticalLayout {
                         spacing: 8px;
-                        SectionHeader {
+                        InkCaption {
                             text: "TRAINING";
                         }
                         if AiLearningState.settings.mode == 0: HorizontalLayout {
@@ -519,7 +511,7 @@ export component AiLearningDialog inherits InkDialog {
                     // -- Algorithm + hyperparameters --
                     VerticalLayout {
                         spacing: 12px;
-                        SectionHeader {
+                        InkCaption {
                             text: "ALL MODEL SETTINGS";
                         }
 
@@ -855,7 +847,7 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             alignment: space-between;
-                            SectionHeader {
+                            InkCaption {
                                 text: "FEATURE CHANNELS";
                             }
 
@@ -921,7 +913,7 @@ export component AiLearningDialog inherits InkDialog {
                     // -- Object classifier: metrics --
                     if AiLearningState.settings.mode == 1: VerticalLayout {
                         spacing: 10px;
-                        SectionHeader {
+                        InkCaption {
                             text: "OBJECT METRICS";
                         }
 
@@ -950,7 +942,7 @@ export component AiLearningDialog inherits InkDialog {
                     // -- Shared training options --
                     VerticalLayout {
                         spacing: 12px;
-                        SectionHeader {
+                        InkCaption {
                             text: "TRAINING OPTIONS";
                         }
 
@@ -1007,7 +999,7 @@ export component AiLearningDialog inherits InkDialog {
                     // -- Training data source --
                     VerticalLayout {
                         spacing: 10px;
-                        SectionHeader {
+                        InkCaption {
                             text: "TRAINING DATA SOURCE";
                         }
 
@@ -1042,7 +1034,7 @@ export component AiLearningDialog inherits InkDialog {
                     // -- Labeled training objects --
                     VerticalLayout {
                         spacing: 10px;
-                        SectionHeader {
+                        InkCaption {
                             text: "TRAINING OBJECTS";
                         }
 
@@ -1096,7 +1088,7 @@ export component AiLearningDialog inherits InkDialog {
         }
 
         // ----- FOOTER -----
-        Divider { }
+        InkDivider { }
 
         // The dialog's buttons; this dialog pads its own content.
         HorizontalLayout {

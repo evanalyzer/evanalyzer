@@ -42,12 +42,11 @@ impl StartPageController {
             .map(|p| p.path.clone())
             .filter(|_| settings.open_last_project)
             .filter(|path| matches!(self.app_state.backend().files().stat(path), Ok(Some(_))));
+        // The EVA menu's RECENT either way.
+        push_recent(&self.ui, &self.app_state);
         match last {
             Some(path) => Arc::clone(&self.project_controller).open_new_project(&path),
-            None => {
-                set_active(&self.ui, true, None);
-                push_recent(&self.ui, &self.app_state);
-            }
+            None => set_active(&self.ui, true, None),
         }
     }
 
@@ -152,7 +151,7 @@ pub(crate) fn set_active(ui: &slint::Weak<AppWindow>, active: bool, mode: Option
 
 /// The project open now goes first in the recent projects (once it has a
 /// file: after opening or saving it).
-pub(crate) fn remember_current_project(app_state: &UiState) {
+pub(crate) fn remember_current_project(app_state: &Arc<UiState>) {
     let entry = {
         let project = app_state.get_project();
         let Some(path) = project.tmp_settings.current_project.clone() else {
@@ -174,6 +173,8 @@ pub(crate) fn remember_current_project(app_state: &UiState) {
         }
     };
     app_state.update_app_settings(|settings| settings.remember_project(entry));
+    // The EVA menu's RECENT and the page show it.
+    push_recent(&app_state.ui_handle.clone(), app_state);
 }
 
 /// The recent projects and the "open the last one" switch on the page;
