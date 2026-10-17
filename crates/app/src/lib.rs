@@ -75,6 +75,7 @@ pub mod results {
     pub use crate::api::Aggregation;
     pub use crate::api::BoxplotBox;
     pub use crate::api::BoxplotFilter;
+    pub use crate::api::BoxplotGroup;
     pub use crate::api::COLOR_SCALE_GRADIENT_STOPS;
     pub use crate::api::Cell;
     pub use crate::api::CellValue;
@@ -218,5 +219,5 @@ pub mod images {
     pub use crate::workspace::images::{
         Erased, erase_mask, object_from_mask, stroke_mask, union_mask,
     };
-    pub use crate::workspace::plate_layout::{PlateLayout, WellImages, plate_layout};
+    pub use crate::workspace::plate_layout::{PlateLayout, WellImages, plate_layout, texts_in_group};
 }

@@ -4,8 +4,9 @@
 // `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ResultsChartKind2, ResultsState } from "../api/results.slint";
-import { InkSegmented } from "../ink/ink.slint";
+import { InkSegmented, InkHint } from "../ink/ink.slint";
 import { SettingsGroup } from "results_common.slint";
+import { ComboBox } from "../ink/std_compat.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
@@ -168,8 +169,18 @@ component BoxplotChart inherits Rectangle {
             padding: 24px;
             spacing: 16px;
 
-            for box in ResultsState.chart-boxplot-boxes: VerticalLayout {
+            // A click on a box: its objects in the List.
+            for box in ResultsState.chart-boxplot-boxes: Rectangle {
                 width: 90px;
+                border-radius: Ink.radius-md;
+                background: box-ta.has-hover ? Ink.hover : transparent;
+                box-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ResultsState.chart-box-clicked(box.label);
+                    }
+                }
+            VerticalLayout {
                 spacing: 4px;
 
                 plot := Rectangle {
@@ -228,6 +239,7 @@ component BoxplotChart inherits Rectangle {
                     color: Ink.text-faint;
                     horizontal-alignment: center;
                 }
+            }
             }
         }
     }
@@ -308,6 +320,22 @@ export component ResultsChartsView inherits Rectangle {
                             ResultsState.chart-y-column-selected(key);
                         }
                     }
+                    if ResultsState.chart-kind == ResultsChartKind2.boxplot: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "A box per";
+                            font-size: Ink.fs-xs;
+                            color: Ink.text-dim;
+                        }
+                        ComboBox {
+                            model: ["Class", "Image", "Well", "Plate row", "Plate column"];
+                            current-index: ResultsState.chart-group;
+                            selected(v) => {
+                                ResultsState.chart-group = self.current-index;
+                                ResultsState.chart-group-selected(self.current-index);
+                            }
+                        }
+                    }
                     if ResultsState.chart-kind != ResultsChartKind2.boxplot: InkMultiSelect {
                         label: "Class";
                         summary-text: ResultsState.chart-class-summary;
@@ -319,6 +347,10 @@ export component ResultsChartsView inherits Rectangle {
                             ResultsState.chart-class-selected(key, selected);
                         }
                     }
+                }
+
+                if ResultsState.chart-kind == ResultsChartKind2.boxplot: InkHint {
+                    text: "Click a box to see its objects in the List.";
                 }
             }
         }

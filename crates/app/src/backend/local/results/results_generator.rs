@@ -34,9 +34,9 @@ pub(crate) const FOLDER_GROUPING_REGEX: &str = r"^(?:.*[/\\])?(([A-Za-z]{1,2})([
 /// How a query extracts the well of an image (see [`Grouping`]): a regex
 /// (already quote-escaped for a SQL string literal) on `column` of the
 /// `objects`/`images` row.
-struct GroupingSql {
-    column: &'static str,
-    regex: String,
+pub(super) struct GroupingSql {
+    pub(super) column: &'static str,
+    pub(super) regex: String,
 }
 
 pub struct ResultsGenerator {
@@ -69,7 +69,7 @@ impl ResultsGenerator {
         })
     }
 
-    fn grouping_sql(&self, grouping: &Grouping) -> Result<GroupingSql, InternalErrors> {
+    pub(super) fn grouping_sql(&self, grouping: &Grouping) -> Result<GroupingSql, InternalErrors> {
         Ok(GroupingSql {
             column: match grouping {
                 Grouping::Folder => "image_rel_path",

@@ -26,8 +26,12 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - **Images › Plate:** wired - the images grouped into wells by the
   project's plate settings (`evanalyzer_app::images::plate_layout`, the same
   patterns as the results queries); a well's images below the plate.
-- **Results:** List, Plate, Charts with their settings columns; the Plate's
-  well card lists the well's images (a click opens one).
+- **Results:** List with images / classes / columns as check lists in
+  place (All / None, search) and "N rows · page" (L); Charts with "A box
+  per" class / image / well / plate row / column (`BoxplotFilter::group_by`)
+  and a click on a box that shows its objects in the List (M); Plate's well
+  card lists the well's images - a click opens one, its eye leaves it out
+  of the results (H).
 - **Objects as a table** (design K): at the bottom between the panels,
   columns ID, classes, area, circularity, the mean of each channel; the
   selected object's buttons in its footer. ⋯ › "Show as a table / list".
@@ -81,6 +85,10 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   (Settings › Viewport › Before / after); costs nothing while off.
 - **Tuning (E):** tabs "All pinned · N" and one per step; the ⌖ in a step's
   line pins all its settings (again: unpins).
+- **Dialog heads:** title and ✕ centred; one line under the head (no
+  double line); Settings' search in its head. AI training as on board R:
+  Pixel / Object, the classes with their counts, the training in short,
+  "Uses the annotations of N images", "More settings ›" for the rest.
 - **Dialogs where the boards put them (N, O, P, Q, R), none modal:** no
   backdrop - the image, panels and shortcuts stay usable; all movable by
   their head; Esc closes the open one also after a click into the window
@@ -92,11 +100,12 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   component, pipeline edit: next to the steps panel (P, Q). Class settings
   (narrow, 7 colors a row), delete / auto-add classes, set class, delete
   objects: left of the right-hand panels (N, P). Run analysis below Run
-  with "N pipelines · M images", connect at the bottom left, unsaved
+  with "N pipelines · M images", connect at the bottom right (above "This computer"), unsaved
   changes centred a third down (N). Places from `Places` (api/layout.slint).
   Only the analysis' waiting dialog ("Edit while an analysis runs" off)
   still blocks.
-- **Build:** generated code 34.9 MB → 32.78 MB → 34.0 MB (this round:
+- **Build:** generated code 34.9 MB → 32.78 MB → 34.0 MB → 34.98 MB
+  (Results views, objects filter, dialogs as on the boards; before that:
   dialogs movable/non-modal ~0.33 MB - `InkDialog` is copied into each of
   its 31 uses -, object card ~0.2 MB, images panel ~0.15 MB, the rest
   ~0.5 MB).
@@ -116,13 +125,12 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - [ ] **Dialogs, not yet:** more than one open at a time (`active_dialog`
       is one value); class settings exactly at the clicked class row (they
       open at the top of the classes panel).
-- [ ] **Charts (M):** group by well row / column; a click on a box or
-      point shows its objects in the List.
-- [ ] **Results › Plate (H):** leave an image out right from the well's
-      list ("Disable D3_04.vsi in the results").
+- [ ] **Charts (M):** a click on a scatter point (points carry no object
+      yet) - boxes do.
+- [ ] **List (L):** "Rows 1–200 of N" (the total isn't known; it shows the
+      page's rows).
+- [ ] **About:** a redesign (not in this round's scope).
 - [ ] **Export (R):** "Images with objects drawn".
-- [ ] **AI training (R):** say how many images' annotations are used
-      ("Uses the annotations of 6 images").
 
 ### Follow-ups of this round
 

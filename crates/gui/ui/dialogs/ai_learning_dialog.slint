@@ -1,4 +1,4 @@
-import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkIcons, InkDialogPlacement } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkIcons, InkDialogPlacement, InkSegmented, InkHint, InkBanner, InkTone } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { AiLearningState, ClassSelectionRowSlint, FeatureRowSlint, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint } from "../api/ai_learning.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
@@ -160,17 +160,42 @@ component ClassSelectionRow inherits Rectangle {
     in property <ClassSelectionRowSlint> data;
     in property <int> row_index;
 
-    height: 30px;
+    height: 26px;
 
     HorizontalLayout {
-        padding-left: 4px;
         spacing: 8px;
-        CheckBox {
-            text: root.data.name;
-            checked: root.data.selected;
-            toggled => {
-                AiLearningState.class_selection[root.row_index].selected = self.checked;
+        VerticalLayout {
+            alignment: center;
+            CheckBox {
+                checked: root.data.selected;
+                toggled => {
+                    AiLearningState.class_selection[root.row_index].selected = self.checked;
+                }
             }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 9px;
+                height: 9px;
+                border-radius: 2px;
+                background: root.data.color;
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.data.name;
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.data.count;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: Ink.text-mute;
+            vertical-alignment: center;
         }
     }
 }
@@ -275,7 +300,10 @@ component TrainingObjectRow inherits Rectangle {
 export component AiLearningDialog inherits InkDialog {
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
-    title: "Train a classifier";
+    title: "Train classifier";
+    subtitle: "from your annotations";
+    // "More settings ›": everything beyond the short form.
+    property <bool> more: false;
     property <length> field-w: 190px;
     card-width: 440px;
     card-height: 840px;
@@ -288,8 +316,6 @@ export component AiLearningDialog inherits InkDialog {
     VerticalLayout {
         spacing: 0;
 
-        Divider { }
-
         // ----- BODY -----
         Rectangle {
             vertical-stretch: 1;
@@ -300,100 +326,205 @@ export component AiLearningDialog inherits InkDialog {
                 VerticalLayout {
                     width: parent.width;
                     padding: 16px;
-                    spacing: 20px;
+                    spacing: 18px;
+                    alignment: start;
 
-                    // -- Model identity --
-                    VerticalLayout {
-                        spacing: 12px;
-                        SectionHeader {
-                            text: "MODEL";
-                        }
-
-                        HorizontalLayout {
-                            spacing: 12px;
-                            alignment: start;
-                            FormLabel {
-                                text: "Classifier type";
-                            }
-
-                            mode-combo := ComboBox {
-                                width: root.field-w;
-                                model: ["Pixel Classifier", "Object Classifier"];
-                                current-index <=> AiLearningState.settings.mode;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 12px;
-                            alignment: start;
-                            FormLabel {
-                                text: "Model name";
-                            }
-
-                            LineEdit {
-                                width: root.field-w;
-                                placeholder-text: "e.g. nuclei-pixel-classifier";
-                                text <=> AiLearningState.settings.model_name;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 12px;
-                            alignment: start;
-                            FormLabel {
-                                text: "";
-                            }
-
-                            InkButton {
-                                small: true;
-                                icon: InkIcons.open;
-                                text: "Load a trained model…";
-                                clicked => {
-                                    AiLearningState.browse_existing_model_clicked();
-                                }
-                            }
-                        }
-
-                        if AiLearningState.settings.loaded_model_path != "": HorizontalLayout {
-                            spacing: 12px;
-                            alignment: start;
-                            FormLabel {
-                                text: "";
-                            }
-
-                            Text {
-                                text: "Loaded: " + AiLearningState.settings.loaded_model_path;
-                                color: Ink.text-mute;
-                                font-size: Ink.fs-sm;
-                                font-family: Ink.font-mono;
-                                overflow: elide;
-                            }
+                    // -- What it learns (design R) --
+                    InkSegmented {
+                        label: "Classifier";
+                        model: ["Pixel classifier", "Object classifier"];
+                        selected: AiLearningState.settings.mode;
+                        picked(i) => {
+                            AiLearningState.settings.mode = i;
                         }
                     }
 
-                    // -- Algorithm + hyperparameters --
                     VerticalLayout {
-                        spacing: 12px;
+                        spacing: 2px;
                         SectionHeader {
-                            text: "ALGORITHM";
+                            text: "CLASSES TO LEARN";
                         }
+                        for data[index] in AiLearningState.class_selection: ClassSelectionRow {
+                            data: data;
+                            row_index: index;
+                        }
+                        if AiLearningState.class_selection.length == 0: InkHint {
+                            text: "No classes yet - add some in the classes panel.";
+                        }
+                    }
 
+                    VerticalLayout {
+                        spacing: 8px;
+                        SectionHeader {
+                            text: "TRAINING";
+                        }
+                        if AiLearningState.settings.mode == 0: HorizontalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            FormLabel {
+                                text: "Channel";
+                            }
+                            ComboBox {
+                                width: root.field-w;
+                                model: AiLearningState.channel_names;
+                                current-index <=> AiLearningState.settings.pixel_channel;
+                            }
+                        }
                         HorizontalLayout {
                             spacing: 12px;
                             alignment: start;
                             FormLabel {
-                                text: "Algorithm";
+                                text: "Model";
                             }
-
-                            algorithm-combo := ComboBox {
+                            ComboBox {
                                 width: root.field-w;
                                 model: ["Random Forest", "K-Nearest Neighbors", "Neural Network (MLP)"];
                                 current-index <=> AiLearningState.settings.algorithm;
                             }
                         }
+                        // The two settings that matter most for the model.
+                        if AiLearningState.settings.algorithm == 0: VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                FormLabel {
+                                    text: "Trees";
+                                }
+                                SpinBox {
+                                    width: root.field-w;
+                                    minimum: 1;
+                                    maximum: 2000;
+                                    value <=> AiLearningState.settings.rf_n_trees;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                FormLabel {
+                                    text: "Tree depth";
+                                }
+                                SpinBox {
+                                    width: root.field-w;
+                                    minimum: 0;
+                                    maximum: 200;
+                                    value <=> AiLearningState.settings.rf_max_depth;
+                                }
+                            }
+                        }
+                        if AiLearningState.settings.algorithm == 1: HorizontalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            FormLabel {
+                                text: "K (neighbors)";
+                            }
+                            SpinBox {
+                                width: root.field-w;
+                                minimum: 1;
+                                maximum: 200;
+                                value <=> AiLearningState.settings.knn_k;
+                            }
+                        }
+                        if AiLearningState.settings.algorithm == 2: VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                FormLabel {
+                                    text: "Hidden layers";
+                                }
+                                LineEdit {
+                                    width: root.field-w;
+                                    placeholder-text: "e.g. 64, 32";
+                                    text <=> AiLearningState.settings.mlp_hidden_layers;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                FormLabel {
+                                    text: "Max iterations";
+                                }
+                                SpinBox {
+                                    width: root.field-w;
+                                    minimum: 1;
+                                    maximum: 100000;
+                                    value <=> AiLearningState.settings.mlp_max_iterations;
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            FormLabel {
+                                text: "Save as";
+                            }
+                            LineEdit {
+                                width: root.field-w;
+                                placeholder-text: "e.g. nuclei-pixels";
+                                text <=> AiLearningState.settings.model_name;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            FormLabel {
+                                text: "";
+                            }
+                            InkButton {
+                                small: true;
+                                kind: InkButtonKind.quiet;
+                                icon: InkIcons.open;
+                                text: "Or load a trained model…";
+                                clicked => {
+                                    AiLearningState.browse_existing_model_clicked();
+                                }
+                            }
+                        }
+                        if AiLearningState.settings.loaded_model_path != "": Text {
+                            text: "Loaded: " + AiLearningState.settings.loaded_model_path;
+                            color: Ink.text-mute;
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            overflow: elide;
+                        }
+                    }
+
+                    InkBanner {
+                        tone: AiLearningState.annotated-image-count == 0 ? InkTone.warn : InkTone.info;
+                        text: AiLearningState.annotated-image-count == 0
+                            ? "No hand-drawn objects yet - draw some in annotate mode."
+                            : "Uses the annotations of \{AiLearningState.annotated-image-count} " + (AiLearningState.annotated-image-count == 1 ? "image" : "images") + ". Annotate more for a better model.";
+                    }
+
+                    // -- Everything else --
+                    HorizontalLayout {
+                        alignment: start;
+                        Text {
+                            text: root.more ? "Fewer settings ‹" : "More settings ›";
+                            font-size: Ink.fs-sm;
+                            color: more-ta.has-hover ? Ink.text : Ink.focus;
+                            more-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.more = !root.more;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.more: VerticalLayout {
+                        spacing: 20px;
+
+                    // -- Algorithm + hyperparameters --
+                    VerticalLayout {
+                        spacing: 12px;
+                        SectionHeader {
+                            text: "ALL MODEL SETTINGS";
+                        }
 
                         // Random Forest
-                        if algorithm-combo.current-index == 0: VerticalLayout {
+                        if AiLearningState.settings.algorithm == 0: VerticalLayout {
                             spacing: 10px;
 
                             HorizontalLayout {
@@ -529,7 +660,7 @@ export component AiLearningDialog inherits InkDialog {
                         }
 
                         // K-Nearest Neighbors
-                        if algorithm-combo.current-index == 1: VerticalLayout {
+                        if AiLearningState.settings.algorithm == 1: VerticalLayout {
                             spacing: 10px;
 
                             HorizontalLayout {
@@ -608,7 +739,7 @@ export component AiLearningDialog inherits InkDialog {
                         }
 
                         // Neural Network (MLP)
-                        if algorithm-combo.current-index == 2: VerticalLayout {
+                        if AiLearningState.settings.algorithm == 2: VerticalLayout {
                             spacing: 10px;
 
                             HorizontalLayout {
@@ -719,7 +850,7 @@ export component AiLearningDialog inherits InkDialog {
                     }
 
                     // -- Pixel classifier: feature channels --
-                    if mode-combo.current-index == 0: VerticalLayout {
+                    if AiLearningState.settings.mode == 0: VerticalLayout {
                         spacing: 10px;
 
                         HorizontalLayout {
@@ -788,7 +919,7 @@ export component AiLearningDialog inherits InkDialog {
                     }
 
                     // -- Object classifier: metrics --
-                    if mode-combo.current-index == 1: VerticalLayout {
+                    if AiLearningState.settings.mode == 1: VerticalLayout {
                         spacing: 10px;
                         SectionHeader {
                             text: "OBJECT METRICS";
@@ -809,35 +940,6 @@ export component AiLearningDialog inherits InkDialog {
 
                             ListView {
                                 for data[index] in AiLearningState.object_metrics: ObjectMetricRow {
-                                    data: data;
-                                    row_index: index;
-                                }
-                            }
-                        }
-                    }
-
-                    // -- Which classes to train on (both modes) --
-                    VerticalLayout {
-                        spacing: 10px;
-                        SectionHeader {
-                            text: "CLASSES TO TRAIN";
-                        }
-
-                        Text {
-                            text: "Only the checked classes become prediction targets. Pre-checked classes already have at least one labeled object.";
-                            color: Ink.text-mute;
-                            font-size: Ink.fs-sm;
-                            wrap: word-wrap;
-                        }
-
-                        Rectangle {
-                            height: 150px;
-                            border-width: 1px;
-                            border-color: Ink.border-soft;
-                            border-radius: Ink.radius-sm;
-
-                            ListView {
-                                for data[index] in AiLearningState.class_selection: ClassSelectionRow {
                                     data: data;
                                     row_index: index;
                                 }
@@ -964,6 +1066,7 @@ export component AiLearningDialog inherits InkDialog {
                                 }
                             }
                         }
+                    }
                     }
                 }
             }

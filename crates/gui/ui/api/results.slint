@@ -275,6 +275,9 @@ export global ResultsState {
     in-out property <bool> active-well-disabled: false;
     // Plate level: the images of the selected well (its well-level cells).
     in-out property <[MatrixCell]> active-well-images: [];
+    // Leaves an image (its name) out of the results, or takes it back in -
+    // from the plate's well card.
+    callback toggle-image-disabled(string, bool);
     in-out property <[MatrixCell]> well-fields: [];
     in-out property <int> well-rows: 4;
     in-out property <int> well-cols: 4;
@@ -359,6 +362,12 @@ export global ResultsState {
     // -------- Charts --------
     in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
     callback chart-kind-selected(ResultsChartKind2);
+    // Boxplot: what a box is - 0 a class, 1 an image, 2 a well, 3 a plate
+    // row, 4 a plate column.
+    in-out property <int> chart-group: 0;
+    callback chart-group-selected(int);
+    // A box was clicked (its label): the List shows its objects.
+    callback chart-box-clicked(string);
 
     // Property (histogram/boxplot's single measurement, scatter's X axis).
     in-out property <[MultiSelectItem]> chart-column-items: [];

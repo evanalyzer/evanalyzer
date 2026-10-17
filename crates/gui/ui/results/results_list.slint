@@ -7,7 +7,7 @@ import { ResultsState } from "../api/results.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { InkMultiSelect } from "../ink/ink.slint";
+import { InkCheckList, InkMultiSelect } from "../ink/ink.slint";
 
 export component ResultsListView inherits Rectangle {
     property <length> side-w: 268px;
@@ -50,6 +50,12 @@ export component ResultsListView inherits Rectangle {
                     label: "Previous page";
                     enabled: ResultsState.list-page-number > 1;
                     clicked => { ResultsState.list-prev-page(); }
+                }
+                Text {
+                    text: ResultsState.list-row-count + (ResultsState.list-row-count == 1 ? " row" : " rows");
+                    font-size: Ink.fs-sm;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
                 }
                 Text {
                     text: "Page " + ResultsState.list-page-number;
@@ -251,41 +257,51 @@ export component ResultsListView inherits Rectangle {
 
                 SettingsGroup {
                     title: "SHOW";
-                    InkMultiSelect {
-                        label: "Images";
-                        summary-text: ResultsState.list-image-summary;
+                    // In place, as on the board (L): ticked = shown.
+                    InkCheckList {
+                        title: "IMAGES · " + ResultsState.list-image-summary;
                         items <=> ResultsState.list-image-items;
-                        multi-select: true;
-                        show-select-all: true;
-                        show-search: true;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => { ResultsState.list-image-selected(key, selected); }
-                        select-all => { ResultsState.list-image-select-all(); }
-                        select-none => { ResultsState.list-image-select-none(); }
-                        filter-changed(text) => { ResultsState.list-image-filter-changed(text); }
+                        searchable: true;
+                        item-selected(key, value, selected) => {
+                            ResultsState.list-image-selected(key, selected);
+                        }
+                        select-all => {
+                            ResultsState.list-image-select-all();
+                        }
+                        select-none => {
+                            ResultsState.list-image-select-none();
+                        }
+                        filter-changed(text) => {
+                            ResultsState.list-image-filter-changed(text);
+                        }
                     }
-                    InkMultiSelect {
-                        label: "Classes";
-                        summary-text: ResultsState.list-class-summary;
+                    InkCheckList {
+                        title: "CLASSES · " + ResultsState.list-class-summary;
                         items <=> ResultsState.list-class-items;
-                        multi-select: true;
-                        show-select-all: true;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => { ResultsState.list-class-selected(key, selected); }
-                        select-all => { ResultsState.list-class-select-all(); }
-                        select-none => { ResultsState.list-class-select-none(); }
+                        list-height: 108px;
+                        item-selected(key, value, selected) => {
+                            ResultsState.list-class-selected(key, selected);
+                        }
+                        select-all => {
+                            ResultsState.list-class-select-all();
+                        }
+                        select-none => {
+                            ResultsState.list-class-select-none();
+                        }
                     }
-                    InkMultiSelect {
-                        label: "Columns";
-                        summary-text: ResultsState.list-columns-summary;
+                    InkCheckList {
+                        title: "COLUMNS · " + ResultsState.list-columns-summary;
                         items <=> ResultsState.list-columns;
-                        groups: ResultsState.list-columns-groups;
-                        multi-select: true;
-                        show-select-all: true;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => { ResultsState.list-columns-item-selected(key, selected); }
-                        select-all => { ResultsState.list-columns-select-all(); }
-                        select-none => { ResultsState.list-columns-select-none(); }
+                        list-height: 156px;
+                        item-selected(key, value, selected) => {
+                            ResultsState.list-columns-item-selected(key, selected);
+                        }
+                        select-all => {
+                            ResultsState.list-columns-select-all();
+                        }
+                        select-none => {
+                            ResultsState.list-columns-select-none();
+                        }
                     }
                 }
 

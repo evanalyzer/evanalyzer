@@ -663,6 +663,21 @@ impl AiLearningController {
             };
             let project = app_state.get_project();
             let used = evanalyzer_app::ai_learning::used_object_classes(&project.settings);
+            // Hand-drawn objects per class, and the images that have any.
+            let mut counts: std::collections::HashMap<_, i32> = std::collections::HashMap::new();
+            let mut annotated_images = 0;
+            for image in project.images.list.values() {
+                let mut any = false;
+                for series in image.series.values() {
+                    for object in &series.objects {
+                        for class in &object.object_class {
+                            *counts.entry(*class).or_default() += 1;
+                            any = true;
+                        }
+                    }
+                }
+                annotated_images += i32::from(any);
+            }
             let rows: Vec<ClassSelectionRowSlint> = project
                 .classification
                 .classes()
@@ -672,11 +687,14 @@ impl AiLearningController {
                     class_index: i as i32,
                     name: c.name.clone().into(),
                     selected: used.contains(&c.global()),
+                    color: slint::Color::from_argb_encoded(c.color | 0xff00_0000),
+                    count: counts.get(&c.global()).copied().unwrap_or(0),
                 })
                 .collect();
             drop(project);
-            ui.global::<AiLearningState>()
-                .set_class_selection(ModelRc::new(VecModel::from(rows)));
+            let state = ui.global::<AiLearningState>();
+            state.set_class_selection(ModelRc::new(VecModel::from(rows)));
+            state.set_annotated_image_count(annotated_images);
         }) {
             warn!(
                 "Failed to sync AI classifier class selection to Slint: {}",

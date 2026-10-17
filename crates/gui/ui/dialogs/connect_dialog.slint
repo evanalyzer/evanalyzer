@@ -8,8 +8,9 @@ import { Ink } from "../ink/palette.slint";
 // before - and, on the first connection to a server, its certificate to
 // confirm (step 1), or a warning that it changed (step 2).
 export component ConnectDialog inherits InkDialog {
-    // Above "This computer" in the bottom bar.
+    // Above "This computer" at the right of the bottom bar.
     from-bottom: true;
+    from-right: true;
     anchor-x: 12px;
     anchor-y: 40px;
     title: ConnectState.step == 0 ? "Connect to server"

@@ -1,5 +1,5 @@
 {
-  "protocol_version": 13,
+  "protocol_version": 14,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -86,8 +86,37 @@
           "column": {
             "TYPENAME": "Column"
           }
+        },
+        {
+          "group_by": {
+            "TYPENAME": "BoxplotGroup"
+          }
+        },
+        {
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
         }
       ]
+    },
+    "BoxplotGroup": {
+      "ENUM": {
+        "0": {
+          "Class": "UNIT"
+        },
+        "1": {
+          "Image": "UNIT"
+        },
+        "2": {
+          "Well": "UNIT"
+        },
+        "3": {
+          "WellRow": "UNIT"
+        },
+        "4": {
+          "WellColumn": "UNIT"
+        }
+      }
     },
     "BoxplotResult": {
       "STRUCT": [

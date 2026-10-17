@@ -664,6 +664,8 @@ export component ResultsMatrixView inherits Rectangle {
                             }
                             if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: ListView {
                                 height: min(8, ResultsState.active-well-images.length) * 30px;
+                                // A click opens the image; its eye leaves it out of
+                                // the results (or takes it back in).
                                 for image in ResultsState.active-well-images: InkListRow {
                                     height: 30px;
                                     title: image.key;
@@ -671,6 +673,11 @@ export component ResultsMatrixView inherits Rectangle {
                                     mono: true;
                                     icon: InkIcons.images;
                                     mark: image.failed ? Ink.warn : transparent;
+                                    has-eye: true;
+                                    shown: !image.disabled;
+                                    eye-toggled => {
+                                        ResultsState.toggle-image-disabled(image.key, !image.disabled);
+                                    }
                                     clicked => {
                                         ResultsState.open-cell(ResultsState.active-well);
                                         ResultsState.open-cell(image.key);

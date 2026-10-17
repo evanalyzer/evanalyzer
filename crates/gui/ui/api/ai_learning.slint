@@ -73,6 +73,9 @@ export struct ClassSelectionRowSlint {
     class_index: int, // index into AiLearningState.class_names
     name: string,
     selected: bool,
+    color: color,
+    // Hand-drawn objects of this class, in all images.
+    count: int,
 }
 
 export struct AiTrainingSettingsSlint {
@@ -179,6 +182,8 @@ export global AiLearningState {
     // Which project classes to train on - see `ClassSelectionRowSlint`'s doc
     // comment. Shared by both pixel- and object-classifier training.
     in-out property <[ClassSelectionRowSlint]> class_selection: [];
+    // Images with hand-drawn objects of a class - what training learns from.
+    in property <int> annotated-image-count: 0;
     // Project's ObjectClass names, used as the label picker's options for
     // each training object row.
     in property <[string]> class_names: [];

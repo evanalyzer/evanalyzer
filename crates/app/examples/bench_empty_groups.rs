@@ -329,6 +329,8 @@ fn main() {
                         images: None,
                         object_classes: None,
                         column: Column::AreaSizePx,
+                        group_by: Default::default(),
+                        grouping: Default::default(),
                     })
                     .unwrap()
                     .boxes

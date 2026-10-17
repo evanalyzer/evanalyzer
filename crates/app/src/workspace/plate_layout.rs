@@ -104,6 +104,27 @@ pub fn plate_layout(images: &[&Path], plate: &PlateSettings) -> PlateLayout {
     }
 }
 
+/// The indices of `texts` (image names, or relative paths for the folder
+/// grouping) whose regex `part` (1 the well, 2 its row, 3 its column - see
+/// `PlateSettings::grouping_regex`) is `label`. Nothing for a regex that
+/// doesn't compile.
+pub fn texts_in_group(texts: &[&str], regex: &str, part: usize, label: &str) -> Vec<usize> {
+    let Ok(regex) = Regex::new(regex) else {
+        return Vec::new();
+    };
+    texts
+        .iter()
+        .enumerate()
+        .filter(|(_, text)| {
+            regex
+                .captures(text)
+                .and_then(|caps| caps.get(part))
+                .is_some_and(|m| m.as_str() == label)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// The regex for `plate`: the custom one, the folder one, or for Auto the
 /// first of the common patterns that matches the most of `texts`. `None`
 /// for a custom regex that doesn't compile.
@@ -209,6 +230,16 @@ mod tests {
         let got = layout(&["A01_01.tif"], &plate);
         assert_eq!(got.wells.len(), 0);
         assert_eq!(got.unplaced, 1);
+    }
+
+    #[test]
+    fn texts_in_group_picks_the_images_of_a_row_column_or_well() {
+        let regex = AUTO_GROUPING_PATTERNS[0];
+        let names = ["A01_01.tif", "A02_01.tif", "B01_01.tif"];
+        assert_eq!(texts_in_group(&names, regex, 2, "A"), vec![0, 1]);
+        assert_eq!(texts_in_group(&names, regex, 3, "01"), vec![0, 2]);
+        assert_eq!(texts_in_group(&names, regex, 1, "B01"), vec![2]);
+        assert!(texts_in_group(&names, "((", 1, "A01").is_empty());
     }
 
     #[test]
