@@ -10,6 +10,8 @@ pub enum TaskDispatch {
 pub struct DrawingTask {
     pub(crate) auto_adjust_selected: bool,
     pub(crate) auto_adjust_if_not_set: bool, // Apply auto adjustment only not yet set
+    /// Every channel auto-adjusted ("Auto-scale all").
+    pub(crate) auto_adjust_all: bool,
     pub(crate) is_new_image: bool,
     pub(crate) fit_to_screen: bool,
     pub(crate) is_new_series: bool,
@@ -20,6 +22,7 @@ impl Default for DrawingTask {
         Self {
             auto_adjust_selected: false,
             auto_adjust_if_not_set: false,
+            auto_adjust_all: false,
             is_new_image: false,
             fit_to_screen: false,
             is_new_series: false,
@@ -31,6 +34,7 @@ impl DrawingTask {
     pub fn reset_job(&mut self) {
         self.auto_adjust_selected = false;
         self.auto_adjust_if_not_set = false;
+        self.auto_adjust_all = false;
         self.is_new_image = false;
         self.fit_to_screen = false;
         self.is_new_series = false;
@@ -48,6 +52,7 @@ impl DrawingTask {
         DrawingTask {
             auto_adjust_selected: self.auto_adjust_selected || other.auto_adjust_selected,
             auto_adjust_if_not_set: self.auto_adjust_if_not_set || other.auto_adjust_if_not_set,
+            auto_adjust_all: self.auto_adjust_all || other.auto_adjust_all,
             is_new_image: self.is_new_image || other.is_new_image,
             fit_to_screen: self.fit_to_screen || other.fit_to_screen,
             is_new_series: self.is_new_series || other.is_new_series,
@@ -64,6 +69,7 @@ mod tests {
         let new_image_task = DrawingTask {
             auto_adjust_selected: false,
             auto_adjust_if_not_set: true,
+            auto_adjust_all: true,
             is_new_image: true,
             fit_to_screen: true,
             is_new_series: true,

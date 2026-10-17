@@ -236,6 +236,30 @@ pub fn channel_colors(channels: &[(i32, f32)]) -> std::collections::BTreeMap<i32
     colors
 }
 
+/// Wavelengths [nm] given to channels without one when an image is opened
+/// (the user setting "Color channels without a wavelength"), in order: red,
+/// green, blue, cyan, yellow, orange - distinct, and stored in the project
+/// like a wavelength the user set.
+pub const ASSIGNED_WAVELENGTHS: [f32; 6] = [635.0, 520.0, 450.0, 490.0, 580.0, 605.0];
+
+/// The display colour of each channel: its wavelength's, white without one
+/// (see [`ASSIGNED_WAVELENGTHS`] for colours given when an image opens).
+pub fn wavelength_colors(channels: &[(i32, f32)]) -> std::collections::BTreeMap<i32, [f32; 3]> {
+    channels
+        .iter()
+        .map(|(id, nm)| {
+            (
+                *id,
+                if *nm > 1.0 {
+                    wavelength_to_rgb_float(*nm)
+                } else {
+                    [1.0, 1.0, 1.0]
+                },
+            )
+        })
+        .collect()
+}
+
 /// A channel's name for display: its own, or "Channel N" (1-based) when the
 /// image has none.
 pub fn channel_display_name(name: &str, channel: i32) -> String {

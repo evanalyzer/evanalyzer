@@ -10,6 +10,7 @@ import { GlobalAppState, DialogType, ConnectionState } from "../api/state.slint"
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
+import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 
 // "EVA ▾": opens the app's one menu.
 component EvaButton inherits Rectangle {
@@ -149,6 +150,9 @@ component AutoPreviewToggle inherits Rectangle {
 export component TopBar inherits Rectangle {
     /// The project's name (and an unsaved-changes mark).
     in property <string> title;
+    // Results: the view and the analysis here, Export on the right (boards
+    // H, L, M) - no image, preview or Run.
+    property <bool> results: LayoutState.mode == WorkspaceMode.results;
 
     height: Ink.bar-h;
     background: Ink.panel;
@@ -215,7 +219,7 @@ export component TopBar inherits Rectangle {
                         background: Ink.warn;
                     }
                 }
-                InkIconButton {
+                if !root.results: InkIconButton {
                     size: 30px;
                     icon: InkIcons.refresh;
                     label: "Refresh preview";
@@ -223,7 +227,7 @@ export component TopBar inherits Rectangle {
                         PipelinesPanelState.dry-run();
                     }
                 }
-                InkIconButton {
+                if !root.results: InkIconButton {
                     size: 30px;
                     icon: InkIcons.annotate;
                     label: "Annotate";
@@ -239,12 +243,20 @@ export component TopBar inherits Rectangle {
             y: (Ink.bar-h - self.height) / 2;
         }
 
-        VerticalLayout {
+        if !root.results: VerticalLayout {
             alignment: center;
             ImageChip { }
         }
 
-        Text {
+        if root.results: ResultsBarNav {
+            padding-left: 6px;
+        }
+
+        if root.results: Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        if !root.results: Text {
             horizontal-stretch: 1;
             text: root.title;
             font-size: Ink.fs-md;
@@ -254,7 +266,9 @@ export component TopBar inherits Rectangle {
             overflow: elide;
         }
 
-        VerticalLayout {
+        if root.results: ResultsBarActions { }
+
+        if !root.results: VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
             HorizontalLayout {

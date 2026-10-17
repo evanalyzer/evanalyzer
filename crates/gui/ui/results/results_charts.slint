@@ -246,37 +246,26 @@ component BoxplotChart inherits Rectangle {
 }
 
 export component ResultsChartsView inherits Rectangle {
-    property <length> side-w: 268px;
+    property <length> side-w: 280px;
     property <length> field-w: root.side-w - 2 * Ink.pad-panel;
 
     background: Ink.ground;
 
+    // Panels on the ground (boards H, L, M): the settings left, the content
+    // beside them.
     HorizontalLayout {
-        spacing: 0px;
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            if ResultsState.chart-kind == ResultsChartKind2.histogram: HistogramChart {
-                vertical-stretch: 1;
-            }
-            if ResultsState.chart-kind == ResultsChartKind2.scatter: ScatterChart {
-                vertical-stretch: 1;
-            }
-            if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
-                vertical-stretch: 1;
-            }
-        }
+        padding: 12px;
+        spacing: 12px;
 
         // -- The chart and what it shows --
         Rectangle {
             width: root.side-w;
             background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            clip: true;
 
-            Rectangle {
-                x: 0;
-                width: 1px;
-                background: Ink.border-soft;
-            }
 
             VerticalLayout {
                 padding: Ink.pad-panel;
@@ -351,6 +340,28 @@ export component ResultsChartsView inherits Rectangle {
 
                 if ResultsState.chart-kind == ResultsChartKind2.boxplot: InkHint {
                     text: "Click a box to see its objects in the List.";
+                }
+            }
+        }
+
+        // The content, a panel beside them.
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            clip: true;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                if ResultsState.chart-kind == ResultsChartKind2.histogram: HistogramChart {
+                    vertical-stretch: 1;
+                }
+                if ResultsState.chart-kind == ResultsChartKind2.scatter: ScatterChart {
+                    vertical-stretch: 1;
+                }
+                if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
+                    vertical-stretch: 1;
                 }
             }
         }

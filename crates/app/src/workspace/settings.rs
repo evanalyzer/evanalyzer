@@ -119,6 +119,16 @@ pub struct ViewportMemorySettings {
 
     /// The card of the selected object next to it on the image.
     pub object_card: bool,
+
+    /// An image opened the first time (no scaling in the project yet) is
+    /// auto-scaled, every channel; off: the full value range. The scaling
+    /// is kept in the project either way.
+    pub auto_scale_new_images: bool,
+
+    /// Channels without an emission wavelength get distinct colours when an
+    /// image is opened (kept in the project as their wavelength); off:
+    /// white.
+    pub color_channels_without_wavelength: bool,
 }
 
 impl ViewportMemorySettings {
@@ -173,6 +183,8 @@ impl Default for ViewportMemorySettings {
             edit_during_analysis: true,
             objects_as_table: false,
             object_card: false,
+            auto_scale_new_images: true,
+            color_channels_without_wavelength: false,
         }
     }
 }

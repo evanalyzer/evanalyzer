@@ -148,7 +148,9 @@ impl ProjectController {
             .sync_project_settings_to_slint();
         self.classification_controller
             .sync_classification_to_slint();
-        self.pipelines_controller.sync_pipelines_to_slint();
+        // Another project: nothing of the last one shown.
+        self.pipelines_controller.project_switched();
+        self.image_list_controller.clear_shown_image();
         self.results_list_controller.sync_results_files_to_slint();
         // A brand-new project has no unsaved changes yet - also updates the
         // window title to the "untitled" state (see `clear_dirty`).
@@ -202,7 +204,9 @@ impl ProjectController {
             .sync_project_settings_to_slint();
         self.classification_controller
             .sync_classification_to_slint();
-        self.pipelines_controller.sync_pipelines_to_slint();
+        // Another project: nothing of the last one shown.
+        self.pipelines_controller.project_switched();
+        self.image_list_controller.clear_shown_image();
         self.results_list_controller.sync_results_files_to_slint();
         // A freshly opened project has no unsaved changes yet - also updates
         // the window title to the newly opened file (see `clear_dirty`).
@@ -276,7 +280,9 @@ impl ProjectController {
             .sync_project_settings_to_slint();
         self.classification_controller
             .sync_classification_to_slint();
-        self.pipelines_controller.sync_pipelines_to_slint();
+        // Another project: nothing of the last one shown.
+        self.pipelines_controller.project_switched();
+        self.image_list_controller.clear_shown_image();
         self.results_list_controller.sync_results_files_to_slint();
 
         if let Some(root) = image_root_dir {
@@ -1203,7 +1209,7 @@ impl ProjectController {
                 crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         let ps = ui.global::<PipelinesPanelState>();
-                        ps.set_active_pipeline_id(0);
+                        ps.set_active_pipeline_id(-1);
                         ps.set_active_pipeline_name("".into());
                         ps.set_active_pipeline_image_source("".into());
                         ps.set_active_commands(ModelRc::default());
@@ -1877,6 +1883,34 @@ pub(crate) mod tests {
         project
     }
 
+    /// A new project shows nothing of the last one: no pipeline's steps
+    /// (also when its first pipeline has the same id) and no image.
+    #[test]
+    fn a_new_project_shows_no_steps_and_no_image_of_the_last_one() {
+        let w = with_window(project_with_pipeline("Old"));
+        let panel = w.ui.global::<PipelinesPanelState>();
+        panel.set_active_pipeline_id(1);
+        panel.set_active_pipeline_name("Old".into());
+        panel.set_active_commands(ModelRc::new(VecModel::from(vec![
+            crate::PipelineCommand::default(),
+        ])));
+        let pixels = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(4, 4);
+        w.ui.set_display_image(slint::Image::from_rgb8(pixels));
+        w.ui.global::<crate::ImageMetaData>()
+            .set_image_name("old.tif".into());
+
+        w.controller.clone().create_new_project();
+        drain_ui_queue();
+
+        assert_eq!(panel.get_active_pipeline_id(), -1);
+        assert_eq!(panel.get_active_commands().row_count(), 0);
+        assert_eq!(w.ui.get_display_image().size().width, 0);
+        assert_eq!(
+            w.ui.global::<crate::ImageMetaData>().get_image_name(),
+            "No image opened"
+        );
+    }
+
     impl Window {
         fn dialog(&self) -> DialogType {
             self.ui.global::<GlobalAppState>().get_active_dialog()
@@ -2193,7 +2227,7 @@ pub(crate) mod tests {
         assert_eq!(
             w.ui.global::<PipelinesPanelState>()
                 .get_active_pipeline_id(),
-            0
+            -1
         );
 
         picker.invoke_confirm(42); // unknown: ignored

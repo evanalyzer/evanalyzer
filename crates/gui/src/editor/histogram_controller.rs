@@ -82,15 +82,13 @@ impl HistogramController {
                 },
             );
 
-            // Auto-scale of new images on / off (project setting)
+            // Every channel auto-scaled.
             let manager = Arc::clone(self);
             ui.global::<HistogramState>()
-                .on_auto_scale_off_toggled(move |off| {
+                .on_auto_adjust_all_clicked(move || {
                     manager
-                        .app_state
-                        .get_project_write()
-                        .set_histogram_auto_scale_off(off);
-                    manager.app_state.mark_dirty();
+                        .viewport_controller
+                        .trigger_image_redraw_with_auto_adjust_all();
                 });
 
             // The open image's scaling for every image
@@ -118,6 +116,12 @@ impl HistogramController {
                         .viewport_controller
                         .trigger_image_redraw_with_auto_adjust();
                 });
+
+            // Log or linear counts.
+            let manager = Arc::clone(self);
+            ui.global::<HistogramState>().on_log_scale_changed(move |log| {
+                manager.viewport_controller.set_histogram_log(log);
+            });
 
             // Comparing: the original's or the breakpoint's histogram.
             let manager = Arc::clone(self);
@@ -165,13 +169,11 @@ impl HistogramController {
     pub fn sync_histogram_settings_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
 
-        let (histogram_settings, auto_scale_off) = {
-            let project = self.app_state.get_project();
-            (
-                project.get_histograms_from_selected_channel().cloned(),
-                project.histogram_auto_scale_off(),
-            )
-        };
+        let histogram_settings = self
+            .app_state
+            .get_project()
+            .get_histograms_from_selected_channel()
+            .cloned();
         // The breakpoint's side: its own window.
         let histogram_settings = if self.viewport_controller.histogram_side() == 1 {
             self.viewport_controller.breakpoint_histogram()
@@ -181,9 +183,6 @@ impl HistogramController {
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
-                ui_ready
-                    .global::<HistogramState>()
-                    .set_auto_scale_off(auto_scale_off);
                 let Some(task) = histogram_settings else {
                     warn!(
                         "No histogram settings found for the selected channel. Cannot sync to Slint."

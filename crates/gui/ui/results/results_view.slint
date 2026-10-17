@@ -1,126 +1,56 @@
 // results/results_view.slint — the results of an analysis, in the main
-// window's Results mode: a head with the view (List, Plate, Charts), where
-// in the plate one is (the breadcrumb), the Z/T stepper and Export; below
-// it the view.
+// window's Results mode (boards H, L, M): the view, the analysis and Export
+// are in the top bar (`results_bar.slint`); here the view's panels. Before
+// an analysis is open: the analyses, to pick one.
 
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
-import { Ink, InkIcons, InkBanner, InkTone, InkSegmented, InkButton } from "../ink/ink.slint";
-import { GlobalPlaneStepper } from "results_common.slint";
+import { Ink, InkBanner, InkTone } from "../ink/ink.slint";
 import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
-
-// The head: the view, the breadcrumb, Z/T, Export.
-component ResultsHead inherits Rectangle {
-    height: Ink.head-h;
-
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 10px;
-
-        VerticalLayout {
-            alignment: center;
-            InkSegmented {
-                width: 190px;
-                label: "Results view";
-                model: ["List", "Plate", "Charts"];
-                selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : 0;
-                picked(i) => {
-                    ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : ResultsRailMode.list;
-                    ResultsState.rail-mode-selected(ResultsState.rail-mode);
-                }
-            }
-        }
-
-        // Where one is: Plate › Well C3 › D3_03.vsi - a click goes back.
-        HorizontalLayout {
-            horizontal-stretch: 1;
-            spacing: 6px;
-            for item[i] in ResultsState.breadcrumb: HorizontalLayout {
-                spacing: 6px;
-                if i > 0: Text {
-                    text: "›";
-                    color: Ink.text-faint;
-                    font-size: Ink.fs-md;
-                    vertical-alignment: center;
-                }
-                crumb-ta := TouchArea {
-                    enabled: i < ResultsState.breadcrumb.length - 1;
-                    mouse-cursor: crumb-ta.enabled ? pointer : default;
-                    clicked => {
-                        ResultsState.breadcrumb-nav(i);
-                    }
-                    Text {
-                        text: item.label;
-                        font-size: Ink.fs-md;
-                        font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
-                        color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                }
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-        }
-
-        VerticalLayout {
-            alignment: center;
-            GlobalPlaneStepper { }
-        }
-
-        VerticalLayout {
-            alignment: center;
-            InkButton {
-                text: "Export…";
-                icon: InkIcons.export;
-                clicked => {
-                    ResultsState.export-dialog-open();
-                }
-            }
-        }
-    }
-
-    Rectangle {
-        y: parent.height - 1px;
-        height: 1px;
-        background: Ink.border-soft;
-    }
-}
+import { ResultsListPanel } from "../editor/results_list_panel.slint";
 
 export component ResultsView inherits Rectangle {
-    background: Ink.panel;
+    property <bool> has-analysis: ResultsState.database-name != "";
 
-    HorizontalLayout {
+    background: Ink.ground;
+
+    // No analysis open: the analyses (the top bar's menu has them too).
+    if !root.has-analysis: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 48px;
+        width: min(420px, parent.width - 24px);
+        height: min(480px, parent.height - 96px);
+        background: Ink.panel;
+        border-radius: Ink.radius-lg;
+        border-width: 1px;
+        border-color: Ink.border;
+        clip: true;
+        ResultsListPanel { }
+    }
+
+    if root.has-analysis: VerticalLayout {
         spacing: 0px;
 
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 0px;
+        // The analysis that wrote this database didn't finish: say so
+        // before anyone draws conclusions from the numbers.
+        if ResultsState.run-warning != "": VerticalLayout {
+            padding: 12px;
+            padding-bottom: 0px;
+            InkBanner {
+                tone: InkTone.warn;
+                text: ResultsState.run-warning;
+            }
+        }
 
-            ResultsHead { }
-
-            // The analysis that wrote this database didn't finish: say so
-            // before anyone draws conclusions from the numbers.
-            if ResultsState.run-warning != "": VerticalLayout {
-                padding: 8px;
-                InkBanner {
-                    tone: InkTone.warn;
-                    text: ResultsState.run-warning;
-                }
-            }
-
-            if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
-                vertical-stretch: 1;
-            }
-            if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
-                vertical-stretch: 1;
-            }
-            if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
-                vertical-stretch: 1;
-            }
+        if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
+            vertical-stretch: 1;
+        }
+        if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
+            vertical-stretch: 1;
+        }
+        if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
+            vertical-stretch: 1;
         }
     }
 }

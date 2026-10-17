@@ -193,6 +193,19 @@ impl PipelinesController {
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
+        // Another image or series shown: the auto preview runs for it. Weak:
+        // `UiState` keeps the listener, and this controller keeps `UiState`.
+        let weak = Arc::downgrade(self);
+        self.app_state.on_image_opened(move || {
+            let weak = weak.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(manager) = weak.upgrade() {
+                    manager.schedule_auto_preview();
+                }
+            })
+            .ok();
+        });
+
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             // The remembered "Always show advanced settings"
@@ -636,7 +649,7 @@ impl PipelinesController {
                             crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_weak.upgrade() {
                                     let ps = ui.global::<PipelinesPanelState>();
-                                    ps.set_active_pipeline_id(0);
+                                    ps.set_active_pipeline_id(-1);
                                     ps.set_active_pipeline_name("".into());
                                     ps.set_active_pipeline_image_source("".into());
                                     ps.set_active_commands(ModelRc::default());
@@ -759,10 +772,7 @@ impl PipelinesController {
                     let preview = ui.global::<PreviewRunState>();
                     preview.set_done(false);
                     preview.set_status_message("".into());
-                    let app = ui.global::<GlobalAppState>();
-                    if app.get_active_dialog() == DialogType::PreviewRendering {
-                        app.set_active_dialog(DialogType::None);
-                    }
+                    preview.set_shown(false);
                 }
             });
 
@@ -2923,23 +2933,14 @@ impl PipelinesController {
     ///    to zero and forcefully triggers the `PipelineRunning` overlay dialog screen.
     /// 4. **Asynchronous Dispatch**: Offloads the generated `PipelineTask` directly to the pipeline worker.
     pub fn trigger_pipeline_preview_execution(&self) {
-        // Auto preview fires this from a debounced timer (see
-        // `pipeline_settings_changed`), completely independent of whatever
-        // dialog the user currently has open - e.g. opening the "New
-        // pipeline" dialog changes pipeline settings, which arms this same
-        // timer. Below, a successful run force-closes the dialog
-        // (`DialogType::None`) once it completes, and starting one
-        // force-opens `PreviewRendering` - either would silently steal focus
-        // from/dismiss an unrelated modal like the pipeline-edit dialog if
-        // this fired while one was open. Skip this run entirely rather than
-        // fight over `active_dialog`; the next real settings change re-arms
-        // the debounce and tries again once the user isn't mid-dialog.
-        if let Some(ui) = self.app_state.ui_handle.upgrade() {
-            let active_dialog = ui.global::<GlobalAppState>().get_active_dialog();
-            if active_dialog != DialogType::None && active_dialog != DialogType::PreviewRendering {
-                debug!("Skipping auto preview - {:?} dialog is open", active_dialog);
-                return;
-            }
+        // Dialogs don't block the window, and the preview's pill isn't a
+        // dialog: it runs with one open (e.g. the step settings while
+        // tuning) - except behind the analysis' waiting dialog.
+        if let Some(ui) = self.app_state.ui_handle.upgrade()
+            && ui.global::<GlobalAppState>().get_active_dialog() == DialogType::PipelineRunning
+        {
+            debug!("Skipping the preview - an analysis is running");
+            return;
         }
 
         let project = self.app_state.get_project();
@@ -3003,8 +3004,7 @@ impl PipelinesController {
             preview.set_total(0);
             preview.set_done(false);
             preview.set_has_error(false);
-            ui.global::<GlobalAppState>()
-                .set_active_dialog(DialogType::PreviewRendering);
+            preview.set_shown(true);
         }
 
         self.dispatch_worker_task(task);
@@ -3353,7 +3353,12 @@ impl PipelinesController {
         self.focus_controller.refresh();
         self.refresh_problems();
 
-        // Trigger preview if auto preview is enabled
+        self.schedule_auto_preview();
+    }
+
+    /// With auto preview on: the preview, once nothing has changed for
+    /// `PREVIEW_DEBOUNCE_MS` (each call restarts the wait). On the UI thread.
+    fn schedule_auto_preview(self: &Arc<Self>) {
         let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
         if auto_preview {
             let this = self.clone();
@@ -4331,6 +4336,24 @@ impl PipelinesController {
     /// this method is safe to call from any thread.
     ///
     /// Logs a `warn!` if the Slint event loop is unreachable.
+    /// Another project: no pipeline shown (the panel lists them) - also
+    /// when its pipeline ids match the last project's.
+    pub fn project_switched(self: &Arc<Self>) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<PipelinesPanelState>();
+                state.set_active_pipeline_id(-1);
+                state.set_active_pipeline_name("".into());
+                state.set_active_pipeline_image_source("".into());
+                state.set_active_commands(ModelRc::default());
+                state.set_tuned_settings(ModelRc::default());
+            }
+        })
+        .ok();
+        self.sync_pipelines_to_slint();
+    }
+
     pub fn sync_pipelines_to_slint(self: &Arc<Self>) {
         // Also runs when a project is opened or created: the focus banner
         // must follow the (focus-less) new project.
@@ -4373,9 +4396,17 @@ impl PipelinesController {
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let model = ModelRc::new(VecModel::from(slint_pipelines));
                 let state = ui.global::<PipelinesPanelState>();
-                state.set_pipelines(model);
+                // A shown pipeline that isn't there (another project opened,
+                // the first start): none shown - the panel lists them.
+                let active = state.get_active_pipeline_id();
+                if !slint_pipelines.iter().any(|p| p.id == active) {
+                    state.set_active_pipeline_id(-1);
+                    state.set_active_pipeline_name("".into());
+                    state.set_active_pipeline_image_source("".into());
+                    state.set_active_commands(ModelRc::default());
+                }
+                state.set_pipelines(ModelRc::new(VecModel::from(slint_pipelines)));
                 state.set_enabled_pipeline_count(enabled_count);
             }
         }) {
@@ -10507,7 +10538,7 @@ mod tests {
         confirm.invoke_confirm();
         drain_ui_queue();
         assert!(ui_state.get_project().pipelines.is_empty());
-        assert_eq!(panel.get_active_pipeline_id(), 0);
+        assert_eq!(panel.get_active_pipeline_id(), -1);
         assert_eq!(panel.get_active_pipeline_name(), "");
         assert_eq!(panel.get_active_commands().row_count(), 0);
     }
@@ -11218,6 +11249,48 @@ mod tests {
             controller.task_request.0.lock().unwrap().is_none(),
             "preview waits for the debounce timer"
         );
+    }
+
+    /// Pipelines synced while the shown one isn't among them (the first
+    /// start, another project opened): none shown - the panel lists them.
+    #[test]
+    fn a_shown_pipeline_that_isnt_there_falls_back_to_none() {
+        let (ui, _ui_state, controller) = selected(vec![step("Threshold")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.set_active_pipeline_id(42);
+        controller.sync_pipelines_to_slint();
+        drain_ui_queue();
+        assert_eq!(panel.get_active_pipeline_id(), -1);
+        assert_eq!(panel.get_active_commands().row_count(), 0);
+
+        // One that is there stays.
+        let id = panel.get_pipelines().row_data(0).unwrap().id;
+        panel.set_active_pipeline_id(id);
+        controller.sync_pipelines_to_slint();
+        drain_ui_queue();
+        assert_eq!(panel.get_active_pipeline_id(), id);
+    }
+
+    /// Another image (or series) shown with auto preview on: its preview
+    /// is armed like after a change - and not without auto preview.
+    #[test]
+    fn opening_another_image_arms_the_auto_preview() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        let armed = || PREVIEW_DEBOUNCE.with(|timer| timer.running());
+
+        ui_state.image_opened();
+        drain_ui_queue();
+        assert!(!armed(), "auto preview is off");
+
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
+        ui_state.image_opened();
+        drain_ui_queue();
+        assert!(armed());
+        assert!(
+            controller.task_request.0.lock().unwrap().is_none(),
+            "waits for the debounce timer"
+        );
+        PREVIEW_DEBOUNCE.with(|timer| timer.stop());
     }
 
     #[test]

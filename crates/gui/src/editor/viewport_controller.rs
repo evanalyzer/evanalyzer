@@ -293,6 +293,8 @@ pub struct ViewportController {
     /// Whose histogram the panel shows and changes: 0 the original's, 1
     /// the breakpoint image's (only while comparing).
     pub(crate) histogram_side: AtomicU8,
+    /// The histogram's counts on a logarithmic scale (default) or linear.
+    pub(crate) histogram_log: AtomicBool,
     /// The latest curve and value scale (2^bits) of each side.
     pub(crate) histograms: Mutex<[(Vec<HistogramData>, f32); 2]>,
     pub(crate) high_res_posted_count: Arc<AtomicU64>,
@@ -375,6 +377,7 @@ impl ViewportController {
             compare: Arc::new(AtomicBool::new(false)),
             breakpoint_histogram: RwLock::new(None),
             histogram_side: AtomicU8::new(0),
+            histogram_log: AtomicBool::new(true),
             histograms: Mutex::new([(Vec::new(), 1.0), (Vec::new(), 1.0)]),
             high_res_posted_count: Arc::new(AtomicU64::new(0)),
             high_res_last_count_at_false: Arc::new(AtomicU64::new(0)),
@@ -513,6 +516,16 @@ impl ViewportController {
         task.is_new_image = false;
         task.fit_to_screen = false;
         task.is_new_series = false;
+        self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
+    }
+
+    /// "Auto-scale all": every channel auto-adjusted, then redrawn.
+    pub fn trigger_image_redraw_with_auto_adjust_all(&self) {
+        self.bump_content_generation();
+        let task = DrawingTask {
+            auto_adjust_all: true,
+            ..DrawingTask::default()
+        };
         self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
     }
 
@@ -740,6 +753,38 @@ impl ViewportController {
         }
     }
 
+    /// Another project: nothing shown until an image is opened - the
+    /// renders, the tile history, the objects, the breakpoint image and its
+    /// compare are gone.
+    pub fn clear_shown_image(&self) {
+        self.bump_content_generation();
+        *self.breakpoint_channel.write().unwrap() = None;
+        *self.breakpoint_histogram.write().unwrap() = None;
+        self.compare.store(false, Ordering::Relaxed);
+        *self.histograms.lock().expect("Poisoned") = [(Vec::new(), 1.0), (Vec::new(), 1.0)];
+        if let Ok(mut active) = self.viewport_cache.active_high_res_data.write() {
+            *active = None;
+        }
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_display_image(slint::Image::default());
+                ui.set_ghost_image(slint::Image::default());
+                ui.set_object_image(slint::Image::default());
+                let view = ui.global::<ViewportSlintState>();
+                view.set_retained_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
+                view.set_compare_image(slint::Image::default());
+                view.set_compare_ready(false);
+                view.set_object_ready(false);
+                ui.global::<HistogramState>()
+                    .set_histogram_svg_path(Rc::new(VecModel::<HistogramData>::default()).into());
+                ui.global::<PipelinesPanelState>().set_has_breakpoint_image(false);
+                ui.global::<crate::ViewportObjectState>().set_compare(false);
+            }
+        })
+        .ok();
+    }
+
     /// The histogram curve and value scale (2^bits) of `side` (0 the
     /// original, 1 the breakpoint image) - shown if the panel shows that side.
     pub fn publish_histogram(&self, side: u8, curves: Vec<HistogramData>, value_scale: f32) {
@@ -762,6 +807,18 @@ impl ViewportController {
             }
         })
         .ok();
+    }
+
+    /// The histogram's counts on a logarithmic scale.
+    pub fn histogram_log(&self) -> bool {
+        self.histogram_log.load(Ordering::Relaxed)
+    }
+
+    /// Log or linear counts - the curves are drawn anew.
+    pub fn set_histogram_log(&self, log: bool) {
+        if self.histogram_log.swap(log, Ordering::Relaxed) != log {
+            self.trigger_image_redraw();
+        }
     }
 
     /// Whose histogram the panel shows: 0 the original's, 1 the breakpoint
@@ -1877,6 +1934,7 @@ mod dispatch_slot_tests {
         let new_image_task = DrawingTask {
             auto_adjust_selected: false,
             auto_adjust_if_not_set: true,
+            auto_adjust_all: false,
             is_new_image: true,
             fit_to_screen: true,
             is_new_series: true,

@@ -89,6 +89,8 @@ pub struct UiState {
     /// Told when the image states change (the images panel's plate) - see
     /// `image_states`.
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// Called once another image (or series) is shown - see `image_opened`.
+    image_opened_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 
@@ -116,6 +118,7 @@ impl UiState {
             app_settings: Mutex::new(app_settings),
             local_backend,
             image_states_listener: Mutex::new(None),
+            image_opened_listener: Mutex::new(None),
         }
     }
 
@@ -175,6 +178,24 @@ impl UiState {
     fn image_states_changed(&self) {
         if let Some(listener) = self
             .image_states_listener
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+        {
+            listener();
+        }
+    }
+
+    /// Calls `f` when another image (or series) is shown.
+    pub fn on_image_opened(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.image_opened_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// Another image (or series) is shown - e.g. the auto preview runs
+    /// for it.
+    pub fn image_opened(&self) {
+        if let Some(listener) = self
+            .image_opened_listener
             .lock()
             .expect("Poisoned")
             .as_ref()

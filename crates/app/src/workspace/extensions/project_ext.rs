@@ -7,7 +7,8 @@ use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use crate::workspace::extensions::object_ext::ObjectExt;
 use crate::workspace::extensions::utils::{
-    channel_colors, channel_display_name, get_relative_key, is_in_root, rgb_to_u32,
+    ASSIGNED_WAVELENGTHS, channel_colors, channel_display_name, get_relative_key, is_in_root,
+    rgb_to_u32, wavelength_colors,
 };
 use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
@@ -133,10 +134,11 @@ pub trait ProjectExt {
     fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]>;
     fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]>;
     fn set_grayscale(&mut self, grayscale: bool);
-    /// Off: a newly opened image is not auto-scaled (see
-    /// `GlobalImageSettings::histogram_auto_scale_off`).
-    fn histogram_auto_scale_off(&self) -> bool;
-    fn set_histogram_auto_scale_off(&mut self, off: bool);
+    /// Channels without a wavelength (`channels`: channel, the image's
+    /// wavelength, `<= 1.0` none) get one of [`ASSIGNED_WAVELENGTHS`] for
+    /// the project - not one a channel already shows. Not for a single
+    /// channel (it stays white). Whether anything was assigned.
+    fn assign_missing_wavelengths(&mut self, channels: &[(i32, f32)]) -> bool;
     /// The open image's scaling becomes the project's, for every image: the
     /// images' own scalings are removed.
     fn apply_histograms_to_all_images(&mut self);
@@ -682,18 +684,51 @@ impl ProjectExt for ProjectWithRuntime {
                 .map(|(id, _)| (*id, [1.0, 1.0, 1.0]))
                 .collect();
         }
-        channel_colors(channels)
+        wavelength_colors(channels)
     }
 
     /// Switches grayscale mode. Switching it on leaves one channel visible
     /// (gray channels can't be told apart when overlaid): the selected one
     /// if it is visible, else the first visible one.
-    fn histogram_auto_scale_off(&self) -> bool {
-        self.images.settings.histogram_auto_scale_off
-    }
-
-    fn set_histogram_auto_scale_off(&mut self, off: bool) {
-        self.images.settings.histogram_auto_scale_off = off;
+    fn assign_missing_wavelengths(&mut self, channels: &[(i32, f32)]) -> bool {
+        if channels.len() < 2 {
+            return false;
+        }
+        let project_nm = |p: &Self, id: i32| {
+            p.images
+                .settings
+                .channels
+                .get(&id)
+                .and_then(|c| c.emission_wave_length)
+                .filter(|nm| *nm > 1.0)
+        };
+        let shown: Vec<f32> = channels
+            .iter()
+            .filter_map(|(id, nm)| project_nm(self, *id).or((*nm > 1.0).then_some(*nm)))
+            .collect();
+        let missing: Vec<i32> = channels
+            .iter()
+            .filter(|(id, nm)| *nm <= 1.0 && project_nm(self, *id).is_none())
+            .map(|(id, _)| *id)
+            .collect();
+        if missing.is_empty() {
+            return false;
+        }
+        // Not a colour a channel already shows (within 15 nm).
+        let free: Vec<f32> = ASSIGNED_WAVELENGTHS
+            .iter()
+            .copied()
+            .filter(|nm| !shown.iter().any(|s| (s - nm).abs() < 15.0))
+            .collect();
+        let palette = if free.is_empty() {
+            ASSIGNED_WAVELENGTHS.to_vec()
+        } else {
+            free
+        };
+        for (id, nm) in missing.into_iter().zip(palette.into_iter().cycle()) {
+            self.set_global_emission_wavel_length(id, nm);
+        }
+        true
     }
 
     fn apply_histograms_to_all_images(&mut self) {
@@ -2298,12 +2333,16 @@ mod tests {
     }
 
     #[test]
-    fn channels_without_wavelengths_get_distinct_colours_and_grayscale_makes_them_white() {
+    fn channels_without_wavelengths_are_white_until_assigned_and_grayscale_makes_them_white() {
         let mut project = project_with_three_unnamed_channels();
-        let colors = project.get_channel_display_colors();
-        assert_eq!(colors[&0], [1.0, 0.0, 0.0]);
-        assert_eq!(colors[&1], [0.0, 1.0, 0.0]);
-        assert_eq!(colors[&2], [0.0, 0.0, 1.0]);
+        let white = [1.0, 1.0, 1.0];
+        assert!(project.get_channel_display_colors().values().all(|c| *c == white));
+
+        // Assigned (the user setting): distinct colours, none white.
+        project.assign_missing_wavelengths(&[(0, 0.0), (1, 0.0), (2, 0.0)]);
+        let colors: Vec<[f32; 3]> = project.get_channel_display_colors().into_values().collect();
+        assert!(colors.iter().all(|c| *c != white), "{colors:?}");
+        assert!(colors[0] != colors[1] && colors[1] != colors[2] && colors[0] != colors[2]);
 
         project.set_grayscale(true);
         assert!(
@@ -3023,11 +3062,29 @@ mod tests {
     }
 
     #[test]
-    fn auto_scale_of_new_images_is_a_project_setting_on_by_default() {
+    fn channels_without_a_wavelength_get_distinct_ones_for_the_project() {
         let mut project = project_with_one_image();
-        assert!(!project.histogram_auto_scale_off());
-        project.set_histogram_auto_scale_off(true);
-        assert!(project.histogram_auto_scale_off());
+        // Channel 1 is red already (635 nm): the others skip red.
+        assert!(project.assign_missing_wavelengths(&[(0, 0.0), (1, 635.0), (2, 0.0)]));
+        let nm = |p: &ProjectWithRuntime, id: i32| {
+            p.images.settings.channels.get(&id).and_then(|c| c.emission_wave_length)
+        };
+        assert_eq!(nm(&project, 0), Some(520.0));
+        assert_eq!(nm(&project, 1), None, "it has its own");
+        assert_eq!(nm(&project, 2), Some(450.0));
+        // Once there, nothing more to assign.
+        assert!(!project.assign_missing_wavelengths(&[(0, 0.0), (1, 635.0), (2, 0.0)]));
+        // A single channel stays white.
+        let mut single = project_with_one_image();
+        assert!(!single.assign_missing_wavelengths(&[(0, 0.0)]));
+    }
+
+    #[test]
+    fn a_channel_without_a_wavelength_is_shown_white() {
+        let project = project_with_one_image();
+        let colors = project.channel_display_colors(&[(0, 0.0), (1, 0.0)]);
+        assert_eq!(colors[&0], [1.0, 1.0, 1.0]);
+        assert_eq!(colors[&1], [1.0, 1.0, 1.0]);
     }
 
     #[test]

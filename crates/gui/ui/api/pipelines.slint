@@ -312,7 +312,8 @@ export global PipelinesPanelState {
         in property <int> cat-count-measure;
 
         // -- User selection state --
-    in-out property <int> active-pipeline-id;
+    // -1: none shown (the steps panel lists the pipelines to pick one).
+    in-out property <int> active-pipeline-id: -1;
         // The step line last clicked (its index in `active-commands`; -1
         // none) - what the step shortcuts act on (Enter, Ctrl /, F9, Ctrl D,
         // Alt ↑/↓, Del; see shortcuts.slint).

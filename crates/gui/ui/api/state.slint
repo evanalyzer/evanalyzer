@@ -19,7 +19,6 @@ export enum DialogType {
     pipeline_edit,
     pipeline_delete_confirm,
     pipeline_running,
-    preview_rendering,
     warning,
     template_meta,
     project_template,
@@ -194,9 +193,11 @@ export global HistogramState {
     // Histogram
     callback histogram_adjusted(float, float, float, float);
         callback auto_adjust_clicked();
-        // A newly opened image keeps the project's scaling (project setting).
-        in-out property <bool> auto-scale-off: false;
-        callback auto-scale-off-toggled(bool);
+        // Every channel auto-scaled.
+        callback auto_adjust_all_clicked();
+        // The counts on a logarithmic scale (default) or linear.
+        in-out property <bool> log-scale: true;
+        callback log-scale-changed(bool);
         // The open image's scaling for every image of the project.
         callback apply-to-all-images();
 

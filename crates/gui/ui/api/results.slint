@@ -173,22 +173,12 @@ export global ResultsState {
     in-out property <bool> list-with-coloc-details: false;
     callback list-with-coloc-details-changed(bool);
 
-    in-out property <[MultiSelectItem]> list-with-coloc-details-by-items: [
-        { key: "flat", value: "Flat", group: "", selected: true },
-        { key: "details", value: "Details", group: "", selected: false },
-    ];
-    in-out property <string> list-with-coloc-details-summary: "Flat";
 
     // Rows (one row per object / per (image, class)) or the classes side by
     // side: per image one column block per class (`transpond_table` on
     // `ListFilter`/`GroupedByImageFilter` in results_generator.rs).
     in-out property <bool> list-transpond: false;
     callback list-transpond-changed(bool);
-    in-out property <[MultiSelectItem]> list-layout-items: [
-        { key: "rows", value: "Rows", group: "", selected: true },
-        { key: "side-by-side", value: "Side by side", group: "", selected: false },
-    ];
-    in-out property <string> list-layout-summary: "Rows";
 
     // Table body. Rust only ever fills this with the current page (see
     // ResultsStateController::update_list_view) — never the full result set

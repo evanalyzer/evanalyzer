@@ -1,0 +1,165 @@
+// results/results_bar.slint — Results in the top bar (boards H, L, M): the
+// view (List, Plate, Charts), the analysis shown (a menu of all), where in
+// the plate one is; on the right Z/T and Export.
+
+import { ResultsRailMode, ResultsState } from "../api/results.slint";
+import { ResultsListState } from "../api/results_list.slint";
+import { Ink, InkIcons, InkSegmented, InkButton, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { GlobalPlaneStepper } from "results_common.slint";
+
+// The analysis shown: "Analysis 16 Oct ▾" - a click lists them all.
+component AnalysisChip inherits Rectangle {
+    callback clicked;
+    property <bool> has-one: ResultsListState.selected_result_index >= 0 && ResultsListState.selected_result_index < ResultsListState.results_list.length;
+
+    width: min(row.preferred-width, 300px);
+    height: 26px;
+    border-radius: Ink.radius-md;
+    background: ta.has-hover ? Ink.hover : transparent;
+    accessible-role: button;
+    accessible-label: "Analysis";
+
+    row := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 5px;
+        Text {
+            text: root.has-one ? ResultsListState.results_list[ResultsListState.selected_result_index].name : ResultsState.database-name != "" ? ResultsState.database-name : "Pick an analysis";
+            font-size: Ink.fs-md;
+            color: root.has-one || ResultsState.database-name != "" ? Ink.text : Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: InkIcons.caret-down;
+            width: 9px;
+            colorize: Ink.text-dim;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Left of the bar: view, analysis, breadcrumb.
+export component ResultsBarNav inherits HorizontalLayout {
+    spacing: 10px;
+
+    VerticalLayout {
+        alignment: center;
+        InkSegmented {
+            width: 190px;
+            label: "Results view";
+            model: ["List", "Plate", "Charts"];
+            selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : 0;
+            picked(i) => {
+                ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : ResultsRailMode.list;
+                ResultsState.rail-mode-selected(ResultsState.rail-mode);
+            }
+        }
+    }
+
+    chip-box := VerticalLayout {
+        alignment: center;
+        chip := AnalysisChip {
+            clicked => {
+                analyses-menu.show();
+            }
+        }
+    }
+
+    // In the plate: › Well C3 › D3_03.vsi - a click goes back.
+    if ResultsState.breadcrumb.length > 1: HorizontalLayout {
+        spacing: 6px;
+        for item[i] in ResultsState.breadcrumb: HorizontalLayout {
+            spacing: 6px;
+            if i > 0: Text {
+                text: "›";
+                color: Ink.text-faint;
+                font-size: Ink.fs-md;
+                vertical-alignment: center;
+            }
+            crumb-ta := TouchArea {
+                enabled: i < ResultsState.breadcrumb.length - 1;
+                mouse-cursor: crumb-ta.enabled ? pointer : default;
+                clicked => {
+                    ResultsState.breadcrumb-nav(i);
+                }
+                Text {
+                    text: item.label;
+                    font-size: Ink.fs-md;
+                    font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
+                    color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+
+    analyses-menu := PopupWindow {
+        x: chip-box.x;
+        y: Ink.bar-h - 6px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.bar-h - 6px;
+            menu-width: 300px;
+            InkMenuCaption {
+                text: "ANALYSES · \{ResultsListState.results_list.length}";
+            }
+            for data[index] in ResultsListState.results_list: InkMenuItem {
+                icon: InkIcons.table;
+                text: data.name;
+                shortcut: data.modified;
+                checked: ResultsListState.selected_result_index == index;
+                clicked => {
+                    ResultsListState.selected_result_index = index;
+                    ResultsListState.result_selected(data.path);
+                }
+            }
+            if ResultsListState.results_list.length == 0: InkMenuItem {
+                text: "None yet - Run writes one";
+                enabled: false;
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.refresh;
+                text: "Refresh";
+                clicked => {
+                    ResultsListState.refresh_clicked();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.folder;
+                text: "Show the output folder";
+                clicked => {
+                    ResultsListState.open_folder_clicked();
+                }
+            }
+        }
+    }
+}
+
+// Right of the bar: Z/T, Export.
+export component ResultsBarActions inherits HorizontalLayout {
+    spacing: 8px;
+    VerticalLayout {
+        alignment: center;
+        GlobalPlaneStepper { }
+    }
+    VerticalLayout {
+        alignment: center;
+        InkButton {
+            text: "Export…";
+            icon: InkIcons.export;
+            enabled: ResultsState.database-name != "";
+            clicked => {
+                ResultsState.export-dialog-open();
+            }
+        }
+    }
+}
