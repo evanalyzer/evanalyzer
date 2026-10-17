@@ -72,6 +72,10 @@ export struct ResultRow {
     // The row's image failed (its analysis stopped with an error), so its
     // values are incomplete - drawn in the warning color.
     failed: bool,
+    // The column showing the object's class (-1 none) and its color - a
+    // dot before the name.
+    class-column: int,
+    class-color: color,
 }
 
 export struct ChartScatterPoint {
@@ -101,6 +105,8 @@ export global ResultsState {
     in-out property <bool> loading: false;
     // File name of the open results database, for the status bar.
     in-out property <string> database-name: "";
+    // "81 images · 1 disabled" - the status bar's.
+    in-out property <string> analysis-summary: "";
 
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
@@ -194,6 +200,14 @@ export global ResultsState {
     // measurement isn't needed here.
     in-out property <[float]> list-column-widths: [];
     in-out property <[ResultRow]> list-rows: [];
+    // The row clicked (its object opened in its image), -1 none.
+    in-out property <int> list-selected-row: -1;
+    // A result's object shown on its image: the window is on the image, a
+    // bar on it says which and leads back ("peek").
+    in-out property <bool> peek: false;
+    in-out property <string> peek-label;
+    // A List row's: ‹ › step to the next row's object.
+    in-out property <bool> peek-can-step: false;
     in-out property <int> list-row-count: 0;
 
     // Next/previous pagination (not infinite scroll — see the discussion on
@@ -327,7 +341,10 @@ export global ResultsState {
     // disabled/enabled (see `MatrixCell.disabled`/`active-well-disabled`),
     // then refreshes the well grid so its heatmap reflects the change.
     callback toggle-active-well-disabled();
+    // A tile of the image heatmap: selected (its card); opened - shown on
+    // its image ("Show on image", a double click).
     callback image-heatmap-cell-clicked(string);
+    callback image-heatmap-cell-open(string);
     // Well level, drag and drop: the image at grid position `from` (row by
     // row) was dropped on position `to` - the two swap places in the well's
     // image order (the project's plate settings).
@@ -352,12 +369,21 @@ export global ResultsState {
     // -------- Charts --------
     in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
     callback chart-kind-selected(ResultsChartKind2);
+    // Display: the histogram's bins and counts on a log scale; how many of
+    // the scatter's points are drawn (index into 500 / 2000 / 10000 / all).
+    in-out property <int> chart-bins: 24;
+    in-out property <bool> chart-log-counts: false;
+    in-out property <int> chart-points-index: 1;
+    callback chart-display-changed();
     // Boxplot: what a box is - 0 a class, 1 an image, 2 a well, 3 a plate
     // row, 4 a plate column.
     in-out property <int> chart-group: 0;
     callback chart-group-selected(int);
     // A box was clicked (its label): the List shows its objects.
     callback chart-box-clicked(string);
+    // A click in the scatter plot: where (0..1 of the points' area, y up)
+    // and that area's size in px - the nearest point's object opens.
+    callback chart-scatter-clicked(float, float, float, float);
 
     // Property (histogram/boxplot's single measurement, scatter's X axis).
     in-out property <[MultiSelectItem]> chart-column-items: [];

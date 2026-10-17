@@ -1,5 +1,5 @@
 {
-  "protocol_version": 14,
+  "protocol_version": 16,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -269,13 +269,13 @@
     "Column": {
       "ENUM": {
         "0": {
-          "ObjectId": "UNIT"
+          "ImageName": "UNIT"
         },
         "1": {
-          "TrackId": "UNIT"
+          "ObjectId": "UNIT"
         },
         "2": {
-          "ImageName": "UNIT"
+          "TrackId": "UNIT"
         },
         "3": {
           "ObjectClass": "UNIT"
@@ -1137,6 +1137,17 @@
         },
         {
           "y": "F64"
+        },
+        {
+          "image": "U32"
+        },
+        {
+          "bbox_px": {
+            "TUPLEARRAY": {
+              "CONTENT": "U32",
+              "SIZE": 4
+            }
+          }
         }
       ]
     },
@@ -1147,6 +1158,11 @@
             "SEQ": {
               "TYPENAME": "ScatterPoint"
             }
+          }
+        },
+        {
+          "images": {
+            "SEQ": "STR"
           }
         },
         {

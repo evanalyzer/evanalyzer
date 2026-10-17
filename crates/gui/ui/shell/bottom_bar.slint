@@ -78,7 +78,8 @@ export component BottomBar inherits Rectangle {
                 // Results: the database shown.
                 if LayoutState.mode == WorkspaceMode.results: InkStatusItem {
                     icon: ResultsState.loading ? InkIcons.busy : InkIcons.table;
-                    text: (ResultsState.loading ? "Loading" : "Ready") + (ResultsState.database-name == "" ? "" : " · " + ResultsState.database-name);
+                    text: (ResultsState.loading ? "Loading" : "Ready") + (ResultsState.database-name == "" ? "" : " · " + ResultsState.database-name)
+                        + (ResultsState.analysis-summary == "" ? "" : " · " + ResultsState.analysis-summary);
                 }
                 // Under the pointer.
                 if LayoutState.mode != WorkspaceMode.results: HorizontalLayout {

@@ -27,12 +27,14 @@ export component ClassEditDialog inherits InkDialog {
     // Left of the right-hand panels.
     from-right: true;
     anchor-x: Places.beside-right;
-    anchor-y: 96px;
+    // At the class row it's for (see `anchor-y`).
+    anchor-y: ClassificationSettingsState.anchor-y;
     title: "Class settings";
     card-width: 320px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
         ClassificationSettingsState.reset_to_zero();
+        ClassificationSettingsState.anchor-y = 96px;
     }
 
     HorizontalLayout {
@@ -155,6 +157,7 @@ export component ClassEditDialog inherits InkDialog {
             clicked => {
                 GlobalAppState.active-dialog = DialogType.none;
                 ClassificationSettingsState.reset_to_zero();
+                ClassificationSettingsState.anchor-y = 96px;
             }
         }
 
@@ -166,6 +169,7 @@ export component ClassEditDialog inherits InkDialog {
                 ClassificationSettingsState.settings.new-id = ClassificationSettingsState.id-index == 0 ? (ClassificationSettingsState.settings.class-id < 0 ? -1 : ClassificationSettingsState.settings.class-id) : ClassificationSettingsState.id-options[ClassificationSettingsState.id-index].to-float();
                 ClassificationSettingsState.apply_classification_settings(ClassificationSettingsState.settings);
                 GlobalAppState.active-dialog = DialogType.none;
+                ClassificationSettingsState.anchor-y = 96px;
             }
         }
     }

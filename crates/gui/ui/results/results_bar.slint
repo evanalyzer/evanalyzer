@@ -49,6 +49,9 @@ component AnalysisChip inherits Rectangle {
 // Left of the bar: view, analysis, breadcrumb.
 export component ResultsBarNav inherits HorizontalLayout {
     spacing: 10px;
+    // Left, as wide as it is: the crumbs don't stretch it.
+    alignment: start;
+    horizontal-stretch: 0;
 
     VerticalLayout {
         alignment: center;
@@ -73,24 +76,29 @@ export component ResultsBarNav inherits HorizontalLayout {
         }
     }
 
-    // In the plate: › Well C3 › D3_03.vsi - a click goes back.
-    if ResultsState.breadcrumb.length > 1: HorizontalLayout {
+    // Inside a well (board H): Plate › Well C3 › D3_03.vsi - a click goes
+    // back. Not at the plate itself (the tab says that); "All results" is
+    // the List tab.
+    if ResultsState.breadcrumb.length > 2: HorizontalLayout {
         spacing: 6px;
         for item[i] in ResultsState.breadcrumb: HorizontalLayout {
             spacing: 6px;
-            if i > 0: Text {
+            if i > 1: Text {
                 text: "›";
                 color: Ink.text-faint;
                 font-size: Ink.fs-md;
                 vertical-alignment: center;
             }
-            crumb-ta := TouchArea {
+            if i > 0: crumb-ta := TouchArea {
+                // Long image names don't push the bar.
+                width: min(crumb-text.preferred-width, 180px);
                 enabled: i < ResultsState.breadcrumb.length - 1;
                 mouse-cursor: crumb-ta.enabled ? pointer : default;
                 clicked => {
                     ResultsState.breadcrumb-nav(i);
                 }
-                Text {
+                crumb-text := Text {
+                    width: 100%;
                     text: item.label;
                     font-size: Ink.fs-md;
                     font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;

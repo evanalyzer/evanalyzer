@@ -645,12 +645,25 @@ fn run(
     ui.run()
 }
 
+/// "Linux x86_64", "macOS aarch64", "Windows x86_64" - for the About.
+fn platform_text(os: &str, arch: &str) -> String {
+    let os = match os {
+        "linux" => "Linux",
+        "macos" => "macOS",
+        "windows" => "Windows",
+        other => other,
+    };
+    format!("{os} {arch}")
+}
+
 /// About dialog content: version comes from the crate version (which the
 /// release CI patches to the git tag before building), licenses are fixed.
 /// The system tab is filled per opening by [`attach_system_info`].
 fn load_about_dialog_information(ui: &AppWindow) {
     let info = ui.global::<AppInfoState>();
     info.set_version(env!("CARGO_PKG_VERSION").into());
+    info.set_prerelease(env!("CARGO_PKG_VERSION").contains('-'));
+    info.set_platform(platform_text(std::env::consts::OS, std::env::consts::ARCH).into());
     let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
         .split("\n\n")
         .map(|p| p.into())

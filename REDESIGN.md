@@ -112,6 +112,38 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   beside, Plate's cell card right (300 px, always there so the grid
   doesn't move); no analysis open: the analyses to pick one; List's
   "Coloc details" and "Transpose" as switches.
+- **Results, this round:** a clicked List row stays highlighted; a click
+  on an object (List row, heatmap tile, scatter point - points carry
+  their object now, protocol 15) opens it on its image with a bar there
+  ("RESULTS · Row 12 of 200 ‹ › Back to results ✕") instead of the
+  results covering the image; the breadcrumb only inside a well
+  ("Plate › Well C3 › image", names elided); the chart kinds as tiles;
+  the status bar "81 images · 1 disabled"; `InkSegmented` only shows
+  the caller's state (a click no longer broke its binding - the tabs
+  didn't follow "All results").
+- **Images › Plate:** a plate bigger than 8 x 12 in sections of 8 x 12
+  (a picker above it: "A1–H12 · A13–H24 / …").
+- **Class settings** open at the clicked class row.
+- **About (board Y):** dark hero (version, platform, stable / pre-
+  release), tabs About (the people turning around the mark, the
+  creators, AGPL-3.0), the contributors, System (where the work runs:
+  cores, RAM, CUDA, OS) and Licenses (searchable, EVAnalyzer's own first);
+  only facts the app knows (no live load charts, update check, build id).
+- **Series:** the top bar's image chip shows "Series 2 of 5 ▾" (a menu with
+  the sizes); an image with several series and none chosen for the
+  project asks once which (over the image, "Decide later").
+- **Results, round 3:** a click selects (List row, heatmap tile); "Show on
+  image ↗" or a double click shows it on its image; Image is the first
+  column (`Column` order), defaults Image · Object ID · Class · Area px ·
+  Area nm · Circularity; object ids by their last block; space between
+  the columns; the class's color as a dot; Charts › Display: histogram
+  bins and log counts, the scatter's points drawn.
+- **Histogram axis:** auto-scale's axis reaches the image's real values
+  (it stopped 1 % past the 99.5 % white point - the brightest pixels,
+  often the signal, were cut off the histogram).
+- **Series:** a project series the image lacks shows its first series
+  (an analysis still refuses it); an image that can't be read empties
+  the viewer instead of keeping the last one.
 - **Fixed:** auto preview didn't run for another image or series; a
   preview closed the open dialog (its pill used the dialog slot) and was
   skipped while one was open; a new / opened project kept the last one's
@@ -172,17 +204,11 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - [ ] **Object card (F):** "Coloc with" (not in the object data yet).
 - [ ] **Images (G):** "+ Add images" (images are the folder's content
       today; there is no action for single images).
-- [ ] **Dialogs:** class settings exactly at the clicked class row (they
-      open at the top of the classes panel). More than one open at a time:
-      decided against (TODO, IDEA).
-- [ ] **Charts (M):** a click on a scatter point (points carry no object
-      yet) - boxes do.
-- [ ] **Charts (M):** the chart kinds as tiles, the small "same values"
-      previews (histogram, scatter) under the chart; the status bar's
-      "Analysis · 81 images · 1 disabled".
-- [ ] **List (L):** "Rows 1–200 of N" (the total isn't known; it shows the
-      page's rows).
-- [ ] **About:** a redesign (not in this round's scope).
+- [ ] **Charts (M):** the small "same values" previews (histogram,
+      scatter) under the chart - left out on purpose: two more queries on
+      every change.
+- [ ] **List (L):** "Rows 1–200 of N" - not now (TODO: a COUNT per
+      change costs speed for little).
 - [ ] **Export (R):** "Images with objects drawn".
 
 ### Follow-ups of this round

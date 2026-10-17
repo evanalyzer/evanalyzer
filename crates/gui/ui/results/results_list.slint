@@ -1,8 +1,8 @@
 // results_list.slint — the results as a table (a row per object or per
 // image), with what to show and how in the settings column on the right.
-import { InkButton, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
 import { SettingsGroup } from "results_common.slint";
-import { ResultsState } from "../api/results.slint";
+import { ResultRow, ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
@@ -11,6 +11,11 @@ import { InkCheckList, InkMultiSelect, InkSwitch } from "../ink/ink.slint";
 
 export component ResultsListView inherits Rectangle {
     property <length> side-w: 280px;
+    // The row clicked (opened in its image) - until other rows come.
+    property <[ResultRow]> rows: ResultsState.list-rows;
+    changed rows => {
+        ResultsState.list-selected-row = -1;
+    }
     property <length> field-w: root.side-w - 2 * Ink.pad-panel;
 
     background: Ink.ground;
@@ -228,6 +233,8 @@ export component ResultsListView inherits Rectangle {
                                 width: max(self.preferred-width, parent.width);
                                 padding-left: 16px;
                                 padding-right: 16px;
+                                // Space between the columns (the same in the rows).
+                                spacing: 18px;
 
                                 for header[idx] in ResultsState.list-column-headers: Rectangle {
                                     horizontal-stretch: 1;
@@ -268,7 +275,7 @@ export component ResultsListView inherits Rectangle {
                                 height: 30px;
                                 width: header-layout.width;
 
-                                background: ta.has-hover ? Ink.hover : (ResultsState.list-with-coloc-details && row.alternating ? Ink.field : transparent);
+                                background: index == ResultsState.list-selected-row ? Ink.selection : ta.has-hover ? Ink.hover : (ResultsState.list-with-coloc-details && row.alternating ? Ink.field : transparent);
                                 opacity: row.disabled ? 0.55 : 1.0;
 
                                 property <bool> row-visible: self.y + self.height >= -body-list.content-y - 3 * self.height
@@ -284,7 +291,14 @@ export component ResultsListView inherits Rectangle {
 
                                 ta := TouchArea {
                                     mouse-cursor: pointer;
-                                    clicked => { ResultsState.list-row-clicked(index); }
+                                    // A click selects; a double click (or "Show on
+                            // image") shows the object on its image.
+                            clicked => {
+                                ResultsState.list-selected-row = index;
+                            }
+                            double-clicked => {
+                                ResultsState.list-row-clicked(index);
+                            }
                                 }
 
                                 if row-visible: row-layout := HorizontalLayout {
@@ -292,6 +306,7 @@ export component ResultsListView inherits Rectangle {
                                     padding-right: 16px;
                                     padding-top: 7px;
                                     padding-bottom: 7px;
+                                    spacing: 18px;
 
                                     // Column virtualization, same reasoning as
                                     // `row-visible` above: with 600-700 selectable
@@ -308,9 +323,19 @@ export component ResultsListView inherits Rectangle {
                                         property <bool> col-visible: self.x + self.width >= -body-list.content-x - 3 * self.width
                                             && self.x <= -body-list.content-x + header-rect.width + 3 * self.width;
 
+                                        // The class: its color before the name.
+                                        if col-visible && c-index == row.class-column: Rectangle {
+                                            x: 0px;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 8px;
+                                            height: 8px;
+                                            border-radius: 4px;
+                                            background: row.class-color;
+                                        }
                                         if col-visible: Text {
+                                            x: c-index == row.class-column ? 14px : 0px;
                                             text: cell;
-                                            width: ResultsState.list-column-widths[c-index] * 1px;
+                                            width: ResultsState.list-column-widths[c-index] * 1px - self.x;
                                             font-size: Ink.fs-md;
                                             font-family: Ink.font-mono;
                                             color: row.failed ? Ink.warn : Ink.text;
@@ -322,7 +347,20 @@ export component ResultsListView inherits Rectangle {
                                     Rectangle { }
                                 }
 
-                                if row.disabled: Rectangle {
+                                // The selected object: on its image (at the right of
+                        // what's in view, also when scrolled sideways).
+                        if index == ResultsState.list-selected-row && ResultsState.list-group-by-summary == "Objects": InkButton {
+                            x: -body-list.content-x + body-list.visible-width - self.width - 10px;
+                            y: (parent.height - self.height) / 2;
+                            small: true;
+                            kind: InkButtonKind.primary;
+                            text: "Show on image ↗";
+                            clicked => {
+                                ResultsState.list-row-clicked(index);
+                            }
+                        }
+
+                        if row.disabled: Rectangle {
                                     y: parent.height / 2 - 1px;
                                     x: 0;
                                     width: parent.width;
@@ -356,7 +394,7 @@ export component ResultsListView inherits Rectangle {
                         x: 16px;
                         height: parent.height;
                         vertical-alignment: center;
-                        text: "Click a row to open the object in its image";
+                        text: "Double-click a row - or Show on image - to see the object on its image";
                     }
                 }
             }

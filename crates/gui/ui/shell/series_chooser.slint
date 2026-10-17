@@ -1,0 +1,106 @@
+// shell/series_chooser.slint — an image with several series, and the
+// project hasn't chosen one yet: which is analysed (it counts for every
+// image - in VSI files the others are often overviews or labels). Asked
+// once; "Decide later" leaves it to the top bar's series picker.
+
+import { ChannelState } from "../api/state.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
+import { Ink, InkButton, InkButtonKind, InkCaption, InkHint } from "../ink/ink.slint";
+
+component SeriesRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> current;
+    callback clicked;
+
+    height: 36px;
+    border-radius: Ink.radius-md;
+    background: root.current ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.title;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.title;
+            font-size: Ink.fs-md;
+            font-weight: root.current ? 600 : 400;
+            color: Ink.text;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.detail;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SeriesChooser inherits Rectangle {
+    callback later;
+
+    width: 340px;
+    height: body.preferred-height;
+    background: Ink.glass;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: Ink.shadow;
+    accessible-role: groupbox;
+    accessible-label: "Which series";
+
+    TouchArea { }
+
+    body := VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        InkCaption {
+            text: "THIS IMAGE HAS " + ImageMetaData.nr_series + " SERIES";
+        }
+        Text {
+            text: "Which one do you analyse?";
+            font-size: Ink.fs-lg;
+            font-weight: 600;
+            color: Ink.text;
+        }
+        InkHint {
+            text: "It counts for every image of the project. The others are often overviews or labels. You can change it any time in the top bar.";
+        }
+        VerticalLayout {
+            spacing: 2px;
+            for s in ImageMetaData.series_list: SeriesRow {
+                title: "Series " + (s.idx + 1);
+                detail: s.width > 0 && s.height > 0 ? s.width + " × " + s.height : "";
+                current: ChannelState.selected_series == s.idx;
+                clicked => {
+                    ChannelState.selected_series = s.idx;
+                    ChannelState.trigger_active_series_changed();
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            InkButton {
+                small: true;
+                kind: InkButtonKind.quiet;
+                text: "Decide later";
+                clicked => {
+                    root.later();
+                }
+            }
+        }
+    }
+}

@@ -343,6 +343,7 @@ impl ResultCharts {
         else {
             return Ok(ScatterResult {
                 points: Vec::new(),
+                images: Vec::new(),
                 x_min: 0.0,
                 x_max: 0.0,
                 y_min: 0.0,
@@ -364,19 +365,42 @@ impl ResultCharts {
             _ => String::new(),
         };
         let points_sql = format!(
-            "SELECT {x_expr} AS x, {y_expr} AS y FROM objects {where_clause} {sample_clause}"
+            "SELECT {x_expr} AS x, {y_expr} AS y, image_rel_path, \
+             bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px \
+             FROM objects {where_clause} {sample_clause}"
         );
         let mut stmt = database.connection().prepare(&points_sql).map_err(err)?;
-        let points: Vec<ScatterPoint> = stmt
+        let rows: Vec<(f64, f64, String, [u32; 4])> = stmt
             .query_map([], |row| {
-                Ok(ScatterPoint {
-                    x: row.get(0)?,
-                    y: row.get(1)?,
-                })
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    [row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?],
+                ))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
+        // Each image's path once; the points refer to it.
+        let mut images: Vec<String> = Vec::new();
+        let mut image_index: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let points: Vec<ScatterPoint> = rows
+            .into_iter()
+            .map(|(x, y, path, bbox_px)| {
+                let image = *image_index.entry(path.clone()).or_insert_with(|| {
+                    images.push(path);
+                    (images.len() - 1) as u32
+                });
+                ScatterPoint {
+                    x,
+                    y,
+                    image,
+                    bbox_px,
+                }
+            })
+            .collect();
 
         let mut x_min = f64::INFINITY;
         let mut x_max = f64::NEG_INFINITY;
@@ -399,6 +423,7 @@ impl ResultCharts {
 
         Ok(ScatterResult {
             points,
+            images,
             x_min,
             x_max,
             y_min,
@@ -900,6 +925,10 @@ mod tests {
         for point in &result.points {
             assert_eq!(point.x, point.y, "x/y should match: both read area_px");
         }
+        // Each point knows its object: the image (listed once) and box.
+        assert_eq!(result.images, ["img1.tif"]);
+        assert!(result.points.iter().all(|p| p.image == 0));
+        assert!(result.points.iter().all(|p| p.bbox_px[2] >= p.bbox_px[0]));
         assert_eq!(result.x_min, 10.0);
         assert_eq!(result.x_max, 50.0);
         assert_eq!(result.y_min, 10.0);

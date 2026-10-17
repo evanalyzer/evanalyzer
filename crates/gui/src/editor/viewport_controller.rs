@@ -753,6 +753,20 @@ impl ViewportController {
         }
     }
 
+    /// The image couldn't be read: its renders (the last image's) go.
+    pub fn clear_rendered_image(&self) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_display_image(slint::Image::default());
+                ui.set_ghost_image(slint::Image::default());
+                ui.global::<ViewportSlintState>()
+                    .set_retained_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
+            }
+        })
+        .ok();
+    }
+
     /// Another project: nothing shown until an image is opened - the
     /// renders, the tile history, the objects, the breakpoint image and its
     /// compare are gone.

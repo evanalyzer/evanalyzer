@@ -39,6 +39,9 @@ export global ImageMetaData {
 
     in property <string> pixel_type: "";
     in property <int> nr_series: 0;
+    // The project has chosen its series (it counts for every image) - an
+    // image with several asks once while not.
+    in property <bool> series-chosen: true;
     in property <[SeriesInfo]> series_list: [];
 
     callback reset_pixel_sizes();

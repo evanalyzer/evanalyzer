@@ -13,6 +13,9 @@ export struct ClassSettingsSlint {
 
 export global ClassificationSettingsState {
     in-out property <ClassSettingsSlint> settings;
+    // Where the dialog opens (from the window's top): at the class row it
+    // was opened for (the classes panel sets it), else near the top.
+    in-out property <length> anchor-y: 96px;
     callback apply_classification_settings(ClassSettingsSlint);
     // The id of the class the dialog added last - a picker that opened the
     // dialog for "+ New class…" picks it (see its `changed` handler).

@@ -1,145 +1,381 @@
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+// dialogs/about.slint — About EVAnalyzer (board Y): a dark hero on the
+// left (name, version, platform), on the right About (the people as an
+// orbit, the creators, the license), System (where the work runs) and
+// Licenses (EVAnalyzer's own, then the third-party packages, searchable).
+// Only facts the app knows - no invented numbers.
+
+import {
+    InkButton,
+    InkButtonKind,
+    InkIconButton,
+    InkIcons,
+    InkSearchField,
+} from "../ink/ink.slint";
 import { AppInfoState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
-
 import { Ink } from "../ink/palette.slint";
 
-component TabButton inherits Rectangle {
+struct Person {
+    initials: string,
+    name: string,
+    role: string,
+    tint: color,
+}
+
+global AboutData {
+    // The colors of the orbit (the app's class colors).
+    out property <[color]> palette: [#E6C200, #E040E0, #9933FF, #33CFFF, #3CB44B, #FB7185];
+    out property <[Person]> creators: [
+        {
+            initials: "JD",
+            name: "Joachim Danmayr",
+            role: "Creator and lead developer",
+            tint: #2A6BDF
+        },
+        { initials: "MS", name: "Melanie Schürz", role: "Scientific lead", tint: #E040E0 },
+    ];
+    out property <[Person]> contributors: [
+        { initials: "NM", name: "Nicole Meisner Kober", role: "Institue leader", tint: #E6C200 },
+        { initials: "CO", name: "Claude Opus 5.5", role: "Unit-Testing", tint: #E040E0 },
+        { initials: "MJ", name: "Maria Jaritsch", role: "Testing", tint: #3CB44B },
+        { initials: "TP", name: "Tanja Plank", role: "Testing", tint: #33CFFF },
+        { initials: "PH", name: "Patricia Hrasnova", role: "Testing", tint: #E6C200 },
+    ];
+}
+
+// A person as a round avatar with initials.
+component Avatar inherits Rectangle {
+    in property <string> initials;
+    in property <color> tint;
+    in property <length> size: 30px;
+    in property <color> ring: Ink.panel;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: root.tint;
+    border-width: 2px;
+    border-color: root.ring;
+    Text {
+        text: root.initials;
+        font-size: root.size * 0.33;
+        font-weight: 700;
+        color: #0B0C10;
+    }
+}
+
+// The people circling the app's mark: the creators (big, pulsing) and the
+// testers on the inner ring, more on the outer one - slowly turning.
+component Orbit inherits Rectangle {
+    in property <length> size: 268px;
+    property <float> s: root.size / 268px;
+    property <length> c: root.size / 2;
+    property <length> r1: 80px * root.s;
+    property <length> r2: 124px * root.s;
+    // Turns while shown (the dialog is open only briefly).
+    property <angle> turn1: animation-tick() / 38s * 360deg;
+    // (Not `-animation-tick()`: Slint 1.18 negates the unsigned tick in Rust.)
+    property <angle> turn2: 0deg - animation-tick() / 64s * 360deg;
+    // 0..1 of a pulse of the creators.
+    property <float> pulse: mod(animation-tick() / 2.8s, 1.0);
+
+    width: root.size;
+    height: root.size;
+
+    // The rings.
+    Rectangle {
+        x: root.c - root.r1;
+        y: root.c - root.r1;
+        width: 2 * root.r1;
+        height: 2 * root.r1;
+        border-radius: root.r1;
+        border-width: 1px;
+        border-color: Ink.border;
+    }
+
+    Rectangle {
+        x: root.c - root.r2;
+        y: root.c - root.r2;
+        width: 2 * root.r2;
+        height: 2 * root.r2;
+        border-radius: root.r2;
+        border-width: 1px;
+        border-color: Ink.border;
+    }
+
+    // The mark in the middle.
+    Rectangle {
+        x: root.c - self.width / 2;
+        y: root.c - self.height / 2;
+        width: 64px * root.s;
+        height: 64px * root.s;
+        border-radius: 16px * root.s;
+        background: Ink.focus.with-alpha(0.12);
+        Image {
+            source: @image-url("../icons/icon.png");
+            width: parent.width * 0.62;
+            height: parent.height * 0.62;
+        }
+    }
+
+    // Outer ring: two testers and three companions.
+    for i in 5: outer := Rectangle {
+        property <angle> a: root.turn2 + 10deg + i * 72deg;
+        property <length> sz: (i < 2 ? 30px : 14px) * root.s;
+        x: root.c + root.r2 * cos(self.a) - self.sz / 2;
+        y: root.c + root.r2 * sin(self.a) - self.sz / 2;
+        width: self.sz;
+        height: self.sz;
+        if i < 2: Avatar {
+            size: outer.sz;
+            initials: AboutData.contributors[i + 2].initials;
+            tint: AboutData.contributors[i + 2].tint;
+        }
+        if i >= 2: Rectangle {
+            border-radius: self.width / 2;
+            border-width: 1.5px;
+            border-color: AboutData.palette[i];
+        }
+    }
+
+    // Inner ring: the creators (big, pulsing) and two testers.
+    for i in 4: spot := Rectangle {
+        property <bool> lead: mod(i, 2) == 0;
+        property <angle> a: root.turn1 - 90deg + i * 90deg;
+        property <length> sz: (self.lead ? 46px : 30px) * root.s;
+        x: root.c + root.r1 * cos(self.a) - self.sz / 2;
+        y: root.c + root.r1 * sin(self.a) - self.sz / 2;
+        width: self.sz;
+        height: self.sz;
+        property <Person> who: self.lead ? AboutData.creators[i / 2] : AboutData.contributors[(i - 1) / 2];
+        if spot.lead: Rectangle {
+            property <length> grow: spot.sz * root.pulse;
+            x: -self.grow / 2;
+            y: -self.grow / 2;
+            width: spot.sz + self.grow;
+            height: spot.sz + self.grow;
+            border-radius: self.width / 2;
+            border-width: 2px;
+            border-color: spot.who.tint.with-alpha(0.6 * (1 - root.pulse));
+        }
+        Avatar {
+            size: spot.sz;
+            initials: spot.who.initials;
+            tint: spot.who.tint;
+        }
+    }
+}
+
+// A tab in the head: its name, the chosen one underlined.
+component AboutTab inherits Rectangle {
     in property <string> text;
+    in property <image> icon;
     in property <bool> active;
     callback clicked;
 
-    horizontal-stretch: 1;
-    height: 30px;
-    border-radius: Ink.radius-md;
-    background: root.active ? Ink.focus.with-alpha(0.14) : (ta.has-hover ? Ink.hover : transparent);
-    animate background { duration: 100ms; }
+    width: row.preferred-width + 24px;
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-item-selected: root.active;
 
-    Text {
-        text: root.text;
-        font-size: 12px;
-        font-weight: root.active ? 700 : 500;
-        color: root.active ? Ink.focus : Ink.text-dim;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    row := HorizontalLayout {
+        alignment: center;
+        spacing: 7px;
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            width: 14px;
+            colorize: root.active ? Ink.text : Ink.text-dim;
+        }
+
+        Text {
+            text: root.text;
+            font-size: Ink.fs-md;
+            font-weight: root.active ? 600 : 500;
+            color: root.active || ta.has-hover ? Ink.text : Ink.text-dim;
+            vertical-alignment: center;
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: root.active ? Ink.focus : transparent;
     }
 
     ta := TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
     }
 }
 
-component ContributorRow inherits Rectangle {
-    in property <string> person_name;
-    in property <string> role;
-    in property <string> initials;
-    in property <bool> is_last: false;
+// A card: raised, rounded.
+component Card inherits Rectangle {
+    in property <bool> soft: false;
+    background: root.soft ? Ink.selection : Ink.raised;
+    border-radius: 10px;
+    border-width: root.soft ? 0px : 1px;
+    border-color: Ink.border;
+}
 
+// "Version   1.4.0" - a label over a value.
+component Fact inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> mono;
+    spacing: 3px;
+    Text {
+        text: root.label;
+        font-size: Ink.fs-sm;
+        color: Ink.text-dim;
+    }
+
+    Text {
+        text: root.value;
+        font-size: Ink.fs-md;
+        font-weight: 500;
+        font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+        color: Ink.text;
+        overflow: elide;
+    }
+}
+
+// A creator: avatar, name, role.
+component PersonCard inherits Card {
+    in property <Person> who;
+    soft: true;
+    height: 54px;
     HorizontalLayout {
-        padding-top: 12px;
-        padding-bottom: 12px;
-        spacing: 12px;
-
-        Rectangle {
-            width: 32px;
-            height: 32px;
-            border-radius: 16px;
-            background: Ink.selection;
-            y: 0px;
-
-            Text {
-                text: root.initials;
-                font-size: 12px;
-                font-weight: 700;
-                color: Ink.focus;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                size: 34px;
+                initials: root.who.initials;
+                tint: root.who.tint;
+                ring: transparent;
             }
         }
 
         VerticalLayout {
-            alignment: start;
-            spacing: 2px;
-
+            alignment: center;
+            spacing: 1px;
             Text {
-                text: root.person_name;
-                font-size: 13px;
-                font-weight: 700;
+                text: root.who.name;
+                font-size: Ink.fs-md;
+                font-weight: 600;
                 color: Ink.text;
             }
 
             Text {
-                text: root.role;
-                font-size: 11.5px;
+                text: root.who.role;
+                font-size: Ink.fs-sm;
                 color: Ink.text-dim;
-                wrap: word-wrap;
             }
         }
     }
-
-    if !root.is_last: Rectangle {
-        x: 0;
-        y: parent.height - 1px;
-        width: parent.width;
-        height: 1px;
-        background: Ink.border-soft;
-    }
 }
 
-component InfoStat inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    in property <color> value_color: Ink.text;
+// A license group: chevron, name, its packages; open: the text.
+component LicenseRow inherits Rectangle {
+    in property <string> title;
+    in property <string> badge;
+    in property <string> subtitle;
+    in property <bool> expanded;
+    callback toggled;
 
-    horizontal-stretch: 1;
-    height: 72px;
-    background: Ink.raised;
-    border-radius: 8px;
+    background: root.expanded ? Ink.raised : head-ta.has-hover ? Ink.hover : transparent;
+    clip: true;
 
     VerticalLayout {
-        alignment: center;
-        padding: 8px;
-        spacing: 6px;
+        spacing: 0px;
+        Rectangle {
+            height: 38px;
+            head-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggled();
+                }
+            }
 
-        Text {
-            text: root.label;
-            font-size: 9.5px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-            color: Ink.text-mute;
-            horizontal-alignment: center;
-            wrap: word-wrap;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 10px;
+                Text {
+                    width: 8px;
+                    text: root.expanded ? "▾" : "▸";
+                    font-size: 9px;
+                    color: Ink.text-faint;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.title;
+                    font-size: Ink.fs-md;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.subtitle;
+                    font-size: Ink.fs-sm;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                if root.badge != "": VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 18px;
+                        width: badge-text.preferred-width + 14px;
+                        border-radius: 4px;
+                        background: Ink.ok.with-alpha(0.14);
+                        badge-text := Text {
+                            text: root.badge;
+                            font-size: Ink.fs-xs;
+                            font-weight: 600;
+                            color: Ink.ok;
+                        }
+                    }
+                }
+            }
+        }
+        // `@children` can't sit in an `if`: collapsed to 0 instead.
+        ScrollView {
+            height: root.expanded ? 180px : 0px;
+            VerticalLayout {
+                padding: 14px;
+                padding-left: 28px;
+                padding-top: 4px;
+                spacing: 6px;
+                alignment: start;
+                @children
+            }
         }
 
-        Text {
-            text: root.value;
-            font-size: 13px;
-            font-weight: 700;
-            color: root.value_color;
-            horizontal-alignment: center;
+        Rectangle {
+            height: 1px;
+            background: Ink.border-soft;
         }
     }
 }
 
-// Small clickable attribution mark for a third-party library whose license
-// requires displaying its logo (currently just Slint's Royalty-free License
-// - https://slint.dev/agreements/slint-royalty-free-license.pdf, section 2 -
-// but written to take more than one as they come up). Sized explicitly
-// per-instance rather than auto-fit from the source image, since each logo
-// asset has its own aspect ratio.
+// Slint's logo, which its Royalty-free License asks to show (section 2 of
+// https://slint.dev/agreements/slint-royalty-free-license.pdf).
 component AttributionLogo inherits Rectangle {
-    in property <image> logo-dark;
-    in property <image> logo-light;
-    in property <string> url;
-    in property <length> logo-width: 48px;
-    in property <length> logo-height: 20px;
-
-    width: root.logo-width;
-    height: root.logo-height;
-
+    width: 48px;
+    height: 20px;
     Image {
-        source: Ink.dark ? root.logo-dark : root.logo-light;
+        source: Ink.dark ? @image-url("../icons/madewithslint-dark.svg") : @image-url("../icons/madewithslint-light.svg");
         width: parent.width;
         height: parent.height;
         image-fit: contain;
@@ -147,414 +383,696 @@ component AttributionLogo inherits Rectangle {
 
     TouchArea {
         mouse-cursor: pointer;
-        clicked => { Platform.open-url(root.url); }
-    }
-}
-
-component LicenseCard inherits Rectangle {
-    in property <string> title;
-    in property <string> subtitle;
-    in property <bool> expanded;
-    callback toggled;
-
-    background: Ink.raised;
-    border-radius: 8px;
-    clip: true;
-
-    VerticalLayout {
-        padding: 10px;
-        spacing: 8px;
-
-        Rectangle {
-            height: header-row.preferred-height;
-
-            header-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.toggled(); }
-            }
-
-            header-row := HorizontalLayout {
-                spacing: 8px;
-
-                Text {
-                    text: root.expanded ? "▾" : "▸";
-                    font-size: 10px;
-                    color: Ink.text-mute;
-                    vertical-alignment: center;
-                }
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 4px;
-
-                    Text {
-                        text: root.title;
-                        font-size: 12px;
-                        font-weight: 700;
-                        color: header-ta.has-hover ? Ink.focus : Ink.text;
-                    }
-
-                    Text {
-                        text: root.subtitle;
-                        font-size: 11px;
-                        color: Ink.text-dim;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-        }
-
-        if root.expanded: Rectangle {
-            height: 1px;
-            background: Ink.border;
-        }
-
-        // Always instantiated (unlike the divider above) so `@children` has
-        // somewhere to live - `@children` can't appear inside a conditional
-        // (`if`) element. Collapsed to zero height instead, which - combined
-        // with `clip: true` on the root `Rectangle` - keeps the paragraph
-        // text invisible and out of the layout until expanded, rather than
-        // it rendering unconditionally wherever the root places extra
-        // children (which is what happened before this had anywhere to go).
-        ScrollView {
-            height: root.expanded ? 180px : 0px;
-            animate height { duration: 100ms; }
-
-            VerticalLayout {
-                alignment: start;
-                spacing: 6px;
-
-                @children
-            }
+        clicked => {
+            Platform.open-url("https://slint.dev");
         }
     }
 }
 
-export component AboutDialog inherits InkDialog {
-    title: "EVA";
-    subtitle: "Version " + AppInfoState.version + " · High-throughput image analysis";
-    card-width: 600px;
-    card-height: 600px;
-    close => {
+export component AboutDialog inherits Rectangle {
+    // 0 About, 1 the contributors, 2 System, 3 Licenses.
+    property <int> tab: 0;
+    // The license opened: -2 EVAnalyzer's own, 0.. a third-party group.
+    property <int> open-license: -1;
+    property <string> query;
+
+    function close() {
         GlobalAppState.active-dialog = DialogType.none;
-        root.current-tab = 0;
-        root.expanded-third-party-index = -1;
+        root.tab = 0;
+        root.open-license = -1;
+        root.query = "";
     }
 
-    property <int> current-tab: 0;
-    // Which license card is expanded, or -1 if none: -2 is EVAnalyzer's own
-    // license, 0.. indexes into AppInfoState.third_party_licenses. One
-    // shared index (rather than a separate bool for the own-license card)
-    // so opening one card closes whichever other was open. Local UI-only
-    // state - the underlying model never changes, only what's shown expanded.
-    property <int> expanded-third-party-index: -1;
+    pure function found(words: string) -> bool {
+        root.query == "" || words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
+    }
 
-    // Fresh every time the dialog opens: in remote mode the numbers come
-    // from the worker, whose connection may have changed since startup.
+    // Fresh every time it opens: in remote mode the numbers come from the
+    // worker, whose connection may have changed since startup.
     init => {
         AppInfoState.refresh_system_info();
     }
 
-    // -- Tab strip: equal-width tabs -----------------------------------
-    HorizontalLayout {
-        height: 30px;
-        spacing: 4px;
+    card := Rectangle {
+        width: min(880px, root.width - 32px);
+        height: min(600px, root.height - 32px);
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        background: Ink.panel;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Ink.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 16px;
+        drop-shadow-color: Ink.shadow;
+        clip: true;
+        accessible-role: groupbox;
+        accessible-label: "About EVAnalyzer";
 
-        TabButton {
-            text: "About";
-            active: root.current-tab == 0;
-            clicked => { root.current-tab = 0; }
-        }
+        // Clicks stay on the card.
+        TouchArea { }
 
-        TabButton {
-            text: "Contributors";
-            active: root.current-tab == 1;
-            clicked => { root.current-tab = 1; }
-        }
+        HorizontalLayout {
+            spacing: 0px;
 
-        TabButton {
-            text: "System";
-            active: root.current-tab == 2;
-            clicked => { root.current-tab = 2; }
-        }
+            // -- The hero: always dark ------------------------------------
+            hero := Rectangle {
+                width: 280px;
+                background: #0B0C10;
+                clip: true;
 
-        TabButton {
-            text: "Licenses";
-            active: root.current-tab == 3;
-            clicked => { root.current-tab = 3; }
-        }
-    }
+                // Circles drifting in the background (objects found).
+                for i in 18: Rectangle {
+                    property <length> r: (8 + mod(i, 5) * 5) * 1px;
+                    property <length> drift: 14px * sin(animation-tick() / (7s + mod(i, 6) * 1.5s) * 360deg + i * 40deg);
+                    x: mod(i * 97, 300) * 1px - 20px + self.drift;
+                    y: mod(i * 151, 620) * 1px - 20px - self.drift;
+                    width: self.r;
+                    height: self.r;
+                    border-radius: self.r / 2;
+                    border-width: 1.5px;
+                    border-color: AboutData.palette[mod(i, 4)].with-alpha(0.45);
+                }
 
-    // -- Tab content -----------------------------------------------------
-    Rectangle {
-        vertical-stretch: 1;
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 6px;
+                    Rectangle {
+                        width: 44px;
+                        height: 44px;
+                        border-radius: 12px;
+                        background: #FFFFFF.with-alpha(0.08);
+                        Image {
+                            source: @image-url("../icons/icon.png");
+                            width: 28px;
+                            height: 28px;
+                        }
+                    }
 
-        // -- About: top-aligned, link as pill ------------------------
-        if (root.current-tab == 0): VerticalLayout {
-            alignment: start;
-            spacing: 14px;
-            padding-top: 6px;
+                    Text {
+                        text: "EVAnalyzer";
+                        font-size: 28px;
+                        font-weight: 700;
+                        color: #F4F4F5;
+                    }
 
-            HorizontalLayout {
-                spacing: 14px;
+                    Text {
+                        text: "Image analysis for extracellular vesicles";
+                        font-size: 12.5px;
+                        color: #A1A1AA;
+                        wrap: word-wrap;
+                    }
 
-                Rectangle {
-                    width: 48px;
-                    height: 48px;
-                    border-radius: Ink.radius-lg + 2px;
-                    background: Ink.focus.with-alpha(0.12);
-                    border-width: 1px;
-                    border-color: Ink.focus.with-alpha(0.25);
-                    Image {
-                        source: @image-url("../icons/icon.png");
-                        width: 30px;
-                        height: 30px;
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+
+                    Text {
+                        text: "VERSION";
+                        font-size: 10px;
+                        font-weight: 600;
+                        letter-spacing: 0.6px;
+                        color: #8A8A93;
+                    }
+
+                    Text {
+                        text: AppInfoState.version;
+                        font-size: 22px;
+                        font-weight: 500;
+                        font-family: Ink.font-mono;
+                        color: #F4F4F5;
+                    }
+
+                    HorizontalLayout {
+                        padding-top: 2px;
+                        padding-bottom: 10px;
+                        spacing: 6px;
+                        alignment: start;
+                        Rectangle {
+                            height: 18px;
+                            width: chan.preferred-width + 14px;
+                            border-radius: 4px;
+                            background: AppInfoState.prerelease ? #FBBF24.with-alpha(0.16) : #4ADE80.with-alpha(0.14);
+                            chan := Text {
+                                text: AppInfoState.prerelease ? "pre-release" : "stable";
+                                font-size: 10.5px;
+                                font-weight: 600;
+                                color: AppInfoState.prerelease ? #FCD34D : #86EFAC;
+                            }
+                        }
+
+                        if AppInfoState.platform != "": Rectangle {
+                            height: 18px;
+                            width: plat.preferred-width + 14px;
+                            border-radius: 4px;
+                            background: #1F1F23;
+                            plat := Text {
+                                text: AppInfoState.platform;
+                                font-size: 10.5px;
+                                color: #A1A1AA;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: #232327;
+                    }
+
+                    Text {
+                        text: "© 2019–2026 Joachim Danmayr";
+                        font-size: 10.5px;
+                        color: #8A8A93;
                     }
                 }
-
-                Text {
-                    horizontal-stretch: 1;
-                    text: "Enhanced Visual Analyzer " + AppInfoState.version + " is an application for high throughput image processing.";
-                    font-size: 13px;
-                    color: Ink.text;
-                    wrap: word-wrap;
-                    vertical-alignment: center;
-                }
             }
 
-            Text {
-                text: "Copyright 2019-2026 Joachim Danmayr";
-                font-size: 12px;
-                color: Ink.text-mute;
-            }
-
-            Rectangle {
-                width: link-text.preferred-width + 28px;
-                height: 30px;
-                border-radius: 15px;
-                background: Ink.raised;
-                border-width: 1px;
-                border-color: Ink.border;
-
-                link-text := Text {
-                    text: "evanalyzer.org ↗";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Ink.focus;
-                    x: 14px;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            Rectangle {
-                vertical-stretch: 1;
-            }
-
-            Text {
-                text: "ALL RIGHTS RESERVED";
-                font-size: 11px;
-                font-weight: 700;
-                letter-spacing: 1px;
-                color: Ink.text-faint;
-            }
-        }
-
-        // -- Contributors: divider rows + initial avatars ---------------
-        if (root.current-tab == 1): ScrollView {
-            width: 100%;
-            height: 100%;
-
+            // -- The tabs and their content --------------------------------
             VerticalLayout {
-                padding-right: 10px;
+                horizontal-stretch: 1;
                 spacing: 0px;
-                alignment: start;
-
-                ContributorRow {
-                    person_name: "Joachim Danmayr";
-                    role: "Creator, Programming, Documentation, Testing";
-                    initials: "JD";
-                }
-
-                ContributorRow {
-                    person_name: "Melanie Schuerz";
-                    role: "Co-Creator, Conceptualization, Testing, AI-Training";
-                    initials: "MS";
-                }
-
-                ContributorRow {
-                    person_name: "Tanja Plank";
-                    role: "Testing";
-                    initials: "TP";
-                }
-
-                ContributorRow {
-                    person_name: "Maria Jaritsch";
-                    role: "Testing";
-                    initials: "MJ";
-                }
-
-                ContributorRow {
-                    person_name: "Patricia Hrasnova";
-                    role: "Testing";
-                    initials: "PH";
-                }
-
-                ContributorRow {
-                    person_name: "Anna Dlugosch";
-                    role: "Testing";
-                    initials: "AD";
-                    is_last: true;
-                }
-            }
-        }
-
-        // -- System: where the work runs + 4-column stat grid ---------------
-        if (root.current-tab == 2): VerticalLayout {
-            alignment: start;
-            spacing: 10px;
-
-            Text {
-                text: "Computing on: " + AppInfoState.system_source;
-                font-size: 11px;
-                color: Ink.text-mute;
-                wrap: word-wrap;
-            }
-
-            if AppInfoState.system_error != "": Text {
-                text: AppInfoState.system_error;
-                font-size: 11px;
-                color: Ink.warn;
-                wrap: word-wrap;
-            }
-
-            HorizontalLayout {
-                spacing: 10px;
-
-                InfoStat {
-                    label: "OPERATING SYSTEM";
-                    value: AppInfoState.system_loading ? "…" : AppInfoState.system_os;
-                }
-
-                InfoStat {
-                    label: "CPU CORES";
-                    value: AppInfoState.system_loading ? "…" : "\{AppInfoState.cpu_cores}";
-                }
-
-                InfoStat {
-                    label: "AVAILABLE RAM";
-                    value: AppInfoState.system_loading ? "…" : AppInfoState.ram_total;
-                }
-
-                InfoStat {
-                    label: "CUDA (GPU)";
-                    value: AppInfoState.system_loading ? "Checking…" : (AppInfoState.cuda_available ? "Available" : "Not available");
-                    value_color: AppInfoState.cuda_available && !AppInfoState.system_loading ? Ink.ok : Ink.text-mute;
-                }
-            }
-        }
-
-        // -- Licenses: chevron + capped inner-scroll body ---------------
-        if (root.current-tab == 3): ScrollView {
-            width: 100%;
-            height: 100%;
-
-            VerticalLayout {
-                padding-right: 10px;
-                spacing: 8px;
-                alignment: start;
-
-                Text {
-                    text: "Tap a license to view its full text.";
-                    font-size: 11px;
-                    color: Ink.text-mute;
-                }
 
                 Rectangle {
-                    height: 4px;
-                }
+                    height: 52px;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 10px;
+                        spacing: 2px;
+                        AboutTab {
+                            text: "About";
+                            icon: InkIcons.info;
+                            active: root.tab <= 1;
+                            clicked => {
+                                root.tab = 0;
+                            }
+                        }
 
-                // -- EVAnalyzer's own license - same card style as the
-                // third-party entries below, just pinned first and
-                // driven off its own sentinel (-2) rather than the
-                // model index.
-                LicenseCard {
-                    title: "EVAnalyzer  (AGPL-3.0)";
-                    subtitle: "This application's own license";
-                    expanded: root.expanded-third-party-index == -2;
-                    toggled => {
-                        root.expanded-third-party-index = (root.expanded-third-party-index == -2) ? -1 : -2;
+                        AboutTab {
+                            text: "System";
+                            icon: InkIcons.computer;
+                            active: root.tab == 2;
+                            clicked => {
+                                root.tab = 2;
+                            }
+                        }
+
+                        AboutTab {
+                            text: "Licenses";
+                            icon: InkIcons.copy;
+                            active: root.tab == 3;
+                            clicked => {
+                                root.tab = 3;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            size: 32px;
+                            icon: InkIcons.close;
+                            label: "Close";
+                            clicked => {
+                                root.close();
+                            }
+                        }
                     }
 
-                    for paragraph in AppInfoState.license_paragraphs: Text {
-                        text: paragraph;
-                        font-family: Ink.font-mono;
-                        font-size: 10px;
-                        color: Ink.text-dim;
-                        wrap: word-wrap;
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Ink.border-soft;
                     }
                 }
 
-                Rectangle {
-                    height: 10px;
-                }
-
-                // Logos of third-party libraries whose license requires
-                // displaying them (just Slint for now).
-                HorizontalLayout {
-                    height: 20px;
+                // -- About ---------------------------------------------
+                if root.tab == 0: VerticalLayout {
+                    vertical-stretch: 1;
+                    padding: 22px;
+                    spacing: 14px;
                     alignment: start;
+
+                    HorizontalLayout {
+                        spacing: 20px;
+                        Orbit {
+                            size: 200px;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 14px;
+                            Text {
+                                text: "EVAnalyzer finds, classifies and measures objects in microscopy images with pipelines of steps you can tune live on the image.";
+                                font-size: 12.5px;
+                                color: Ink.text-dim;
+                                wrap: word-wrap;
+                            }
+
+                            GridLayout {
+                                spacing-horizontal: 16px;
+                                spacing-vertical: 12px;
+                                Row {
+                                    Fact {
+                                        label: "Version";
+                                        value: AppInfoState.version;
+                                        mono: true;
+                                    }
+
+                                    Fact {
+                                        label: "Platform";
+                                        value: AppInfoState.platform;
+                                    }
+                                }
+
+                                Row {
+                                    Fact {
+                                        label: "Copyright";
+                                        value: "© 2019–2026 Joachim Danmayr";
+                                    }
+
+                                    Fact {
+                                        label: "License";
+                                        value: "AGPL-3.0";
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        for p in AboutData.creators: PersonCard {
+                            horizontal-stretch: 1;
+                            who: p;
+                        }
+                    }
+
+                    Card {
+                        height: 52px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: -6px;
+                                for p in AboutData.contributors: VerticalLayout {
+                                    alignment: center;
+                                    Avatar {
+                                        size: 26px;
+                                        initials: p.initials;
+                                        tint: p.tint;
+                                        ring: Ink.raised;
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 1px;
+                                Text {
+                                    text: "and " + AboutData.contributors.length + " contributors";
+                                    font-size: 12.5px;
+                                    font-weight: 600;
+                                    color: Ink.text;
+                                }
+
+                                Text {
+                                    text: "Testing";
+                                    font-size: Ink.fs-sm;
+                                    color: Ink.text-dim;
+                                    overflow: elide;
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                InkButton {
+                                    small: true;
+                                    text: "See all contributors";
+                                    clicked => {
+                                        root.tab = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        height: 56px;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: "Free and open source";
+                                    font-size: 12.5px;
+                                    font-weight: 600;
+                                    color: Ink.text;
+                                }
+
+                                Text {
+                                    text: "AGPL-3.0: use, study, share and change it - what you share or offer as a service stays open.";
+                                    font-size: Ink.fs-sm;
+                                    color: Ink.text-dim;
+                                    overflow: elide;
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                InkButton {
+                                    small: true;
+                                    text: "Read license";
+                                    clicked => {
+                                        root.open-license = -2;
+                                        root.tab = 3;
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                InkButton {
+                                    small: true;
+                                    kind: InkButtonKind.quiet;
+                                    text: AppInfoState.third_party_package_count + " libraries →";
+                                    clicked => {
+                                        root.tab = 3;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // -- The contributors -------------------------------------
+                if root.tab == 1: HorizontalLayout {
+                    vertical-stretch: 1;
+                    padding: 22px;
+                    spacing: 22px;
+                    VerticalLayout {
+                        alignment: center;
+                        Orbit {
+                            size: 220px;
+                        }
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 10px;
+                        Text {
+                            text: "CREATED BY";
+                            font-size: 10px;
+                            font-weight: 600;
+                            letter-spacing: 0.6px;
+                            color: Ink.text-faint;
+                        }
+
+                        for p in AboutData.creators: PersonCard {
+                            who: p;
+                        }
+                        Text {
+                            text: "CONTRIBUTORS";
+                            font-size: 10px;
+                            font-weight: 600;
+                            letter-spacing: 0.6px;
+                            color: Ink.text-faint;
+                        }
+
+                        VerticalLayout {
+                            for p in AboutData.contributors: Rectangle {
+                                height: 34px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 10px;
+                                            height: 10px;
+                                            border-radius: 5px;
+                                            background: p.tint;
+                                        }
+                                    }
+
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: p.name;
+                                        font-size: 12.5px;
+                                        color: Ink.text;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: p.role;
+                                        font-size: Ink.fs-sm;
+                                        color: Ink.text-dim;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    y: parent.height - 1px;
+                                    height: 1px;
+                                    background: Ink.border-soft;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // -- System: where the work runs ----------------------------
+                if root.tab == 2: VerticalLayout {
+                    vertical-stretch: 1;
+                    padding: 22px;
                     spacing: 12px;
-
-                    AttributionLogo {
-                        logo-dark: @image-url("../icons/madewithslint-dark.svg");
-                        logo-light: @image-url("../icons/madewithslint-light.svg");
-                        url: "https://slint.dev";
-                        logo-width: 48px;
-                        logo-height: 20px;
-                    }
-                }
-
-                Rectangle {
-                    height: 10px;
-                }
-
-                Text {
-                    text: "Third-party open-source packages (" + AppInfoState.third_party_package_count + ")";
-                    font-size: 13px;
-                    font-weight: 700;
-                    color: Ink.text;
-                }
-
-                Rectangle {
-                    height: 4px;
-                }
-
-                for group[i] in AppInfoState.third_party_licenses: LicenseCard {
-                    title: group.name + "  (" + group.id + ")";
-                    subtitle: group.crates;
-                    expanded: root.expanded-third-party-index == i;
-                    toggled => {
-                        root.expanded-third-party-index = (root.expanded-third-party-index == i) ? -1 : i;
-                    }
-
-                    for paragraph in group.text_paragraphs: Text {
-                        text: paragraph;
-                        font-family: Ink.font-mono;
-                        font-size: 10px;
+                    alignment: start;
+                    Text {
+                        text: "Computing on: " + AppInfoState.system_source;
+                        font-size: Ink.fs-sm;
                         color: Ink.text-dim;
+                    }
+
+                    if AppInfoState.system_error != "": Text {
+                        text: AppInfoState.system_error;
+                        font-size: Ink.fs-sm;
+                        color: Ink.warn;
                         wrap: word-wrap;
                     }
-                }
-            }
-        }
-    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        for stat in [
+                            {
+                                label: "PROCESSOR",
+                                value: AppInfoState.system_loading ? "…" : AppInfoState.cpu_cores + " cores",
+                                note: "Analysis threads run on them"
+                            },
+                            {
+                                label: "MEMORY",
+                                value: AppInfoState.system_loading ? "…" : AppInfoState.ram_total,
+                                note: "Installed"
+                            },
+                            {
+                                label: "GPU · CUDA",
+                                value: AppInfoState.system_loading ? "Checking…" : AppInfoState.cuda_available ? "Available" : "Not available",
+                                note: AppInfoState.cuda_available ? "AI runs on the GPU" : "AI runs on the CPU"
+                            },
+                        ]: Card {
+                            horizontal-stretch: 1;
+                            height: 96px;
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 4px;
+                                Text {
+                                    text: stat.label;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    letter-spacing: 0.6px;
+                                    color: Ink.text-faint;
+                                }
 
-    InkDialogFooter {
-        InkButton {
-            kind: InkButtonKind.primary;
-            text: "Close";
-            clicked => {
-                root.close();
+                                Text {
+                                    text: stat.value;
+                                    font-size: 20px;
+                                    font-weight: 500;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text;
+                                }
+
+                                Text {
+                                    text: stat.note;
+                                    font-size: Ink.fs-sm;
+                                    color: Ink.text-dim;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        height: 64px;
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 24px;
+                            Fact {
+                                label: "System";
+                                value: AppInfoState.system_loading ? "…" : AppInfoState.system_os;
+                            }
+
+                            Fact {
+                                label: "Platform";
+                                value: AppInfoState.platform;
+                            }
+
+                            Fact {
+                                label: "Version";
+                                value: AppInfoState.version;
+                                mono: true;
+                            }
+                        }
+                    }
+                }
+
+                // -- Licenses -------------------------------------------------
+                if root.tab == 3: VerticalLayout {
+                    vertical-stretch: 1;
+                    padding: 22px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        InkSearchField {
+                            horizontal-stretch: 1;
+                            placeholder: "Search libraries or licenses";
+                            text: root.query;
+                            edited(t) => {
+                                root.query = t;
+                            }
+                        }
+
+                        Text {
+                            text: AppInfoState.third_party_package_count + " libraries";
+                            font-size: Ink.fs-sm;
+                            color: Ink.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Ink.border;
+                        clip: true;
+                        ScrollView {
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 0px;
+                                if root.found("EVAnalyzer AGPL-3.0"): LicenseRow {
+                                    title: "EVAnalyzer";
+                                    badge: "AGPL-3.0";
+                                    subtitle: "This application";
+                                    expanded: root.open-license == -2;
+                                    toggled => {
+                                        root.open-license = root.open-license == -2 ? -1 : -2;
+                                    }
+                                    for paragraph in AppInfoState.license_paragraphs: Text {
+                                        text: paragraph;
+                                        font-family: Ink.font-mono;
+                                        font-size: 10px;
+                                        color: Ink.text-dim;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                for group[i] in AppInfoState.third_party_licenses: VerticalLayout {
+                                    if root.found(group.name + " " + group.id + " " + group.crates): LicenseRow {
+                                        title: group.name;
+                                        badge: group.id;
+                                        subtitle: group.crates;
+                                        expanded: root.open-license == i;
+                                        toggled => {
+                                            root.open-license = root.open-license == i ? -1 : i;
+                                        }
+                                        for paragraph in group.text_paragraphs: Text {
+                                            text: paragraph;
+                                            font-family: Ink.font-mono;
+                                            font-size: 10px;
+                                            color: Ink.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // -- Footer -----------------------------------------------------
+                Rectangle {
+                    height: 56px;
+                    Rectangle {
+                        y: 0px;
+                        height: 1px;
+                        background: Ink.border-soft;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 14px;
+                        spacing: 6px;
+                        if root.tab == 1: VerticalLayout {
+                            alignment: center;
+                            InkButton {
+                                small: true;
+                                kind: InkButtonKind.quiet;
+                                text: "← Back to About";
+                                clicked => {
+                                    root.tab = 0;
+                                }
+                            }
+                        }
+                        if root.tab != 1: VerticalLayout {
+                            alignment: center;
+                            InkButton {
+                                small: true;
+                                kind: InkButtonKind.quiet;
+                                text: "Website ↗";
+                                clicked => {
+                                    Platform.open-url("https://evanalyzer.org");
+                                }
+                            }
+                        }
+                        if root.tab == 3: VerticalLayout {
+                            alignment: center;
+                            AttributionLogo { }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.tab == 3 ? "Thank you to everyone who builds these" : "";
+                            font-size: Ink.fs-sm;
+                            color: Ink.text-faint;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            InkButton {
+                                kind: InkButtonKind.primary;
+                                text: "Close";
+                                clicked => {
+                                    root.close();
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

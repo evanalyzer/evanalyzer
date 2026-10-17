@@ -423,6 +423,10 @@ impl ViewportWorker {
             }
         } else if let Err(e) = read_result {
             warn!("Error reading image tile: {:?}", e);
+            // A new image that can't be read: not the last one's picture.
+            if task.is_new_image || task.is_new_series {
+                self.viewport_controller.clear_rendered_image();
+            }
         }
 
         // ----------------------------------------------------------------
@@ -969,6 +973,12 @@ pub(crate) fn auto_adjust_range(
 
     let mut min = 0.0;
     let mut max = 1.0;
+    // The axis: past black and white, so the histogram doesn't end at the
+    // white line (cutting off the brightest pixels, in fluorescence often
+    // the signal) - but only as far as there are values, so a few hot
+    // pixels don't squash the curve into a corner.
+    let mut lowest = 0.0f32;
+    let mut highest = 1.0f32;
 
     if let Some(pixels) = samples {
         if pixels.len() > 0 {
@@ -986,10 +996,16 @@ pub(crate) fn auto_adjust_range(
 
             sample.select_nth_unstable_by(high_idx, |a, b| a.total_cmp(b));
             max = sample[high_idx];
+
+            lowest = sample.iter().copied().fold(f32::INFINITY, f32::min);
+            highest = sample.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         }
     }
 
-    (min, max, (min - 0.01).max(0.0), (max + 0.01).min(1.0))
+    let span = max - min;
+    let low = (min - (0.1 * span).max(0.01)).max(lowest.min(min - 0.01));
+    let high = (max + (0.5 * span).max(0.01)).min(highest.max(max + 0.01));
+    (min, max, low.max(0.0), high.min(1.0))
 }
 
 /// Renders a `u32` label buffer (segmentation classes or instance IDs)
@@ -1379,8 +1395,24 @@ mod tests {
             max, 0.5,
             "the 2 high outliers must be clipped out of the range"
         );
+        // Nor the axis: a few outliers don't stretch it.
         assert_eq!(min_limit, 0.49);
         assert_eq!(max_limit, 0.51);
+    }
+
+    /// The histogram isn't cut at the bright end: the axis reaches the
+    /// brightest pixels (in fluorescence often the signal), the white
+    /// point stays at 99.5 %.
+    #[test]
+    fn the_axis_reaches_the_brightest_pixels() {
+        let mut pixels = vec![0.1f32; 10_000];
+        for i in (0..10_000).step_by(1000) {
+            pixels[i] = 0.8; // bright signal, in the sample
+        }
+        let img = gray_container(pixels);
+        let (_, max, _, max_limit) = apply_auto_adjust(&img, false);
+        assert!(max_limit >= 0.8, "axis to {max_limit}");
+        assert!(max <= max_limit);
     }
 
     #[test]
