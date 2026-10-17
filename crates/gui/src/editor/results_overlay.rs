@@ -1,7 +1,8 @@
 //! The results' split view on the image: every object of the analysis on
 //! the shown image as an ellipse in its box (the results keep boxes, not
-//! outlines), in its class's color or the value's heatmap color. While one
-//! is selected the others are dimmed. Drawn instead of the project's
+//! outlines), in its class's color or the value's heatmap color. The
+//! selected one is yellow (as a selected object in the editor), drawn on
+//! top and bolder; the others are dimmed meanwhile. Drawn instead of the project's
 //! objects (see `ViewportController::sync_objects_to_slint_viewport`).
 
 /// The objects to draw, in image pixels.
@@ -17,6 +18,8 @@ pub struct ResultsOverlay {
 const OUTLINE_ALPHA: f32 = 0.95;
 const FILL_ALPHA: f32 = 0.12;
 const DIMMED: f32 = 0.3;
+/// The selected object's color (`0xFCE903`, the editor's selection).
+pub const SELECTED_RGB: [u8; 3] = [0xFC, 0xE9, 0x03];
 
 /// Draws `overlay` into `buffer` (`buf_w` × `buf_h`, transparent before),
 /// image pixel `p` at `p * zoom + off` on it.
@@ -30,12 +33,21 @@ pub fn draw_results_overlay(
     off_y: f32,
 ) {
     let (w, h) = (buf_w as i64, buf_h as i64);
-    for (i, (bbox, rgb)) in overlay.objects.iter().enumerate() {
-        let dim = if overlay.selected.is_some_and(|s| s != i) {
+    // The selected one last: on top.
+    let order = (0..overlay.objects.len())
+        .filter(|i| Some(*i) != overlay.selected)
+        .chain(overlay.selected.filter(|s| *s < overlay.objects.len()));
+    for i in order {
+        let (bbox, rgb) = &overlay.objects[i];
+        let selected = overlay.selected == Some(i);
+        let dim = if overlay.selected.is_some() && !selected {
             DIMMED
         } else {
             1.0
         };
+        let rgb = if selected { &SELECTED_RGB } else { rgb };
+        // Half the outline's width.
+        let half = if selected { 1.25 } else { 0.75 };
         // The box's outer edges on screen (`xmax` is inclusive).
         let x0 = bbox[0] as f32 * zoom + off_x;
         let y0 = bbox[1] as f32 * zoom + off_y;
@@ -58,7 +70,7 @@ pub fn draw_results_overlay(
             }
             continue;
         }
-        // Pixels whose centre lies within ~0.75 px of the ellipse are its
+        // Pixels whose centre lies within ~`half` px of the ellipse are its
         // outline (soft at the edges), inside it the tint.
         let xs = (x0.floor() as i64).max(0)..(x1.ceil() as i64).min(w);
         let ys = (y0.floor() as i64).max(0)..(y1.ceil() as i64).min(h);
@@ -70,8 +82,8 @@ pub fn draw_results_overlay(
                 let d = (dx * dx + dy * dy).sqrt();
                 // Distance to the ellipse in screen pixels (close enough).
                 let dist = (d - 1.0) * r;
-                let alpha = if dist.abs() < 1.5 {
-                    OUTLINE_ALPHA * (1.0 - (dist.abs() - 0.75).max(0.0) / 0.75)
+                let alpha = if dist.abs() < 2.0 * half {
+                    OUTLINE_ALPHA * (1.0 - (dist.abs() - half).max(0.0) / half)
                 } else if dist < 0.0 {
                     FILL_ALPHA
                 } else {
@@ -183,6 +195,8 @@ mod tests {
         let mut buf = buffer(30, 10);
         draw_results_overlay(&mut buf, &overlay, 30, 10, 1.0, 0.0, 0.0);
         assert!(buf[5 * 30].a < buf[5 * 30 + 20].a, "the dimmed one is fainter");
+        let p = buf[5 * 30 + 20];
+        assert_eq!([p.r, p.g, p.b], SELECTED_RGB, "the selected one is yellow");
     }
 
     #[test]

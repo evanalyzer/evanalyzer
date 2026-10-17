@@ -28,6 +28,9 @@ pub(super) struct SplitState {
     objects: Arc<Vec<ResultObject>>,
     /// Index into `objects`.
     selected: Option<usize>,
+    /// A region shown instead of an object (an image heatmap's tile), in
+    /// image pixels: a yellow box, flown to.
+    region: Option<[u32; 4]>,
     /// Bumped by every image shown: a late answer for another is dropped.
     generation: u64,
     /// Plate: the well's images, `(name, rel_path)`.
@@ -91,7 +94,11 @@ impl ResultsStateController {
         state.on_split_step(move |delta| manager.split_step(delta));
         let manager = self.clone();
         state.on_split_clear(move || {
-            manager.split.lock().expect("Poisoned").selected = None;
+            {
+                let mut split = manager.split.lock().expect("Poisoned");
+                split.selected = None;
+                split.region = None;
+            }
             if let Some(ui) = manager.ui.upgrade() {
                 ui.global::<ResultsState>().set_list_selected_row(-1);
             }
@@ -111,7 +118,7 @@ impl ResultsStateController {
                 .find(|(n, _)| *n == name.as_str())
                 .map(|(_, rel)| rel.clone());
             if let Some(rel_path) = rel_path {
-                manager.split_show_image(rel_path, None);
+                manager.split_show_image(rel_path, None, None);
             }
         });
         let manager = self.clone();
@@ -148,7 +155,29 @@ impl ResultsStateController {
         self.split_push_thumbs();
         self.split_make_thumbs(well_images.into_iter().map(|(_, rel)| rel).collect());
         if let Some(first) = first {
-            self.split_show_image(first, None);
+            self.split_show_image(first, None, None);
+        }
+    }
+
+    /// The image heatmap's tile `key` on the image drilled into.
+    pub(super) fn split_show_tile(self: &Arc<Self>, key: &str) {
+        let rel_path = self.current_image.lock().expect("Poisoned").clone();
+        if let (Some(rel_path), Some(bbox)) = (rel_path, self.tile_bbox(key)) {
+            self.split_show_image(rel_path, None, Some(bbox));
+        }
+    }
+
+    /// A well's image (the well level's field `name`), whole.
+    pub(super) fn split_show_image_named(self: &Arc<Self>, name: &str) {
+        let rel_path = self
+            .images
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .find(|image| image.name == name)
+            .map(|image| image.rel_path.to_string_lossy().into_owned());
+        if let Some(rel_path) = rel_path {
+            self.split_show_image(rel_path, None, None);
         }
     }
 
@@ -163,7 +192,7 @@ impl ResultsStateController {
         let Some((rel_path, bbox)) = location.filter(|_| row >= 0) else {
             return;
         };
-        self.split_show_image(rel_path, Some(bbox));
+        self.split_show_image(rel_path, Some(bbox), None);
     }
 
     /// ‹ › and ↑ ↓: List the next row, Plate the next object of the image
@@ -246,17 +275,29 @@ impl ResultsStateController {
         self.split_push_overlay();
     }
 
-    /// Shows `rel_path` in the image pane (and then selects the object
-    /// with box `select`): opened at that object when following, its
-    /// objects read off the UI thread.
-    fn split_show_image(self: &Arc<Self>, rel_path: String, select: Option<[u32; 4]>) {
+    /// Shows `rel_path` in the image pane, and then selects the object
+    /// with box `select` - or marks `region` (a heatmap tile): opened at
+    /// that when following, its objects read off the UI thread.
+    fn split_show_image(
+        self: &Arc<Self>,
+        rel_path: String,
+        select: Option<[u32; 4]>,
+        region: Option<[u32; 4]>,
+    ) {
         let generation = {
             let mut split = self.split.lock().expect("Poisoned");
+            split.region = region;
             if split.image.as_deref() == Some(rel_path.as_str()) && !split.objects.is_empty() {
+                if select.is_none() {
+                    split.selected = None;
+                }
                 drop(split);
                 match select {
                     Some(bbox) => self.split_select_bbox(bbox, true),
-                    None => self.split_push_selection(false),
+                    None => {
+                        self.split_push_selection(region.is_some());
+                        self.split_push_overlay();
+                    }
                 }
                 return;
             }
@@ -279,7 +320,7 @@ impl ResultsStateController {
         let in_viewer = self.split_in_viewer(&rel_path);
         let follow = self.split_follow();
         if !in_viewer {
-            *self.viewport().viewport_cache.focus.lock().expect("Poisoned") = match (&absolute, select) {
+            *self.viewport().viewport_cache.focus.lock().expect("Poisoned") = match (&absolute, select.or(region)) {
                 (Some(path), Some(bbox)) if follow => Some((path.clone(), bbox.map(|v| v as f32))),
                 _ => None,
             };
@@ -433,10 +474,22 @@ impl ResultsStateController {
     /// The selected object's ring and card, "n / total" - and, `fly`, the
     /// view to it.
     fn split_push_selection(&self, fly: bool) {
-        let (title_image, object, total, index, channel) = {
+        let (title_image, object, total, index, channel, region) = {
             let split = self.split.lock().expect("Poisoned");
             let object = split.selected.and_then(|i| split.objects.get(i).cloned());
-            (split.image.clone(), object, split.objects.len(), split.selected, split.channel)
+            (split.image.clone(), object, split.objects.len(), split.selected, split.channel, split.region)
+        };
+        // A tile (no object selected): its box on the image.
+        let highlight = match (&object, region) {
+            (None, Some([x0, y0, x1, y1])) => crate::ObjectHighlightBox {
+                x_px: x0 as f32,
+                y_px: y0 as f32,
+                w_px: (x1.saturating_sub(x0) + 1) as f32,
+                h_px: (y1.saturating_sub(y0) + 1) as f32,
+                active: true,
+                paint_as_rectangle: true,
+            },
+            _ => crate::ObjectHighlightBox::default(),
         };
         let classes: HashMap<i32, (String, u32)> = self
             .classes
@@ -493,7 +546,9 @@ impl ResultsStateController {
                 }
             }
         };
-        let fly_to = (fly && self.split_follow()).then_some(()).and(object.as_ref().map(|o| o.bbox_px));
+        let fly_to = (fly && self.split_follow())
+            .then_some(())
+            .and(object.as_ref().map(|o| o.bbox_px).or(region));
         let reduce_motion = self.viewport().memory_settings().reduce_motion;
         let full = *self.viewport().full_image_size.lock().expect("Poisoned");
         let (_, _, _, v_w, v_h) = self.viewport().view();
@@ -525,6 +580,7 @@ impl ResultsStateController {
                 state.set_split_total(rows as i32);
             }
             state.set_split_sel(sel);
+            ui.global::<crate::ViewportObjectState>().set_object_highlight(highlight);
             if let Some(target) = target
                 && full.0 > 0
             {
