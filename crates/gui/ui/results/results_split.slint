@@ -1,7 +1,7 @@
 // results/results_split.slint — Results, split with the image (board Z):
 // the results left, the image right. The image is the one viewer
 // (`Viewport`, moved into the right pane by the workspace); here what is
-// on and around it: the head over the image, the selected object's ring
+// on and around it: the head over the image, the selected object's lines
 // and card, the hint, the well's filmstrip, and the divider.
 
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
@@ -196,14 +196,15 @@ export component SplitImageHead inherits Hud {
     }
 }
 
-// The selected object on the image: a ring round it, faint lines through
-// it and its card beside it. Covers the image; takes no input.
+// The selected object on the image (drawn yellow in the objects' layer):
+// faint lines through it, with a gap round it, and its card beside it.
+// Covers the image; takes no input.
 export component SplitSelection inherits Rectangle {
     property <length> cx: ViewportState.offset_x + (ResultsState.split-sel.x + ResultsState.split-sel.w / 2) * ViewportState.zoom_factor * 1px;
     property <length> cy: ViewportState.offset_y + (ResultsState.split-sel.y + ResultsState.split-sel.h / 2) * ViewportState.zoom_factor * 1px;
     property <length> r: max(14px, max(ResultsState.split-sel.w, ResultsState.split-sel.h) / 2 * ViewportState.zoom_factor * 1px + 7px);
 
-    // The lines, with a gap round the ring.
+    // The lines, with a gap round the object.
     Rectangle {
         x: root.cx;
         y: 0;
@@ -233,36 +234,7 @@ export component SplitSelection inherits Rectangle {
         background: #5E95EA.with-alpha(0.35);
     }
 
-    // The ring: white, an accent edge and glow.
-    Rectangle {
-        x: root.cx - self.width / 2;
-        y: root.cy - self.height / 2;
-        width: 2 * root.r + 8px;
-        height: self.width;
-        border-radius: self.width / 2;
-        border-width: 4px;
-        border-color: #2A6BDF.with-alpha(0.35);
-    }
-    Rectangle {
-        x: root.cx - self.width / 2;
-        y: root.cy - self.height / 2;
-        width: 2 * root.r + 4px;
-        height: self.width;
-        border-radius: self.width / 2;
-        border-width: 2px;
-        border-color: #2A6BDF;
-    }
-    Rectangle {
-        x: root.cx - self.width / 2;
-        y: root.cy - self.height / 2;
-        width: 2 * root.r;
-        height: self.width;
-        border-radius: self.width / 2;
-        border-width: 2px;
-        border-color: #FAFAFA;
-    }
-
-    // The card: right of the ring, else left; kept on the image.
+    // The card: right of the object, else left; kept on the image.
     card := Hud {
         property <length> right-x: root.cx + root.r + 12px;
         x: self.right-x + self.width <= root.width - 8px ? self.right-x : max(8px, root.cx - root.r - 12px - self.width);

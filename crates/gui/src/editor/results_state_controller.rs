@@ -1111,11 +1111,16 @@ impl ResultsStateController {
                         return;
                     };
                     let cells = manager.well_cells.lock().expect("Poisned");
-                    let Some(cell) = cells.get(key.as_str()) else {
+                    let Some(cell) = cells.get(key.as_str()).cloned() else {
                         warn!("Unknown field clicked: {key}");
                         return;
                     };
+                    drop(cells);
                     let state = ui_ready.global::<ResultsState>();
+                    // Split with the image: this image, right away.
+                    if state.get_split() {
+                        manager.split_show_image_named(&key);
+                    }
                     state.set_active_well(key);
                     // `exists` (not `has_value`): the user must be able to
                     // select/open a well or field even when it has no
@@ -1266,11 +1271,16 @@ impl ResultsStateController {
                         return;
                     };
                     let cells = manager.image_heatmap_cells.lock().expect("Poisned");
-                    let Some(cell) = cells.get(key.as_str()) else {
+                    let Some(cell) = cells.get(key.as_str()).cloned() else {
                         warn!("Unknown heatmap tile clicked: {key}");
                         return;
                     };
+                    drop(cells);
                     let state = ui_ready.global::<ResultsState>();
+                    // Split with the image: the tile on it, right away.
+                    if state.get_split() {
+                        manager.split_show_tile(&key);
+                    }
                     state.set_active_well(key.clone());
                     // `exists` (not `has_value`): the user must be able to
                     // select/open a well or field even when it has no
@@ -1287,6 +1297,11 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_image_heatmap_cell_open(move |key| {
+                    // Split with the image: shown there (the split stays).
+                    if manager.ui.upgrade().is_some_and(|ui| ui.global::<ResultsState>().get_split()) {
+                        manager.split_show_tile(&key);
+                        return;
+                    }
                     // Paint the clicked tile's own bounds as a rectangle
                     // over the image it belongs to — unlike a list row's
                     // crosshair (`on_list_row_clicked`), the tile itself
@@ -1297,21 +1312,10 @@ impl ResultsStateController {
                         warn!("No image open, cannot highlight heatmap tile {key}");
                         return;
                     };
-                    let Some((row, col)) = parse_tile_key(&key) else {
+                    let Some(bbox_px) = manager.tile_bbox(&key) else {
                         warn!("Unrecognized heatmap tile key: {key}");
                         return;
                     };
-                    let square_size = manager
-                        .matrix_filter
-                        .lock()
-                        .expect("Poisned")
-                        .as_ref()
-                        .and_then(|filter| filter.square_size)
-                        .unwrap_or(DEFAULT_SQUARE_SIZE)
-                        as u32;
-                    let xmin = col * square_size;
-                    let ymin = row * square_size;
-                    let bbox_px = [xmin, ymin, xmin + square_size - 1, ymin + square_size - 1];
                     manager
                         .image_list_controller
                         .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, true);
@@ -1863,6 +1867,21 @@ impl ResultsStateController {
             job(&done.0);
             drop(done);
         }));
+    }
+
+    /// The image heatmap's tile `key` ("R0C0") in image pixels
+    /// (`[xmin, ymin, xmax, ymax]`, inclusive).
+    fn tile_bbox(&self, key: &str) -> Option<[u32; 4]> {
+        let (row, col) = parse_tile_key(key)?;
+        let square_size = self
+            .matrix_filter
+            .lock()
+            .expect("Poisned")
+            .as_ref()
+            .and_then(|filter| filter.square_size)
+            .unwrap_or(DEFAULT_SQUARE_SIZE) as u32;
+        let (xmin, ymin) = (col * square_size, row * square_size);
+        Some([xmin, ymin, xmin + square_size - 1, ymin + square_size - 1])
     }
 
     /// A result's object shown on its image (`row`: the List row, -1 none):
@@ -7085,6 +7104,30 @@ mod tests {
         state.invoke_split_step(1);
         drain_ui_queue();
         assert_eq!(state.get_list_selected_row(), 2);
+    }
+
+    #[test]
+    fn split_a_heatmap_tile_is_shown_on_the_split_image_and_the_split_stays() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        *controller.current_image.lock().unwrap() = Some("A1_01.tif".to_string());
+
+        // A double click (or "Show on image"): no leaving for Images.
+        state.invoke_image_heatmap_cell_open("R0C0".into());
+        drain_ui_queue();
+        assert_ne!(ui.global::<crate::LayoutState>().get_mode(), crate::WorkspaceMode::Images);
+        assert!(!state.get_peek());
+        assert_eq!(controller.split.lock().unwrap().image.as_deref(), Some("A1_01.tif"));
+        let highlight = ui.global::<crate::ViewportObjectState>().get_object_highlight();
+        assert!(highlight.active && highlight.paint_as_rectangle, "the tile's box");
+        assert_eq!((highlight.x_px, highlight.y_px), (0.0, 0.0));
+        assert!(!state.get_split_sel().active, "no object selected");
+
+        // Selecting an object instead: the box goes.
+        state.invoke_split_image_clicked(5.0, 5.0);
+        drain_ui_queue();
+        assert!(state.get_split_sel().active);
+        assert!(!ui.global::<crate::ViewportObjectState>().get_object_highlight().active);
     }
 
     #[test]
