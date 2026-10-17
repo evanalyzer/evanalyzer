@@ -22,6 +22,7 @@
 // `key-pressed` handlers above (Slint callbacks aren't values, so there's no
 // way to enumerate "every branch below" automatically) - it only stays
 // accurate if every new shortcut updates both places.
+import { ComponentSettingsState } from "api/create_component.slint";
 import { LayoutState, WorkspaceMode } from "api/layout.slint";
 import { CommandPaletteState } from "api/command_palette.slint";
 import { AnalysisRunningCloseState, ConnectState, DialogType, GlobalAppState, UnsavedChangesState } from "api/state.slint";
@@ -89,9 +90,8 @@ export component GlobalShortcuts inherits FocusScope {
             return reject;
         }
 
-        // -- Before / after: hold Space for the image without the
-        // preview's objects --
-        if (e.text == " " && !e.modifiers.control && ViewportMemoryState.before_after) {
+        // -- Compare: hold Space for the whole original --
+        if (e.text == " " && !e.modifiers.control && ViewportObjectState.compare && ViewportMemoryState.before_after && PipelinesPanelState.has-breakpoint-image) {
             ViewportObjectState.show-before = true;
             return accept;
         }
@@ -291,6 +291,12 @@ export component DialogShortcuts inherits FocusScope {
     init => {
         self.focus();
     }
+    // It covers the window, but the dialogs don't block it: a press that
+    // no dialog takes belongs to the window. Without this a FocusScope
+    // without focus takes the press to get focus (the image couldn't be
+    // panned after a click anywhere else). Esc still works after such a
+    // click - `GlobalShortcuts` closes the dialog then.
+    focus-on-click: false;
 
     key-pressed(e) => {
         if (e.text != Key.Escape) {
@@ -340,6 +346,10 @@ export global DialogEscape {
             RunAnalysisState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.ai_learning) {
             AiLearningState.cancel_clicked();
+        } else if (GlobalAppState.active_dialog == DialogType.component_settings) {
+            // Like its Cancel: the component as it was when it opened.
+            ComponentSettingsState.parameter-edit-cancelled();
+            ComponentSettingsState.close();
         } else if (GlobalAppState.active_dialog == DialogType.none) {
             return false;
         }

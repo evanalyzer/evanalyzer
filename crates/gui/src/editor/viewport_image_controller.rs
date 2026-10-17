@@ -5,7 +5,7 @@ use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb, this_comp
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, ImagePixelInfo, IntensityProjection,
-    ViewportMemoryState, ViewportState as ViewportSlintState,
+    LayoutState, ViewportMemoryState, ViewportState as ViewportSlintState,
 };
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::project::ProjectExt;
@@ -94,6 +94,8 @@ impl ViewportImageController {
             state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
             state.set_edit_during_analysis(settings.edit_during_analysis);
             state.set_before_after(settings.before_after);
+            state.set_objects_as_table(settings.objects_as_table);
+            state.set_object_card(settings.object_card);
         }
     }
 
@@ -115,9 +117,16 @@ impl ViewportImageController {
             free_caches_on_analysis: state.get_free_caches_on_analysis(),
             edit_during_analysis: state.get_edit_during_analysis(),
             before_after: state.get_before_after(),
+            objects_as_table: state.get_objects_as_table(),
+            object_card: state.get_object_card(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
         };
-        if settings != self.viewport_controller.memory_settings() {
+        let before = self.viewport_controller.memory_settings();
+        if settings.objects_as_table != before.objects_as_table {
+            ui.global::<LayoutState>()
+                .set_objects_as_table(settings.objects_as_table);
+        }
+        if settings != before {
             self.apply_memory_settings(settings);
         }
     }
@@ -142,7 +151,11 @@ impl ViewportImageController {
 
             // Viewport memory settings (Viewport section of the settings
             // dialog): shown when it opens, taken over on Apply.
-            self.show_memory_settings(&self.viewport_controller.memory_settings());
+            let settings = self.viewport_controller.memory_settings();
+            self.show_memory_settings(&settings);
+            // The objects' view to start with.
+            ui.global::<LayoutState>()
+                .set_objects_as_table(settings.objects_as_table);
             let manager = self.clone();
             ui.global::<ViewportMemoryState>().on_load(move || {
                 manager.show_memory_settings(&manager.viewport_controller.memory_settings());
@@ -1228,6 +1241,8 @@ mod tests {
         state.set_free_caches_on_analysis(false);
         state.set_edit_during_analysis(false);
         state.set_before_after(false);
+        state.set_objects_as_table(true);
+        state.set_object_card(true);
 
         state.invoke_apply();
         drain_ui_queue();
@@ -1242,6 +1257,8 @@ mod tests {
             free_caches_on_analysis: false,
             edit_during_analysis: false,
             before_after: false,
+            objects_as_table: true,
+            object_card: true,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(
@@ -1354,6 +1371,42 @@ mod tests {
             "{} for a {h} high view",
             vp.offset_y
         );
+    }
+
+    /// Dialogs don't block the image: with one open, the image pans - also
+    /// a second time, after the first pan gave the keyboard back to the
+    /// window (the dialogs' layer once took that press to get focus).
+    #[test]
+    fn the_image_pans_while_a_dialog_is_open() {
+        use crate::{DialogType, GlobalAppState};
+        use slint::LogicalPosition;
+        use slint::platform::{PointerEventButton, WindowEvent};
+
+        let (ui, _, _controller) = attached();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::ProjectSettings);
+        let view = ui.global::<ViewportSlintState>();
+        let drag = |from: f32, to: f32| {
+            let window = ui.window();
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: LogicalPosition::new(from, 450.0),
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(to, 450.0),
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position: LogicalPosition::new(to, 450.0),
+                button: PointerEventButton::Left,
+            });
+        };
+
+        let start = view.get_offset_x();
+        drag(600.0, 650.0);
+        assert_eq!(view.get_offset_x() - start, 50.0);
+        drag(650.0, 700.0);
+        assert_eq!(view.get_offset_x() - start, 100.0);
     }
 
     #[test]
@@ -1592,7 +1645,7 @@ mod tests {
 
         let sizes = ui_state.get_project().get_pixel_sizes();
         let (value, pos) = pixel_info(&ui);
-        assert_eq!(value, "DAPI: 128 (50.0000%)");
+        assert_eq!(value, "DAPI: 128");
         assert_eq!(
             pos,
             format!(
@@ -1629,7 +1682,7 @@ mod tests {
         ui.global::<ViewportSlintState>()
             .invoke_report_mouse_moved(11.0, 21.0);
         drain_ui_queue();
-        assert_eq!(pixel_info(&ui).0, "DAPI: 128 (50.0000%)", "at once");
+        assert_eq!(pixel_info(&ui).0, "DAPI: 128", "at once");
 
         // The image changes; further moves within the throttle window wait
         // (the window held open however slowly this test runs).
@@ -1639,14 +1692,14 @@ mod tests {
         ui.global::<ViewportSlintState>()
             .invoke_report_mouse_moved(12.0, 22.0);
         drain_ui_queue();
-        assert_eq!(pixel_info(&ui).0, "DAPI: 128 (50.0000%)", "throttled");
+        assert_eq!(pixel_info(&ui).0, "DAPI: 128", "throttled");
         assert!(controller.pixel_info_throttle_timer.running());
 
         advance(40);
         drain_ui_queue();
         assert_eq!(
             pixel_info(&ui).0,
-            "DAPI: 64 (25.0000%)",
+            "DAPI: 64",
             "the trailing update"
         );
     }

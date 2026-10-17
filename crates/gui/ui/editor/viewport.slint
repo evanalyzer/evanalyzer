@@ -5,14 +5,19 @@ import { Ink } from "../ink/palette.slint";
 import { InkIcons } from "../ink/icons.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ViewportMemoryState } from "../api/project_settings.slint";
+import { PipelinesPanelState } from "../api/pipelines.slint";
 
 import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
-    // Before / after is on (and not switched off in the settings).
-    property <bool> comparing: ViewportObjectState.compare && ViewportMemoryState.before_after;
+    // Compare is on (not switched off in the settings, with a breakpoint
+    // image to compare).
+    property <bool> comparing: ViewportObjectState.compare && ViewportMemoryState.before_after && PipelinesPanelState.has-breakpoint-image;
+    changed comparing => {
+        ViewportObjectState.compare-changed(self.comparing);
+    }
     property <bool> brush-tool: ViewportObjectState.act_tool_state == ToolState.Brush || ViewportObjectState.act_tool_state == ToolState.Eraser;
     property <length> last_mouse_y: 0;
     in-out property <image> display_image;
@@ -128,26 +133,38 @@ export component Viewport inherits Rectangle {
             height: root.screen_len(ViewportState.hr_img_h);
         }
 
+        // Layer 2b: Compare - the breakpoint image over the original, on
+        // its side of the divider (moving the divider only moves the cut;
+        // nothing is rendered again). Space held: the whole original.
+        if root.comparing && ViewportState.compare_ready && !ViewportObjectState.show-before: cmp-clip := Rectangle {
+            x: ViewportObjectState.compare-swapped ? root.width * ViewportObjectState.compare-at : 0px;
+            y: 0px;
+            width: ViewportObjectState.compare-swapped ? parent.width - self.x : root.width * ViewportObjectState.compare-at;
+            height: parent.height;
+            clip: true;
+            Image {
+                source: ViewportState.compare_image;
+                image-fit: fill;
+                x: root.screen_x(ViewportState.cmp_img_x) - cmp-clip.x;
+                y: root.screen_y(ViewportState.cmp_img_y);
+                width: root.screen_len(ViewportState.cmp_img_w);
+                height: root.screen_len(ViewportState.cmp_img_h);
+                visible: root.fits(self.x + cmp-clip.x, self.y, self.width, self.height);
+            }
+        }
+
         // Layer 3: The objects
         // Rendered in screen space (viewport plus a margin) at the zoom/offset
         // of its render; placed like the image layers, so it stays on the
         // image while a pan/zoom moves it, until the re-render settles.
-        // Comparing: only right of the line ("after").
-        obj-clip := Rectangle {
-            x: root.comparing ? root.width * ViewportObjectState.compare-at : 0px;
-            y: 0px;
-            width: parent.width - self.x;
-            height: parent.height;
-            clip: root.comparing;
-            Image {
-                source: root.object_image;
-                image-fit: fill;
-                visible: ViewportObjectState.show_objects && !(ViewportObjectState.show-before && ViewportMemoryState.before_after) && ViewportState.object_ready && root.fits(self.x + obj-clip.x, self.y, self.width, self.height);
-                x: root.screen_x(ViewportState.obj_img_x) - obj-clip.x;
-                y: root.screen_y(ViewportState.obj_img_y);
-                width: root.screen_len(ViewportState.obj_img_w);
-                height: root.screen_len(ViewportState.obj_img_h);
-            }
+        Image {
+            source: root.object_image;
+            image-fit: fill;
+            visible: ViewportObjectState.show_objects && ViewportState.object_ready && root.fits(self.x, self.y, self.width, self.height);
+            x: root.screen_x(ViewportState.obj_img_x);
+            y: root.screen_y(ViewportState.obj_img_y);
+            width: root.screen_len(ViewportState.obj_img_w);
+            height: root.screen_len(ViewportState.obj_img_h);
         }
 
         // Layer 4: Markers
@@ -477,8 +494,9 @@ export component Viewport inherits Rectangle {
         viewport-height: root.height;
     }
 
-    // Before / after: the line between them, dragged sideways.
-    if root.comparing: Rectangle {
+    // Compare: the line between them, dragged sideways; a click on its
+    // handle swaps the sides.
+    if root.comparing && !ViewportObjectState.show-before: Rectangle {
         x: root.width * ViewportObjectState.compare-at - self.width / 2;
         width: 24px;
         height: root.height;
@@ -502,22 +520,36 @@ export component Viewport inherits Rectangle {
         Text {
             x: -self.width - 6px;
             y: root.height / 2 + 18px;
-            text: "Before";
+            text: ViewportObjectState.compare-swapped ? "Original" : "Breakpoint";
             font-size: Ink.fs-sm;
             color: #FFFFFF;
         }
         Text {
             x: parent.width + 6px;
             y: root.height / 2 + 18px;
-            text: "After";
+            text: ViewportObjectState.compare-swapped ? "Breakpoint" : "Original";
             font-size: Ink.fs-sm;
             color: #FFFFFF;
         }
         TouchArea {
+            property <bool> dragged;
             mouse-cursor: MouseCursor.ew-resize;
+            accessible-role: button;
+            accessible-label: "Swap the sides";
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    self.dragged = false;
+                }
+            }
             moved => {
                 if self.pressed {
+                    self.dragged = true;
                     ViewportObjectState.compare-at = clamp((self.absolute-position.x - root.absolute-position.x + self.mouse-x) / root.width, 0.02, 0.98);
+                }
+            }
+            clicked => {
+                if !self.dragged {
+                    ViewportObjectState.compare-swapped = !ViewportObjectState.compare-swapped;
                 }
             }
         }

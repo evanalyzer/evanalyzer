@@ -16,6 +16,7 @@ import { ResultsListPanel } from "../editor/results_list_panel.slint";
 import { ClassificationPanel } from "../editor/classification_panel.slint";
 import { ObjectListPanel } from "../editor/object_list_panel.slint";
 import { ObjectCard } from "../editor/object_card.slint";
+import { ViewportMemoryState } from "../api/project_settings.slint";
 import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
@@ -124,7 +125,8 @@ export component Workspace inherits Rectangle {
     }
 
     // The selected object, next to it on the image (under the panels).
-    if root.on-image && ObjectListState.selected_object.id != 0 && ObjectListState.selected_object.bbox-w > 0: ObjectCard {
+    // Only when switched on (Settings › Viewport › Object card).
+    if ViewportMemoryState.object_card && root.on-image && ObjectListState.selected_object.id != 0 && ObjectListState.selected_object.bbox-w > 0: ObjectCard {
         width: 100%;
         height: 100%;
         inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;

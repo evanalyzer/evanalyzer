@@ -113,9 +113,17 @@ pub struct ViewportMemorySettings {
     /// whose RAM the analysis needs all of).
     pub edit_during_analysis: bool,
 
-    /// The before / after compare over the image (the top bar's button and
-    /// holding Space). Off: neither is there. Costs nothing while unused.
+    /// The compare of the breakpoint image with the original over the
+    /// image (the top bar's button and holding Space). Off: neither is
+    /// there. Costs nothing while unused.
     pub before_after: bool,
+
+    /// The objects open as a table at the bottom, not as a list in the
+    /// right panel (its ⋯ still switches).
+    pub objects_as_table: bool,
+
+    /// The card of the selected object next to it on the image.
+    pub object_card: bool,
 }
 
 impl ViewportMemorySettings {
@@ -169,6 +177,8 @@ impl Default for ViewportMemorySettings {
             free_caches_on_analysis: true,
             edit_during_analysis: true,
             before_after: true,
+            objects_as_table: false,
+            object_card: false,
         }
     }
 }

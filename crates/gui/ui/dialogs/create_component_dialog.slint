@@ -1,5 +1,5 @@
 import { Places } from "../api/layout.slint";
-import { InkButton, InkButtonKind, InkBanner, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkBanner, InkCaption, InkChip, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement } from "../ink/ink.slint";
 import { ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "../api/create_component.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
@@ -325,524 +325,445 @@ export component ComponentUpdateDialog inherits InkDialog {
     }
 }
 
-// -- Component settings ------------------------------------------------
-// A parameter's row: name, section, help and what it sets on the left; its
-// default and ↑ ↓ ✎ ✕ on the right. While a parameter is opened to edit
-// (`editing`), the rows' buttons wait for its Apply or Cancel.
-component ParamHeader inherits Rectangle {
+// -- Component settings (design P) ----------------------------------------
+// A parameter in the list: its name and default.
+component ParamListRow inherits Rectangle {
     in property <ComponentParamRow> param;
-    in property <int> index;
-    in property <int> editing: -1;
-    callback edit;
+    in property <bool> selected;
+    callback clicked;
 
-    property <bool> free: root.editing < 0;
+    height: 28px;
+    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: root.param.label;
+    accessible-item-selected: root.selected;
 
-    background: root.index == root.editing ? Ink.cat-component.with-alpha(0.06) : transparent;
-
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 10px;
-        spacing: 16px;
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: 2px;
-
-            HorizontalLayout {
-                spacing: 8px;
-                Text {
-                    text: root.param.label;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Ink.text;
-                    overflow: elide;
-                }
-
-                if root.param.section != "": VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        height: 16px;
-                        width: section-text.preferred-width + 12px;
-                        border-radius: 8px;
-                        background: Ink.raised;
-                        section-text := Text {
-                            text: root.param.section;
-                            font-size: 10px;
-                            color: Ink.text-dim;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-            }
-
-            Text {
-                text: root.param.description != "" ? root.param.description : (root.param.default-description != "" ? root.param.default-description : "No help text");
-                font-size: 11px;
-                color: root.param.description != "" ? Ink.text-dim : Ink.text-mute;
-                overflow: elide;
-            }
-
-            Text {
-                text: "sets \{root.param.sets}";
-                font-size: 10px;
-                color: Ink.text-mute;
-                overflow: elide;
-            }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
         }
-
-        VerticalLayout {
-            alignment: center;
-            HorizontalLayout {
-                spacing: 2px;
-                Text {
-                    text: "default \{root.param.default-value}";
-                    font-size: 10px;
-                    color: Ink.text-mute;
-                    vertical-alignment: center;
-                }
-
-                Rectangle {
-                    width: 6px;
-                }
-
-                InkIconButton {
-                    icon: InkIcons.caret-up;
-                    size: 24px;
-                    label: "Move up";
-                    enabled: root.free && root.index > 0;
-                    clicked => {
-                        ComponentSettingsState.parameter-moved(root.param.key, -1);
-                    }
-                }
-
-                InkIconButton {
-                    icon: InkIcons.caret-down;
-                    size: 24px;
-                    label: "Move down";
-                    enabled: root.free && root.index < ComponentSettingsState.parameters.length - 1;
-                    clicked => {
-                        ComponentSettingsState.parameter-moved(root.param.key, 1);
-                    }
-                }
-
-                InkIconButton {
-                    icon: InkIcons.edit;
-                    size: 24px;
-                    label: "Edit parameter";
-                    enabled: root.free;
-                    clicked => {
-                        root.edit();
-                    }
-                }
-
-                InkIconButton {
-                    icon: InkIcons.delete;
-                    size: 24px;
-                    label: "Remove parameter";
-                    enabled: root.free;
-                    clicked => {
-                        ComponentSettingsState.parameter-removed(root.param.key);
-                    }
-                }
-            }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 8px;
+        spacing: 6px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.param.label;
+            font-size: Ink.fs-sm;
+            font-weight: root.selected ? 600 : 400;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            max-width: 90px;
+            text: root.param.default-value;
+            font-size: Ink.fs-xs;
+            font-family: Ink.font-mono;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
         }
     }
 }
 
-// The component's name, descriptions and parameters - laid out like the
-// project settings: sections on the left, rows of name/explanation and
-// control on the right. Changes apply right away.
+// A label of the parameter's form.
+component FormLabel inherits Text {
+    width: 72px;
+    font-size: Ink.fs-sm;
+    color: Ink.text-dim;
+    vertical-alignment: center;
+}
+
+// The component's name and descriptions (General) and its parameters - a
+// list by section, the chosen one's form beside it. Cancel undoes all
+// changes made while it's open (✕ and Esc too), Apply keeps them.
 export component ComponentSettingsDialog inherits InkDialog {
     // Next to the steps panel.
     anchor-x: Places.beside-left;
-    // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
-    title: "Component settings";
-    subtitle: "◆ " + ComponentSettingsState.name;
+    title: ComponentSettingsState.name;
+    subtitle: "◆ component settings";
     card-width: 700px;
-    card-height: 620px;
     content-padding: 0px;
-    close-on-backdrop: true;
     close => {
+        ComponentSettingsState.parameter-edit-cancelled();
         ComponentSettingsState.close();
     }
 
-    // 0 General, 1 Parameters. ✎ on an exposed setting opens its parameter -
-    // set once as the dialog opens (refills change `focus-index`).
+    // 0 General, 1 Parameters.
     property <int> current-section: 0;
-    // The parameter opened to edit (its name, help, section, what it sets).
-    property <int> editing: -1;
+    // The parameter shown in the form.
+    property <int> chosen: 0;
+    property <ComponentParamRow> param: ComponentSettingsState.parameters[min(root.chosen, ComponentSettingsState.parameters.length - 1)];
+    property <bool> has-param: ComponentSettingsState.parameters.length > 0;
 
     init => {
+        // What Cancel goes back to.
+        ComponentSettingsState.parameter-edit-started("");
+        // ✎ on an exposed setting: its parameter.
         if ComponentSettingsState.focus-index >= 0 {
             root.current-section = 1;
-            root.editing = ComponentSettingsState.focus-index;
+            root.chosen = ComponentSettingsState.focus-index;
         }
     }
-    // A closed parameter row's height - so the focused one can be scrolled to.
-    property <length> row-height: 66px;
-    // The opened parameter's editor height (below its header).
-    property <length> edited-height: 0px;
 
+    // -- Tabs, in the head (left of ✕) --
     Rectangle {
+        height: 0px;
+        HorizontalLayout {
+            x: parent.width - self.width - 48px;
+            y: (Ink.head-h - 30px) / 2 - Ink.head-h;
+            width: self.preferred-width;
+            height: 30px;
+            spacing: 14px;
+            InkTab {
+                text: "General";
+                active: root.current-section == 0;
+                clicked => {
+                    root.current-section = 0;
+                }
+            }
+            InkTab {
+                text: "Parameters";
+                note: "· \{ComponentSettingsState.parameters.length}";
+                active: root.current-section == 1;
+                clicked => {
+                    root.current-section = 1;
+                }
+            }
+        }
+    }
+
+    // -- General --
+    if root.current-section == 0: ScrollView {
         vertical-stretch: 1;
-
         VerticalLayout {
-            spacing: 0;
+            alignment: start;
+            padding: Ink.pad-dialog;
+            spacing: 14px;
 
-            // -- Tabs: General, Parameters (design P) --
-            HorizontalLayout {
-                height: 34px;
-                padding-left: Ink.pad-dialog;
-                padding-right: Ink.pad-dialog;
-                spacing: 14px;
-                InkTab {
-                    text: "General";
-                    active: root.current-section == 0;
-                    clicked => {
-                        root.current-section = 0;
-                    }
-                }
-                InkTab {
-                    text: "Parameters";
-                    note: "· \{ComponentSettingsState.parameters.length}";
-                    active: root.current-section == 1;
-                    clicked => {
-                        root.current-section = 1;
-                    }
-                }
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
+            InkHint {
+                text: "What the component is called and does - shown in the command picker and behind the component card's ?.";
             }
 
+            InkSettingsCard {
+                InkSettingRow {
+                    label: "Name";
+                    LineEdit {
+                        text: ComponentSettingsState.name;
+                        placeholder-text: "Component name";
+                        edited(t) => {
+                            ComponentSettingsState.name-edited(t);
+                        }
+                    }
+                }
+
+                InkSettingRow {
+                    label: "Short description";
+                    description: "One line, shown in the command picker.";
+                    LineEdit {
+                        text: ComponentSettingsState.description;
+                        placeholder-text: "What the component does";
+                        edited(t) => {
+                            ComponentSettingsState.description-edited(t);
+                        }
+                    }
+                }
+
+                InkSettingRow {
+                    label: "Author";
+                    author-name-edit := LineEdit {
+                        text: ComponentSettingsState.author-name;
+                        placeholder-text: "Full name";
+                        edited(t) => {
+                            ComponentSettingsState.author-edited(t, author-organization-edit.text);
+                        }
+                    }
+                }
+
+                InkSettingRow {
+                    label: "Organization";
+                    author-organization-edit := LineEdit {
+                        text: ComponentSettingsState.author-organization;
+                        placeholder-text: "Lab, institute, company";
+                        edited(t) => {
+                            ComponentSettingsState.author-edited(author-name-edit.text, t);
+                        }
+                    }
+                }
+
+                InkSettingBlock {
+                    label: "Description";
+                    description: "How to use it, what it expects, references - shown behind the component card's ?.";
+                    TextEdit {
+                        height: 96px;
+                        text: ComponentSettingsState.long-description;
+                        wrap: word-wrap;
+                        placeholder-text: "How to use it, what it expects, references…";
+                        edited(t) => {
+                            ComponentSettingsState.long-description-edited(t);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // -- Parameters: the list, the chosen one's form --
+    if root.current-section == 1: HorizontalLayout {
+        vertical-stretch: 1;
+        spacing: 0px;
+
+        // The list, by section.
+        Rectangle {
+            width: 250px;
+            ScrollView {
+                content-width: self.visible-width;
+                VerticalLayout {
+                    width: parent.width;
+                    alignment: start;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    for p[pi] in ComponentSettingsState.parameters: VerticalLayout {
+                        if p.section != "" && (pi == 0 || ComponentSettingsState.parameters[pi - 1].section != p.section): HorizontalLayout {
+                            padding-left: 14px;
+                            InkCaption {
+                                text: p.section;
+                                height: 26px;
+                                vertical-alignment: bottom;
+                            }
+                        }
+                        ParamListRow {
+                            param: p;
+                            selected: pi == root.chosen;
+                            clicked => {
+                                root.chosen = pi;
+                            }
+                        }
+                    }
+                    if !root.has-param: HorizontalLayout {
+                        padding: 14px;
+                        InkHint {
+                            text: "None yet - ◇ next to a setting of the opened component makes it a parameter.";
+                        }
+                    }
+                }
+            }
             Rectangle {
-                height: 1px;
+                x: parent.width - 1px;
+                width: 1px;
                 background: Ink.border-soft;
             }
+        }
 
+        // The chosen one.
+        if root.has-param: ScrollView {
+            horizontal-stretch: 1;
+            content-width: self.visible-width;
             VerticalLayout {
-                vertical-stretch: 1;
-                spacing: 0;
+                width: parent.width;
+                alignment: start;
+                padding: 14px;
+                padding-left: 16px;
+                spacing: 10px;
 
-                // -- Settings --------------------------------------------
-                if root.current-section == 0: ScrollView {
-                    horizontal-stretch: 1;
-                    VerticalLayout {
-                        alignment: start;
-                        padding: Ink.pad-dialog;
-                        padding-top: 12px;
-                        spacing: 14px;
-
-                        InkSettingsHead {
-                            title: "General";
-                            scope: "Saved with the component";
-                            subtitle: "What the component is called and does - shown in the command picker and behind the component card's ?.";
-                        }
-
-                        InkSettingsCard {
-                            InkSettingRow {
-                                label: "Name";
-                                LineEdit {
-                                    text: ComponentSettingsState.name;
-                                    placeholder-text: "Component name";
-                                    edited(t) => {
-                                        ComponentSettingsState.name-edited(t);
-                                    }
-                                }
-                            }
-
-                            InkSettingRow {
-                                label: "Short description";
-                                description: "One line, shown in the command picker.";
-                                LineEdit {
-                                    text: ComponentSettingsState.description;
-                                    placeholder-text: "What the component does";
-                                    edited(t) => {
-                                        ComponentSettingsState.description-edited(t);
-                                    }
-                                }
-                            }
-
-                            InkSettingRow {
-                                label: "Author";
-                                author-name-edit := LineEdit {
-                                    text: ComponentSettingsState.author-name;
-                                    placeholder-text: "Full name";
-                                    edited(t) => {
-                                        ComponentSettingsState.author-edited(t, author-organization-edit.text);
-                                    }
-                                }
-                            }
-
-                            InkSettingRow {
-                                label: "Organization";
-                                author-organization-edit := LineEdit {
-                                    text: ComponentSettingsState.author-organization;
-                                    placeholder-text: "Lab, institute, company";
-                                    edited(t) => {
-                                        ComponentSettingsState.author-edited(author-name-edit.text, t);
-                                    }
-                                }
-                            }
-
-                            InkSettingBlock {
-                                label: "Description";
-                                description: "How to use it, what it expects, references - shown behind the component card's ?.";
-                                TextEdit {
-                                    height: 96px;
-                                    text: ComponentSettingsState.long-description;
-                                    wrap: word-wrap;
-                                    placeholder-text: "How to use it, what it expects, references…";
-                                    edited(t) => {
-                                        ComponentSettingsState.long-description-edited(t);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if root.current-section == 1: VerticalLayout {
-                    horizontal-stretch: 1;
-                    padding: 28px;
-                    padding-top: 22px;
-                    padding-bottom: 0px;
-                    spacing: 14px;
-
-                    InkSettingsHead {
-                        title: "Parameters";
-                        scope: "Saved with the component";
-                        subtitle: ComponentSettingsState.parameters.length == 0 ? "None yet - ◇ next to a setting of the opened component shows it on the component card." : "Shown on the component card in this order. ✎ edits a parameter's name, help, section and what it sets.";
-                    }
-
-                    // The list, and the opened parameter's header pinned on top
-                    // while its editor scrolls.
-                    if ComponentSettingsState.parameters.length > 0: Rectangle {
-                        vertical-stretch: 1;
-
-                        list := ScrollView {
-                            init => {
-                                if ComponentSettingsState.focus-index > 0 {
-                                    self.content-y = -ComponentSettingsState.focus-index * root.row-height;
-                                }
-                            }
-
-                            VerticalLayout {
-                                alignment: start;
-                                padding-bottom: 20px;
-
-                                InkSettingsCard {
-                                    for param[pi] in ComponentSettingsState.parameters: VerticalLayout {
-                                        // Divider, like a settings row.
-                                        Rectangle {
-                                            height: 1px;
-                                            background: Ink.border-soft;
-                                        }
-
-                                        ParamHeader {
-                                            param: param;
-                                            index: pi;
-                                            editing: root.editing;
-                                            height: root.row-height - 1px;
-                                            edit => {
-                                                ComponentSettingsState.parameter-edit-started(param.key);
-                                                root.editing = pi;
-                                            }
-                                        }
-
-                                    // -- The parameter, opened to edit --
-                                        if pi == root.editing: VerticalLayout {
-                                            // How tall the opened editor is - for the pinned
-                                            // header (see `pinned`).
-                                            changed height => {
-                                                root.edited-height = self.height;
-                                            }
-                                            init => {
-                                                root.edited-height = self.height;
-                                            }
-                                            padding-left: 16px;
-                                            padding-right: 16px;
-                                            padding-bottom: 14px;
-                                            spacing: 8px;
-
-                                            InkSettingRow {
-                                                label: "Name";
-                                                description: "On the component card.";
-                                                LineEdit {
-                                                    text: param.label;
-                                                    placeholder-text: "Name on the component card";
-                                                    accessible-label: "Parameter name";
-                                                    edited(t) => {
-                                                        ComponentSettingsState.parameter-name-edited(param.key, t);
-                                                    }
-                                                }
-                                            }
-
-                                            InkSettingRow {
-                                                label: "Section";
-                                                description: "Groups parameters on the card (optional).";
-                                                LineEdit {
-                                                    text: param.section;
-                                                    placeholder-text: "e.g. Detection";
-                                                    accessible-label: "Parameter section";
-                                                    edited(t) => {
-                                                        ComponentSettingsState.parameter-section-edited(param.key, t);
-                                                    }
-                                                }
-                                            }
-
-                                            InkSettingBlock {
-                                                label: "Help text";
-                                                description: param.description == "" ? (param.default-description == "" ? "Shown as ? next to the parameter." : "Empty: the setting's own help is shown.") : "Shown as ? next to the parameter.";
-                                                TextEdit {
-                                                    height: 56px;
-                                                    text: param.description;
-                                                    wrap: word-wrap;
-                                                    placeholder-text: param.default-description != "" ? param.default-description : "Help text, shown as ? next to the parameter";
-                                                    accessible-label: "Parameter help text";
-                                                    edited(t) => {
-                                                        ComponentSettingsState.parameter-help-edited(param.key, t);
-                                                    }
-                                                }
-
-                                                if param.description != "": HorizontalLayout {
-                                                    alignment: start;
-                                                    InkButton {
-                                                        text: "Reset to the setting's own help";
-                                                        clicked => {
-                                                            ComponentSettingsState.parameter-help-reset(param.key);
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            InkSettingBlock {
-                                                label: "Sets";
-                                                description: "The settings of the component's steps this parameter sets.";
-
-                                                for binding in param.bindings: HorizontalLayout {
-                                                    spacing: 6px;
-                                                    height: 24px;
-                                                    Text {
-                                                        horizontal-stretch: 1;
-                                                        text: binding.text;
-                                                        font-size: 11px;
-                                                        color: Ink.text;
-                                                        vertical-alignment: center;
-                                                        overflow: elide;
-                                                    }
-
-                                                    InkIconButton {
-                                                        icon: InkIcons.close;
-                                                        size: 24px;
-                                                        label: "Stop setting \{binding.text}";
-                                                        // The last one: remove the parameter instead.
-                                                        enabled: param.bindings.length > 1;
-                                                        clicked => {
-                                                            ComponentSettingsState.binding-removed(param.key, binding.step-id, binding.path);
-                                                        }
-                                                    }
-                                                }
-
-                                                if param.addable.length > 1: also-set := ComboBox {
-                                                    model: param.addable;
-                                                    current-index: 0;
-                                                    accessible-label: "Also set";
-                                                    selected => {
-                                                        if also-set.current-index > 0 {
-                                                            ComponentSettingsState.binding-added(param.key, also-set.current-index - 1);
-                                                            also-set.current-index = 0;
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // Keep or undo what was changed since ✎.
-                                            HorizontalLayout {
-                                                alignment: end;
-                                                spacing: 8px;
-                                                padding-top: 4px;
-                                                InkButton {
-                                                    text: "Cancel";
-                                                    clicked => {
-                                                        ComponentSettingsState.parameter-edit-cancelled();
-                                                        root.editing = -1;
-                                                    }
-                                                }
-
-                                                InkButton {
-                                                    kind: InkButtonKind.primary;
-                                                    text: "Apply";
-                                                    clicked => {
-                                                        ComponentSettingsState.parameter-edit-applied();
-                                                        root.editing = -1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // The opened parameter's header, while its own is scrolled
-                        // away and its editor still shows.
-                        property <length> header-top: list.content-y + root.editing * root.row-height;
-                        if root.editing >= 0 && self.header-top < 0 && self.header-top + root.row-height + root.edited-height > root.row-height: Rectangle {
-                            y: 0;
-                            height: root.row-height;
-                            background: Ink.panel;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: Ink.cat-component.with-alpha(0.5);
-                            drop-shadow-blur: 8px;
-                            drop-shadow-color: Ink.shadow;
-                            accessible-role: none;
-                            ParamHeader {
-                                param: ComponentSettingsState.parameters[root.editing];
-                                index: root.editing;
-                                editing: root.editing;
-                            }
-                        }
-                    }
-
-                    if ComponentSettingsState.parameters.length == 0: Rectangle {
-                        vertical-stretch: 1;
-                    }
-                }
-            }
-
-            // -- Footer ----------------------------------------------------
-            Rectangle {
-                height: 1px;
-                background: Ink.border-soft;
-            }
-
-            Rectangle {
-                background: Ink.panel;
-                // The dialog's buttons; this dialog pads its own content.
                 HorizontalLayout {
-                    alignment: end;
-                    spacing: 6px;
-                    padding-left: Ink.pad-dialog;
-                    padding-right: Ink.pad-dialog;
-                    padding-top: 10px;
-                    padding-bottom: 10px;
-                    InkButton {
-                        kind: InkButtonKind.primary;
-                        text: "Close";
+                    spacing: 2px;
+                    InkCaption {
+                        horizontal-stretch: 1;
+                        text: root.param.section == "" ? root.param.label : root.param.section + " · " + root.param.label;
+                        vertical-alignment: center;
+                    }
+                    InkIconButton {
+                        icon: InkIcons.caret-up;
+                        size: 24px;
+                        label: "Move up";
+                        enabled: root.chosen > 0;
                         clicked => {
-                            ComponentSettingsState.close();
+                            ComponentSettingsState.parameter-moved(root.param.key, -1);
+                            root.chosen -= 1;
+                        }
+                    }
+                    InkIconButton {
+                        icon: InkIcons.caret-down;
+                        size: 24px;
+                        label: "Move down";
+                        enabled: root.chosen < ComponentSettingsState.parameters.length - 1;
+                        clicked => {
+                            ComponentSettingsState.parameter-moved(root.param.key, 1);
+                            root.chosen += 1;
                         }
                     }
                 }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    FormLabel {
+                        text: "Name";
+                    }
+                    LineEdit {
+                        text: root.param.label;
+                        placeholder-text: "Name on the component card";
+                        accessible-label: "Parameter name";
+                        edited(t) => {
+                            ComponentSettingsState.parameter-name-edited(root.param.key, t);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    FormLabel {
+                        text: "Section";
+                    }
+                    LineEdit {
+                        text: root.param.section;
+                        placeholder-text: "e.g. Detection (optional)";
+                        accessible-label: "Parameter section";
+                        edited(t) => {
+                            ComponentSettingsState.parameter-section-edited(root.param.key, t);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    FormLabel {
+                        vertical-alignment: top;
+                        text: "Help";
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        TextEdit {
+                            height: 56px;
+                            text: root.param.description;
+                            wrap: word-wrap;
+                            placeholder-text: root.param.default-description != "" ? root.param.default-description : "Shown as ? next to the parameter";
+                            accessible-label: "Parameter help text";
+                            edited(t) => {
+                                ComponentSettingsState.parameter-help-edited(root.param.key, t);
+                            }
+                        }
+                        if root.param.description != "" && root.param.default-description != "": HorizontalLayout {
+                            alignment: start;
+                            InkButton {
+                                small: true;
+                                kind: InkButtonKind.quiet;
+                                text: "Use the setting's own help";
+                                clicked => {
+                                    ComponentSettingsState.parameter-help-reset(root.param.key);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 26px;
+                    spacing: 10px;
+                    FormLabel {
+                        text: "Default";
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.param.default-value == "" ? "–" : root.param.default-value;
+                        font-size: Ink.fs-sm;
+                        font-family: Ink.font-mono;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    FormLabel {
+                        vertical-alignment: top;
+                        height: 24px;
+                        text: "Sets";
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        alignment: start;
+                        for binding in root.param.bindings: HorizontalLayout {
+                            alignment: start;
+                            InkChip {
+                                text: binding.text;
+                                // The last one: "Remove parameter" instead.
+                                removable: root.param.bindings.length > 1;
+                                remove => {
+                                    ComponentSettingsState.binding-removed(root.param.key, binding.step-id, binding.path);
+                                }
+                            }
+                        }
+                        if root.param.addable.length > 1: also-set := ComboBox {
+                            model: root.param.addable;
+                            current-index: 0;
+                            accessible-label: "Also set";
+                            selected => {
+                                if also-set.current-index > 0 {
+                                    ComponentSettingsState.binding-added(root.param.key, also-set.current-index - 1);
+                                    also-set.current-index = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: start;
+                    padding-top: 6px;
+                    InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        icon: InkIcons.delete;
+                        text: "Remove parameter";
+                        clicked => {
+                            ComponentSettingsState.parameter-removed(root.param.key);
+                            root.chosen = max(0, root.chosen - 1);
+                        }
+                    }
+                }
+            }
+        }
+        if !root.has-param: Rectangle {
+            horizontal-stretch: 1;
+        }
+    }
+
+    // The footer; this dialog pads its own content.
+    Rectangle {
+        height: 1px;
+        background: Ink.border-soft;
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        padding-left: Ink.pad-dialog;
+        padding-right: Ink.pad-dialog;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        Text {
+            horizontal-stretch: 1;
+            text: "Changes apply to every use of the component";
+            font-size: Ink.fs-sm;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+        InkButton {
+            text: "Cancel";
+            clicked => {
+                ComponentSettingsState.parameter-edit-cancelled();
+                ComponentSettingsState.close();
+            }
+        }
+        InkButton {
+            kind: InkButtonKind.primary;
+            text: "Apply";
+            clicked => {
+                ComponentSettingsState.close();
             }
         }
     }

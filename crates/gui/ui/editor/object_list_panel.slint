@@ -127,6 +127,35 @@ component ObjectActions inherits HorizontalLayout {
     }
 }
 
+// The filter: a class, a search (in the list's own row, in the table's
+// head).
+component ObjectFilter inherits HorizontalLayout {
+    in property <string> class-name;
+    in property <color> class-color;
+    callback class-clicked;
+    spacing: 6px;
+    InkChip {
+        text: ObjectListState.filter-class < 0 ? "All classes ▾" : root.class-name;
+        swatch: ObjectListState.filter-class < 0 ? transparent : root.class-color;
+        removable: ObjectListState.filter-class >= 0;
+        clicked => {
+            root.class-clicked();
+        }
+        remove => {
+            ObjectListState.filter-class = -1;
+            ObjectListState.filter-changed();
+        }
+    }
+    InkSearchField {
+        placeholder: "id, area > 50 …";
+        text: ObjectListState.filter-text;
+        edited(text) => {
+            ObjectListState.filter-text = text;
+            ObjectListState.filter-changed();
+        }
+    }
+}
+
 // An object: a list row, or a line of the table.
 component ObjectRow inherits Rectangle {
     in property <ObjectItemDataSlint> data;
@@ -224,6 +253,10 @@ export component ObjectListPanel inherits Rectangle {
     // The class filtered by, from the classes list.
     property <string> filter-class-name;
     property <color> filter-class-color;
+    // The table's head: the filter's width, the room of ⋯ and ✕.
+    property <length> table-filter-w: min(440px, root.width * 0.5);
+    property <length> head-buttons-w: 72px;
+    property <length> filter-row-h: 34px;
 
     function select(data: ObjectItemDataSlint) {
         ObjectListState.selected_object = data;
@@ -250,7 +283,7 @@ export component ObjectListPanel inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        InkPanelHead {
+        head := InkPanelHead {
             title: "Objects";
             subtitle: root.table ? ImageMetaData.image_name : "";
             count: ObjectListState.object_list.length;
@@ -264,32 +297,9 @@ export component ObjectListPanel inherits Rectangle {
             }
         }
 
-        // -- Filter: a class, a search --
-        HorizontalLayout {
-            padding-left: Ink.pad-panel;
-            padding-right: Ink.pad-panel;
-            padding-bottom: 6px;
-            spacing: 6px;
-            class-chip := InkChip {
-                text: ObjectListState.filter-class < 0 ? "All classes ▾" : root.filter-class-name;
-                swatch: ObjectListState.filter-class < 0 ? transparent : root.filter-class-color;
-                removable: ObjectListState.filter-class >= 0;
-                clicked => {
-                    class-menu.show();
-                }
-                remove => {
-                    ObjectListState.filter-class = -1;
-                    ObjectListState.filter-changed();
-                }
-            }
-            InkSearchField {
-                placeholder: "id, area > 50 …";
-                text: ObjectListState.filter-text;
-                edited(text) => {
-                    ObjectListState.filter-text = text;
-                    ObjectListState.filter-changed();
-                }
-            }
+        // The list: room for the filter (below), a row of its own.
+        if !root.table: Rectangle {
+            height: root.filter-row-h;
         }
 
         // -- The table's column heads --
@@ -523,12 +533,26 @@ export component ObjectListPanel inherits Rectangle {
         }
     }
 
+    // -- Filter: a class, a search - one, in the table's head (design K,
+    // left of ⋯ ✕) or in the list's row below its head --
+    ObjectFilter {
+        x: root.table ? root.width - self.width - root.head-buttons-w : Ink.pad-panel;
+        y: root.table ? (Ink.head-h - self.height) / 2 : Ink.head-h;
+        width: root.table ? root.table-filter-w : root.width - 2 * Ink.pad-panel;
+        height: 28px;
+        class-name: root.filter-class-name;
+        class-color: root.filter-class-color;
+        class-clicked => {
+            class-menu.show();
+        }
+    }
+
     // The class filter's choices.
     class-menu := PopupWindow {
-        x: Ink.pad-panel;
-        y: Ink.head-h + 26px;
+        x: root.table ? root.width - root.table-filter-w - root.head-buttons-w : Ink.pad-panel;
+        y: root.table ? Ink.head-h - 4px : Ink.head-h + 26px;
         InkMenuFrame {
-            open-y: root.absolute-position.y + Ink.head-h + 26px;
+            open-y: root.absolute-position.y + (root.table ? Ink.head-h - 4px : Ink.head-h + 26px);
             menu-width: 220px;
             InkMenuItem {
                 text: "All classes";

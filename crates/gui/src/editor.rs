@@ -33,6 +33,7 @@ pub mod project_settings_controller;
 pub mod results_list_controller;
 pub mod results_state_controller;
 pub mod script_editor_controller;
+pub(crate) mod step_model_patch;
 pub mod template_controller;
 #[cfg(test)]
 pub(crate) mod test_support;

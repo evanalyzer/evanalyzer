@@ -11,6 +11,8 @@
 
 - [x] feat: Save the Tuning panel's pins with the project - `ProjectSettings::editor.pins` (an additive field with `serde(default)`, so no migration step; with the previewed / analysed images).
 
+- IDEA (decided against, 2026-10-17): more than one dialog open at a time. No use case - the dialogs don't block the window, and one `active_dialog` keeps it simple. Not to be built.
+
 ## Results
 
 - [x] Export Well formed in matrix view
