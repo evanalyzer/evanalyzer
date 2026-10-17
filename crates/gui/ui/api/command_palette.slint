@@ -4,11 +4,11 @@
 // runs the chosen one.
 
 // What an entry is.
-export enum PaletteKind { action, step, command, image, class }
+export enum PaletteKind { action, step, command, image, class, setting }
 
 export struct PaletteEntry {
     // What `run` gets back: "action:save", "step:2", "command:17",
-    // "image:<path>", "class:3".
+    // "image:<path>", "class:3", "setting:2" (a setting of step 2).
     id: string,
     title: string,
     // A second, dimmer text: a step's summary, a command's category, an

@@ -32,7 +32,18 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   columns ID, classes, area, circularity, the mean of each channel; the
   selected object's buttons in its footer. ⋯ › "Show as a table / list".
 - **Tuning panel** with pins (settings, list entries, table rows).
-- **Command palette** (Ctrl+K): actions, steps, commands, images, classes.
+- **Command palette** (Ctrl+K): actions, steps, settings ("Min threshold ·
+  #3 Threshold · 240" opens the step), commands, images, classes.
+- **Pipelines (J):** reorder by dragging ⋮⋮ (`move-pipeline-by`); with none
+  shown the steps panel lists them to pick one; the shown one is deselected
+  by a second click or "Show no pipeline".
+- **Objects (K):** a class filter chip and a search (an id, `area > 50`,
+  `circ < 0.6`, a class name; terms by commas) for list and table;
+  "Columns" in the table's ⋯ (area, circularity, each channel's mean).
+- **Histogram:** "Auto-scale new images" (a project setting; off: the
+  project's scaling or the full range) and "Use for all images".
+- **Kept with the project:** the Tuning panel's pins and which images were
+  previewed / analysed (`ProjectSettings::editor`).
 - **Keyboard:** Tab reaches the buttons, icon buttons, checkboxes and
   switches; Space/Enter press them; a focus ring shows only for the
   keyboard.
@@ -105,7 +116,6 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - [ ] **Dialogs, not yet:** more than one open at a time (`active_dialog`
       is one value); class settings exactly at the clicked class row (they
       open at the top of the classes panel).
-- [ ] **Pipelines (J):** reorder by dragging ⋮⋮.
 - [ ] **Charts (M):** group by well row / column; a click on a box or
       point shows its objects in the List.
 - [ ] **Results › Plate (H):** leave an image out right from the well's
@@ -113,22 +123,14 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - [ ] **Export (R):** "Images with objects drawn".
 - [ ] **AI training (R):** say how many images' annotations are used
       ("Uses the annotations of 6 images").
-- [ ] **Command palette (D):** settings too ("Min threshold · EV Detection
-      · 240").
-- [ ] **Objects table (K):** a class filter chip, a search ("id, area >
-      50"), "Columns…".
 
 ### Follow-ups of this round
 
-- [ ] **Image states:** "previewed" lasts the session and "analysed" means
-      "in the analysis open in Results" - to keep them, store them with the
-      project.
 - [ ] **Images › Plate:** a custom grouping regex is compiled by the Rust
       `regex` crate here and by DuckDB (RE2) in the results - the same for
       the usual patterns, but not for every one.
 - [ ] **Keyboard:** list rows, segmented controls, selects and the step
       lines don't take Tab focus yet.
-- [ ] **Pins:** save with the project (see `TODO`).
 
 ### Findings
 
@@ -156,7 +158,7 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 
 ### New feature
 
-- [ ] Allow to disable Histogram Auto Scale of the image when a new one is opend should be stored in project settings
-- [ ] Allow to apply the histogram scale settings to all images in the project
-- [ ] If no pipeline is selectd show the list of pipelines obove the "New Pipeline" button
-- [ ] Allow to deselect a pipeline
+- [x] Allow to disable Histogram Auto Scale of the image when a new one is opend should be stored in project settings
+- [x] Allow to apply the histogram scale settings to all images in the project
+- [x] If no pipeline is selectd show the list of pipelines obove the "New Pipeline" button
+- [x] Allow to deselect a pipeline

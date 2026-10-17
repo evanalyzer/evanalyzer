@@ -79,6 +79,8 @@ component PipelineTab inherits Rectangle {
     callback more-clicked;
     callback move-up;
     callback move-down;
+    // Dragged by this many rows (- up).
+    callback move-by(int);
     callback focus-clicked;
 
     height: 40px;
@@ -86,9 +88,15 @@ component PipelineTab inherits Rectangle {
     accessible-label: root.pipeline.name;
     accessible-item-selected: root.active;
 
+    // Dragged by its ⋮⋮: how far, while the mouse is down.
+    property <length> drag-dy: 0px;
+
     face := Rectangle {
+        y: root.drag-dy;
         border-radius: Ink.radius-sm;
-        background: root.active ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        background: root.drag-dy != 0px ? Ink.raised : root.active ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        drop-shadow-blur: root.drag-dy != 0px ? 12px : 0px;
+        drop-shadow-color: Ink.shadow;
 
         ta := TouchArea {
             mouse-cursor: pointer;
@@ -106,9 +114,41 @@ component PipelineTab inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 8px;
+            padding-left: 2px;
             padding-right: 4px;
-            spacing: 8px;
+            spacing: 6px;
+
+            // ⋮⋮: drag up or down to reorder.
+            Rectangle {
+                width: 14px;
+                Image {
+                    source: InkIcons.drag;
+                    width: 12px;
+                    colorize: drag-ta.has-hover || root.drag-dy != 0px ? Ink.text-dim : Ink.text-faint;
+                }
+                drag-ta := TouchArea {
+                    mouse-cursor: MouseCursor.grab;
+                    property <length> start-y;
+                    pointer-event(e) => {
+                        if e.kind == PointerEventKind.down {
+                            self.start-y = self.mouse-y;
+                        }
+                        if e.kind == PointerEventKind.up {
+                            // By whole rows.
+                            let rows = round(root.drag-dy / root.height);
+                            root.drag-dy = 0px;
+                            if rows != 0 {
+                                root.move-by(rows);
+                            }
+                        }
+                    }
+                    moved => {
+                        if self.pressed {
+                            root.drag-dy = self.mouse-y - self.start-y;
+                        }
+                    }
+                }
+            }
 
             InkCheckbox {
                 y: (parent.height - self.height) / 2;
@@ -2904,6 +2944,9 @@ export component PipelinesPanel inherits Rectangle {
                         move-down => {
                             PipelinesPanelState.move-pipeline-down(p.id);
                         }
+                        move-by(rows) => {
+                            PipelinesPanelState.move-pipeline-by(p.id, rows);
+                        }
                         more-clicked => {
                             PipelinesPanelState.pipeline-more(p.id);
                         }
@@ -3173,6 +3216,9 @@ export component PipelinesPanel inherits Rectangle {
                 }
                 move-down => {
                     PipelinesPanelState.move-pipeline-down(p.id);
+                }
+                move-by(rows) => {
+                    PipelinesPanelState.move-pipeline-by(p.id, rows);
                 }
                 more-clicked => {
                     PipelinesPanelState.pipeline-more(p.id);
