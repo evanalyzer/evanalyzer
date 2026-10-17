@@ -160,43 +160,23 @@ impl ViewportWorker {
 
         let current_version = version_tracker.load(Ordering::SeqCst);
 
-        // Whether the user has the breakpoint-image toggle active.
-        let in_breakpoint_mode = self
-            .viewport_controller
-            .show_breakpoint
-            .load(Ordering::Relaxed);
         // Compare: the original here, the breakpoint image in a second
         // render after it (`render_compare`).
         let comparing = self.viewport_controller.comparing();
-        // Both tiers skip disk I/O and render the in-memory breakpoint buffer
-        // when in breakpoint mode - the LowRes ghost renders it in grayscale
-        // (below) rather than being left showing the unrelated regular image.
-        let show_bp = in_breakpoint_mode && !comparing;
 
         // ----------------------------------------------------------------
-        // STEP 3: Disk I/O (skipped in breakpoint mode)
+        // STEP 3: Disk I/O
         // ----------------------------------------------------------------
-        // Whether the buffer this frame renders is a U32 label map
-        // (Segmentation/Instances) rather than intensity data - set
-        // below when `show_bp` picks one. Declared outside the `if` so
-        // STEP 4 can branch on it after `read_result` is computed.
-        let mut is_label_render = false;
-        let read_result = if show_bp {
-            let (read, is_label) = self.read_breakpoint(&viewport_state);
-            is_label_render = is_label;
-            read
-        } else {
-            self.viewport_cache.read_image_tile_combined(
-                series,
-                to_z_projection(z_stack.z_projection.clone()),
-                z_stack.z_range.clone(),
-                t_stack.t_stack.clone(),
-                task.fit_to_screen,
-                task.is_new_image,
-                is_low_res,
-                &viewport_state,
-            )
-        };
+        let read_result = self.viewport_cache.read_image_tile_combined(
+            series,
+            to_z_projection(z_stack.z_projection.clone()),
+            z_stack.z_range.clone(),
+            t_stack.t_stack.clone(),
+            task.fit_to_screen,
+            task.is_new_image,
+            is_low_res,
+            &viewport_state,
+        );
         let read_duration = task_start.elapsed();
         let step4_7_start = Instant::now();
 
@@ -210,6 +190,7 @@ impl ViewportWorker {
         // ----------------------------------------------------------------
         let mut pixel_buffer_to_send = None;
         let mut svg_hists_to_send = Vec::new();
+        let mut histogram_scale = 1.0;
         let mut render_info = None;
 
         if let Ok((render_src, prepared)) = read_result {
@@ -241,29 +222,15 @@ impl ViewportWorker {
 
             // ------------------------------------------------------------
             // STEP 5-7: Render pixels + build histograms - pure CPU, no locks.
-            //
-            // Segmentation/Instances breakpoint views bypass all of this:
-            // label IDs aren't intensities, so a histogram min/max window
-            // is meaningless for them - `render_labels_to_rgb8` writes
-            // `master_slice` directly instead.
             // ------------------------------------------------------------
-            let mut channel_contexts: Vec<ChannelCtx> = Vec::new();
+            let mut channel_contexts: Vec<ChannelCtx> = Vec::with_capacity(render_src.len());
             let mut is_rgb = false;
 
-            let all_hists: Vec<Vec<f32>> = if is_label_render {
-                if let Some(channel) = render_src.first()
-                    && let Samples::Image(image) = &channel.samples
-                    && let ImageContainer::U32(img) = &**image
-                {
-                    render_labels_to_rgb8(img.data.as_slice(), master_slice);
-                }
-                Vec::new()
-            } else {
+            let all_hists: Vec<Vec<f32>> = {
                 // STEP 5: Auto-adjust - write lock acquired AFTER read lock
                 // dropped. Safe because we dropped the project read lock in
-                // STEP 1. Skipped in breakpoint mode to preserve the
-                // original histogram.
-                if !show_bp && (task.auto_adjust_if_not_set || task.auto_adjust_selected) {
+                // STEP 1.
+                if task.auto_adjust_if_not_set || task.auto_adjust_selected {
                     for channel in render_src.iter() {
                         let idx = channel.c_stack;
                         if let Some(ch) = hist_settings.get(&idx) {
@@ -308,7 +275,6 @@ impl ViewportWorker {
                 };
 
                 // Build channel contexts for rendering
-                channel_contexts = Vec::with_capacity(render_src.len());
 
                 for channel in render_src.iter() {
                     let idx = channel.c_stack;
@@ -319,19 +285,11 @@ impl ViewportWorker {
                         is_rgb = channel.is_rgb;
 
                         if let Some(slice) = data_slice {
-                            // In breakpoint mode the LowRes ghost is rendered in
-                            // grayscale so it doesn't flash color during pan/zoom.
-                            let color = if is_low_res && show_bp {
-                                [1.0f32, 1.0, 1.0]
-                            } else if show_bp {
-                                channel.color
-                            } else {
-                                channel_display_color(
-                                    channel,
-                                    display_colors.get(&idx).copied(),
-                                    grayscale,
-                                )
-                            };
+                            let color = channel_display_color(
+                                channel,
+                                display_colors.get(&idx).copied(),
+                                grayscale,
+                            );
                             channel_contexts.push(channel_ctx(
                                 slice,
                                 (*histogram).clone(),
@@ -444,13 +402,18 @@ impl ViewportWorker {
             }
 
             if !is_low_res {
+                // The selected channel's only: the panel's black and white
+                // lines are on its axis (each channel counts on its own).
                 svg_hists_to_send = histogram_to_svg_fast(
                     &all_hists
                         .into_iter()
-                        .zip(channel_contexts.iter().map(|c| c.color))
+                        .zip(channel_contexts.iter())
+                        .filter(|(_, c)| c.channel_idx == selected_channel)
+                        .map(|(h, c)| (h, c.color))
                         .collect(),
                     NUM_BINS,
                 );
+                histogram_scale = 2f32.powi(prepared.bit_depth as i32);
             }
         } else if let Err(e) = read_result {
             warn!("Error reading image tile: {:?}", e);
@@ -463,9 +426,12 @@ impl ViewportWorker {
         busy.store(true, Ordering::SeqCst);
 
         if let (Some(pb), Some(info)) = (pixel_buffer_to_send, render_info) {
+            if !is_low_res {
+                self.viewport_controller
+                    .publish_histogram(0, svg_hists_to_send, histogram_scale);
+            }
             self.viewport_controller.sync_viewport_state_to_slint(
                 pb,
-                svg_hists_to_send,
                 ImageRect::from_screen(
                     info.draw_x,
                     info.draw_y,
@@ -529,6 +495,8 @@ impl ViewportWorker {
         let Ok((render_src, prepared)) = read else {
             return;
         };
+        // Label maps have no histogram.
+        let mut curves = Vec::new();
         let native = pool.next_native(prepared.image_w as u32, prepared.image_h as u32);
         let slice = native.make_mut_slice();
         slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
@@ -539,25 +507,47 @@ impl ViewportWorker {
                 {
                     render_labels_to_rgb8(img.data.as_slice(), slice);
                 }
-            } else if let Some(Some(histogram)) = self
-                .app_state
-                .get_project()
-                .get_image_channel_histograms()
-                .get(&channel.c_stack)
-                .cloned()
-                && let Some(data) = channel.slice()
-            {
+            } else if let Some(data) = channel.slice() {
+                // Its own window (auto-adjusted at first), not the channel's:
+                // after a filter its values lie elsewhere.
+                let histogram = self.viewport_controller.breakpoint_histogram().unwrap_or_else(|| {
+                    let (min, max, min_limit, max_limit) =
+                        auto_adjust_range(channel.slice(), channel.is_rgb);
+                    let auto = HistogramSettings {
+                        min,
+                        max,
+                        min_limit,
+                        max_limit,
+                    };
+                    *self.viewport_controller.breakpoint_histogram.write().unwrap() =
+                        Some(auto.clone());
+                    // The panel shows it: its sliders.
+                    if self.viewport_controller.histogram_side() == 1 {
+                        self.histogram_controller.sync_histogram_settings_to_slint();
+                    }
+                    auto
+                });
                 let ctx = channel_ctx(data, histogram, channel.color, channel.c_stack);
-                prepare_image_channels_for_slint(
+                let color = ctx.color;
+                let hists = prepare_image_channels_for_slint(
                     &[ctx],
                     slice,
                     NUM_BINS,
-                    false,
+                    true,
                     &vec![channel.c_stack],
                     channel.is_rgb,
                 );
+                curves = histogram_to_svg_fast(
+                    &hists.into_iter().map(|h| (h, color)).collect(),
+                    NUM_BINS,
+                );
             }
         }
+        self.viewport_controller.publish_histogram(
+            1,
+            curves,
+            2f32.powi(prepared.bit_depth as i32),
+        );
 
         let (buffer, shown) = if cfg!(target_os = "windows") {
             let vp_w = prepared.viewport_width.max(1.0) as usize;
@@ -1918,12 +1908,13 @@ mod tests {
     }
 
     #[test]
-    fn breakpoint_images_render_instead_of_the_file() {
+    fn a_compare_renders_each_view_of_the_breakpoint_image() {
         let mut r = render_fixture(project_with_fixture_image());
-        r.worker.viewport_controller.set_show_breakpoint(true);
-        // Nothing captured yet: no frame.
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        r.worker.viewport_controller.set_compare(true);
+        // Nothing captured yet: no second image.
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
-        assert_eq!(r.ui.get_display_image().size().width, 0);
+        assert_eq!(r.view().get_compare_image().size().width, 0);
 
         let labels = ImageContainer::U32(ManagedImage {
             data: Image::<u32, 1>::new(
@@ -1954,10 +1945,45 @@ mod tests {
         for mode in [0, 1, 2] {
             r.worker.viewport_controller.set_breakpoint_view_mode(mode);
             r.draw(TaskDispatch::HighRes, DrawingTask::default());
-            assert!(r.ui.get_display_image().size().width > 0, "mode {mode}");
+            assert!(r.view().get_compare_image().size().width > 0, "mode {mode}");
         }
-        r.draw(TaskDispatch::LowRes, DrawingTask::default());
-        assert!(r.ui.get_ghost_image().size().width > 0);
+    }
+
+    /// The footer's breakpoint value: at the full-image pixel, in the
+    /// image's units - a label map's label; nothing outside it.
+    #[test]
+    fn the_breakpoint_value_is_read_at_the_full_image_pixel() {
+        let r = render_fixture(project_with_fixture_image());
+        let labels = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(
+                ImageSize {
+                    width: 8,
+                    height: 1,
+                },
+                vec![0, 1, 7, 2, 0, 2, 3, 3],
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        });
+        let vc = &r.worker.viewport_controller;
+        vc.set_breakpoint_channel(
+            gray_container(vec![0.1, 0.5, 0.5, 0.2, 0.3, 0.4, 0.6, 0.7]),
+            Some(labels),
+            None,
+            2,
+            3,
+            8,
+            1,
+            8,
+            Some(0),
+        );
+        // Pixel (4, 3) is the tile's third.
+        assert_eq!(vc.breakpoint_value_at(4.5, 3.2).as_deref(), Some("128"));
+        assert_eq!(vc.breakpoint_value_at(1.5, 3.2), None, "left of it");
+        assert_eq!(vc.breakpoint_value_at(4.5, 4.2), None, "below it");
+        vc.set_breakpoint_view_mode(1);
+        assert_eq!(vc.breakpoint_value_at(4.5, 3.2).as_deref(), Some("label 7"));
     }
 
     /// Compare: the file as the image, the breakpoint image as the second
@@ -1979,7 +2005,6 @@ mod tests {
             8,
             Some(0),
         );
-        r.worker.viewport_controller.set_show_breakpoint(true);
         r.worker.viewport_controller.set_compare(true);
         drain_ui_queue();
 
@@ -2004,8 +2029,7 @@ mod tests {
         assert_eq!(r.view().get_compare_image().size().width, 0);
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
         assert_eq!(r.view().get_compare_image().size().width, 0);
-        // The breakpoint view again.
-        assert_eq!(r.ui.get_display_image().size().width, 8);
+        assert_eq!(r.ui.get_display_image().size(), file_size);
     }
 
     // -- channel colours -------------------------------------------------------
@@ -2374,20 +2398,16 @@ mod tests {
     }
 
     #[test]
-    fn a_breakpoint_image_is_drawn_through_its_channels_histogram_window_in_gray() {
+    fn a_compared_breakpoint_image_is_drawn_in_gray_through_its_own_window() {
         let mut r = render_fixture(project_with_fixture_image());
         r.draw(TaskDispatch::HighRes, new_image_task());
-        assert!(
-            matches!(
-                r.app_state
-                    .get_project()
-                    .get_image_channel_histograms()
-                    .get(&0),
-                Some(Some(_))
-            ),
-            "channel 0 has a histogram window"
-        );
-        r.worker.viewport_controller.set_show_breakpoint(true);
+        let channel_window = r
+            .app_state
+            .get_project()
+            .get_image_channel_histograms()
+            .get(&0)
+            .cloned()
+            .flatten();
         r.worker.viewport_controller.set_breakpoint_channel(
             gray_container(vec![0.1, 0.5, 0.9, 0.2, 0.3, 0.4, 0.6, 1.0]),
             None,
@@ -2399,17 +2419,34 @@ mod tests {
             8,
             Some(0),
         );
+        r.worker.viewport_controller.set_compare(true);
+        r.worker.viewport_controller.set_histogram_side(1);
         drain_ui_queue();
 
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
-        r.draw(TaskDispatch::LowRes, DrawingTask::default());
 
-        for image in [r.ui.get_display_image(), r.ui.get_ghost_image()] {
-            let pixels = image.to_rgb8().expect("an RGB8 frame");
-            assert_eq!(pixels.width(), 8);
-            let pixels = pixels.as_slice();
-            assert!(pixels.iter().any(|p| p.r > 0), "something was drawn");
-            assert!(pixels.iter().all(|p| p.r == p.g && p.g == p.b), "in gray");
-        }
+        let pixels = r.view().get_compare_image().to_rgb8().expect("an RGB8 frame");
+        assert_eq!(pixels.width(), 8);
+        let pixels = pixels.as_slice();
+        assert!(pixels.iter().any(|p| p.r > 0), "something was drawn");
+        assert!(pixels.iter().all(|p| p.r == p.g && p.g == p.b), "in gray");
+        // Its own window, auto-adjusted - the channel's stays as it was.
+        assert!(r.worker.viewport_controller.breakpoint_histogram().is_some());
+        let window = |h: Option<HistogramSettings>| h.map(|h| (h.min, h.max, h.min_limit, h.max_limit));
+        assert_eq!(
+            window(
+                r.app_state
+                    .get_project()
+                    .get_image_channel_histograms()
+                    .get(&0)
+                    .cloned()
+                    .flatten()
+            ),
+            window(channel_window)
+        );
+        // The panel shows the breakpoint's curve, in 8-bit values.
+        assert_eq!(r.ui.global::<crate::HistogramState>().get_histogram_svg_path().row_count(), 1);
+        assert_eq!(r.ui.global::<crate::HistogramState>().get_value_scale(), 256.0);
     }
+
 }

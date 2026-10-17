@@ -8,6 +8,7 @@ use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use slint::{Color, ComponentHandle, Model, VecModel};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -279,9 +280,6 @@ pub struct ViewportController {
     pub(crate) drawing_tasks: Tasks,
     /// Raw breakpoint image stored for re-rendering with live histogram settings.
     pub(crate) breakpoint_channel: Arc<RwLock<Option<BreakpointChannelData>>>,
-    /// When `true` the HighRes viewport worker renders `breakpoint_channel`
-    /// instead of loading from disk.
-    pub(crate) show_breakpoint: Arc<AtomicBool>,
     /// Which of `breakpoint_channel`'s buffers to render (image/segmentation/
     /// instances). Stored as the raw `BreakpointViewMode` discriminant.
     pub(crate) breakpoint_view_mode: Arc<AtomicU8>,
@@ -289,6 +287,14 @@ pub struct ViewportController {
     /// rendered as the image and the breakpoint image as a second one over
     /// it, cut at the divider in the UI. Off: no second render.
     pub(crate) compare: Arc<AtomicBool>,
+    /// Compare: the breakpoint image's histogram window - its own, not the
+    /// channel's and not saved; `None`: auto-adjusted at its next render.
+    pub(crate) breakpoint_histogram: RwLock<Option<HistogramSettings>>,
+    /// Whose histogram the panel shows and changes: 0 the original's, 1
+    /// the breakpoint image's (only while comparing).
+    pub(crate) histogram_side: AtomicU8,
+    /// The latest curve and value scale (2^bits) of each side.
+    pub(crate) histograms: Mutex<[(Vec<HistogramData>, f32); 2]>,
     pub(crate) high_res_posted_count: Arc<AtomicU64>,
     pub(crate) high_res_last_count_at_false: Arc<AtomicU64>,
     pub(crate) high_res_is_ready: AtomicBool,
@@ -365,9 +371,11 @@ impl ViewportController {
             })),
             drawing_tasks,
             breakpoint_channel: Arc::new(RwLock::new(None)),
-            show_breakpoint: Arc::new(AtomicBool::new(false)),
             breakpoint_view_mode: Arc::new(AtomicU8::new(BreakpointViewMode::default() as u8)),
             compare: Arc::new(AtomicBool::new(false)),
+            breakpoint_histogram: RwLock::new(None),
+            histogram_side: AtomicU8::new(0),
+            histograms: Mutex::new([(Vec::new(), 1.0), (Vec::new(), 1.0)]),
             high_res_posted_count: Arc::new(AtomicU64::new(0)),
             high_res_last_count_at_false: Arc::new(AtomicU64::new(0)),
             high_res_is_ready: AtomicBool::new(false),
@@ -613,7 +621,6 @@ impl ViewportController {
     pub fn sync_viewport_state_to_slint(
         &self,
         pixel_buffer: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
-        svg_histogram_data: Vec<HistogramData>,
         rect: ImageRect,
         render_zoom: f32,
         generation: u64,
@@ -671,13 +678,7 @@ impl ViewportController {
                     view_state.set_hr_zoom(render_zoom);
                     view_state.set_hr_generation(generation);
 
-                    let hist_state = ui.global::<HistogramState>();
-
                     ui.set_display_image(slint::Image::from_rgb8(pixel_buffer));
-
-                    // Update the Histogram Visual
-                    let model = Rc::new(VecModel::from(svg_histogram_data));
-                    hist_state.set_histogram_svg_path(model.into());
                 }
             }
         })
@@ -732,19 +733,91 @@ impl ViewportController {
         })
         .ok();
 
-        // If the breakpoint view is already active (or compared), re-render
-        // immediately so the updated image is visible without requiring a
-        // manual pan/zoom.
-        if self.show_breakpoint.load(Ordering::Relaxed) || self.comparing() {
+        // Compared: re-render at once, so the new image shows without a
+        // pan or zoom.
+        if self.comparing() {
             self.trigger_image_redraw();
         }
     }
 
-    /// Switches the HighRes viewport worker between the original image and the
-    /// breakpoint channel, then triggers a redraw so the change is immediate.
-    pub fn set_show_breakpoint(&self, show: bool) {
-        self.show_breakpoint.store(show, Ordering::Relaxed);
-        self.trigger_image_redraw();
+    /// The histogram curve and value scale (2^bits) of `side` (0 the
+    /// original, 1 the breakpoint image) - shown if the panel shows that side.
+    pub fn publish_histogram(&self, side: u8, curves: Vec<HistogramData>, value_scale: f32) {
+        self.histograms.lock().expect("Poisoned")[side as usize] = (curves, value_scale);
+        if self.histogram_side.load(Ordering::Relaxed) == side {
+            self.show_histogram_curve();
+        }
+    }
+
+    /// The shown side's curve and value scale to the panel.
+    pub fn show_histogram_curve(&self) {
+        let side = self.histogram_side.load(Ordering::Relaxed) as usize;
+        let (curves, scale) = self.histograms.lock().expect("Poisoned")[side].clone();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let hist_state = ui.global::<HistogramState>();
+                hist_state.set_value_scale(scale);
+                hist_state.set_histogram_svg_path(Rc::new(VecModel::from(curves)).into());
+            }
+        })
+        .ok();
+    }
+
+    /// Whose histogram the panel shows: 0 the original's, 1 the breakpoint
+    /// image's.
+    pub fn histogram_side(&self) -> u8 {
+        self.histogram_side.load(Ordering::Relaxed)
+    }
+
+    pub fn set_histogram_side(&self, side: u8) {
+        self.histogram_side.store(side.min(1), Ordering::Relaxed);
+        self.show_histogram_curve();
+    }
+
+    /// The breakpoint image's histogram window, `None` before its first
+    /// compare render.
+    pub fn breakpoint_histogram(&self) -> Option<HistogramSettings> {
+        self.breakpoint_histogram.read().unwrap().clone()
+    }
+
+    /// Sets it (`None`: auto-adjusted at the next render) and redraws.
+    pub fn set_breakpoint_histogram(&self, settings: Option<HistogramSettings>) {
+        *self.breakpoint_histogram.write().unwrap() = settings;
+        if self.comparing() {
+            self.trigger_image_redraw();
+        }
+    }
+
+    /// The breakpoint image's value at full-image pixel (`x`, `y`), as the
+    /// footer shows it: in the image's units ("128"), a label map's label
+    /// ("label 3"); `None` outside it or without one.
+    pub fn breakpoint_value_at(&self, x: f32, y: f32) -> Option<String> {
+        let guard = self.breakpoint_channel.read().unwrap();
+        let bp = guard.as_ref()?;
+        let bx = (x.floor() as i64).checked_sub(bp.tile_offset_x as i64)?;
+        let by = (y.floor() as i64).checked_sub(bp.tile_offset_y as i64)?;
+        if bx < 0 || by < 0 || bx >= bp.tile_width as i64 || by >= bp.tile_height as i64 {
+            return None;
+        }
+        let idx = by as usize * bp.tile_width + bx as usize;
+        let image = match self.breakpoint_view_mode() {
+            BreakpointViewMode::Image => &bp.image,
+            BreakpointViewMode::Segmentation => bp.segmentation.as_ref().unwrap_or(&bp.image),
+            BreakpointViewMode::Instances => bp.instances.as_ref().unwrap_or(&bp.image),
+        };
+        match &**image {
+            ImageContainer::U32(labels) => labels
+                .data
+                .as_slice()
+                .get(idx)
+                .map(|label| format!("label {label}")),
+            ImageContainer::F32Gray(gray) => gray
+                .as_slice()
+                .get(idx)
+                .map(|v| format!("{:.0}", v * 2f32.powi(bp.nr_bits as i32))),
+            _ => None,
+        }
     }
 
     /// Whether the breakpoint image is compared with the original.
@@ -808,7 +881,7 @@ impl ViewportController {
     pub fn set_breakpoint_view_mode(&self, mode: i32) {
         self.breakpoint_view_mode
             .store(BreakpointViewMode::from_i32(mode) as u8, Ordering::Relaxed);
-        if self.show_breakpoint.load(Ordering::Relaxed) || self.comparing() {
+        if self.comparing() {
             self.trigger_image_redraw();
         }
     }
@@ -1947,20 +2020,6 @@ mod breakpoint_state_tests {
         controller.set_breakpoint_view_mode(99);
 
         assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Image);
-    }
-
-    // -- set_show_breakpoint ------------------------------------------------------
-
-    #[test]
-    fn set_show_breakpoint_stores_the_given_flag() {
-        let controller = make_controller();
-        assert!(!controller.show_breakpoint.load(Ordering::Relaxed));
-
-        controller.set_show_breakpoint(true);
-        assert!(controller.show_breakpoint.load(Ordering::Relaxed));
-
-        controller.set_show_breakpoint(false);
-        assert!(!controller.show_breakpoint.load(Ordering::Relaxed));
     }
 
     // -- set_breakpoint_channel ----------------------------------------------------

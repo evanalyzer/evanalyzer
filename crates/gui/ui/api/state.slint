@@ -200,6 +200,14 @@ export global HistogramState {
         // The open image's scaling for every image of the project.
         callback apply-to-all-images();
 
+        // What one unit of the values below is in the image's own values
+        // (2^bits, like the pixel values in the footer); 1 for float images.
+        in-out property <float> value-scale: 1.0;
+        // Comparing: whose histogram is shown and changed - 0 the
+        // original's, 1 the breakpoint image's (its own range, not saved).
+        in-out property <int> side: 0;
+        callback side-changed(int);
+
         // These are the histogram values how to use in the application
     in-out property <float> histogram_min_val_abs: 0.0;
         in-out property <float> histogram_max_val_abs: 1.0;
@@ -211,9 +219,6 @@ export global HistogramState {
         // These are the histogram limits
     in-out property <float> histogram_min_lim: 0.0;
         in-out property <float> histogram_max_lim: 1.0;
-
-        in-out property <string> histogram_min_lim_txt: "0.0";
-        in-out property <string> histogram_max_lim_txt: "1.0";
 
         // Histogram data
     in-out property <[HistogramData]> histogram_svg_path: [

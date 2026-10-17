@@ -2,7 +2,6 @@
 // actions, the image shown, the project's name, preview and Run.
 
 import { ViewportObjectState } from "../api/viewport.slint";
-import { ViewportMemoryState } from "../api/project_settings.slint";
 import { Ink, InkScheme, InkIcons, InkSegmented, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
@@ -261,9 +260,8 @@ export component TopBar inherits Rectangle {
             HorizontalLayout {
                 spacing: 6px;
                 // Compare the breakpoint image with the original (hold
-                // Space: the original) - with a breakpoint image; can be
-                // switched off in the settings.
-                if ViewportMemoryState.before_after && PipelinesPanelState.has-breakpoint-image: InkIconButton {
+                // Space: the original) - with a breakpoint image.
+                if PipelinesPanelState.has-breakpoint-image: InkIconButton {
                     size: 28px;
                     icon: InkIcons.compare;
                     label: "Compare with the original (hold Space: original)";

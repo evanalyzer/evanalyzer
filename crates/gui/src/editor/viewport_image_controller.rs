@@ -93,7 +93,6 @@ impl ViewportImageController {
             state.set_overview_cache_mb(overview_mb as i32);
             state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
             state.set_edit_during_analysis(settings.edit_during_analysis);
-            state.set_before_after(settings.before_after);
             state.set_objects_as_table(settings.objects_as_table);
             state.set_object_card(settings.object_card);
         }
@@ -116,7 +115,6 @@ impl ViewportImageController {
                 .max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: state.get_free_caches_on_analysis(),
             edit_during_analysis: state.get_edit_during_analysis(),
-            before_after: state.get_before_after(),
             objects_as_table: state.get_objects_as_table(),
             object_card: state.get_object_card(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
@@ -550,6 +548,15 @@ impl ViewportImageController {
                         let scaled_val = raw_val * 2.0f32.powf(ctx.bit_depth as f32);
                         pixel_values.push(format!("{}: {:.0}", channel.name, scaled_val));
                     }
+                }
+            }
+
+            // Comparing: the breakpoint image's value at the same pixel too.
+            if self.viewport_controller.comparing() && viewport_state.zoom > 0.0 {
+                let x = (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
+                let y = (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
+                if let Some(value) = self.viewport_controller.breakpoint_value_at(x, y) {
+                    pixel_values.push(format!("Breakpoint: {value}"));
                 }
             }
 
@@ -1240,7 +1247,6 @@ mod tests {
         state.set_overview_cache_mb(300);
         state.set_free_caches_on_analysis(false);
         state.set_edit_during_analysis(false);
-        state.set_before_after(false);
         state.set_objects_as_table(true);
         state.set_object_card(true);
 
@@ -1256,7 +1262,6 @@ mod tests {
             overview_cache_mb: 300.max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: false,
             edit_during_analysis: false,
-            before_after: false,
             objects_as_table: true,
             object_card: true,
         };

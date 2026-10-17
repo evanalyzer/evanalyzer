@@ -233,6 +233,8 @@ impl PipelinesController {
                     };
                     *manager.breakpoint.lock().unwrap() = parse_step_id(&step_id)
                         .map(|step_id| (pipeline_id as u32, step_id, bp_mode));
+                    // Another step's image: its histogram window anew.
+                    manager.viewport_controller.set_breakpoint_histogram(None);
                 },
             );
 
@@ -243,12 +245,6 @@ impl PipelinesController {
                     *manager.breakpoint.lock().unwrap() = None;
                 });
 
-            // Toggle breakpoint image view
-            let manager = self.clone();
-            ui.global::<PipelinesPanelState>()
-                .on_show_breakpoint_image_changed(move |show| {
-                    manager.viewport_controller.set_show_breakpoint(show);
-                });
 
             // Compare the breakpoint image with the original (shown or not).
             let manager = self.clone();
@@ -7606,19 +7602,10 @@ mod tests {
     }
 
     #[test]
-    fn attach_callbacks_breakpoint_image_and_view_mode_forward_to_the_viewport_controller() {
+    fn attach_callbacks_breakpoint_view_mode_forwards_to_the_viewport_controller() {
         let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
         controller.attach_callbacks();
-
-        ui.global::<PipelinesPanelState>()
-            .invoke_show_breakpoint_image_changed(true);
-        assert!(
-            controller
-                .viewport_controller
-                .show_breakpoint
-                .load(std::sync::atomic::Ordering::Relaxed)
-        );
 
         ui.global::<PipelinesPanelState>()
             .invoke_breakpoint_view_mode_changed(1);

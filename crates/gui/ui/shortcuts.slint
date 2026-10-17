@@ -36,7 +36,7 @@ import { PipelineDeleteConfirmState, PipelineEditState } from "api/pipeline_edit
 import { TemplateMetaState } from "api/template_meta.slint";
 import { RunAnalysisState } from "api/run_analysis.slint";
 import { AiLearningState } from "api/ai_learning.slint";
-import { ProjectSettingsState, ViewportMemoryState } from "api/project_settings.slint";
+import { ProjectSettingsState } from "api/project_settings.slint";
 import { ClassificationSettingsState } from "api/classification_class_edit.slint";
 import { CommandPickerState } from "api/command_selection.slint";
 import { ProjectTemplateState } from "api/project_template.slint";
@@ -91,7 +91,7 @@ export component GlobalShortcuts inherits FocusScope {
         }
 
         // -- Compare: hold Space for the whole original --
-        if (e.text == " " && !e.modifiers.control && ViewportObjectState.compare && ViewportMemoryState.before_after && PipelinesPanelState.has-breakpoint-image) {
+        if (e.text == " " && !e.modifiers.control && ViewportObjectState.compare && PipelinesPanelState.has-breakpoint-image) {
             ViewportObjectState.show-before = true;
             return accept;
         }

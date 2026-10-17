@@ -324,8 +324,6 @@ export global PipelinesPanelState {
         in-out property <string> breakpoint-step-id: "";
     // 0 = off, 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
     in-out property <int> breakpoint-mode: 0;
-    // True while the viewport shows the breakpoint image instead of the original.
-    in-out property <bool> show-breakpoint-image: false;
     // True once a breakpoint image has been captured (enables the toggle).
     in-out property <bool> has-breakpoint-image: false;
     // Which buffer the breakpoint preview renders: 0 = processed image,
@@ -338,9 +336,6 @@ export global PipelinesPanelState {
     // mode: 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
     callback set-breakpoint(int, string, int);   // pipeline-id, step-id, mode
     callback clear-breakpoint();
-    // Fired whenever the breakpoint-image toggle changes so Rust can
-    // switch the viewport worker between original and breakpoint rendering.
-    callback show-breakpoint-image-changed(bool);
     // Fired whenever the breakpoint view-mode dropdown changes (see
     // breakpoint-view-mode above for the value meaning).
     callback breakpoint-view-mode-changed(int);
@@ -460,8 +455,6 @@ export global PipelinesPanelState {
             if self.breakpoint-mode == 1 {
                 // Stop → Snapshot (capture image, pipeline continues)
                 self.breakpoint-mode = 2;
-                self.show-breakpoint-image = false;
-                self.show-breakpoint-image-changed(false);
                 self.has-breakpoint-image = false;
                 self.set-breakpoint(self.active-pipeline-id, step-id, 2);
             } else {
@@ -476,8 +469,6 @@ export global PipelinesPanelState {
             self.breakpoint-pipeline-id = self.active-pipeline-id;
             self.breakpoint-step-id = step-id;
             self.breakpoint-mode = 1;
-            self.show-breakpoint-image = false;
-            self.show-breakpoint-image-changed(false);
             self.has-breakpoint-image = false;
             self.set-breakpoint(self.active-pipeline-id, step-id, 1);
         }

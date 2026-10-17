@@ -2,6 +2,7 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{AppWindow, HistogramState};
 use evanalyzer_app::project::ProjectExt;
+use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use log::warn;
 use slint::ComponentHandle;
 use std::sync::Arc;
@@ -60,6 +61,18 @@ impl HistogramController {
                         slint::TimerMode::SingleShot,
                         std::time::Duration::from_millis(5),
                         move || {
+                            // Comparing, the breakpoint's side: its own window.
+                            if manager_in.viewport_controller.histogram_side() == 1 {
+                                manager_in.viewport_controller.set_breakpoint_histogram(Some(
+                                    HistogramSettings {
+                                        min,
+                                        max,
+                                        min_limit,
+                                        max_limit,
+                                    },
+                                ));
+                                return;
+                            }
                             manager_in.update_histogram_settings_in_project(
                                 min, max, min_limit, max_limit,
                             );
@@ -96,10 +109,24 @@ impl HistogramController {
             let manager = Arc::clone(self);
             ui.global::<HistogramState>()
                 .on_auto_adjust_clicked(move || {
+                    if manager.viewport_controller.histogram_side() == 1 {
+                        // Auto-adjusted at its next render.
+                        manager.viewport_controller.set_breakpoint_histogram(None);
+                        return;
+                    }
                     manager
                         .viewport_controller
                         .trigger_image_redraw_with_auto_adjust();
                 });
+
+            // Comparing: the original's or the breakpoint's histogram.
+            let manager = Arc::clone(self);
+            ui.global::<HistogramState>().on_side_changed(move |side| {
+                manager
+                    .viewport_controller
+                    .set_histogram_side(side.clamp(0, 1) as u8);
+                manager.sync_histogram_settings_to_slint();
+            });
         }
     }
 
@@ -145,6 +172,12 @@ impl HistogramController {
                 project.histogram_auto_scale_off(),
             )
         };
+        // The breakpoint's side: its own window.
+        let histogram_settings = if self.viewport_controller.histogram_side() == 1 {
+            self.viewport_controller.breakpoint_histogram()
+        } else {
+            histogram_settings
+        };
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -163,13 +196,6 @@ impl HistogramController {
                 // Set the outer limits of the slider track
                 hist_state.set_histogram_min_lim(task.min_limit);
                 hist_state.set_histogram_max_lim(task.max_limit);
-
-                // Round to 3 decimal places and convert to a Slint SharedString
-                let min_txt = format!("{:.3}", task.min_limit);
-                let max_txt = format!("{:.3}", task.max_limit);
-
-                hist_state.set_histogram_min_lim_txt(min_txt.into());
-                hist_state.set_histogram_max_lim_txt(max_txt.into());
 
                 // Calculate relative handle positions (0.0 to 1.0) for the UI sliders
                 // Formula: rel = (abs - min_lim) / range
