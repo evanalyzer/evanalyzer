@@ -14,6 +14,15 @@
         "$ref": "#/$defs/ComponentDefinition"
       }
     },
+    "editor": {
+      "description": "What the editor keeps with the project: the Tuning panel's pinned\nsettings, which images were previewed or analysed.",
+      "$ref": "#/$defs/EditorSettings",
+      "default": {
+        "analysedImages": [],
+        "pins": [],
+        "previewedImages": []
+      }
+    },
     "images": {
       "description": "The collection of images and their associated processing states.",
       "$ref": "#/$defs/ImageSettings"
@@ -754,6 +763,36 @@
         "kernelSize"
       ]
     },
+    "EditorSettings": {
+      "description": "See `ProjectSettings::editor`.",
+      "type": "object",
+      "properties": {
+        "analysedImages": {
+          "description": "Images (relative to the image folder) of the analysis last opened in\nResults.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "pins": {
+          "description": "Settings pinned into the Tuning panel.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PinnedSetting"
+          }
+        },
+        "previewedImages": {
+          "description": "Images (relative to the image folder) a preview ran on.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "EnhanceContrastSettings": {
       "description": "Configuration for contrast enhancement and histogram manipulation.\n\nThis algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.",
       "type": "object",
@@ -1073,6 +1112,11 @@
           }
         },
         "grayscale": {
+          "type": "boolean",
+          "default": false
+        },
+        "histogramAutoScaleOff": {
+          "description": "A newly opened image keeps the project's scaling (or the full value\nrange) instead of being auto-scaled.",
           "type": "boolean",
           "default": false
         },
@@ -2432,6 +2476,28 @@
             "$ref": "#/$defs/ParamValue"
           }
         }
+      ]
+    },
+    "PinnedSetting": {
+      "description": "A setting pinned into the Tuning panel: in which pipeline, which step\n(its id, so it stays when steps move), which setting (`name`, or\n`list.entry.field` for a list entry's).",
+      "type": "object",
+      "properties": {
+        "pipeline": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "setting": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pipeline",
+        "step",
+        "setting"
       ]
     },
     "PipelineCommand": {

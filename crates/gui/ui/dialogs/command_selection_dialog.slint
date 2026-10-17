@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 // command_picker.slint
 // EVAnalyzer - Add-Step (command selection) dialog.
 //
@@ -450,6 +451,8 @@ component DetailPane inherits Rectangle {
 // ===========================================================================
 
 export component CommandSelectionDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
     // ---- Host inputs ----
@@ -511,7 +514,7 @@ export component CommandSelectionDialog inherits InkDialog {
 
     title: "Add step";
     subtitle: insert-after-idx < 0 ? "Append to \"\{target-pipeline}\"" : "After step \{insert-after-idx + 1} of \"\{target-pipeline}\"";
-    card-width: PickerStyle.modal-w;
+    card-width: 760px;
     card-height: PickerStyle.modal-h;
     content-padding: 0px;
     close => {

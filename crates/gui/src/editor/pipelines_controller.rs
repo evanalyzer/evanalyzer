@@ -51,7 +51,7 @@ use evanalyzer_cfg::settings::pipeline_command_settings::{
 use evanalyzer_cfg::settings::pipeline_settings::{
     PipelineSettings, PipelineStepSettings, StepContent,
 };
-use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+use evanalyzer_cfg::settings::project_settings::{PinnedSetting, ProjectSettings};
 use evanalyzer_cfg::settings::templates::ComponentTemplate;
 use evanalyzer_gui_slint::CommandAuthor;
 use log::debug;
@@ -146,9 +146,6 @@ pub struct PipelinesController {
     /// The open sections of component cards: (pipeline, step id, section).
     /// The others show their values on one line.
     open_sections: Mutex<std::collections::HashSet<(u32, String, String)>>,
-    /// The settings pinned into the Tuning panel: (pipeline id, step id,
-    /// setting name). For this session.
-    pins: Mutex<std::collections::HashSet<(u32, String, String)>>,
 }
 
 /// One level of [`PipelinesController::open_component`].
@@ -192,7 +189,6 @@ impl PipelinesController {
             last_problems: Mutex::new(Vec::new()),
             debug_mode: std::sync::atomic::AtomicBool::new(false),
             open_sections: Mutex::new(std::collections::HashSet::new()),
-            pins: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -2822,6 +2818,8 @@ impl PipelinesController {
             pipelines: project.pipelines.clone(),
             tile_merge: project.tile_merge.clone(),
             components: project.components.clone(),
+            // The preview needs none of the editor's state.
+            editor: Default::default(),
         }
     }
 
@@ -2980,12 +2978,40 @@ impl PipelinesController {
         };
         let key = (pipeline_id, card.step_id.to_string(), name.to_string());
         {
-            let mut pins = self.pins.lock().expect("Poisoned");
+            let mut pins = self.pins();
             if !pins.remove(&key) {
                 pins.insert(key);
             }
+            self.set_pins(pins);
         }
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+    }
+
+    /// The settings pinned into the Tuning panel: (pipeline id, step id,
+    /// setting name) - kept with the project.
+    fn pins(&self) -> std::collections::HashSet<(u32, String, String)> {
+        self.app_state
+            .get_project()
+            .editor
+            .pins
+            .iter()
+            .map(|pin| (pin.pipeline, pin.step.clone(), pin.setting.clone()))
+            .collect()
+    }
+
+    /// Keeps `pins` with the project (an undo step; the project changed).
+    fn set_pins(&self, pins: std::collections::HashSet<(u32, String, String)>) {
+        let mut pins: Vec<PinnedSetting> = pins
+            .into_iter()
+            .map(|(pipeline, step, setting)| PinnedSetting {
+                pipeline,
+                step,
+                setting,
+            })
+            .collect();
+        pins.sort_by(|a, b| (a.pipeline, &a.step, &a.setting).cmp(&(b.pipeline, &b.step, &b.setting)));
+        self.app_state.get_project_write().editor.pins = pins;
+        self.app_state.mark_dirty();
     }
 
     /// Pins the settings of `section` of the step at `step_idx` - a row of
@@ -3015,7 +3041,7 @@ impl PipelinesController {
             return;
         }
         {
-            let mut pins = self.pins.lock().expect("Poisoned");
+            let mut pins = self.pins();
             let key = |name: &String| (pipeline_id, card.step_id.to_string(), name.clone());
             if names.iter().all(|name| pins.contains(&key(name))) {
                 for name in &names {
@@ -3026,6 +3052,7 @@ impl PipelinesController {
                     pins.insert(key(name));
                 }
             }
+            self.set_pins(pins);
         }
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
     }
@@ -3052,7 +3079,7 @@ impl PipelinesController {
             return;
         }
         {
-            let mut pins = self.pins.lock().expect("Poisoned");
+            let mut pins = self.pins();
             let key = |name: &String| (pipeline_id, card.step_id.to_string(), name.clone());
             if names.iter().all(|name| pins.contains(&key(name))) {
                 for name in &names {
@@ -3063,6 +3090,7 @@ impl PipelinesController {
                     pins.insert(key(name));
                 }
             }
+            self.set_pins(pins);
         }
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
     }
@@ -4828,7 +4856,7 @@ impl PipelinesController {
             }
         };
         let open_sections = self.open_sections.lock().expect("Poisoned").clone();
-        let pins = self.pins.lock().expect("Poisoned").clone();
+        let pins = self.pins();
         let component_class_items = component_classes.clone();
         // A class list's flags: the project's 33 (see `MultiClassDropdown`),
         // then one per class of the opened component.
@@ -11523,6 +11551,51 @@ mod tests {
         drain_ui_queue();
         assert!(row(1).cells.iter().all(|cell| !cell.pinned));
         assert_eq!(panel.get_tuned_settings().row_count(), 0);
+    }
+
+    #[test]
+    fn pins_are_kept_with_the_project() {
+        let (ui, ui_state, _controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let name = panel
+            .get_active_commands()
+            .row_data(0)
+            .unwrap()
+            .parameters
+            .row_data(0)
+            .unwrap()
+            .name;
+
+        panel.invoke_toggle_pin(0, name.clone());
+        drain_ui_queue();
+        let pins = ui_state.get_project().editor.pins.clone();
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].setting, name.as_str());
+        assert!(ui_state.is_dirty());
+
+        // Undo takes the pin back.
+        assert!(ui_state.undo());
+        assert!(ui_state.get_project().editor.pins.is_empty());
+    }
+
+    #[test]
+    fn a_deselected_pipeline_shows_no_steps_and_survives_a_refresh() {
+        let (ui, _ui_state, controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        assert!(panel.get_active_commands().row_count() > 0);
+
+        panel.invoke_deselect_pipeline();
+        assert_eq!(panel.get_active_pipeline_id(), -1);
+        assert_eq!(panel.get_active_commands().row_count(), 0);
+
+        // A refresh of the shown steps (e.g. after an undo) keeps showing none.
+        controller.sync_steps_of_selected_pipeline_to_slint(
+            PipelineId(panel.get_active_pipeline_id() as u32),
+            false,
+        );
+        drain_ui_queue();
+        assert_eq!(panel.get_active_commands().row_count(), 0);
+        assert_eq!(panel.get_active_pipeline_id(), -1);
     }
 
     #[test]

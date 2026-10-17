@@ -6,7 +6,62 @@ import { LineEdit, ComboBox, SpinBox, Switch } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
 import { MultiClassDropdown } from "../editor/pipelines_panel.slint";
-import { InkNavItem, InkNavCaption, InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock } from "../ink/ink.slint";
+import { InkSettingsCard, InkSettingRow, InkSettingBlock, InkSearchField, InkCaption, InkIcons } from "../ink/ink.slint";
+// A section's head: its title, a short summary, ▸ / ▾ - a click opens or
+// closes it.
+component SectionToggle inherits Rectangle {
+    in property <string> title;
+    in property <string> summary;
+    in property <bool> open;
+    callback toggled;
+
+    height: 36px;
+    border-radius: Ink.radius-md;
+    background: ta.has-hover ? Ink.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-expanded: root.open;
+    accessible-expandable: true;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 8px;
+        spacing: 8px;
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: root.open ? InkIcons.caret-down : InkIcons.caret-right;
+            width: 10px;
+            height: 10px;
+            colorize: Ink.text-mute;
+        }
+        Text {
+            text: root.title;
+            font-size: Ink.fs-md;
+            font-weight: 600;
+            color: Ink.text;
+            vertical-alignment: center;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.summary;
+            font-size: Ink.fs-sm;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 // -- Dialog --------------------------------------------------------------------
 
 // All settings in one place: the project's (saved with the project) and this
@@ -16,16 +71,19 @@ export component ProjectSettingsDialog inherits InkDialog {
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
     title: "Settings";
-    card-width: 900px;
-    card-height: 680px;
+    card-width: 440px;
     content-padding: 0px;
     close => {
         root.cancel();
     }
     private property <length> well_size: (ProjectSettingsState.settings.well_rows > 5 || ProjectSettingsState.settings.well_columns > 5) ? 30px : 45px;
 
-    // Sections: 0 General, 1 Plate & grouping, 2 Object merging, 3 Viewport.
-    property <int> current-section: 0;
+    // Sections: 0 General, 1 Plate & grouping, 2 Object merging, 3 Viewport -
+    // each opened or closed by its head.
+    property <bool> open-0: true;
+    property <bool> open-1: false;
+    property <bool> open-2: false;
+    property <bool> open-3: false;
     property <string> query;
     property <bool> searching: root.query.replace-all(" ", "") != "";
 
@@ -57,9 +115,26 @@ export component ProjectSettingsDialog inherits InkDialog {
         words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
     }
 
+    // Section `section` is open (searching: all are).
+    pure function is-open(section: int) -> bool {
+        root.searching || (section == 0 ? root.open-0 : section == 1 ? root.open-1 : section == 2 ? root.open-2 : root.open-3)
+    }
+
+    function toggle(section: int) {
+        if section == 0 {
+            root.open-0 = !root.open-0;
+        } else if section == 1 {
+            root.open-1 = !root.open-1;
+        } else if section == 2 {
+            root.open-2 = !root.open-2;
+        } else {
+            root.open-3 = !root.open-3;
+        }
+    }
+
     // Whether a setting of `section` found by `words` is shown.
     pure function shows(section: int, words: string) -> bool {
-        root.searching ? root.matches(words) : root.current-section == section
+        root.searching ? root.matches(words) : root.is-open(section)
     }
 
     // Whether anything of `section` matches the search.
@@ -71,12 +146,7 @@ export component ProjectSettingsDialog inherits InkDialog {
     }
 
     pure function shows-section(section: int) -> bool {
-        root.searching ? root.section-matches(section) : root.current-section == section
-    }
-
-    function go-to(section: int) {
-        root.query = "";
-        root.current-section = section;
+        root.searching ? root.section-matches(section) : true
     }
 
     function cancel() {
@@ -86,12 +156,11 @@ export component ProjectSettingsDialog inherits InkDialog {
 
     init => {
         ViewportMemoryState.load();
-        search-input.focus();
+        search-input.focus-input();
     }
 
     Rectangle {
         vertical-stretch: 1;
-        background: Ink.ground;
 
         VerticalLayout {
             spacing: 0;
@@ -101,157 +170,21 @@ export component ProjectSettingsDialog inherits InkDialog {
                 background: Ink.border-soft;
             }
 
-            HorizontalLayout {
+            VerticalLayout {
                 vertical-stretch: 1;
                 spacing: 0;
 
-                // -- Section list ----------------------------------------------
-                Rectangle {
-                    width: 230px;
-                    background: Ink.panel;
-
-                    VerticalLayout {
-                        padding: 16px;
-                        spacing: 4px;
-
-                        // Search field
-                        Rectangle {
-                            height: 32px;
-                            border-radius: 6px;
-                            background: Ink.panel;
-                            border-width: 1px;
-                            border-color: search-input.has-focus ? Ink.focus : Ink.border-soft;
-
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 6px;
-                                spacing: 8px;
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    Image {
-                                        source: @image-url("../icons/regular-white/magnifying-glass.svg");
-                                        width: 14px;
-                                        height: 14px;
-                                        colorize: Ink.text-mute;
-                                    }
-                                }
-
-                                Rectangle {
-                                    horizontal-stretch: 1;
-
-                                    if root.query == "": Text {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: "Search settings";
-                                        font-size: 12px;
-                                        color: Ink.text-faint;
-                                        vertical-alignment: center;
-                                    }
-
-                                    search-input := TextInput {
-                                        width: 100%;
-                                        height: 100%;
-                                        text <=> root.query;
-                                        single-line: true;
-                                        font-size: 12px;
-                                        color: Ink.text;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                if root.query != "": VerticalLayout {
-                                    alignment: center;
-                                    Rectangle {
-                                        width: 20px;
-                                        height: 20px;
-                                        border-radius: 4px;
-                                        background: clear-ta.has-hover ? Ink.hover : transparent;
-                                        Image {
-                                            source: @image-url("../icons/regular-white/x.svg");
-                                            width: 10px;
-                                            height: 10px;
-                                            colorize: Ink.text-dim;
-                                        }
-
-                                        clear-ta := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.query = "";
-                                                search-input.focus();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                // -- Search --
+                HorizontalLayout {
+                    padding: Ink.pad-dialog;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    search-input := InkSearchField {
+                        placeholder: "Search settings";
+                        text: root.query;
+                        edited(t) => {
+                            root.query = t;
                         }
-
-                        Rectangle {
-                            height: 14px;
-                        }
-
-                        InkNavCaption {
-                            text: "PROJECT";
-                        }
-
-                        InkNavItem {
-                            text: "General";
-                            icon: @image-url("../icons/regular-white/user-circle.svg");
-                            active: !root.searching && root.current-section == 0;
-                            dimmed: root.searching && !root.section-matches(0);
-                            clicked => {
-                                root.go-to(0);
-                            }
-                        }
-
-                        InkNavItem {
-                            text: "Plate & grouping";
-                            icon: @image-url("../icons/regular-white/grid-nine.svg");
-                            active: !root.searching && root.current-section == 1;
-                            dimmed: root.searching && !root.section-matches(1);
-                            clicked => {
-                                root.go-to(1);
-                            }
-                        }
-
-                        InkNavItem {
-                            text: "Object merging";
-                            icon: @image-url("../icons/regular-white/squares-four.svg");
-                            active: !root.searching && root.current-section == 2;
-                            dimmed: root.searching && !root.section-matches(2);
-                            clicked => {
-                                root.go-to(2);
-                            }
-                        }
-
-                        Rectangle {
-                            height: 14px;
-                        }
-
-                        InkNavCaption {
-                            text: "THIS COMPUTER";
-                        }
-
-                        InkNavItem {
-                            text: "Viewport";
-                            icon: @image-url("../icons/regular-white/monitor.svg");
-                            active: !root.searching && root.current-section == 3;
-                            dimmed: root.searching && !root.section-matches(3);
-                            clicked => {
-                                root.go-to(3);
-                            }
-                        }
-
-                        Rectangle {
-                            vertical-stretch: 1;
-                        }
-                    }
-
-                    Rectangle {
-                        x: parent.width - 1px;
-                        width: 1px;
-                        height: parent.height;
-                        background: Ink.border-soft;
                     }
                 }
 
@@ -262,9 +195,9 @@ export component ProjectSettingsDialog inherits InkDialog {
                     ScrollView {
                         VerticalLayout {
                             alignment: start;
-                            padding: 28px;
-                            padding-top: 22px;
-                            spacing: 28px;
+                            padding: Ink.pad-dialog;
+                            padding-top: 4px;
+                            spacing: 12px;
 
                             if root.searching && !root.section-matches(0) && !root.section-matches(1) && !root.section-matches(2) && !root.section-matches(3): VerticalLayout {
                                 padding-top: 60px;
@@ -286,16 +219,23 @@ export component ProjectSettingsDialog inherits InkDialog {
                             }
 
                             // -- General -----------------------------------
+                            InkCaption {
+                                text: "PROJECT";
+                            }
                             if root.shows-section(0): VerticalLayout {
                                 spacing: 14px;
-                                InkSettingsHead {
+                                SectionToggle {
                                     title: "General";
-                                    scope: "Saved with the project";
-                                    subtitle: "Who made this project - stored with it and shown when it is cited.";
+                                    summary: "Who made this project - stored with it and shown when it is cited.";
+                                    open: root.is-open(0);
+                                    toggled => {
+                                        root.toggle(0);
+                                    }
                                 }
 
-                                InkSettingsCard {
+                                if root.is-open(0): InkSettingsCard {
                                     if root.shows(0, root.kw-name): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Project name";
                                         LineEdit {
                                             placeholder-text: "Enter project name…";
@@ -303,6 +243,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(0, root.kw-author): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Author";
                                         LineEdit {
                                             placeholder-text: "Charles Darwin";
@@ -310,6 +251,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(0, root.kw-org): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Organization";
                                         LineEdit {
                                             placeholder-text: "University / Company";
@@ -322,14 +264,18 @@ export component ProjectSettingsDialog inherits InkDialog {
                             // -- Plate & grouping --------------------------
                             if root.shows-section(1): VerticalLayout {
                                 spacing: 14px;
-                                InkSettingsHead {
+                                SectionToggle {
                                     title: "Plate & grouping";
-                                    scope: "Saved with the project";
-                                    subtitle: "How images are grouped into wells and how the plate is laid out in the results.";
+                                    summary: "How images are grouped into wells and how the plate is laid out in the results.";
+                                    open: root.is-open(1);
+                                    toggled => {
+                                        root.toggle(1);
+                                    }
                                 }
 
-                                InkSettingsCard {
+                                if root.is-open(1): InkSettingsCard {
                                     if root.shows(1, root.kw-grouping): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Grouping";
                                         description: "How the well of an image is found.";
                                         ComboBox {
@@ -342,6 +288,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if ProjectSettingsState.settings.grouping_mode == 1 && root.shows(1, root.kw-regex): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Regex";
                                         description: "Applied to the file name to find the well.";
                                         LineEdit {
@@ -350,6 +297,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(1, root.kw-plate): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Plate size";
                                         description: "The same choice as the results window's plate size.";
                                         ComboBox {
@@ -358,6 +306,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(1, root.kw-well-size): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Well size";
                                         description: ProjectSettingsState.settings.well_auto ? "Rows and columns of images in a well, fitted to the images." : "Rows × columns of images in a well.";
                                         VerticalLayout {
@@ -457,14 +406,18 @@ export component ProjectSettingsDialog inherits InkDialog {
                             // -- Object merging ----------------------------
                             if root.shows-section(2): VerticalLayout {
                                 spacing: 14px;
-                                InkSettingsHead {
+                                SectionToggle {
                                     title: "Object merging";
-                                    scope: "Saved with the project";
-                                    subtitle: "Reassembles objects split across an internal tile boundary (e.g. a whole organ on a whole slide image) into one object. Every object class merges unless excluded.";
+                                    summary: "Reassembles objects split across an internal tile boundary (e.g. a whole organ on a whole slide image) into one object. Every object class merges unless excluded.";
+                                    open: root.is-open(2);
+                                    toggled => {
+                                        root.toggle(2);
+                                    }
                                 }
 
-                                InkSettingsCard {
+                                if root.is-open(2): InkSettingsCard {
                                     if root.shows(2, root.kw-merge): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Merge objects across tiles";
                                         description: "Off: objects are exported per tile, as found.";
                                         HorizontalLayout {
@@ -475,6 +428,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-exclude): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Exclude classes";
                                         description: "Classes whose objects are never merged.";
                                         MultiClassDropdown {
@@ -487,6 +441,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-connectivity): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Connectivity";
                                         description: "8-connected also joins pieces touching only diagonally.";
                                         ComboBox {
@@ -495,6 +450,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-fragments): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Max fragments per group";
                                         description: "Upper limit of pieces joined into one object.";
                                         SpinBox {
@@ -510,16 +466,23 @@ export component ProjectSettingsDialog inherits InkDialog {
                             }
 
                             // -- Viewport ----------------------------------
+                            InkCaption {
+                                text: "THIS COMPUTER";
+                            }
                             if root.shows-section(3): VerticalLayout {
                                 spacing: 14px;
-                                InkSettingsHead {
+                                SectionToggle {
                                     title: "Viewport";
-                                    scope: "This computer only";
-                                    subtitle: "Memory the image viewport may use for smoother panning and zooming. Kept on this computer, for every project.";
+                                    summary: "Memory the image viewport may use for smoother panning and zooming. Kept on this computer, for every project.";
+                                    open: root.is-open(3);
+                                    toggled => {
+                                        root.toggle(3);
+                                    }
                                 }
 
-                                InkSettingsCard {
+                                if root.is-open(3): InkSettingsCard {
                                     if root.shows(3, root.kw-history): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Keep earlier high-resolution renders";
                                         description: "Panning back or zooming shows the sharp earlier renders instead of the blurry overview - most useful for whole slide images. Off: only the current render and one overview are kept (least RAM).";
                                         HorizontalLayout {
@@ -530,6 +493,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-budget): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Memory for earlier renders";
                                         description: "In MB. The graphics card holds about as much again.";
                                         enabled: ViewportMemoryState.tile_history_enabled;
@@ -542,6 +506,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-margin): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Object overlay margin";
                                         description: "In pixels: how far objects are drawn past the visible area, so panning doesn't uncover an empty border. 0 uses the least RAM; objects at a newly uncovered edge then appear once you stop moving.";
                                         SpinBox {
@@ -552,6 +517,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-cache-auto): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Size caches automatically";
                                         description: "From this computer's RAM - " + ViewportMemoryState.auto_cache_note + ". Off: use the sizes below.";
                                         HorizontalLayout {
@@ -562,6 +528,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-tile-cache): InkSettingRow {
+                                        control-width: 168px;
                                         enabled: !ViewportMemoryState.cache_sizes_auto;
                                         label: "Tile cache";
                                         description: "In MB: image tiles kept after reading, so panning back or returning to an image doesn't read them from disk again.";
@@ -574,6 +541,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-overview-cache): InkSettingRow {
+                                        control-width: 168px;
                                         enabled: !ViewportMemoryState.cache_sizes_auto;
                                         label: "Overview cache";
                                         description: "In MB: whole-image overviews kept, so switching between images shows them at once.";
@@ -586,6 +554,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-free-caches): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Free caches when an analysis starts";
                                         description: "Gives a local analysis the RAM of both caches; they fill up again as you use the viewport.";
                                         HorizontalLayout {
@@ -596,6 +565,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-edit-during-analysis): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Edit while an analysis runs";
                                         description: "Pipelines can be edited and the image previewed while an analysis runs - its progress is shown over the image. Off: the window waits until the analysis is done, for a computer that needs all its RAM for the analysis.";
                                         HorizontalLayout {
@@ -606,6 +576,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         }
                                     }
                                     if root.shows(3, root.kw-before-after): InkSettingRow {
+                                        control-width: 168px;
                                         label: "Before / after";
                                         description: "Compare the image without and with the preview's objects: a divider to drag (top bar), or hold Space. Off: no button, Space does nothing.";
                                         HorizontalLayout {
@@ -617,9 +588,10 @@ export component ProjectSettingsDialog inherits InkDialog {
                                     }
                                 }
 
-                                if !root.searching: HorizontalLayout {
+                                if !root.searching && root.open-3: HorizontalLayout {
                                     alignment: end;
                                     InkButton {
+                                        small: true;
                                         text: "Reset to defaults";
                                         clicked => {
                                             ViewportMemoryState.reset_to_defaults();
@@ -651,7 +623,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                     padding-bottom: 10px;
 
                     Text {
-                        text: "Project settings are saved with the project; viewport settings on this computer.";
+                        text: "Project: saved with it. This computer: here.";
                         font-size: 12px;
                         color: Ink.text-dim;
                         vertical-alignment: center;

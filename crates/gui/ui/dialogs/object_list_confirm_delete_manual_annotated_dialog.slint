@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ObjectListState } from "../api/object_list.slint";
@@ -5,8 +6,12 @@ import { Ink } from "../ink/palette.slint";
 
 
 export component ConfirmDeleteManualAnnotatedObjectDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 240px;
     title: "Delete objects";
-    card-width: 440px;
+    card-width: 340px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
     }

@@ -37,6 +37,16 @@ export global ObjectListState {
 
     in-out property <ObjectItemDataSlint> selected_object;
 
+    // The objects shown: of this class (-1 all) and matching the search
+    // ("12" an id, "area > 50", "circ < 0.6", a class name; terms split by
+    // commas). `filter-changed` after a change.
+    in-out property <int> filter-class: -1;
+    in-out property <string> filter-text;
+    callback filter-changed();
+    // Columns of the objects table hidden: "area", "circ", "ch<i>" each
+    // between commas (",area,ch2,").
+    in-out property <string> hidden-columns: ",";
+
     callback object_selected(int);
     callback object_copy(int);
     callback object_edit(int);

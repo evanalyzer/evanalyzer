@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ClassificationState } from "../api/classification.slint";
@@ -5,8 +6,12 @@ import { ClassificationState } from "../api/classification.slint";
 import { Ink } from "../ink/palette.slint";
 
 export component ConfirmAutoAddClassesDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 96px;
     title: "Auto add classes";
-    card-width: 500px;
+    card-width: 380px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
     }

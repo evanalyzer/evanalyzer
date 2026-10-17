@@ -268,3 +268,49 @@ export component InkModeTab inherits Rectangle {
         }
     }
 }
+
+/// A tab: a word (and a note after it, "· 2"); the chosen one underlined.
+export component InkTab inherits Rectangle {
+    in property <string> text;
+    // After the name, e.g. "· 2" changed.
+    in property <string> note;
+    in property <bool> active;
+    callback clicked;
+
+    height: 30px;
+    width: tab-row.preferred-width;
+
+    tab-row := HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 2px;
+        spacing: 4px;
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: Ink.fs-md;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Ink.text : ta.has-hover ? Ink.text : Ink.text-dim;
+        }
+
+        if root.note != "": Text {
+            text: root.note;
+            vertical-alignment: center;
+            font-size: Ink.fs-sm;
+            color: Ink.new;
+        }
+    }
+
+    // The underline of the chosen tab.
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: root.active ? Ink.text : transparent;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

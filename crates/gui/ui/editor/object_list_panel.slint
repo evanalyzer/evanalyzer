@@ -10,7 +10,8 @@ import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkSearchField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
+import { ClassificationState } from "../api/classification.slint";
 
 // "Area   1 204 px²" - a label and a mono value.
 component Fact inherits Rectangle {
@@ -50,6 +51,14 @@ component Fact inherits Rectangle {
 
 // The widths of the table's fixed columns; the channels share the rest.
 global TableCols {
+    // Column `key` ("area", "circ", "ch<i>") is shown (see
+    // `ObjectListState.hidden-columns`).
+    pure public function shown(key: string) -> bool {
+        ObjectListState.hidden-columns.replace-all("," + key + ",", ",") == ObjectListState.hidden-columns
+    }
+    public function toggle(key: string) {
+        ObjectListState.hidden-columns = self.shown(key) ? ObjectListState.hidden-columns + key + "," : ObjectListState.hidden-columns.replace-all("," + key + ",", ",");
+    }
     out property <length> id: 64px;
     out property <length> classes: 170px;
     out property <length> area: 72px;
@@ -186,16 +195,17 @@ component ObjectRow inherits Rectangle {
                 }
             }
             NumberCell {
-                width: TableCols.area;
+                width: TableCols.shown("area") ? TableCols.area : 0px;
                 text: root.data.area > 0 ? root.data.area : "–";
             }
             NumberCell {
-                width: TableCols.circ;
+                width: TableCols.shown("circ") ? TableCols.circ : 0px;
                 text: root.data.circularity != "" ? root.data.circularity : "–";
             }
             for ch in ChannelState.channels: NumberCell {
-                horizontal-stretch: 1;
-                min-width: 40px;
+                horizontal-stretch: TableCols.shown("ch\{ch.idx}") ? 1 : 0;
+                min-width: TableCols.shown("ch\{ch.idx}") ? 40px : 0px;
+                max-width: TableCols.shown("ch\{ch.idx}") ? 100000px : 0px;
                 text: root.data.intensity_avgs.length > ch.idx && root.data.intensity_avgs[ch.idx] != "" ? root.data.intensity_avgs[ch.idx] : "–";
             }
             Rectangle {
@@ -211,6 +221,9 @@ export component ObjectListPanel inherits Rectangle {
 
     property <length> row-h: root.table ? 28px : Ink.row-h;
     property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
+    // The class filtered by, from the classes list.
+    property <string> filter-class-name;
+    property <color> filter-class-color;
 
     function select(data: ObjectItemDataSlint) {
         ObjectListState.selected_object = data;
@@ -251,6 +264,34 @@ export component ObjectListPanel inherits Rectangle {
             }
         }
 
+        // -- Filter: a class, a search --
+        HorizontalLayout {
+            padding-left: Ink.pad-panel;
+            padding-right: Ink.pad-panel;
+            padding-bottom: 6px;
+            spacing: 6px;
+            class-chip := InkChip {
+                text: ObjectListState.filter-class < 0 ? "All classes ▾" : root.filter-class-name;
+                swatch: ObjectListState.filter-class < 0 ? transparent : root.filter-class-color;
+                removable: ObjectListState.filter-class >= 0;
+                clicked => {
+                    class-menu.show();
+                }
+                remove => {
+                    ObjectListState.filter-class = -1;
+                    ObjectListState.filter-changed();
+                }
+            }
+            InkSearchField {
+                placeholder: "id, area > 50 …";
+                text: ObjectListState.filter-text;
+                edited(text) => {
+                    ObjectListState.filter-text = text;
+                    ObjectListState.filter-changed();
+                }
+            }
+        }
+
         // -- The table's column heads --
         if root.table: VerticalLayout {
             HorizontalLayout {
@@ -267,18 +308,19 @@ export component ObjectListPanel inherits Rectangle {
                     text: "CLASSES";
                 }
                 HeadCell {
-                    width: TableCols.area;
+                    width: TableCols.shown("area") ? TableCols.area : 0px;
                     text: "AREA PX²";
                     horizontal-alignment: right;
                 }
                 HeadCell {
-                    width: TableCols.circ;
+                    width: TableCols.shown("circ") ? TableCols.circ : 0px;
                     text: "CIRCULARITY";
                     horizontal-alignment: right;
                 }
                 for ch in ChannelState.channels: HeadCell {
-                    horizontal-stretch: 1;
-                    min-width: 40px;
+                    horizontal-stretch: TableCols.shown("ch\{ch.idx}") ? 1 : 0;
+                    min-width: TableCols.shown("ch\{ch.idx}") ? 40px : 0px;
+                    max-width: TableCols.shown("ch\{ch.idx}") ? 100000px : 0px;
                     text: ch.name.to-uppercase();
                     horizontal-alignment: right;
                 }
@@ -436,6 +478,33 @@ export component ObjectListPanel inherits Rectangle {
         InkMenuFrame {
             open-y: root.absolute-position.y + Ink.head-h;
             menu-width: 270px;
+            if root.table: InkMenuCaption {
+                text: "COLUMNS";
+            }
+            if root.table: InkMenuItem {
+                text: "Area";
+                checked: TableCols.shown("area");
+                clicked => {
+                    TableCols.toggle("area");
+                }
+            }
+            if root.table: InkMenuItem {
+                text: "Circularity";
+                checked: TableCols.shown("circ");
+                clicked => {
+                    TableCols.toggle("circ");
+                }
+            }
+            for ch in ChannelState.channels: InkMenuItem {
+                visible: root.table;
+                height: root.table ? self.preferred-height : 0px;
+                text: "Mean " + ch.name;
+                checked: TableCols.shown("ch\{ch.idx}");
+                clicked => {
+                    TableCols.toggle("ch\{ch.idx}");
+                }
+            }
+            if root.table: InkMenuSeparator { }
             InkMenuItem {
                 icon: root.table ? InkIcons.objects : InkIcons.table;
                 text: root.table ? "Show as a list" : "Show as a table";
@@ -449,6 +518,39 @@ export component ObjectListPanel inherits Rectangle {
                 danger: true;
                 clicked => {
                     GlobalAppState.active_dialog = DialogType.object_confirm_delete_manual_annotated;
+                }
+            }
+        }
+    }
+
+    // The class filter's choices.
+    class-menu := PopupWindow {
+        x: Ink.pad-panel;
+        y: Ink.head-h + 26px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.head-h + 26px;
+            menu-width: 220px;
+            InkMenuItem {
+                text: "All classes";
+                checked: ObjectListState.filter-class < 0;
+                clicked => {
+                    ObjectListState.filter-class = -1;
+                    ObjectListState.filter-changed();
+                }
+            }
+            for cls in ClassificationState.classes_list: InkPickerRow {
+                label: cls.id < 10 ? "0" + cls.id : cls.id;
+                selected: cls.id == ObjectListState.filter-class;
+                clicked => {
+                    root.filter-class-name = cls.name;
+                    root.filter-class-color = cls.color;
+                    ObjectListState.filter-class = cls.id;
+                    ObjectListState.filter-changed();
+                    class-menu.close();
+                }
+                InkSwatchName {
+                    color: cls.color;
+                    name: cls.name;
                 }
             }
         }

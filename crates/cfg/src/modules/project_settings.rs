@@ -116,4 +116,36 @@ pub struct ProjectSettings {
     /// (by `key`). Absent in projects saved before components existed.
     #[serde(default)]
     pub components: Vec<ComponentDefinition>,
+
+    /// What the editor keeps with the project: the Tuning panel's pinned
+    /// settings, which images were previewed or analysed.
+    #[serde(default)]
+    pub editor: EditorSettings,
+}
+
+/// See `ProjectSettings::editor`.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSettings {
+    /// Settings pinned into the Tuning panel.
+    #[serde(default)]
+    pub pins: Vec<PinnedSetting>,
+    /// Images (relative to the image folder) a preview ran on.
+    #[serde(default)]
+    pub previewed_images: Vec<std::path::PathBuf>,
+    /// Images (relative to the image folder) of the analysis last opened in
+    /// Results.
+    #[serde(default)]
+    pub analysed_images: Vec<std::path::PathBuf>,
+}
+
+/// A setting pinned into the Tuning panel: in which pipeline, which step
+/// (its id, so it stays when steps move), which setting (`name`, or
+/// `list.entry.field` for a list entry's).
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedSetting {
+    pub pipeline: u32,
+    pub step: String,
+    pub setting: String,
 }

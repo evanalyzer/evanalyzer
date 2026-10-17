@@ -86,10 +86,8 @@ pub struct UiState {
     /// This computer - where "Disconnect" returns to, and where the list of
     /// recent servers is kept whatever the window is connected to.
     local_backend: Arc<dyn Backend>,
-    /// Which images were previewed (this session) or are in the analysis
-    /// open in Results - the images plate's well states.
-    image_states: Mutex<crate::editor::images_list_controller::ImageStates>,
-    /// Told when `image_states` changes (the images panel's plate).
+    /// Told when the image states change (the images panel's plate) - see
+    /// `image_states`.
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
@@ -117,32 +115,55 @@ impl UiState {
             force_next_checkpoint: AtomicBool::new(false),
             app_settings: Mutex::new(app_settings),
             local_backend,
-            image_states: Mutex::new(Default::default()),
             image_states_listener: Mutex::new(None),
         }
     }
 
-    /// See `image_states`.
+    /// Which images were previewed or are in the analysis last opened in
+    /// Results - kept with the project (`ProjectSettings::editor`).
     pub fn image_states(&self) -> crate::editor::images_list_controller::ImageStates {
-        self.image_states.lock().expect("Poisoned").clone()
+        let project = self.get_project();
+        let root = project.images.root.clone().unwrap_or_default();
+        crate::editor::images_list_controller::ImageStates {
+            previewed: project
+                .editor
+                .previewed_images
+                .iter()
+                .map(|rel| root.join(rel))
+                .collect(),
+            analysed: project.editor.analysed_images.iter().cloned().collect(),
+        }
     }
 
-    /// A preview ran on the image at `path` (full path).
+    /// A preview ran on the image at `path` (full path). Kept with the
+    /// project, but no undo step and no unsaved change: it's what was seen,
+    /// not an edit.
     pub fn mark_previewed(&self, path: PathBuf) {
-        let added = self
-            .image_states
-            .lock()
-            .expect("Poisoned")
-            .previewed
-            .insert(path);
+        let added = {
+            let mut project = self.get_project_runtime_write();
+            let root = project.images.root.clone().unwrap_or_default();
+            let Ok(rel) = path.strip_prefix(&root).map(PathBuf::from) else {
+                return;
+            };
+            if project.editor.previewed_images.contains(&rel) {
+                false
+            } else {
+                project.editor.previewed_images.push(rel);
+                true
+            }
+        };
         if added {
             self.image_states_changed();
         }
     }
 
-    /// The images (relative paths) of the analysis open in Results.
+    /// The images (relative paths) of the analysis opened in Results - kept
+    /// like `mark_previewed`.
     pub fn set_analysed(&self, paths: impl IntoIterator<Item = PathBuf>) {
-        self.image_states.lock().expect("Poisoned").analysed = paths.into_iter().collect();
+        let mut paths: Vec<PathBuf> = paths.into_iter().collect();
+        paths.sort();
+        paths.dedup();
+        self.get_project_runtime_write().editor.analysed_images = paths;
         self.image_states_changed();
     }
 
@@ -162,9 +183,8 @@ impl UiState {
         }
     }
 
-    /// Another project: what was previewed or analysed belonged to the old one.
+    /// Another project: its own image states are shown.
     fn clear_image_states(&self) {
-        *self.image_states.lock().expect("Poisoned") = Default::default();
         self.image_states_changed();
     }
 
@@ -843,6 +863,28 @@ mod ui_state_tests {
     }
 
     #[test]
+    fn a_previewed_image_is_kept_with_the_project_but_is_no_edit() {
+        let ui_state = test_ui_state();
+        ui_state.get_project_runtime_write().images.root = Some(PathBuf::from("/data"));
+
+        ui_state.mark_previewed(PathBuf::from("/data/plate1/A01.tif"));
+        ui_state.mark_previewed(PathBuf::from("/data/plate1/A01.tif"));
+        // Outside the image folder: not one of the project's images.
+        ui_state.mark_previewed(PathBuf::from("/elsewhere/x.tif"));
+        ui_state.set_analysed([PathBuf::from("plate1/B02.tif")]);
+
+        let project = ui_state.get_project();
+        assert_eq!(project.editor.previewed_images, [PathBuf::from("plate1/A01.tif")]);
+        assert_eq!(project.editor.analysed_images, [PathBuf::from("plate1/B02.tif")]);
+        drop(project);
+        assert!(!ui_state.is_dirty());
+        assert!(ui_state.undo_stack.lock().unwrap().is_empty(), "no undo step");
+        let states = ui_state.image_states();
+        assert!(states.previewed.contains(&PathBuf::from("/data/plate1/A01.tif")));
+        assert!(states.analysed.contains(&PathBuf::from("plate1/B02.tif")));
+    }
+
+    #[test]
     fn mark_dirty_and_clear_dirty_round_trip() {
         let ui_state = test_ui_state();
 
@@ -1306,12 +1348,35 @@ mod ui_state_tests {
             let rect = |label: &str| {
                 let e = ElementHandle::find_by_accessible_label(&ui, label)
                     .next()
-                    .unwrap_or_else(|| panic!("{label:?} not found"));
+                    .unwrap_or_else(|| panic!("{label:?} not found (height {height})"));
                 (e.absolute_position(), e.size())
             };
 
-            let (nav, size) = rect("Viewport");
-            let at = LogicalPosition::new(nav.x + size.width / 2.0, nav.y + size.height / 2.0);
+            // The settings list: the largest scroll area of the sheet (on
+            // the right).
+            let list = || {
+                ElementHandle::find_by_element_type_name(&ui, "ScrollView")
+                    .filter(|e| e.absolute_position().x > 1280.0 - 470.0)
+                    .max_by(|a, b| a.size().height.total_cmp(&b.size().height))
+                    .expect("the settings list")
+            };
+            let scroll_to_end = || {
+                let (top, view) = (list().absolute_position(), list().size());
+                let inside =
+                    LogicalPosition::new(top.x + view.width / 2.0, top.y + view.height / 2.0);
+                for _ in 0..20 {
+                    window.dispatch_event(WindowEvent::PointerScrolled {
+                        position: inside,
+                        delta_x: 0.0,
+                        delta_y: -300.0,
+                    });
+                }
+            };
+
+            // Scroll down to the Viewport section and open it.
+            scroll_to_end();
+            let (head, size) = rect("Viewport");
+            let at = LogicalPosition::new(head.x + size.width / 2.0, head.y + size.height / 2.0);
             window.dispatch_event(WindowEvent::PointerPressed {
                 position: at,
                 button: PointerEventButton::Left,
@@ -1320,20 +1385,8 @@ mod ui_state_tests {
                 position: at,
                 button: PointerEventButton::Left,
             });
-
-            let scroll_view = ElementHandle::find_by_element_type_name(&ui, "ScrollView")
-                .filter(|e| e.absolute_position().x > at.x)
-                .max_by(|a, b| a.size().height.total_cmp(&b.size().height))
-                .expect("the settings list");
-            let (top, view) = (scroll_view.absolute_position(), scroll_view.size());
-            let inside = LogicalPosition::new(top.x + view.width / 2.0, top.y + view.height / 2.0);
-            for _ in 0..20 {
-                window.dispatch_event(WindowEvent::PointerScrolled {
-                    position: inside,
-                    delta_x: 0.0,
-                    delta_y: -300.0,
-                });
-            }
+            scroll_to_end();
+            let (top, view) = (list().absolute_position(), list().size());
 
             let (button, button_size) = rect("Reset to defaults");
             assert!(

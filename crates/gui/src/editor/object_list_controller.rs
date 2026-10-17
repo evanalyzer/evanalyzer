@@ -91,6 +91,11 @@ impl ObjectListController {
                     manager.sync_selected_object_to_slint(false);
                     manager.viewport_controller.trigger_image_redraw_objects();
                 });
+
+            // The class filter or the search changed
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_filter_changed(move || manager.sync_objects_to_slint());
         }
     }
 
@@ -101,7 +106,9 @@ impl ObjectListController {
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let label_counts = precompute_label_counts(&bridge_ptr.app_state);
-                let visible_rows = compute_visible_rows(&bridge_ptr.app_state);
+                let state = ui.global::<ObjectListState>();
+                let filter = ObjectFilter::parse(state.get_filter_class(), &state.get_filter_text());
+                let visible_rows = compute_visible_rows(&bridge_ptr.app_state, &filter);
                 let nr_of_bits = current_image_nr_of_bits(&bridge_ptr.app_state);
                 let bridge = Rc::new(ObjectModalBridge {
                     app_state: bridge_ptr.app_state.clone(),
@@ -239,8 +246,8 @@ impl Model for ObjectModalBridge {
 // ---------------------------------------------------------------------------
 
 /// Indices into the combined (manual ++ preview) object list that should be shown in
-/// the list panel, respecting `hide_unclassified_objects`.
-fn compute_visible_rows(app_state: &Arc<UiState>) -> Vec<usize> {
+/// the list panel, respecting `hide_unclassified_objects` and `filter`.
+fn compute_visible_rows(app_state: &Arc<UiState>, filter: &ObjectFilter) -> Vec<usize> {
     let project = app_state.get_project();
     let hide_unclassified = project.hide_unclassified_objects();
     let manual = project.get_objects().unwrap_or(&[]);
@@ -251,8 +258,131 @@ fn compute_visible_rows(app_state: &Arc<UiState>) -> Vec<usize> {
         .chain(preview.iter())
         .enumerate()
         .filter(|(_, object)| !hide_unclassified || !object.object_class.is_empty())
+        .filter(|(_, object)| filter.matches(object, &project))
         .map(|(i, _)| i)
         .collect()
+}
+
+/// What the objects list / table shows: a class (`None` all) and the search
+/// terms - all must match.
+#[derive(Debug, Default, PartialEq)]
+struct ObjectFilter {
+    class: Option<u32>,
+    terms: Vec<ObjectTerm>,
+}
+
+#[derive(Debug, PartialEq)]
+enum ObjectTerm {
+    /// "12": the object's id (its segmentation label).
+    Id(u32),
+    /// "area > 50" (`>`, `>=`, `<`, `<=`, `=`).
+    Area(Compare, f64),
+    /// "circ < 0.6" / "circularity …".
+    Circularity(Compare, f64),
+    /// Anything else: part of a class name (any case).
+    Text(String),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Compare {
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
+    Equal,
+}
+
+impl Compare {
+    fn holds(self, value: f64, limit: f64) -> bool {
+        match self {
+            Compare::Greater => value > limit,
+            Compare::GreaterOrEqual => value >= limit,
+            Compare::Less => value < limit,
+            Compare::LessOrEqual => value <= limit,
+            Compare::Equal => (value - limit).abs() < 1e-9,
+        }
+    }
+}
+
+impl ObjectFilter {
+    /// `class` -1 for all; `text` the search ("area > 50, nuclei").
+    fn parse(class: i32, text: &str) -> Self {
+        let terms = text
+            .split(',')
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .map(ObjectTerm::parse)
+            .collect();
+        Self {
+            class: u32::try_from(class).ok(),
+            terms,
+        }
+    }
+
+    fn matches(&self, object: &ObjectMetricSettings, project: &ProjectWithRuntime) -> bool {
+        if let Some(class) = self.class
+            && !object
+                .object_class
+                .contains(&evanalyzer_cfg::core_types::ObjectClass::Global(class))
+        {
+            return false;
+        }
+        self.terms.iter().all(|term| term.matches(object, project))
+    }
+}
+
+impl ObjectTerm {
+    fn parse(term: &str) -> Self {
+        let lower = term.to_lowercase();
+        if let Ok(id) = lower.parse::<u32>() {
+            return ObjectTerm::Id(id);
+        }
+        for (name, make) in [
+            ("circularity", ObjectTerm::Circularity as fn(Compare, f64) -> ObjectTerm),
+            ("circ", ObjectTerm::Circularity),
+            ("area", ObjectTerm::Area),
+        ] {
+            if let Some(rest) = lower.strip_prefix(name) {
+                let rest = rest.trim_start();
+                for (op, compare) in [
+                    (">=", Compare::GreaterOrEqual),
+                    ("<=", Compare::LessOrEqual),
+                    (">", Compare::Greater),
+                    ("<", Compare::Less),
+                    ("=", Compare::Equal),
+                ] {
+                    if let Some(number) = rest.strip_prefix(op)
+                        && let Ok(limit) = number.trim().parse::<f64>()
+                    {
+                        return make(compare, limit);
+                    }
+                }
+            }
+        }
+        ObjectTerm::Text(lower)
+    }
+
+    fn matches(&self, object: &ObjectMetricSettings, project: &ProjectWithRuntime) -> bool {
+        match self {
+            ObjectTerm::Id(id) => object.segmentation_class.as_u32() == *id,
+            ObjectTerm::Area(compare, limit) => compare.holds(object.area as f64, *limit),
+            ObjectTerm::Circularity(compare, limit) => {
+                object.area > 0
+                    && object.perimeter > 0.0
+                    && compare.holds(
+                        ((4.0 * std::f64::consts::PI * object.area as f64)
+                            / (object.perimeter as f64 * object.perimeter as f64))
+                            .min(1.0),
+                        *limit,
+                    )
+            }
+            ObjectTerm::Text(text) => object.object_class.iter().any(|class| {
+                project
+                    .get_class_from_id(class)
+                    .is_some_and(|c| c.name.to_lowercase().contains(text.as_str()))
+            }),
+        }
+    }
 }
 
 fn precompute_label_counts(app_state: &Arc<UiState>) -> HashMap<SegmentationClass, i32> {
@@ -645,6 +775,45 @@ mod tests {
     }
 
     #[test]
+    fn the_search_reads_ids_comparisons_and_class_names() {
+        let filter = ObjectFilter::parse(-1, "12, area > 50, circ<=0.6, Nuc");
+        assert_eq!(filter.class, None);
+        assert_eq!(
+            filter.terms,
+            vec![
+                ObjectTerm::Id(12),
+                ObjectTerm::Area(Compare::Greater, 50.0),
+                ObjectTerm::Circularity(Compare::LessOrEqual, 0.6),
+                ObjectTerm::Text("nuc".into()),
+            ]
+        );
+        assert_eq!(ObjectFilter::parse(3, " ").class, Some(3));
+        assert!(ObjectFilter::parse(3, " ").terms.is_empty());
+    }
+
+    #[test]
+    fn the_filter_shows_the_objects_of_a_class_matching_the_search() {
+        let project = ProjectWithRuntime::default();
+        let mut big = object_with_class(1, 7, true);
+        big.area = 100;
+        let mut small = object_with_class(2, 8, true);
+        small.area = 10;
+        let unclassified = object_with_class(3, 9, false);
+
+        let shows = |filter: &ObjectFilter| {
+            [&big, &small, &unclassified]
+                .iter()
+                .map(|o| filter.matches(o, &project))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shows(&ObjectFilter::parse(-1, "")), [true, true, true]);
+        assert_eq!(shows(&ObjectFilter::parse(1, "")), [true, true, false]);
+        assert_eq!(shows(&ObjectFilter::parse(-1, "area >= 50")), [true, false, false]);
+        assert_eq!(shows(&ObjectFilter::parse(-1, "8")), [false, true, false]);
+        assert_eq!(shows(&ObjectFilter::parse(1, "area < 50")), [false, true, false]);
+    }
+
+    #[test]
     fn compute_visible_rows_hides_unclassified_objects_by_default() {
         let mut project = project_with_one_image();
         project.add_object(&object_with_class(1, 1, false)); // unclassified
@@ -655,7 +824,7 @@ mod tests {
             ui_state.get_project().hide_unclassified_objects(),
             "hide_unclassified_objects defaults to true"
         );
-        assert_eq!(compute_visible_rows(&ui_state), vec![1]);
+        assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![1]);
     }
 
     #[test]
@@ -666,7 +835,7 @@ mod tests {
         project.toggle_hide_unclassified_objects();
         let ui_state = test_ui_state_with_project(project);
 
-        assert_eq!(compute_visible_rows(&ui_state), vec![0, 1]);
+        assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![0, 1]);
     }
 
     #[test]
@@ -679,7 +848,7 @@ mod tests {
             .push(object_with_class(2, 1, true)); // preview, index 1
         let ui_state = test_ui_state_with_project(project);
 
-        assert_eq!(compute_visible_rows(&ui_state), vec![0, 1]);
+        assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![0, 1]);
     }
 
     #[test]
@@ -823,7 +992,7 @@ mod tests {
             app_state: ui_state.clone(),
             notify: ModelNotify::default(),
             label_counts: precompute_label_counts(ui_state),
-            visible_rows: compute_visible_rows(ui_state),
+            visible_rows: compute_visible_rows(ui_state, &ObjectFilter::default()),
             nr_of_bits: Some(16),
         }
     }

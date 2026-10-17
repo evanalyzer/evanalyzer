@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
@@ -23,8 +24,12 @@ component ColorTile inherits Rectangle {
 }
 
 export component ClassEditDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 96px;
     title: "Class settings";
-    card-width: 486px;
+    card-width: 320px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
         ClassificationSettingsState.reset_to_zero();
@@ -34,7 +39,7 @@ export component ClassEditDialog inherits InkDialog {
         spacing: 10px;
         Text {
             text: "Name";
-            width: 110px;
+            width: 72px;
             vertical-alignment: center;
             font-size: 13px;
             color: Ink.text;
@@ -50,7 +55,7 @@ export component ClassEditDialog inherits InkDialog {
         spacing: 10px;
         Text {
             text: "Notes";
-            width: 110px;
+            width: 72px;
             vertical-alignment: center;
             font-size: 13px;
             color: Ink.text;
@@ -66,7 +71,7 @@ export component ClassEditDialog inherits InkDialog {
         spacing: 10px;
         Text {
             text: "Class ID";
-            width: 110px;
+            width: 72px;
             vertical-alignment: center;
             font-size: 13px;
             color: Ink.text;
@@ -92,34 +97,52 @@ export component ClassEditDialog inherits InkDialog {
         spacing: 10px;
         Text {
             text: "Color";
-            width: 110px;
+            width: 72px;
             vertical-alignment: center;
             font-size: 13px;
             color: Ink.text;
         }
 
+        // 7 a row: the card stays narrow (next to the classes panel).
         GridLayout {
-            spacing: 8px;
+            spacing: 6px;
             Row {
-                for c in [#FF00FF, #00FFFF, #00FF00, #FFFF00, #FF3333, #3366FF, #FF9900, #ADFF2F, #00FA9A, #87CEFA, #FF66CC, #FF1493, #7B00FF, #00FF88]: ColorTile {
+                for c in [#FF00FF, #00FFFF, #00FF00, #FFFF00, #FF3333, #3366FF, #FF9900]: ColorTile {
                     item_color: c;
                 }
             }
-
             Row {
-                for c in [#FFD700, #FF4500, #FF69B4, #F08080, #FFA07A, #DA70D6, #FF007F, #FFCC00, #EEDD82, #BC8F8F, #FF8C00, #FF7F50, #C71585, #E9967A]: ColorTile {
+                for c in [#ADFF2F, #00FA9A, #87CEFA, #FF66CC, #FF1493, #7B00FF, #00FF88]: ColorTile {
                     item_color: c;
                 }
             }
-
             Row {
-                for c in [#00CED1, #1E90FF, #9370DB, #40E0D0, #7B68EE, #48D1CC, #00BFFF, #AFEEEE, #B0C4DE, #66CDAA, #9932CC, #20B2AA, #5F9EA0, #4169E1]: ColorTile {
+                for c in [#FFD700, #FF4500, #FF69B4, #F08080, #FFA07A, #DA70D6, #FF007F]: ColorTile {
                     item_color: c;
                 }
             }
-
             Row {
-                for c in [#FFCCFF, #99FFFF, #FFE4B5, #EEE8AA, #CCFFCC, #E6E6FA, #FFFAC8, #F0FFF0, #F5FFFA, #F0F8FF, #FFFFFF, #FFF0F5, #FFE4E1, #E0FFFF]: ColorTile {
+                for c in [#FFCC00, #EEDD82, #BC8F8F, #FF8C00, #FF7F50, #C71585, #E9967A]: ColorTile {
+                    item_color: c;
+                }
+            }
+            Row {
+                for c in [#00CED1, #1E90FF, #9370DB, #40E0D0, #7B68EE, #48D1CC, #00BFFF]: ColorTile {
+                    item_color: c;
+                }
+            }
+            Row {
+                for c in [#AFEEEE, #B0C4DE, #66CDAA, #9932CC, #20B2AA, #5F9EA0, #4169E1]: ColorTile {
+                    item_color: c;
+                }
+            }
+            Row {
+                for c in [#FFCCFF, #99FFFF, #FFE4B5, #EEE8AA, #CCFFCC, #E6E6FA, #FFFAC8]: ColorTile {
+                    item_color: c;
+                }
+            }
+            Row {
+                for c in [#F0FFF0, #F5FFFA, #F0F8FF, #FFFFFF, #FFF0F5, #FFE4E1, #E0FFFF]: ColorTile {
                     item_color: c;
                 }
             }

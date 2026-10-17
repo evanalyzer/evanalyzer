@@ -33,3 +33,16 @@ export global LayoutState {
     /// Brush and eraser size, in screen pixels.
     in-out property <int> brush-size: 12;
 }
+
+// Where the floating panels are - for the workspace and for the dialogs that
+// open beside them (next to the steps, left of the right-hand panels).
+export global Places {
+    out property <length> gap: 12px;
+    out property <length> left-w: 360px;
+    out property <length> right-w: 300px;
+    // x of a dialog next to the steps panel.
+    out property <length> beside-left: self.left-w + 2 * self.gap;
+    // Distance from the window's right edge of a dialog left of the
+    // right-hand panels.
+    out property <length> beside-right: self.right-w + 2 * self.gap;
+}

@@ -69,6 +69,29 @@ impl HistogramController {
                 },
             );
 
+            // Auto-scale of new images on / off (project setting)
+            let manager = Arc::clone(self);
+            ui.global::<HistogramState>()
+                .on_auto_scale_off_toggled(move |off| {
+                    manager
+                        .app_state
+                        .get_project_write()
+                        .set_histogram_auto_scale_off(off);
+                    manager.app_state.mark_dirty();
+                });
+
+            // The open image's scaling for every image
+            let manager = Arc::clone(self);
+            ui.global::<HistogramState>()
+                .on_apply_to_all_images(move || {
+                    manager
+                        .app_state
+                        .get_project_write()
+                        .apply_histograms_to_all_images();
+                    manager.app_state.mark_dirty();
+                    manager.viewport_controller.trigger_image_redraw();
+                });
+
             // Histogram auto adjust clicked^
             let manager = Arc::clone(self);
             ui.global::<HistogramState>()
@@ -115,14 +138,19 @@ impl HistogramController {
     pub fn sync_histogram_settings_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
 
-        let histogram_settings = self
-            .app_state
-            .get_project()
-            .get_histograms_from_selected_channel()
-            .cloned();
+        let (histogram_settings, auto_scale_off) = {
+            let project = self.app_state.get_project();
+            (
+                project.get_histograms_from_selected_channel().cloned(),
+                project.histogram_auto_scale_off(),
+            )
+        };
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<HistogramState>()
+                    .set_auto_scale_off(auto_scale_off);
                 let Some(task) = histogram_settings else {
                     warn!(
                         "No histogram settings found for the selected channel. Cannot sync to Slint."

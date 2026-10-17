@@ -8,10 +8,14 @@ import { Ink } from "../ink/palette.slint";
 // before - and, on the first connection to a server, its certificate to
 // confirm (step 1), or a warning that it changed (step 2).
 export component ConnectDialog inherits InkDialog {
+    // Above "This computer" in the bottom bar.
+    from-bottom: true;
+    anchor-x: 12px;
+    anchor-y: 40px;
     title: ConnectState.step == 0 ? "Connect to server"
         : ConnectState.step == 1 ? "Is this your server?"
         : "The server's certificate has changed";
-    card-width: 520px;
+    card-width: 360px;
     close => {
         ConnectState.cancel();
         GlobalAppState.active-dialog = DialogType.none;

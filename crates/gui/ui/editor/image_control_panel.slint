@@ -359,6 +359,29 @@ export component ImageControlPanel inherits Rectangle {
 
                 Histogram { }
 
+                // New images: auto-scaled or the project's scaling; this
+                // image's scaling for all.
+                HorizontalLayout {
+                    spacing: 6px;
+                    InkSwitch {
+                        horizontal-stretch: 1;
+                        text: "Auto-scale new images";
+                        checked: !HistogramState.auto-scale-off;
+                        toggled(on) => {
+                            HistogramState.auto-scale-off = !on;
+                            HistogramState.auto-scale-off-toggled(!on);
+                        }
+                    }
+                    InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        text: "Use for all images";
+                        clicked => {
+                            HistogramState.apply-to-all-images();
+                        }
+                    }
+                }
+
                 GridLayout {
                     spacing-horizontal: 6px;
                     spacing-vertical: 4px;

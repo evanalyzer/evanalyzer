@@ -6,6 +6,8 @@ import { Ink } from "../ink/palette.slint";
 // Asked when the window is closed, the server disconnected or another
 // project opened while an analysis runs.
 export component AnalysisRunningCloseDialog inherits InkDialog {
+    // In the middle, a third down.
+    anchor-y: root.height / 3;
     title: "Analysis running";
     card-width: 480px;
     close => {

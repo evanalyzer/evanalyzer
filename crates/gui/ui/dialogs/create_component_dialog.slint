@@ -1,8 +1,9 @@
+import { Places } from "../api/layout.slint";
 import { InkButton, InkButtonKind, InkBanner, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement } from "../ink/ink.slint";
 import { ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "../api/create_component.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
-import { InkNavItem, InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock } from "../ink/ink.slint";
+import { InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock, InkTab } from "../ink/ink.slint";
 import { Ink } from "../ink/palette.slint";
 
 // "Create component": turns consecutive steps of a pipeline into a component.
@@ -35,6 +36,8 @@ component RangeRow inherits HorizontalLayout {
 // -- Dialog component -----------------------------------------
 
 export component CreateComponentDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     title: "Create component";
     card-width: 480px;
     close-on-backdrop: true;
@@ -161,6 +164,8 @@ export component CreateComponentDialog inherits InkDialog {
 
 // -- "Edit for all" or "Only this step" -------------------------
 export component ComponentEditChoiceDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     title: "Open \{ComponentEditChoiceState.component-name}";
     card-width: 420px;
     close-on-backdrop: true;
@@ -202,6 +207,8 @@ export component ComponentEditChoiceDialog inherits InkDialog {
 
 // -- Expose a setting: a new parameter, or one that exists -------
 export component ExposeChoiceDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     title: "Expose \{ExposeChoiceState.setting-name}";
     card-width: 460px;
     close-on-backdrop: true;
@@ -279,6 +286,8 @@ export component ExposeChoiceDialog inherits InkDialog {
 
 // -- Update a component from the library -------------------------------
 export component ComponentUpdateDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     title: "Update \{ComponentUpdateState.component-name}";
     card-width: 420px;
     close-on-backdrop: true;
@@ -450,11 +459,13 @@ component ParamHeader inherits Rectangle {
 // project settings: sections on the left, rows of name/explanation and
 // control on the right. Changes apply right away.
 export component ComponentSettingsDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
     title: "Component settings";
     subtitle: "◆ " + ComponentSettingsState.name;
-    card-width: 860px;
+    card-width: 700px;
     card-height: 620px;
     content-padding: 0px;
     close-on-backdrop: true;
@@ -481,7 +492,6 @@ export component ComponentSettingsDialog inherits InkDialog {
 
     Rectangle {
         vertical-stretch: 1;
-        background: Ink.ground;
 
         VerticalLayout {
             spacing: 0;
@@ -491,57 +501,48 @@ export component ComponentSettingsDialog inherits InkDialog {
                 background: Ink.border-soft;
             }
 
+            // -- Tabs: General, Parameters (design P) --
             HorizontalLayout {
-                vertical-stretch: 1;
-                spacing: 0;
-
-                // -- Section list ----------------------------------------
-                Rectangle {
-                    width: 210px;
-                    background: Ink.panel;
-
-                    VerticalLayout {
-                        padding: 16px;
-                        spacing: 4px;
-
-                        InkNavItem {
-                            text: "General";
-                            icon: @image-url("../icons/regular-white/info.svg");
-                            active: root.current-section == 0;
-                            clicked => {
-                                root.current-section = 0;
-                            }
-                        }
-
-                        InkNavItem {
-                            text: "Parameters (\{ComponentSettingsState.parameters.length})";
-                            icon: @image-url("../icons/regular-white/faders-horizontal.svg");
-                            active: root.current-section == 1;
-                            clicked => {
-                                root.current-section = 1;
-                            }
-                        }
-
-                        Rectangle {
-                            vertical-stretch: 1;
-                        }
-                    }
-
-                    Rectangle {
-                        x: parent.width - 1px;
-                        width: 1px;
-                        height: parent.height;
-                        background: Ink.border-soft;
+                height: 34px;
+                padding-left: Ink.pad-dialog;
+                padding-right: Ink.pad-dialog;
+                spacing: 14px;
+                InkTab {
+                    text: "General";
+                    active: root.current-section == 0;
+                    clicked => {
+                        root.current-section = 0;
                     }
                 }
+                InkTab {
+                    text: "Parameters";
+                    note: "· \{ComponentSettingsState.parameters.length}";
+                    active: root.current-section == 1;
+                    clicked => {
+                        root.current-section = 1;
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Ink.border-soft;
+            }
+
+            VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 0;
 
                 // -- Settings --------------------------------------------
                 if root.current-section == 0: ScrollView {
                     horizontal-stretch: 1;
                     VerticalLayout {
                         alignment: start;
-                        padding: 28px;
-                        padding-top: 22px;
+                        padding: Ink.pad-dialog;
+                        padding-top: 12px;
                         spacing: 14px;
 
                         InkSettingsHead {

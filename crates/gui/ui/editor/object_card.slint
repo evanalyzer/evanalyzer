@@ -37,6 +37,8 @@ export component ObjectCard inherits Rectangle {
     // The room the panels leave on the image (the viewport's insets).
     in property <length> inset-left;
     in property <length> inset-right;
+    // Taken at the bottom (the objects table).
+    in property <length> inset-bottom;
 
     property <length> card-w: 232px;
     // The object on the screen.
@@ -48,7 +50,7 @@ export component ObjectCard inherits Rectangle {
 
     card := Rectangle {
         x: clamp(root.want-x, root.inset-left + 8px, max(root.inset-left + 8px, root.width - root.inset-right - root.card-w - 8px));
-        y: clamp(root.obj-y, 8px, max(8px, root.height - self.height - 8px));
+        y: clamp(root.obj-y, 8px, max(8px, root.height - root.inset-bottom - self.height - 8px));
         width: root.card-w;
         height: body.preferred-height;
 

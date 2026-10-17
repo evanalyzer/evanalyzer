@@ -1,3 +1,5 @@
+import { PipelinesPanelState } from "../api/pipelines.slint";
+import { ImagesListState } from "../api/images_list.slint";
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { RunAnalysisState } from "../api/run_analysis.slint";
@@ -5,8 +7,13 @@ import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
 export component RunAnalysisDialog inherits InkDialog {
+    // Below the Run button.
+    from-right: true;
+    anchor-x: 12px;
+    anchor-y: 46px;
     title: "Run analysis";
-    card-width: 440px;
+    subtitle: PipelinesPanelState.enabled-pipeline-count + (PipelinesPanelState.enabled-pipeline-count == 1 ? " pipeline · " : " pipelines · ") + ImagesListState.images_list.length + " images";
+    card-width: 360px;
     close => {
         RunAnalysisState.cancel();
     }

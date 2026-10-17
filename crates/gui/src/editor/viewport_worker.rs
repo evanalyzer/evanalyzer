@@ -124,6 +124,7 @@ impl ViewportWorker {
             t_stack,
             hist_settings,
             selected_channel,
+            auto_scale_off,
         ) = {
             let project = self.app_state.get_project();
             (
@@ -134,6 +135,7 @@ impl ViewportWorker {
                 project.get_t_stack().cloned().unwrap_or_default(),
                 project.get_image_channel_histograms(),
                 project.get_selected_image_channel_idx(),
+                project.histogram_auto_scale_off(),
             )
         };
 
@@ -326,8 +328,15 @@ impl ViewportWorker {
                             if (!ch.is_some() && task.auto_adjust_if_not_set)
                                 || (task.auto_adjust_selected && idx == selected_channel)
                             {
+                                // Auto-scale off: a channel without any
+                                // scaling shows its full value range (the
+                                // values are normalized to 0..1).
                                 let (min, max, min_range, max_range) =
-                                    auto_adjust_range(channel.slice(), channel.is_rgb);
+                                    if auto_scale_off && !task.auto_adjust_selected {
+                                        (0.0, 1.0, 0.0, 1.0)
+                                    } else {
+                                        auto_adjust_range(channel.slice(), channel.is_rgb)
+                                    };
                                 debug!(
                                     "Auto-adjusting channel {} min={} max={} range=({},{})",
                                     idx, min, max, min_range, max_range

@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 // pipelines_panel.slint
 // EVAnalyzer - Pipelines panel.
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
@@ -19,7 +20,7 @@ import { InkPickerField, InkPickerRow, InkSwatchName, InkDialogPlacement } from 
 
 import { FocusModeButton } from "pipeline_focus.slint";
 import { CommandPaletteState } from "../api/command_palette.slint";
-import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSectionHead, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog, InkDivider, InkSearchField } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSectionHead, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog, InkDivider, InkSearchField, InkTab } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -2600,6 +2601,8 @@ component CategoryChip inherits Rectangle {
     */
 export component PipelinesPanel inherits Rectangle {
     property <bool> has-pipeline: PipelinesPanelState.pipelines.length > 0;
+    // A pipeline is shown (none: -1, see `deselect-pipeline`).
+    property <bool> pipeline-selected: root.has-pipeline && PipelinesPanelState.active-pipeline-id >= 0;
 
     VerticalLayout {
         spacing: 0px;
@@ -2631,7 +2634,7 @@ export component PipelinesPanel inherits Rectangle {
                             padding-right: 8px;
                             spacing: 6px;
                             Text {
-                                text: root.has-pipeline ? "Steps · " + PipelinesPanelState.active-pipeline-name : "Pipelines";
+                                text: root.pipeline-selected ? "Steps · " + PipelinesPanelState.active-pipeline-name : "Pipelines";
                                 font-size: Ink.fs-lg;
                                 font-weight: 600;
                                 color: Ink.text;
@@ -2697,7 +2700,7 @@ export component PipelinesPanel inherits Rectangle {
                         size: 24px;
                         icon: InkIcons.more;
                         label: "Pipeline actions";
-                        enabled: root.has-pipeline;
+                        enabled: root.pipeline-selected;
                         clicked => {
                             pipeline-menu.show();
                         }
@@ -2866,7 +2869,60 @@ export component PipelinesPanel inherits Rectangle {
                 padding-top: 6px;
                 spacing: 0px;
 
-                if PipelinesPanelState.active-commands.length == 0: VerticalLayout {
+                // None shown: the pipelines to pick one.
+                if root.has-pipeline && !root.pipeline-selected: VerticalLayout {
+                    padding-top: 6px;
+                    spacing: 2px;
+                    InkCaption {
+                        height: 24px;
+                        x: 6px;
+                        text: "PICK A PIPELINE";
+                    }
+                    for p in PipelinesPanelState.pipelines: PipelineTab {
+                        pipeline: p;
+                        active: false;
+                        selected => {
+                            PipelinesPanelState.active-pipeline-id = p.id;
+                            PipelinesPanelState.select-pipeline(p.id);
+                            PipelineFocusState.pipeline-selected(p.id);
+                        }
+                        double-clicked => {
+                            PipelinesPanelState.pipeline-more(p.id);
+                        }
+                        alt-clicked => {
+                            PipelineFocusState.toggle-pipeline-focus(p.id);
+                        }
+                        focus-clicked => {
+                            PipelineFocusState.toggle-pipeline-focus(p.id);
+                        }
+                        toggled => {
+                            PipelinesPanelState.toggle-pipeline(p.id);
+                        }
+                        move-up => {
+                            PipelinesPanelState.move-pipeline-up(p.id);
+                        }
+                        move-down => {
+                            PipelinesPanelState.move-pipeline-down(p.id);
+                        }
+                        more-clicked => {
+                            PipelinesPanelState.pipeline-more(p.id);
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        padding-top: 12px;
+                        InkButton {
+                            text: "New pipeline";
+                            kind: InkButtonKind.primary;
+                            icon: InkIcons.add;
+                            clicked => {
+                                PipelinesPanelState.new-pipeline();
+                            }
+                        }
+                    }
+                }
+
+                if PipelinesPanelState.active-commands.length == 0 && (root.pipeline-selected || !root.has-pipeline): VerticalLayout {
                     padding: 20px;
                     spacing: 8px;
                     Text {
@@ -2962,7 +3018,7 @@ export component PipelinesPanel inherits Rectangle {
                     }
                 }
 
-                if root.has-pipeline && !PipelinesPanelState.open-component-read-only: add-step := Rectangle {
+                if root.pipeline-selected && !PipelinesPanelState.open-component-read-only: add-step := Rectangle {
                     height: 30px;
                     accessible-role: button;
                     accessible-label: "Add step";
@@ -3087,10 +3143,15 @@ export component PipelinesPanel inherits Rectangle {
             for p in PipelinesPanelState.pipelines: PipelineTab {
                 pipeline: p;
                 active: p.id == PipelinesPanelState.active-pipeline-id;
+                // The shown one again: shows none.
                 selected => {
-                    PipelinesPanelState.active-pipeline-id = p.id;
-                    PipelinesPanelState.select-pipeline(p.id);
-                    PipelineFocusState.pipeline-selected(p.id);
+                    if p.id == PipelinesPanelState.active-pipeline-id {
+                        PipelinesPanelState.deselect-pipeline();
+                    } else {
+                        PipelinesPanelState.active-pipeline-id = p.id;
+                        PipelinesPanelState.select-pipeline(p.id);
+                        PipelineFocusState.pipeline-selected(p.id);
+                    }
                     pipelines-popup.close();
                 }
                 // Double-click edits the pipeline, Alt+click focuses it.
@@ -3119,6 +3180,14 @@ export component PipelinesPanel inherits Rectangle {
                 }
             }
             InkMenuSeparator { }
+            if root.pipeline-selected: InkMenuItem {
+                icon: InkIcons.close;
+                text: "Show no pipeline";
+                clicked => {
+                    PipelinesPanelState.deselect-pipeline();
+                    pipelines-popup.close();
+                }
+            }
             InkMenuItem {
                 icon: InkIcons.add;
                 text: "New pipeline";
@@ -3182,51 +3251,6 @@ export component PipelinesPanel inherits Rectangle {
 // ══════════════════════════════════════════════════════════
 // Step settings dialog
 
-// A tab of the step settings dialog: a section of the step's settings.
-component SettingsTab inherits Rectangle {
-    in property <string> text;
-    // After the name, e.g. "· 2" changed.
-    in property <string> note;
-    in property <bool> active;
-    callback clicked;
-
-    height: 30px;
-    width: tab-row.preferred-width;
-
-    tab-row := HorizontalLayout {
-        padding-left: 2px;
-        padding-right: 2px;
-        spacing: 4px;
-        Text {
-            text: root.text;
-            vertical-alignment: center;
-            font-size: Ink.fs-md;
-            font-weight: root.active ? 600 : 400;
-            color: root.active ? Ink.text : ta.has-hover ? Ink.text : Ink.text-dim;
-        }
-
-        if root.note != "": Text {
-            text: root.note;
-            vertical-alignment: center;
-            font-size: Ink.fs-sm;
-            color: Ink.new;
-        }
-    }
-
-    // The underline of the chosen tab.
-    Rectangle {
-        y: parent.height - 2px;
-        height: 2px;
-        background: root.active ? Ink.text : transparent;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
 
 // A step's settings in a dialog (⤢ on the step card, design Q): the step,
 // its sections and "Advanced" as tabs with a search, then the chosen tab's
@@ -3234,6 +3258,8 @@ component SettingsTab inherits Rectangle {
 // setting. Shows the step `PipelinesPanelState.settings-step-id`, live:
 // edits go through the same callbacks as on the card.
 export component StepSettingsDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
     title: "Step settings";
@@ -3321,7 +3347,7 @@ export component StepSettingsDialog inherits InkDialog {
                     HorizontalLayout {
                         height: 30px;
                         spacing: 14px;
-                        for section[si] in cmd.sections: SettingsTab {
+                        for section[si] in cmd.sections: InkTab {
                             text: section == "" ? "General" : section;
                             active: !root.searching && root.current == si;
                             clicked => {
@@ -3330,7 +3356,7 @@ export component StepSettingsDialog inherits InkDialog {
                             }
                         }
 
-                        if cmd.advanced-count > 0: SettingsTab {
+                        if cmd.advanced-count > 0: InkTab {
                             text: "Advanced";
                             note: cmd.advanced-changed > 0 ? "· \{cmd.advanced-changed}" : "";
                             active: on-advanced;
@@ -3501,7 +3527,7 @@ export component TuningPanel inherits Rectangle {
             padding-left: Ink.pad-panel;
             padding-right: Ink.pad-panel;
             spacing: 14px;
-            SettingsTab {
+            InkTab {
                 text: "All pinned";
                 note: "· \{root.tuned.length}";
                 active: root.tab < 0;
@@ -3509,7 +3535,7 @@ export component TuningPanel inherits Rectangle {
                     root.tab = -1;
                 }
             }
-            for t[i] in root.tuned: SettingsTab {
+            for t[i] in root.tuned: InkTab {
                 visible: i == 0 || root.tuned[i - 1].step != t.step;
                 width: self.visible ? self.preferred-width : 0px;
                 text: t.step-name;
