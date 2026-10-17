@@ -474,3 +474,129 @@ export component InkMultiSelect inherits Rectangle {
         }
     }
 }
+
+/// The items of a choice shown in place (a settings column): a title with
+/// how many are chosen, All / None, a search (`searchable`), the list with a
+/// checkbox each (it scrolls past `list-height`). Same items and callbacks
+/// as `InkMultiSelect` - the popup's list, open.
+export component InkCheckList inherits VerticalLayout {
+    in property <string> title;
+    in-out property <[MultiSelectItem]> items;
+    in property <bool> searchable: false;
+    in-out property <string> filter-text;
+    in property <length> list-height: 132px;
+    callback item-selected(string, string, bool);
+    callback select-all();
+    callback select-none();
+    callback filter-changed(string);
+
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.title;
+            font-size: Ink.fs-xs;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "All";
+            font-size: Ink.fs-sm;
+            color: all-ta.has-hover ? Ink.text : Ink.focus;
+            all-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.select-all();
+                }
+            }
+        }
+        Text {
+            text: "None";
+            font-size: Ink.fs-sm;
+            color: none-ta.has-hover ? Ink.text : Ink.focus;
+            none-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.select-none();
+                }
+            }
+        }
+    }
+
+    if root.searchable: InkSearchField {
+        text: root.filter-text;
+        placeholder: "Search";
+        edited(t) => {
+            root.filter-text = t;
+            root.filter-changed(t);
+        }
+    }
+
+    Rectangle {
+        height: min(root.list-height, root.items.length * 24px + 4px);
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: Ink.border-soft;
+        ScrollView {
+            VerticalLayout {
+                padding: 2px;
+                alignment: start;
+                for item[i] in root.items: Rectangle {
+                    height: 24px;
+                    background: row-ta.has-hover ? Ink.hover : transparent;
+                    border-radius: Ink.radius-xs;
+                    row-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.items[i].selected = !root.items[i].selected;
+                            root.item-selected(root.items[i].key, root.items[i].value, root.items[i].selected);
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 7px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 13px;
+                                height: 13px;
+                                border-radius: Ink.radius-xs;
+                                border-width: item.selected ? 0px : 1px;
+                                border-color: Ink.text-faint;
+                                background: item.selected ? Ink.primary : Ink.field;
+                                Image {
+                                    visible: item.selected;
+                                    source: InkIcons.check;
+                                    width: 9px;
+                                    colorize: Ink.on-primary;
+                                }
+                            }
+                        }
+                        if item.color != transparent && item.color.alpha > 0: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 2px;
+                                background: item.color;
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: item.value;
+                            font-size: Ink.fs-sm;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

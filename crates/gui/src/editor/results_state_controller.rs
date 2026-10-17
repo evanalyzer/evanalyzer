@@ -22,7 +22,7 @@ use evanalyzer_app::results::WellFilter;
 use evanalyzer_app::results::WellSize;
 use evanalyzer_app::results::{Aggregation, HistogramResult};
 use evanalyzer_app::results::{BoxplotBox, Cell};
-use evanalyzer_app::results::{BoxplotFilter, ScatterResult};
+use evanalyzer_app::results::{BoxplotFilter, BoxplotGroup, ScatterResult};
 use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -153,6 +153,8 @@ struct ChartFilter {
     /// `None` means no class filter (every object) — doesn't apply to
     /// Boxplot, which always groups by every class present regardless.
     pub object_class: Option<ObjectClass>,
+    /// Boxplot: a box per class, image, well, plate row or column.
+    pub group_by: BoxplotGroup,
 }
 
 #[derive(Default)]
@@ -911,6 +913,85 @@ impl ResultsStateController {
                     state.set_active_well_disabled(cell.disabled);
                 });
 
+            // A row of the well card's images: leave it out / take it in.
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_toggle_image_disabled(move |image_name, disable| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    let rel_path = manager
+                        .images
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .find(|image| image.name == image_name.as_str())
+                        .map(|image| image.rel_path.to_string_lossy().into_owned());
+                    let Some(rel_path) = rel_path else {
+                        warn!("Unknown image to toggle: {image_name}");
+                        return;
+                    };
+                    // Shown right away.
+                    let rows = state.get_active_well_images();
+                    for i in 0..rows.row_count() {
+                        if let Some(mut row) = rows.row_data(i)
+                            && row.key == image_name
+                        {
+                            row.disabled = disable;
+                            rows.set_row_data(i, row);
+                        }
+                    }
+                    let well = state.get_active_well().to_string();
+                    manager.run_db_job(move |manager| {
+                        let toggled = {
+                            let guard = manager.result_generator.lock().expect("Poisned");
+                            match guard.as_ref() {
+                                None => Err("No database opened!".to_string()),
+                                Some(db) => db
+                                    .enable_image(&rel_path, disable)
+                                    .map_err(|err| format!("Could not toggle image {rel_path}: {err}")),
+                            }
+                        };
+                        if let Err(err) = toggled {
+                            error!("{err}");
+                        }
+                        // The plate and the well's images, from the database.
+                        manager.refresh_matrix_view_at(MatrixLevel::Plate);
+                        let images: Vec<MatrixCell> = manager
+                            .query_well(&well)
+                            .map(|(result, ..)| {
+                                flatten_grid_cells(&result)
+                                    .into_iter()
+                                    .filter(|image| image.exists)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        // The plate's refresh closed the card: open it again,
+                        // with the well's new value.
+                        let cell = manager
+                            .matrix_cells
+                            .lock()
+                            .expect("Poisned")
+                            .get(well.as_str())
+                            .cloned();
+                        let ui_weak = manager.ui.clone();
+                        crate::helper::ui_thread::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                let state = ui.global::<ResultsState>();
+                                if let Some(cell) = cell {
+                                    state.set_active_well_has_value(cell.exists);
+                                    state.set_active_well_value(cell.label.clone());
+                                }
+                                state.set_active_well(well.into());
+                                state.set_active_well_images(ModelRc::from(Rc::new(VecModel::from(images))));
+                            }
+                        })
+                        .ok();
+                    });
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
@@ -1164,6 +1245,23 @@ impl ResultsStateController {
                     manager.chart_filter.lock().expect("Poisened").kind = kind;
                     manager.refresh_charts();
                 });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_group_selected(move |group| {
+                    manager.chart_filter.lock().expect("Poisened").group_by = match group {
+                        1 => BoxplotGroup::Image,
+                        2 => BoxplotGroup::Well,
+                        3 => BoxplotGroup::WellRow,
+                        4 => BoxplotGroup::WellColumn,
+                        _ => BoxplotGroup::Class,
+                    };
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_box_clicked(move |label| manager.show_box_in_list(&label));
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -1827,6 +1925,7 @@ impl ResultsStateController {
                     column: default_chart_column.clone(),
                     y_column: default_chart_column.clone(),
                     object_class: None,
+                    group_by: BoxplotGroup::Class,
                 };
                 let chart_column_items_vec = chart_column_items(
                     &available_columns,
@@ -2015,12 +2114,122 @@ impl ResultsStateController {
                     // doc comment).
                     object_classes: None,
                     column: chart_filter.column,
+                    group_by: chart_filter.group_by,
+                    grouping: self.current_grouping(),
                 }) {
                     Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
         }
+    }
+
+    /// How images are put into wells now (the project's plate settings, as
+    /// in the plate view).
+    fn current_grouping(&self) -> evanalyzer_app::results::Grouping {
+        self.matrix_filter
+            .lock()
+            .expect("Poisned")
+            .as_ref()
+            .map(|filter| grouping_of(&filter.plate))
+            .unwrap_or_default()
+    }
+
+    /// The List view, filtered to the objects of the boxplot's box `label`
+    /// (a class, an image, a well, a plate row or column).
+    pub fn show_box_in_list(&self, label: &str) {
+        let group = self.chart_filter.lock().expect("Poisened").group_by;
+        let images = self.images.lock().expect("Poisened").clone();
+        let total_images = images.len();
+        let mut picked_images: Vec<PathBuf> = Vec::new();
+        let mut picked_class: Option<ObjectClass> = None;
+        match group {
+            BoxplotGroup::Class => {
+                picked_class = self
+                    .classes
+                    .lock()
+                    .expect("Poisened")
+                    .iter()
+                    .find(|class| class.name == label)
+                    .map(|class| class.global());
+                if picked_class.is_none() {
+                    return;
+                }
+            }
+            BoxplotGroup::Image => {
+                picked_images = images
+                    .iter()
+                    .filter(|image| image.name == label)
+                    .map(|image| image.rel_path.clone())
+                    .collect();
+            }
+            group => {
+                let grouping = self.current_grouping();
+                let regex = {
+                    let db = self.result_generator.lock().expect("Poisened");
+                    let Some(db) = db.as_ref() else {
+                        return;
+                    };
+                    match db.grouping_regex(&grouping) {
+                        Ok(regex) => regex,
+                        Err(err) => {
+                            warn!("No grouping for the box: {err}");
+                            return;
+                        }
+                    }
+                };
+                let folder = matches!(grouping, evanalyzer_app::results::Grouping::Folder);
+                let texts: Vec<String> = images
+                    .iter()
+                    .map(|image| {
+                        if folder {
+                            image.rel_path.to_string_lossy().into_owned()
+                        } else {
+                            image.name.clone()
+                        }
+                    })
+                    .collect();
+                let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+                let part = match group {
+                    BoxplotGroup::Well => 1,
+                    BoxplotGroup::WellRow => 2,
+                    _ => 3,
+                };
+                picked_images = evanalyzer_app::images::texts_in_group(&refs, &regex, part, label)
+                    .into_iter()
+                    .map(|i| images[i].rel_path.clone())
+                    .collect();
+            }
+        }
+
+        // The List's filter and its dropdowns.
+        {
+            let mut list_filter = self.list_filter.lock().expect("Poisened");
+            match picked_class {
+                Some(class) => list_filter.object_classes = vec![class],
+                None => list_filter.image_rel_path = picked_images.clone(),
+            }
+        }
+        if let Some(class) = picked_class {
+            let classes = self.classes.lock().expect("Poisened").clone();
+            let mut items = class_filter_items(&classes, false);
+            for item in &mut items {
+                item.selected = item.key.as_str() == label;
+            }
+            let _ = class;
+            self.push_class_items(items, list_summary(1, classes.len(), "Classes"));
+        } else {
+            let items = filtered_image_items(&images, |path| picked_images.iter().any(|p| p == path), "");
+            self.push_image_items(items, image_summary_text(picked_images.len(), total_images));
+        }
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_rail_mode(ResultsRailMode::List);
+            }
+        })
+        .ok();
+        self.refresh_list();
     }
 
     fn push_chart_error(&self, message: String) {
@@ -2165,7 +2374,9 @@ impl ResultsStateController {
                         |(label, color, min, q1, median, q3, max, outliers, object_count)| {
                             ChartBoxplotBox {
                                 label: label.into(),
-                                color: bg_color_to_slint(color),
+                                // A box that isn't a class (an image, a well, ...) has
+                                // no color of its own.
+                                color: bg_color_to_slint(if color == 0 { 0x5B5BD6 } else { color }),
                                 min,
                                 q1,
                                 median,
@@ -4590,6 +4801,35 @@ mod tests {
         controller.attach_callbacks();
         controller.open_database(path);
         (ui, controller)
+    }
+
+    #[test]
+    fn a_clicked_box_shows_its_class_or_image_in_the_list() {
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
+        state.set_rail_mode(ResultsRailMode::Charts);
+
+        // A class's box: the List shows that class.
+        let class = controller.classes.lock().unwrap()[0].clone();
+        controller.show_box_in_list(&class.name);
+        drain_ui_queue();
+        assert_eq!(state.get_rail_mode(), ResultsRailMode::List);
+        assert_eq!(
+            controller.list_filter.lock().unwrap().object_classes,
+            vec![class.global()]
+        );
+
+        // An image's box: the List shows that image.
+        controller.chart_filter.lock().unwrap().group_by = BoxplotGroup::Image;
+        let image = {
+            let images = controller.images.lock().unwrap();
+            (images[1].name.clone(), images[1].rel_path.clone())
+        };
+        controller.show_box_in_list(&image.0);
+        drain_ui_queue();
+        assert_eq!(controller.list_filter.lock().unwrap().image_rel_path, vec![image.1]);
+        let checked: Vec<bool> = state.get_list_image_items().iter().map(|i| i.selected).collect();
+        assert_eq!(checked.iter().filter(|c| **c).count(), 1, "its box ticked in the list");
     }
 
     #[test]

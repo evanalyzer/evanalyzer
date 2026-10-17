@@ -294,7 +294,7 @@ pub struct ColumnEntry {
     pub group: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ImageEntry {
     pub name: String,
     pub rel_path: PathBuf,
@@ -361,6 +361,24 @@ pub struct BoxplotFilter {
     /// box per class.
     pub object_classes: Option<Vec<ObjectClass>>,
     pub column: Column,
+    /// What a box is: a class (the default), an image, a well, a plate
+    /// row or column.
+    #[serde(default)]
+    pub group_by: BoxplotGroup,
+    /// How images are put into wells (for the well groupings).
+    #[serde(default)]
+    pub grouping: Grouping,
+}
+
+/// What a boxplot's box stands for.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoxplotGroup {
+    #[default]
+    Class,
+    Image,
+    Well,
+    WellRow,
+    WellColumn,
 }
 
 /// One equal-width-binned histogram, ready for the GUI to draw straight

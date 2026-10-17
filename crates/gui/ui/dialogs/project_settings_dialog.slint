@@ -165,28 +165,24 @@ export component ProjectSettingsDialog inherits InkDialog {
         VerticalLayout {
             spacing: 0;
 
+            // The search, up in the head: Settings | search | ✕ (design O).
             Rectangle {
-                height: 1px;
-                background: Ink.border-soft;
+                height: 0px;
+                search-input := InkSearchField {
+                    x: 84px;
+                    y: (Ink.head-h - self.height) / 2 - Ink.head-h;
+                    width: parent.width - self.x - 44px;
+                    placeholder: "Search settings";
+                    text: root.query;
+                    edited(t) => {
+                        root.query = t;
+                    }
+                }
             }
 
             VerticalLayout {
                 vertical-stretch: 1;
                 spacing: 0;
-
-                // -- Search --
-                HorizontalLayout {
-                    padding: Ink.pad-dialog;
-                    padding-top: 10px;
-                    padding-bottom: 10px;
-                    search-input := InkSearchField {
-                        placeholder: "Search settings";
-                        text: root.query;
-                        edited(t) => {
-                            root.query = t;
-                        }
-                    }
-                }
 
                 // -- Settings ------------------------------------------------
                 Rectangle {
@@ -196,7 +192,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                         VerticalLayout {
                             alignment: start;
                             padding: Ink.pad-dialog;
-                            padding-top: 4px;
+                            padding-top: 10px;
                             spacing: 12px;
 
                             if root.searching && !root.section-matches(0) && !root.section-matches(1) && !root.section-matches(2) && !root.section-matches(3): VerticalLayout {

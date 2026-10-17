@@ -533,12 +533,9 @@ impl ViewportImageController {
             for channel in image_data.iter() {
                 if !channel.is_rgb {
                     if let Some(raw_val) = channel.value_at(idx) {
-                        let normalized_val = raw_val * 100.0;
+                        //let _normalized_val = raw_val * 100.0;
                         let scaled_val = raw_val * 2.0f32.powf(ctx.bit_depth as f32);
-                        pixel_values.push(format!(
-                            "{}: {:.0} ({:.4}%)",
-                            channel.name, scaled_val, normalized_val
-                        ));
+                        pixel_values.push(format!("{}: {:.0}", channel.name, scaled_val));
                     }
                 }
             }
