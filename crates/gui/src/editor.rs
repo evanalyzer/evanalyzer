@@ -31,6 +31,7 @@ pub mod pipelines_controller;
 pub mod project_controller;
 pub mod project_settings_controller;
 pub mod results_list_controller;
+pub mod results_overlay;
 pub mod results_state_controller;
 pub mod script_editor_controller;
 pub(crate) mod step_model_patch;

@@ -2,6 +2,7 @@
 //! served through [`LocalResults`] as the `ResultsSource` for front ends.
 
 mod drawn_images;
+pub use drawn_images::{colorize, colorize_thumbnail};
 mod results_charts;
 mod results_exporter;
 mod results_generator;
@@ -125,6 +126,13 @@ impl ResultsSource for LocalResults {
 
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors> {
         self.with(|db| ResultCharts {}.paint_scatter(db, filter))
+    }
+
+    fn image_objects(
+        &self,
+        filter: &crate::api::ImageObjectsFilter,
+    ) -> Result<Vec<crate::api::ResultObject>, InternalErrors> {
+        self.with(|db| ResultCharts {}.image_objects(db, filter))
     }
 
     fn export(

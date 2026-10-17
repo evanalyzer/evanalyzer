@@ -1,5 +1,5 @@
 {
-  "protocol_version": 17,
+  "protocol_version": 18,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -604,6 +604,25 @@
         }
       ]
     },
+    "ImageObjectsFilter": {
+      "STRUCT": [
+        {
+          "image_rel_path": "STR"
+        },
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "value_column": {
+            "OPTION": {
+              "TYPENAME": "Column"
+            }
+          }
+        }
+      ]
+    },
     "ListFilter": {
       "STRUCT": [
         {
@@ -911,6 +930,45 @@
         }
       ]
     },
+    "ResultObject": {
+      "STRUCT": [
+        {
+          "object_id": "STR"
+        },
+        {
+          "class_id": "I32"
+        },
+        {
+          "bbox_px": {
+            "TUPLEARRAY": {
+              "CONTENT": "U32",
+              "SIZE": 4
+            }
+          }
+        },
+        {
+          "centroid_px": {
+            "TUPLEARRAY": {
+              "CONTENT": "F32",
+              "SIZE": 2
+            }
+          }
+        },
+        {
+          "area_px": "U64"
+        },
+        {
+          "means": {
+            "SEQ": "F32"
+          }
+        },
+        {
+          "value": {
+            "OPTION": "F64"
+          }
+        }
+      ]
+    },
     "ResultsAnswer": {
       "ENUM": {
         "0": {
@@ -986,6 +1044,15 @@
         "10": {
           "Text": {
             "NEWTYPE": "STR"
+          }
+        },
+        "11": {
+          "Objects": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "ResultObject"
+              }
+            }
           }
         }
       }
@@ -1097,6 +1164,13 @@
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
+            }
+          }
+        },
+        "16": {
+          "ImageObjects": {
+            "NEWTYPE": {
+              "TYPENAME": "ImageObjectsFilter"
             }
           }
         }

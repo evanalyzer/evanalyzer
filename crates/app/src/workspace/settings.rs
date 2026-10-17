@@ -37,6 +37,11 @@ pub struct AppSettings {
     #[serde(default)]
     pub histogram_linear: bool,
 
+    /// The results' split view (results left, the image right; see
+    /// [`ResultsSplitSettings`]).
+    #[serde(default)]
+    pub results_split: ResultsSplitSettings,
+
     /// Servers connected to from the GUI, most recent first - see
     /// [`AppSettings::remember_server`]. Kept on this computer only.
     #[serde(default)]
@@ -50,6 +55,28 @@ pub struct AppSettings {
     /// settings even when connected to a server.
     #[serde(default)]
     pub viewport: ViewportMemorySettings,
+}
+
+/// The results' split view: on or off, how wide the results are, and
+/// whether the image follows the selection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResultsSplitSettings {
+    pub on: bool,
+    /// Width of the results pane in logical pixels.
+    pub width_px: f32,
+    /// A selected object is shown on the image (else only selected).
+    pub follow: bool,
+}
+
+impl Default for ResultsSplitSettings {
+    fn default() -> Self {
+        Self {
+            on: false,
+            width_px: 640.0,
+            follow: true,
+        }
+    }
 }
 
 /// The colors of the GUI: light, dark, or a softer dark (`Dim`).
@@ -133,6 +160,10 @@ pub struct ViewportMemorySettings {
     /// image is opened (kept in the project as their wavelength); off:
     /// white.
     pub color_channels_without_wavelength: bool,
+
+    /// No animated moves: the results' split view jumps to an object
+    /// instead of flying there.
+    pub reduce_motion: bool,
 }
 
 impl ViewportMemorySettings {
@@ -189,6 +220,7 @@ impl Default for ViewportMemorySettings {
             object_card: false,
             auto_scale_new_images: true,
             color_channels_without_wavelength: false,
+            reduce_motion: false,
         }
     }
 }

@@ -1,0 +1,463 @@
+// results/results_split.slint — Results, split with the image (board Z):
+// the results left, the image right. The image is the one viewer
+// (`Viewport`, moved into the right pane by the workspace); here what is
+// on and around it: the head over the image, the selected object's ring
+// and card, the hint, the well's filmstrip, and the divider.
+
+import { ResultsRailMode, ResultsState } from "../api/results.slint";
+import { ViewportState } from "../api/viewport.slint";
+import { Ink, InkIcons } from "../ink/ink.slint";
+
+// Floats on the image: dark in every scheme, as the image is.
+component Hud inherits Rectangle {
+    background: #18181B.with-alpha(0.92);
+    border-width: 1px;
+    border-color: #2E2E33;
+    border-radius: 8px;
+}
+
+component HudButton inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    in property <bool> on: false;
+    in property <bool> enabled: true;
+    in property <image> icon;
+    callback clicked;
+
+    height: 26px;
+    border-radius: 5px;
+    background: root.on ? #3F3F46 : ta.has-hover && root.enabled ? #2D2D34 : transparent;
+    opacity: root.enabled ? 1.0 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label != "" ? root.label : root.text;
+    accessible-checked: root.on;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        if root.icon.width > 0: Image {
+            source: root.icon;
+            width: 12px;
+            colorize: root.on ? #FAFAFA : #D4D4D8;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            font-size: 11px;
+            font-weight: root.on ? 600 : 400;
+            color: root.on ? #FAFAFA : #D4D4D8;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The head over the image: which image (and channel), ‹ n / total ›,
+// Follow selection, Color by (plate), Open in Images.
+export component SplitImageHead inherits Hud {
+    property <bool> plate: ResultsState.rail-mode == ResultsRailMode.matrix;
+    property <bool> channel-open: false;
+
+    height: 36px;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 4px;
+        spacing: 4px;
+        alignment: stretch;
+
+        Rectangle {
+            width: 8px;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 2px;
+                background: ResultsState.split-sel.active ? ResultsState.split-sel.class-color : #5A5E6A;
+            }
+        }
+        Rectangle { width: 2px; }
+        Text {
+            text: ResultsState.split-title != "" ? ResultsState.split-title : (root.plate ? "Click a well to see its images" : "Click a row to see its object");
+            font-size: 12px;
+            font-weight: 600;
+            color: #F4F4F5;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            min-width: 60px;
+        }
+        // The channel the card's mean is of.
+        if ResultsState.split-channels.length > 1: channel := HudButton {
+            text: "· " + ResultsState.split-channels[ResultsState.split-channel] + " ▾";
+            label: "Channel of the mean intensity";
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                ResultsState.split-channel-changed(Math.mod(ResultsState.split-channel + 1, ResultsState.split-channels.length));
+            }
+        }
+
+        if root.plate: Text {
+            text: "Color by";
+            font-size: 10.5px;
+            color: #A1A1AA;
+            vertical-alignment: center;
+        }
+        if root.plate: Rectangle {
+            width: by-row.preferred-width + 4px;
+            height: 30px;
+            y: 3px;
+            background: #1F1F23;
+            border-radius: 6px;
+            accessible-role: tab-list;
+            accessible-label: "Color by";
+            by-row := HorizontalLayout {
+                padding: 2px;
+                HudButton {
+                    text: "Class";
+                    on: !ResultsState.split-by-value;
+                    clicked => {
+                        ResultsState.split-by-value = false;
+                        ResultsState.split-by-value-changed(false);
+                    }
+                }
+                HudButton {
+                    text: "Value";
+                    on: ResultsState.split-by-value;
+                    clicked => {
+                        ResultsState.split-by-value = true;
+                        ResultsState.split-by-value-changed(true);
+                    }
+                }
+            }
+        }
+
+        HudButton {
+            text: "‹";
+            label: "Previous object";
+            enabled: ResultsState.split-total > 0;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                ResultsState.split-step(-1);
+            }
+        }
+        Text {
+            text: ResultsState.split-total == 0 ? "– / –" : (ResultsState.split-pos > 0 ? ResultsState.split-pos : "–") + " / " + ResultsState.split-total;
+            font-size: 10.5px;
+            font-family: Ink.font-mono;
+            color: #A1A1AA;
+            vertical-alignment: center;
+        }
+        HudButton {
+            text: "›";
+            label: "Next object";
+            enabled: ResultsState.split-total > 0;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                ResultsState.split-step(1);
+            }
+        }
+        Rectangle {
+            width: 9px;
+            Rectangle {
+                width: 1px;
+                height: 18px;
+                background: #2E2E33;
+            }
+        }
+        HudButton {
+            text: "Follow selection";
+            icon: InkIcons.focus;
+            on: ResultsState.split-follow;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                ResultsState.split-follow = !ResultsState.split-follow;
+                ResultsState.split-follow-changed(ResultsState.split-follow);
+            }
+        }
+        HudButton {
+            text: "Open in Images ↗";
+            enabled: ResultsState.split-title != "";
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                ResultsState.split-open-in-images();
+            }
+        }
+    }
+}
+
+// The selected object on the image: a ring round it, faint lines through
+// it and its card beside it. Covers the image; takes no input.
+export component SplitSelection inherits Rectangle {
+    property <length> cx: ViewportState.offset_x + (ResultsState.split-sel.x + ResultsState.split-sel.w / 2) * ViewportState.zoom_factor * 1px;
+    property <length> cy: ViewportState.offset_y + (ResultsState.split-sel.y + ResultsState.split-sel.h / 2) * ViewportState.zoom_factor * 1px;
+    property <length> r: max(14px, max(ResultsState.split-sel.w, ResultsState.split-sel.h) / 2 * ViewportState.zoom_factor * 1px + 7px);
+
+    // The lines, with a gap round the ring.
+    Rectangle {
+        x: root.cx;
+        y: 0;
+        width: 1px;
+        height: max(0px, root.cy - root.r);
+        background: #5E95EA.with-alpha(0.35);
+    }
+    Rectangle {
+        x: root.cx;
+        y: root.cy + root.r;
+        width: 1px;
+        height: max(0px, root.height - self.y);
+        background: #5E95EA.with-alpha(0.35);
+    }
+    Rectangle {
+        x: 0;
+        y: root.cy;
+        width: max(0px, root.cx - root.r);
+        height: 1px;
+        background: #5E95EA.with-alpha(0.35);
+    }
+    Rectangle {
+        x: root.cx + root.r;
+        y: root.cy;
+        width: max(0px, root.width - self.x);
+        height: 1px;
+        background: #5E95EA.with-alpha(0.35);
+    }
+
+    // The ring: white, an accent edge and glow.
+    Rectangle {
+        x: root.cx - self.width / 2;
+        y: root.cy - self.height / 2;
+        width: 2 * root.r + 8px;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 4px;
+        border-color: #2A6BDF.with-alpha(0.35);
+    }
+    Rectangle {
+        x: root.cx - self.width / 2;
+        y: root.cy - self.height / 2;
+        width: 2 * root.r + 4px;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: #2A6BDF;
+    }
+    Rectangle {
+        x: root.cx - self.width / 2;
+        y: root.cy - self.height / 2;
+        width: 2 * root.r;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: #FAFAFA;
+    }
+
+    // The card: right of the ring, else left; kept on the image.
+    card := Hud {
+        property <length> right-x: root.cx + root.r + 12px;
+        x: self.right-x + self.width <= root.width - 8px ? self.right-x : max(8px, root.cx - root.r - 12px - self.width);
+        y: clamp(root.cy - root.r, 54px, max(54px, root.height - self.height - 48px));
+        width: max(170px, card-box.preferred-width);
+        height: card-box.preferred-height;
+
+        card-box := VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    width: 8px;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 2px;
+                        background: ResultsState.split-sel.class-color;
+                    }
+                }
+                Text {
+                    text: ResultsState.split-sel.class-name;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #F4F4F5;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "#" + ResultsState.split-sel.id;
+                    font-size: 10.5px;
+                    font-family: Ink.font-mono;
+                    color: #A1A1AA;
+                }
+            }
+            for fact in [
+                { k: "Area", v: ResultsState.split-sel.area },
+                { k: ResultsState.split-channels.length > 0 ? "Mean " + ResultsState.split-channels[ResultsState.split-channel] : "Mean", v: ResultsState.split-sel.mean },
+                { k: "Position", v: ResultsState.split-sel.position },
+            ]: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    width: 64px;
+                    text: fact.k;
+                    font-size: 10.5px;
+                    color: #A1A1AA;
+                    overflow: elide;
+                }
+                Text {
+                    text: fact.v;
+                    font-size: 10.5px;
+                    font-family: Ink.font-mono;
+                    color: #F4F4F5;
+                }
+            }
+        }
+    }
+}
+
+// Bottom left on the image: the zoom, and what a click does.
+export component SplitHint inherits Hud {
+    property <bool> plate: ResultsState.rail-mode == ResultsRailMode.matrix;
+    height: 28px;
+    width: hint-row.preferred-width;
+    hint-row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: round(ViewportState.zoom_factor * 100) + " %";
+            font-size: 10.5px;
+            font-family: Ink.font-mono;
+            color: #A1A1AA;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "·  Click an object to find it in the " + (root.plate ? "well" : "list");
+            font-size: 10.5px;
+            color: #A1A1AA;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Plate: the well's images under the image; a click shows one.
+export component SplitFilmstrip inherits Rectangle {
+    background: #18181B;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: #2E2E33;
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: start;
+        Text {
+            width: 52px;
+            text: "WELL " + ResultsState.active-well;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            color: #8A8A93;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        for thumb in ResultsState.split-thumbs: Rectangle {
+            property <bool> current: thumb.key == ResultsState.split-image-key;
+            width: 92px;
+            height: 56px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 6px;
+            background: #0B0C10;
+            clip: true;
+            accessible-role: button;
+            accessible-label: thumb.key;
+            accessible-item-selected: self.current;
+            Image {
+                source: thumb.image;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+            Rectangle {
+                x: 0;
+                y: parent.height - 16px;
+                height: 16px;
+                background: #000000.with-alpha(0.5);
+                Text {
+                    x: 4px;
+                    width: parent.width - 8px;
+                    text: thumb.key;
+                    font-size: 9.5px;
+                    font-family: Ink.font-mono;
+                    color: #D4D4D8;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            Rectangle {
+                border-radius: 6px;
+                border-width: 2px;
+                border-color: parent.current ? #2A6BDF : thumb-ta.has-hover ? #3F3F46 : transparent;
+            }
+            thumb-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    ResultsState.split-show-image(thumb.key);
+                }
+            }
+        }
+    }
+}
+
+// Between the panes: dragged sideways, the results get wider or narrower.
+export component SplitDivider inherits Rectangle {
+    in property <length> min-left;
+    in property <length> max-left;
+    // Where the drag started (the results' width) and the pointer.
+    property <length> start-w;
+    property <length> start-x;
+
+    accessible-role: slider;
+    accessible-label: "Results width";
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        for i in 4: Rectangle {
+            width: 4px;
+            height: 4px;
+            x: (parent.width - self.width) / 2;
+            border-radius: 2px;
+            background: ta.has-hover || ta.pressed ? Ink.text-dim : Ink.border;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.col-resize;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                root.start-w = ResultsState.split-w;
+                root.start-x = self.absolute-position.x + self.mouse-x;
+            }
+            if e.kind == PointerEventKind.up {
+                ResultsState.split-width-changed(ResultsState.split-w);
+            }
+        }
+        moved => {
+            if self.pressed {
+                ResultsState.split-w = clamp(root.start-w + self.absolute-position.x + self.mouse-x - root.start-x, root.min-left, root.max-left);
+            }
+        }
+    }
+}

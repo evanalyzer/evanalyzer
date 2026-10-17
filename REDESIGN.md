@@ -202,6 +202,25 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   changes centred a third down (N). Places from `Places` (api/layout.slint).
   Only the analysis' waiting dialog ("Edit while an analysis runs" off)
   still blocks.
+- **Results, split with the image (Z):** "Full | Split with image" in the
+  top bar (List and Plate; Charts greyed out). The results left, the one
+  image viewer in a pane right, a divider between (dragged; width, on/off
+  and Follow selection kept as user settings, `AppSettings::results_split`).
+  The analysis' objects are drawn on the image as ellipses in their boxes
+  (`editor/results_overlay.rs`, instead of the project's objects), the
+  others dimmed while one is selected; a ring, faint lines and a card (class,
+  ID, area, mean of the channel picked in the head, position) mark it.
+  A List row (click, ↑ ↓, ‹ ›) flies the view there (0.4 s, eased; jumps
+  with Settings › Viewport › Reduce motion; a new image opens at the object
+  - `ViewportCache::focus`); a click on an object selects its row. Esc lets
+  go. Plate: a well shows its images, a filmstrip under the image (thumbnails
+  from the smallest pyramid level, kept at 184 × 112), "Color by Class |
+  Value" with the heatmap's scale (Value only for a per-object property).
+  In the split, the list's and the plate's settings are fields in the
+  table's / grid's head, the well card is under the plate. Status bar:
+  "Split view · list and image". Code: `results/results_split.slint`,
+  `results_state_controller/split.rs`. Generated code +1.0 MB
+  (36.81 → 37.83 MB).
 - **Build:** generated code 34.9 MB → 32.78 MB → 34.0 MB → 34.98 MB
   (Results views, objects filter, dialogs as on the boards; before that:
   dialogs movable/non-modal ~0.33 MB - `InkDialog` is copied into each of
@@ -221,6 +240,10 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
       change costs speed for little).
 
 ### Follow-ups of this round
+
+- Split view: the channel picker sets only the card's mean, not which
+  channels the image shows (that stays the project's channel settings);
+  List paging still pages the table only - ↑ ↓ stop at the page's ends.
 
 - Later (TODO): one regex engine for the plate grouping, "+ Add images",
   compare two previews.

@@ -42,6 +42,7 @@ import { CommandPickerState } from "api/command_selection.slint";
 import { ProjectTemplateState } from "api/project_template.slint";
 import { ShortcutsDoc } from "api/shortcuts.slint";
 import { ExportDialogState } from "api/export.slint";
+import { ResultsState } from "api/results.slint";
 
 export component GlobalShortcuts inherits FocusScope {
     // A step line is selected (and still there).
@@ -134,6 +135,19 @@ export component GlobalShortcuts inherits FocusScope {
                 ToolbarState.undo_clicked();
             }
             return accept;
+        }
+
+        // -- Results, split with the image: ↑ ↓ step through the objects,
+        // Esc lets go of the selected one --
+        if (LayoutState.mode == WorkspaceMode.results && ResultsState.split && !e.modifiers.control && !e.modifiers.alt) {
+            if (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                ResultsState.split-step(e.text == Key.UpArrow ? -1 : 1);
+                return accept;
+            }
+            if (e.text == Key.Escape && ResultsState.split-sel.active) {
+                ResultsState.split-clear();
+                return accept;
+            }
         }
 
         // -- The selected step (a click on its line) --

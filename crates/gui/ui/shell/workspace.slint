@@ -20,10 +20,11 @@ import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
+import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitSelection } from "../results/results_split.slint";
 import { ResultsPeek } from "results_peek.slint";
 import { SeriesChooser } from "series_chooser.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
-import { ResultsState } from "../api/results.slint";
+import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { AnalysisCard } from "../dialogs/pipeline_running_dialog.slint";
 import { PipelineRunningState, PreviewRunState } from "../api/pipeline_running.slint";
 
@@ -85,6 +86,20 @@ export component Workspace inherits Rectangle {
     in property <image> object_image;
 
     property <bool> on-image: LayoutState.mode != WorkspaceMode.results;
+    // Results, split with the image (board Z): the results left, the
+    // viewer in a pane right - List and Plate, with an analysis open.
+    property <bool> split: LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts;
+    changed split => {
+        ResultsState.split-shown(self.split);
+    }
+    property <length> split-min-left: 420px;
+    property <length> split-max-left: max(root.split-min-left, root.width - 360px);
+    property <length> split-left: clamp(ResultsState.split-w, root.split-min-left, root.split-max-left);
+    // The image pane: right of the divider, 12 px from the edges.
+    property <length> pane-x: root.split-left + 16px;
+    property <length> pane-w: root.width - root.pane-x - 12px;
+    property <length> pane-h: root.height - 24px;
+    property <length> strip-h: ResultsState.rail-mode == ResultsRailMode.matrix && ResultsState.split-thumbs.length > 0 ? 76px : 0px;
     // The objects table at the bottom, and the room it takes there.
     property <bool> objects-table-shown: root.on-image && LayoutState.objects-open && LayoutState.objects-as-table;
     property <length> table-h: min(320px, root.height * 0.4);
@@ -105,7 +120,8 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    background: Ink.viewport;
+    // Split with the image: the panes on the ground.
+    background: root.split ? Ink.ground : Ink.viewport;
     clip: true;
 
     // Always there - switching modes keeps zoom and position.
@@ -113,12 +129,19 @@ export component Workspace inherits Rectangle {
         display_image: root.display_image;
         ghost_image: root.ghost_image;
         object_image: root.object_image;
-        width: 100%;
-        height: 100%;
+        x: root.split ? root.pane-x : 0px;
+        y: root.split ? 12px : 0px;
+        width: root.split ? root.pane-w : root.width;
+        height: root.split ? root.pane-h - root.strip-h : root.height;
         // Also with a dialog open - only the analysis' waiting one blocks it.
-        enabled: root.on-image && GlobalAppState.active_dialog != DialogType.pipeline-running;
+        enabled: (root.on-image || root.split) && GlobalAppState.active_dialog != DialogType.pipeline-running;
+        split-mode: root.split;
+        border-top-left-radius: root.split ? 10px : 0px;
+        border-top-right-radius: root.split ? 10px : 0px;
+        border-bottom-left-radius: root.split && root.strip-h == 0 ? 10px : 0px;
+        border-bottom-right-radius: root.split && root.strip-h == 0 ? 10px : 0px;
         inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
-        inset-right: Float.right-w + 2 * Float.gap;
+        inset-right: LayoutState.mode == WorkspaceMode.results ? 0px : Float.right-w + 2 * Float.gap;
     }
 
     // Several series and none chosen for the project: asked once (until
@@ -184,7 +207,56 @@ export component Workspace inherits Rectangle {
 
     // The view's panels (boards H, L, M); the analysis is picked in the
     // top bar.
-    if LayoutState.mode == WorkspaceMode.results: ResultsView { }
+    if LayoutState.mode == WorkspaceMode.results: ResultsView {
+        x: 0px;
+        width: root.split ? root.split-left + 4px : root.width;
+    }
+
+    // -- Split with the image: around the viewer --
+    if root.split: Rectangle {
+        x: root.pane-x;
+        y: 12px;
+        width: root.pane-w;
+        height: root.pane-h - root.strip-h;
+        clip: true;
+        if ResultsState.split-sel.active: SplitSelection { }
+        SplitImageHead {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+        }
+        SplitHint {
+            x: 10px;
+            y: parent.height - self.height - 34px;
+        }
+    }
+    if root.split && root.strip-h > 0: SplitFilmstrip {
+        x: root.pane-x;
+        y: 12px + root.pane-h - root.strip-h;
+        width: root.pane-w;
+        height: root.strip-h;
+        border-bottom-left-radius: 10px;
+        border-bottom-right-radius: 10px;
+        clip: true;
+    }
+    // Rounded corners and the edge of the pane, over all of it.
+    if root.split: Rectangle {
+        x: root.pane-x - 1px;
+        y: 11px;
+        width: root.pane-w + 2px;
+        height: root.pane-h + 2px;
+        border-radius: 11px;
+        border-width: 1px;
+        border-color: #2E2E33;
+    }
+    if root.split: SplitDivider {
+        x: root.split-left;
+        y: 12px;
+        width: 16px;
+        height: root.pane-h;
+        min-left: root.split-min-left;
+        max-left: root.split-max-left;
+    }
 
     // -- Right --
     if root.on-image: VerticalLayout {

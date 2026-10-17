@@ -220,6 +220,16 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn image_objects(
+        &self,
+        filter: &crate::api::ImageObjectsFilter,
+    ) -> Result<Vec<crate::api::ResultObject>, InternalErrors> {
+        match self.query(ResultsQuery::ImageObjects(filter.clone()))? {
+            ResultsAnswer::Objects(objects) => Ok(objects),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn export(
         &self,
         export: &ResultExport,

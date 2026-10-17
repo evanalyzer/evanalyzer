@@ -1,5 +1,6 @@
 use crate::ViewportState as ViewportSlintState;
 use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
+use crate::editor::results_overlay::{ResultsOverlay, draw_results_overlay};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
 use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
@@ -314,6 +315,9 @@ pub struct ViewportController {
     /// The tile cache the viewport workers read through - limited by the
     /// memory settings, emptied for an analysis.
     pub(crate) viewport_cache: Arc<ViewportCache>,
+    /// The results' split view: the analysis' objects, drawn instead of
+    /// the project's (see [`ResultsOverlay`]).
+    pub(crate) results_overlay: RwLock<Option<Arc<ResultsOverlay>>>,
 }
 
 /// Posts `t` into the worker's single-slot task queue, merging it with
@@ -386,6 +390,7 @@ impl ViewportController {
             memory_settings: RwLock::new(app_state.viewport_memory_settings()),
             full_image_size: Mutex::new((0, 0)),
             viewport_cache,
+            results_overlay: RwLock::new(None),
             app_state,
         }
     }
@@ -1082,6 +1087,23 @@ impl ViewportController {
         let auto_objects = project.get_preview_objects();
         let hide_unclassified = project.hide_unclassified_objects();
 
+        // The results' split view: the analysis' objects instead.
+        let results_overlay = self.results_overlay.read().expect("Poisoned").clone();
+        if let Some(overlay) = results_overlay {
+            let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
+            draw_results_overlay(
+                buffer.make_mut_slice(),
+                &overlay,
+                buf_w,
+                buf_h,
+                zoom,
+                off_x + margin,
+                off_y + margin,
+            );
+            self.post_object_image(buffer, rect);
+            return;
+        }
+
         // Draw order: selected object > selected class > class list order
         // (first class in the list on top) > unclassified. Resolved once here.
         let z = ZOrder::new(&*project);
@@ -1137,7 +1159,34 @@ impl ViewportController {
             off_y + margin,
             zoom < 1.0,
         );
+        self.post_object_image(buffer, rect);
+    }
 
+    /// The results' split view's objects (`None`: the project's again),
+    /// drawn right away.
+    pub fn set_results_overlay(&self, overlay: Option<ResultsOverlay>) {
+        *self.results_overlay.write().expect("Poisoned") = overlay.map(Arc::new);
+        self.trigger_image_redraw_objects();
+    }
+
+    /// The current results overlay, if the split view shows one.
+    pub fn results_overlay(&self) -> Option<Arc<ResultsOverlay>> {
+        self.results_overlay.read().expect("Poisoned").clone()
+    }
+
+    /// The view now: `(zoom, offset_x, offset_y, viewport_w, viewport_h)`.
+    pub fn view(&self) -> (f32, f32, f32, f32, f32) {
+        let s = self.viewport_state.read().expect("Poisoned");
+        (s.zoom, s.offset_x, s.offset_y, s.viewport_width, s.viewport_height)
+    }
+
+    /// Hands a rendered object overlay (covering `rect` of the image) to
+    /// the UI.
+    fn post_object_image(
+        &self,
+        buffer: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+        rect: ImageRect,
+    ) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {

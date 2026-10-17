@@ -7,7 +7,7 @@ import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ConnectionState, ImagePixelInfo } from "../api/state.slint";
 import { ViewportObjectState, ViewportState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
-import { ResultsState } from "../api/results.slint";
+import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
 import { AnalysisText } from "../dialogs/pipeline_running_dialog.slint";
 
@@ -80,6 +80,9 @@ export component BottomBar inherits Rectangle {
                     icon: ResultsState.loading ? InkIcons.busy : InkIcons.table;
                     text: (ResultsState.loading ? "Loading" : "Ready") + (ResultsState.database-name == "" ? "" : " · " + ResultsState.database-name)
                         + (ResultsState.analysis-summary == "" ? "" : " · " + ResultsState.analysis-summary);
+                }
+                if LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts: InkStatusItem {
+                    text: "Split view · " + (ResultsState.rail-mode == ResultsRailMode.matrix ? "plate" : "list") + " and image";
                 }
                 // Under the pointer.
                 if LayoutState.mode != WorkspaceMode.results: HorizontalLayout {

@@ -10,7 +10,8 @@ use crate::api::{DrawnImages, ExportProgress};
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
 use evanalyzer_core::{ImageReader, ReadMode};
 use evanalyzer_core::ImageContainer;
-use std::collections::HashMap;
+use evanalyzer_core::ImageChannel;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -128,13 +129,35 @@ fn render(
         },
     )?;
 
+    let mut picture = colorize(&channels, &settings.colors, width, height);
+
+    // The boxes, scaled to the level: 2 px lines in the class's color.
+    let sx = width as f32 / full.width.max(1) as f32;
+    let sy = height as f32 / full.height.max(1) as f32;
+    for (bbox, class) in boxes {
+        let c = class_colors.get(class).copied().unwrap_or(0xFFFFFF);
+        let color = image::Rgb([(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+        let x0 = (bbox[0] as f32 * sx) as i64;
+        let y0 = (bbox[1] as f32 * sy) as i64;
+        let x1 = ((bbox[2] as f32 * sx) as i64).max(x0 + 1);
+        let y1 = ((bbox[3] as f32 * sy) as i64).max(y0 + 1);
+        draw_box(&mut picture, [x0, y0, x1, y1], color);
+    }
+    Ok(picture)
+}
+
+/// The channels of a tile as one picture: each in its color (white
+/// without one), auto-scaled as the viewer does (see [`window`]). RGB
+/// images are taken as they are. Also the split view's thumbnails.
+pub fn colorize(
+    channels: &[ImageChannel],
+    colors: &BTreeMap<i32, [f32; 3]>,
+    width: usize,
+    height: usize,
+) -> image::RgbImage {
     let mut rgb = vec![0f32; width * height * 3];
-    for channel in &channels {
-        let color = settings
-            .colors
-            .get(&channel.c_stack)
-            .copied()
-            .unwrap_or([1.0, 1.0, 1.0]);
+    for channel in channels {
+        let color = colors.get(&channel.c_stack).copied().unwrap_or([1.0, 1.0, 1.0]);
         match &*channel.image {
             ImageContainer::F32Gray(image) => {
                 let data = image.data.as_slice();
@@ -155,28 +178,27 @@ fn render(
             ImageContainer::U32(_) => {}
         }
     }
-    let mut picture = image::RgbImage::from_fn(width as u32, height as u32, |x, y| {
+    image::RgbImage::from_fn(width as u32, height as u32, |x, y| {
         let i = (y as usize * width + x as usize) * 3;
         image::Rgb([
             (rgb[i].min(1.0) * 255.0) as u8,
             (rgb[i + 1].min(1.0) * 255.0) as u8,
             (rgb[i + 2].min(1.0) * 255.0) as u8,
         ])
-    });
+    })
+}
 
-    // The boxes, scaled to the level: 2 px lines in the class's color.
-    let sx = width as f32 / full.width.max(1) as f32;
-    let sy = height as f32 / full.height.max(1) as f32;
-    for (bbox, class) in boxes {
-        let c = class_colors.get(class).copied().unwrap_or(0xFFFFFF);
-        let color = image::Rgb([(c >> 16) as u8, (c >> 8) as u8, c as u8]);
-        let x0 = (bbox[0] as f32 * sx) as i64;
-        let y0 = (bbox[1] as f32 * sy) as i64;
-        let x1 = ((bbox[2] as f32 * sx) as i64).max(x0 + 1);
-        let y1 = ((bbox[3] as f32 * sy) as i64).max(y0 + 1);
-        draw_box(&mut picture, [x0, y0, x1, y1], color);
-    }
-    Ok(picture)
+/// [`colorize`]d, then scaled down to fill `(width, height)` (cropped to
+/// its shape) - the split view's filmstrip.
+pub fn colorize_thumbnail(
+    channels: &[ImageChannel],
+    colors: &BTreeMap<i32, [f32; 3]>,
+    (width, height): (usize, usize),
+    (thumb_w, thumb_h): (u32, u32),
+) -> image::RgbImage {
+    image::DynamicImage::ImageRgb8(colorize(channels, colors, width, height))
+        .resize_to_fill(thumb_w, thumb_h, image::imageops::FilterType::Triangle)
+        .into_rgb8()
 }
 
 /// The display window of a channel: its 0.5 % and 99.5 % values (of every

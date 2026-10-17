@@ -187,7 +187,7 @@ impl ImagesListController {
 
     /// A new image has been selected. We update the project state accordingly.
     /// This method is called when the user selects a new image from the UI.
-    fn open_new_image_from_rel_path(self: &Arc<Self>, rel_path: &PathBuf) {
+    pub(crate) fn open_new_image_from_rel_path(self: &Arc<Self>, rel_path: &PathBuf) {
         let absolute_path = {
             let project = self.app_state.get_project();
             project.get_image_absolute_path_from_relative(&rel_path)

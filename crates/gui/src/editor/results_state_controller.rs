@@ -1,4 +1,7 @@
 use crate::editor::images_list_controller::ImagesListController;
+use crate::editor::viewport_controller::ViewportController;
+
+mod split;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell,
     MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode,
@@ -283,6 +286,8 @@ pub struct ResultsStateController {
     // Called after the results' plate view changed the project's plate settings,
     // so the project settings dialog shows them too (wired in editor.rs).
     plate_settings_written: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// Results, split with the image - see [`split`].
+    split: Mutex<split::SplitState>,
 }
 
 impl ResultsStateController {
@@ -320,12 +325,14 @@ impl ResultsStateController {
             list_stale: AtomicBool::new(false),
             charts_stale: AtomicBool::new(false),
             plate_settings_written: Mutex::new(None),
+            split: Mutex::new(split::SplitState::default()),
         }
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            self.attach_split_callbacks(&ui);
             ui.global::<ResultsListState>()
                 .on_refresh_clicked(move || {});
 
@@ -964,8 +971,13 @@ impl ResultsStateController {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    let names: Vec<String> = images.iter().map(|image| image.key.to_string()).collect();
                     state.set_active_well_images(ModelRc::from(Rc::new(VecModel::from(images))));
                     state.set_active_well(key);
+                    // Split: the well's images in the image pane.
+                    if state.get_split() {
+                        manager.split_show_well(names);
+                    }
                     // `exists` (not `has_value`): the user must be able to
                     // select/open a well or field even when it has no
                     // number to show (an image with zero detected
@@ -1950,6 +1962,8 @@ impl ResultsStateController {
         match db {
             Ok(results) => {
                 *self.export_populated.lock().expect("Poisened") = false;
+                // Another analysis: nothing of the last one's split.
+                *self.split.lock().expect("Poisoned") = split::SplitState::default();
                 let run_warning = match results.run_status() {
                     Ok(status) => status.warning().unwrap_or_default(),
                     Err(err) => {
@@ -6980,5 +6994,109 @@ mod tests {
 
         assert!(controller.matrix_cells.lock().unwrap().contains_key("A1"));
         assert!(!controller.well_cells.lock().unwrap().is_empty());
+    }
+
+    /// Split with the image: the analysis' images registered in the
+    /// project (else they can't be opened), the split on.
+    fn split_controller() -> (AppWindow, Arc<ResultsStateController>) {
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+        let (ui, controller) = controller_with_open_database();
+        {
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            for name in ["A1_01.tif", "A1_02.tif", "A2_01.tif"] {
+                project.images.list.insert(
+                    PathBuf::from(name),
+                    ImageEntry {
+                        rel_path: PathBuf::from(name),
+                        file_size: 0,
+                        selected_series: 0,
+                        series: std::collections::BTreeMap::from([(0, SeriesSettings::default())]),
+                    },
+                );
+            }
+        }
+        ui.global::<ResultsState>().set_split(true);
+        (ui, controller)
+    }
+
+    #[test]
+    fn split_a_row_shows_its_object_on_its_image_and_esc_lets_go() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        let (rel_path, bbox) = controller.list_row_locations.lock().unwrap()[1].clone();
+
+        state.set_list_selected_row(1);
+        state.invoke_list_row_selected(1);
+        drain_ui_queue();
+
+        let overlay = controller.viewport().results_overlay().expect("the analysis' objects on the image");
+        assert_eq!(overlay.objects.len(), 1, "the one object of {rel_path}");
+        assert_eq!(overlay.objects[0].0, bbox);
+        assert_eq!(overlay.selected, Some(0));
+        let sel = state.get_split_sel();
+        assert!(sel.active);
+        assert_eq!((sel.x, sel.y, sel.w, sel.h), (0.0, 0.0, 11.0, 11.0));
+        assert!(sel.class_name.starts_with("Class"));
+        assert_eq!((state.get_split_pos(), state.get_split_total()), (2, 3), "row 2 of 3");
+        assert_eq!(state.get_split_title(), rel_path.as_str());
+
+        // Esc: nothing selected, the objects stay.
+        state.invoke_split_clear();
+        drain_ui_queue();
+        assert!(!state.get_split_sel().active);
+        assert_eq!(state.get_list_selected_row(), -1);
+        assert_eq!(controller.viewport().results_overlay().unwrap().selected, None);
+
+        // Leaving the split: the project's objects again.
+        state.invoke_split_shown(false);
+        assert!(controller.viewport().results_overlay().is_none());
+    }
+
+    #[test]
+    fn split_a_click_on_an_object_selects_its_row_and_arrows_step_rows() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        state.invoke_split_clear();
+        drain_ui_queue();
+
+        // The object (0..10 px) under the click; zoom 1, no offset.
+        let (zoom, off_x, off_y, ..) = controller.viewport().view();
+        state.invoke_split_image_clicked(off_x + 5.0 * zoom, off_y + 5.0 * zoom);
+        drain_ui_queue();
+        assert_eq!(state.get_list_selected_row(), 0, "its row");
+        assert!(state.get_split_sel().active);
+
+        // Beside every object: nothing changes.
+        state.invoke_split_image_clicked(off_x + 80.0 * zoom, off_y + 80.0 * zoom);
+        drain_ui_queue();
+        assert_eq!(state.get_list_selected_row(), 0);
+
+        // ↓: the next row, on its own image.
+        state.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!(state.get_list_selected_row(), 1);
+        let next = controller.list_row_locations.lock().unwrap()[1].0.clone();
+        assert_eq!(controller.split.lock().unwrap().image.as_deref(), Some(next.as_str()));
+        // At the end it stays.
+        state.invoke_split_step(1);
+        state.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!(state.get_list_selected_row(), 2);
+    }
+
+    #[test]
+    fn split_settings_are_remembered_as_user_settings() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_split_changed(true);
+        state.invoke_split_width_changed(512.0);
+        state.invoke_split_follow_changed(false);
+        let saved = controller._app_state.load_app_settings().results_split;
+        assert!(saved.on);
+        assert_eq!(saved.width_px, 512.0);
+        assert!(!saved.follow);
     }
 }

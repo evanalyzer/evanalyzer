@@ -173,6 +173,10 @@ export component InkSegmented inherits Rectangle {
     in property <int> selected: 0;
     in property <bool> enabled: true;
     in property <string> label;
+    /// One entry that can't be picked now (-1 none): dimmed, and why
+    /// (`disabled-why`, for screen readers and the hover hint).
+    in property <int> disabled-index: -1;
+    in property <string> disabled-why;
     callback picked(int);
 
     height: 24px;
@@ -201,6 +205,8 @@ export component InkSegmented inherits Rectangle {
                 accessible-role: tab;
                 accessible-label: entry;
                 accessible-item-selected: i == root.selected;
+                accessible-description: i == root.disabled-index ? root.disabled-why : "";
+                opacity: i == root.disabled-index ? 0.4 : 1.0;
                 seg-text := Text {
                     text: entry;
                     font-size: Ink.fs-sm;
@@ -208,7 +214,7 @@ export component InkSegmented inherits Rectangle {
                     color: i == root.selected ? Ink.text : Ink.text-dim;
                 }
                 seg-ta := TouchArea {
-                    enabled: root.enabled;
+                    enabled: root.enabled && i != root.disabled-index;
                     mouse-cursor: pointer;
                     clicked => {
                         root.picked(i);
@@ -223,11 +229,11 @@ export component InkSegmented inherits Rectangle {
         enabled: root.enabled;
         focus-on-click: false;
         key-pressed(e) => {
-            if e.text == Key.LeftArrow && root.selected > 0 {
+            if e.text == Key.LeftArrow && root.selected > 0 && root.selected - 1 != root.disabled-index {
                 root.picked(root.selected - 1);
                 return accept;
             }
-            if e.text == Key.RightArrow && root.selected < root.model.length - 1 {
+            if e.text == Key.RightArrow && root.selected < root.model.length - 1 && root.selected + 1 != root.disabled-index {
                 root.picked(root.selected + 1);
                 return accept;
             }

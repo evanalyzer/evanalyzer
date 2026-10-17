@@ -69,6 +69,7 @@ pub mod global {
     pub use crate::workspace::settings::RecentServer;
     pub use crate::workspace::settings::UserInformation;
     pub use crate::workspace::settings::ViewportMemorySettings;
+    pub use crate::workspace::settings::ResultsSplitSettings;
 }
 
 pub mod results {
@@ -77,6 +78,8 @@ pub mod results {
     pub use crate::api::BoxplotFilter;
     pub use crate::api::BoxplotGroup;
     pub use crate::api::DrawnImages;
+    pub use crate::backend::local::results::{colorize, colorize_thumbnail};
+    pub use crate::api::{ImageObjectsFilter, ResultObject};
     pub use crate::api::COLOR_SCALE_GRADIENT_STOPS;
     pub use crate::api::Cell;
     pub use crate::api::CellValue;

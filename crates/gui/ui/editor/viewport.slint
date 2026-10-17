@@ -5,6 +5,7 @@ import { Ink } from "../ink/palette.slint";
 import { InkIcons } from "../ink/icons.slint";
 import { LayoutState } from "../api/layout.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
+import { ResultsState } from "../api/results.slint";
 
 import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
@@ -26,6 +27,11 @@ export component Viewport inherits Rectangle {
     // and the navigator stay beside them.
     in property <length> inset-left: 0px;
     in property <length> inset-right: 0px;
+    // Results, split with the image: a click (no drag) picks the object
+    // there; no editing tools.
+    in property <bool> split-mode: false;
+    property <length> press-x;
+    property <length> press-y;
     property <duration> last-click-time: 0ms;
 
     background: Ink.viewport;
@@ -361,6 +367,19 @@ export component Viewport inherits Rectangle {
             if (evt.kind == PointerEventKind.down) {
                 root.last_mouse_x = self.mouse-x;
                 root.last_mouse_y = self.mouse-y;
+                root.press-x = self.mouse-x;
+                root.press-y = self.mouse-y;
+            }
+            if (root.split-mode) {
+                if (evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left && abs(self.mouse-x - root.press-x) < 4px && abs(self.mouse-y - root.press-y) < 4px) {
+                    ResultsState.split-image-clicked(self.mouse-x, self.mouse-y);
+                }
+                if (evt.kind == PointerEventKind.up) {
+                    GlobalAppState.reclaim_focus_requested += 1;
+                }
+                return;
+            }
+            if (evt.kind == PointerEventKind.down) {
 
                 // Brush (needs a class to paint into) and eraser: a stroke.
                 if root.brush-tool && evt.button == PointerEventButton.left && (ViewportObjectState.act_tool_state == ToolState.Eraser || ClassificationState.selected_class_id >= 0) {
@@ -447,11 +466,13 @@ export component Viewport inherits Rectangle {
 
         // Double glick for select
         double-clicked => {
-            ViewportObjectState.viewport_clicked(self.mouse-x, self.mouse-y);
+            if !root.split-mode {
+                ViewportObjectState.viewport_clicked(self.mouse-x, self.mouse-y);
+            }
         }
 
         moved => {
-            if ViewportObjectState.act_tool_state == ToolState.Move {
+            if ViewportObjectState.act_tool_state == ToolState.Move || root.split-mode {
                 if (self.pressed) {
                     ViewportState.offset_x += self.mouse-x - root.last_mouse_x;
                     ViewportState.offset_y += self.mouse-y - root.last_mouse_y;
@@ -486,8 +507,8 @@ export component Viewport inherits Rectangle {
 
     // Above the image's touch area: clicks in it move the view.
     Navigator {
-        x: parent.width - self.width - 12px - root.inset-right;
-        y: parent.height - self.height - 12px;
+        x: parent.width - self.width - (root.split-mode ? 10px : 12px) - root.inset-right;
+        y: parent.height - self.height - (root.split-mode ? 10px : 12px);
         viewport-width: root.width;
         viewport-height: root.height;
     }

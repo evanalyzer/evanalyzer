@@ -389,6 +389,106 @@ component ImageHeatmapGrid inherits Rectangle {
 }
 
 // -- Unused today: single image + object markers ------------------------------
+// The selected cell (board H): its value, what to do with it and, for a
+// well, its images. Beside the grid; split with the image, under it.
+component SelectedCellCard inherits Rectangle {
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    clip: true;
+
+    if ResultsState.active-well == "": VerticalLayout {
+        padding: Ink.pad-panel;
+        alignment: start;
+        InkHint {
+            text: ResultsState.matrix-level == MatrixLevel.plate ? "Click a well to see its value and images." : "Click a tile to see its value.";
+        }
+    }
+
+    if ResultsState.active-well != "": VerticalLayout {
+        padding: Ink.pad-panel;
+        spacing: 6px;
+        alignment: start;
+
+        InkCaption {
+            text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : ResultsState.matrix-level == MatrixLevel.well ? "IMAGE " : "TILE ") + ResultsState.active-well;
+        }
+        // Not struck through when disabled - the grid's
+        // tile already marks that.
+        Text {
+            text: ResultsState.active-well-has-value ? ResultsState.active-well-value : "—";
+            font-size: 20px;
+            font-weight: 700;
+            font-family: Ink.font-mono;
+            color: Ink.text;
+        }
+        InkHint {
+            text: ResultsState.active-well-caption;
+        }
+        // A tile of the image heatmap: shown on its image.
+        if ResultsState.matrix-level == MatrixLevel.object: InkButton {
+            small: true;
+            kind: InkButtonKind.primary;
+            text: "Show on image ↗";
+            enabled: ResultsState.active-well-has-value;
+            clicked => {
+                ResultsState.image-heatmap-cell-open(ResultsState.active-well);
+            }
+        }
+        if ResultsState.matrix-level != MatrixLevel.object: InkButton {
+            small: true;
+            kind: InkButtonKind.primary;
+            text: ResultsState.matrix-level == MatrixLevel.plate ? "Open well ›" : "Open image ›";
+            enabled: ResultsState.active-well-has-value;
+            clicked => {
+                ResultsState.open-cell(ResultsState.active-well);
+            }
+        }
+        // Only at the well level a cell is one image.
+        if ResultsState.matrix-level == MatrixLevel.well: InkButton {
+            small: true;
+            text: ResultsState.active-well-disabled ? "Use this image in the results" : "Leave this image out of the results";
+            enabled: ResultsState.active-well-has-value;
+            clicked => {
+                ResultsState.toggle-active-well-disabled();
+            }
+        }
+        // Plate level: the well's images, each opens itself.
+        if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: InkCaption {
+            text: ResultsState.active-well-images.length + " IMAGES";
+        }
+        if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: ListView {
+            height: min(ResultsState.split ? 4 : 8, ResultsState.active-well-images.length) * 30px;
+            // A click opens the image; its eye leaves it out of
+            // the results (or takes it back in).
+            for image in ResultsState.active-well-images: InkListRow {
+                height: 30px;
+                title: image.key;
+                trailing: image.disabled ? "left out" : image.label;
+                mono: true;
+                icon: InkIcons.images;
+                mark: image.failed ? Ink.warn : transparent;
+                has-eye: true;
+                shown: !image.disabled;
+                eye-toggled => {
+                    ResultsState.toggle-image-disabled(image.key, !image.disabled);
+                }
+                selected: ResultsState.split && image.key == ResultsState.split-image-key;
+                // Split: shown in the image pane; else opened.
+                clicked => {
+                    if ResultsState.split {
+                        ResultsState.split-show-image(image.key);
+                    } else {
+                        ResultsState.open-cell(ResultsState.active-well);
+                        ResultsState.open-cell(image.key);
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component ResultsMatrixView inherits Rectangle {
     // The settings column is this wide, its fields fill it.
     property <length> side-w: 280px;
@@ -404,8 +504,9 @@ export component ResultsMatrixView inherits Rectangle {
         padding: 12px;
         spacing: 12px;
 
-        // -- The settings: value, plate, look --
-        Rectangle {
+        // -- The settings: value, plate, look (split with the image: the
+        // value's fields in the grid's head) --
+        if !ResultsState.split: Rectangle {
             width: root.side-w;
             background: Ink.panel;
             border-radius: Ink.radius-lg;
@@ -588,6 +689,8 @@ export component ResultsMatrixView inherits Rectangle {
         // The content, a panel beside them.
         Rectangle {
             horizontal-stretch: 1;
+            // Not as narrow as its widest fixed child (the head's fields).
+            max-width: 100000px;
             background: Ink.panel;
             border-radius: Ink.radius-lg;
             border-width: 1px;
@@ -604,7 +707,43 @@ export component ResultsMatrixView inherits Rectangle {
                     padding-top: 10px;
                     padding-bottom: 6px;
                     spacing: 12px;
-                    Text {
+                    // Split with the image: the value's fields here.
+                    if ResultsState.split: HorizontalLayout {
+                        spacing: 6px;
+                        InkMultiSelect {
+                            summary-text: ResultsState.matrix-class-summary;
+                            items <=> ResultsState.matrix-class-items;
+                            multi-select: false;
+                            pill-width: 130px;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-class-summary = value;
+                                ResultsState.matrix-class-selected(key, selected);
+                            }
+                        }
+                        InkMultiSelect {
+                            summary-text: ResultsState.matrix-column-summary;
+                            items <=> ResultsState.matrix-column-items;
+                            multi-select: false;
+                            groups: ResultsState.list-columns-groups;
+                            pill-width: 110px;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-column-summary = value;
+                                ResultsState.matrix-value-clicked();
+                            }
+                        }
+                        InkMultiSelect {
+                            summary-text: ResultsState.matrix-aggregate;
+                            items <=> ResultsState.matrix-aggregation-items;
+                            multi-select: false;
+                            pill-width: 130px;
+                            enabled: ResultsState.matrix-aggregate-enabled;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-aggregate = value;
+                                ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate);
+                            }
+                        }
+                    }
+                    if !ResultsState.split: Text {
                         text: ResultsState.matrix-class-summary + " · " + ResultsState.matrix-column-summary
                             + (ResultsState.matrix-aggregate-enabled ? " · " + ResultsState.matrix-aggregate : "")
                             + ", " + root.level-name;
@@ -631,103 +770,35 @@ export component ResultsMatrixView inherits Rectangle {
                 if ResultsState.matrix-level == MatrixLevel.object: ImageHeatmapGrid {
                     vertical-stretch: 1;
                 }
+
+                // Split with the image: the scale and the selected cell
+                // under the grid.
+                if ResultsState.split: VerticalLayout {
+                    vertical-stretch: 0;
+                    padding: 12px;
+                    padding-top: 4px;
+                    spacing: 10px;
+                    LegendBar {
+                        vertical-stretch: 0;
+                        value-label: ResultsState.matrix-column-summary;
+                        min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-min : ResultsState.image-heatmap-min);
+                        max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-max : ResultsState.image-heatmap-max);
+                        gradient-stops: ResultsState.matrix-color-scale-stops;
+                        editable: false;
+                        is-manual: ResultsState.matrix-scale-is-manual;
+                    }
+                    SelectedCellCard {
+                        height: 240px;
+                    }
+                }
             }
         }
 
         // -- The selected cell (board H): a panel on the right, the same at
         // every level (see `ResultsState.active-well`). Always there, so
         // the grid doesn't move when one is clicked --
-        Rectangle {
+        if !ResultsState.split: SelectedCellCard {
             width: 300px;
-            background: Ink.panel;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            clip: true;
-
-            if ResultsState.active-well == "": VerticalLayout {
-                padding: Ink.pad-panel;
-                alignment: start;
-                InkHint {
-                    text: ResultsState.matrix-level == MatrixLevel.plate ? "Click a well to see its value and images." : "Click a tile to see its value.";
-                }
-            }
-
-            if ResultsState.active-well != "": VerticalLayout {
-                padding: Ink.pad-panel;
-                spacing: 6px;
-                alignment: start;
-
-                InkCaption {
-                    text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : ResultsState.matrix-level == MatrixLevel.well ? "IMAGE " : "TILE ") + ResultsState.active-well;
-                }
-                // Not struck through when disabled - the grid's
-                // tile already marks that.
-                Text {
-                    text: ResultsState.active-well-has-value ? ResultsState.active-well-value : "—";
-                    font-size: 20px;
-                    font-weight: 700;
-                    font-family: Ink.font-mono;
-                    color: Ink.text;
-                }
-                InkHint {
-                    text: ResultsState.active-well-caption;
-                }
-                // A tile of the image heatmap: shown on its image.
-                if ResultsState.matrix-level == MatrixLevel.object: InkButton {
-                    small: true;
-                    kind: InkButtonKind.primary;
-                    text: "Show on image ↗";
-                    enabled: ResultsState.active-well-has-value;
-                    clicked => {
-                        ResultsState.image-heatmap-cell-open(ResultsState.active-well);
-                    }
-                }
-                if ResultsState.matrix-level != MatrixLevel.object: InkButton {
-                    small: true;
-                    kind: InkButtonKind.primary;
-                    text: ResultsState.matrix-level == MatrixLevel.plate ? "Open well ›" : "Open image ›";
-                    enabled: ResultsState.active-well-has-value;
-                    clicked => {
-                        ResultsState.open-cell(ResultsState.active-well);
-                    }
-                }
-                // Only at the well level a cell is one image.
-                if ResultsState.matrix-level == MatrixLevel.well: InkButton {
-                    small: true;
-                    text: ResultsState.active-well-disabled ? "Use this image in the results" : "Leave this image out of the results";
-                    enabled: ResultsState.active-well-has-value;
-                    clicked => {
-                        ResultsState.toggle-active-well-disabled();
-                    }
-                }
-                // Plate level: the well's images, each opens itself.
-                if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: InkCaption {
-                    text: ResultsState.active-well-images.length + " IMAGES";
-                }
-                if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: ListView {
-                    height: min(8, ResultsState.active-well-images.length) * 30px;
-                    // A click opens the image; its eye leaves it out of
-                    // the results (or takes it back in).
-                    for image in ResultsState.active-well-images: InkListRow {
-                        height: 30px;
-                        title: image.key;
-                        trailing: image.disabled ? "left out" : image.label;
-                        mono: true;
-                        icon: InkIcons.images;
-                        mark: image.failed ? Ink.warn : transparent;
-                        has-eye: true;
-                        shown: !image.disabled;
-                        eye-toggled => {
-                            ResultsState.toggle-image-disabled(image.key, !image.disabled);
-                        }
-                        clicked => {
-                            ResultsState.open-cell(ResultsState.active-well);
-                            ResultsState.open-cell(image.key);
-                        }
-                    }
-                }
-            }
         }
     }
 }
