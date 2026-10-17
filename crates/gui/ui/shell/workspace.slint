@@ -3,7 +3,7 @@
 // Pipelines, images on the left in Images; classes, objects and the image
 // controls on the right; the annotate tools on top. Results fill it.
 
-import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton, InkDivider } from "../ink/ink.slint";
 import { Places, LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { GlobalAppState, DialogType } from "../api/state.slint";
 import { Viewport } from "../editor/viewport.slint";
@@ -198,10 +198,7 @@ export component Workspace inherits Rectangle {
         ImagesListPanel {
             vertical-stretch: 1;
         }
-        Rectangle {
-            height: 1px;
-            background: Ink.border-soft;
-        }
+        InkDivider { }
         ImageMetaPanel {
             vertical-stretch: 0;
         }

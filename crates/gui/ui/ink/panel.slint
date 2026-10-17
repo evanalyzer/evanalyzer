@@ -387,3 +387,41 @@ export component InkBarSeparator inherits Rectangle {
         background: Ink.border;
     }
 }
+
+/// A fact in a card: the label, the value (mono; "–" without one) and
+/// something after it (`extra`, e.g. the area in nm²).
+export component InkFact inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> extra;
+    in property <length> label-width: 80px;
+
+    height: 20px;
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: root.label-width;
+            text: root.label;
+            font-size: Ink.fs-sm;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.value == "" ? "–" : root.value;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.extra;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+    }
+}
