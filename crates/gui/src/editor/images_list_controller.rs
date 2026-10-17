@@ -284,6 +284,8 @@ impl ImagesListController {
 
         // Now we can scan the new image root for images
         self.scan_image_root_for_images(selected_image_absolute_path);
+        // A folder of images opened: next, picking one.
+        crate::editor::start_page_controller::set_active(&self.ui, false, Some(crate::WorkspaceMode::Images));
     }
 
     /// Updates the project's root image directory without performing a fresh filesystem crawl.

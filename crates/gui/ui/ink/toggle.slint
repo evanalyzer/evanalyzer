@@ -250,16 +250,21 @@ export component InkModeTab inherits Rectangle {
     /// A count after the text (problems, images), 0: none.
     in property <int> count: 0;
     in property <bool> warn: false;
+    in property <bool> enabled: true;
     callback clicked;
 
     height: 24px;
     horizontal-stretch: 0;
+    opacity: root.enabled ? 1.0 : 0.45;
     preferred-width: label.preferred-width + (root.count > 0 ? count-text.preferred-width + 6px : 0px) + 18px;
     accessible-role: tab;
     accessible-label: root.text;
     accessible-item-selected: root.active;
+    accessible-enabled: root.enabled;
     accessible-action-default => {
-        root.clicked();
+        if root.enabled {
+            root.clicked();
+        }
     }
 
     face := Rectangle {
@@ -290,6 +295,7 @@ export component InkModeTab inherits Rectangle {
     }
 
     ta := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: pointer;
         clicked => {
             root.clicked();

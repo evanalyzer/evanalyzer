@@ -8,6 +8,7 @@ import { ConnectionState, ImagePixelInfo } from "../api/state.slint";
 import { ViewportObjectState, ViewportState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
+import { StartState } from "../api/start.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
 import { AnalysisText } from "../dialogs/pipeline_running_dialog.slint";
 
@@ -32,23 +33,30 @@ export component BottomBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 2px;
+                // The start page: nothing open - Pipelines still opens
+                // (an empty project), Images and Results need one.
                 InkModeTab {
                     text: "Images";
-                    active: LayoutState.mode == WorkspaceMode.images;
+                    enabled: !StartState.active;
+                    active: !StartState.active && LayoutState.mode == WorkspaceMode.images;
                     clicked => {
                         LayoutState.mode = WorkspaceMode.images;
                     }
                 }
                 InkModeTab {
                     text: "Pipelines";
-                    active: LayoutState.mode == WorkspaceMode.pipelines;
+                    active: !StartState.active && LayoutState.mode == WorkspaceMode.pipelines;
                     clicked => {
+                        if StartState.active {
+                            StartState.empty-project();
+                        }
                         LayoutState.mode = WorkspaceMode.pipelines;
                     }
                 }
                 InkModeTab {
                     text: "Results";
-                    active: LayoutState.mode == WorkspaceMode.results;
+                    enabled: !StartState.active;
+                    active: !StartState.active && LayoutState.mode == WorkspaceMode.results;
                     clicked => {
                         LayoutState.mode = WorkspaceMode.results;
                     }
@@ -75,17 +83,21 @@ export component BottomBar inherits Rectangle {
                     }
                 }
 
+                // The start page: nothing open.
+                if StartState.active: InkStatusItem {
+                    text: "No project open";
+                }
                 // Results: the database shown.
-                if LayoutState.mode == WorkspaceMode.results: InkStatusItem {
+                if !StartState.active && LayoutState.mode == WorkspaceMode.results: InkStatusItem {
                     icon: ResultsState.loading ? InkIcons.busy : InkIcons.table;
                     text: (ResultsState.loading ? "Loading" : "Ready") + (ResultsState.database-name == "" ? "" : " · " + ResultsState.database-name)
                         + (ResultsState.analysis-summary == "" ? "" : " · " + ResultsState.analysis-summary);
                 }
-                if LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts: InkStatusItem {
+                if !StartState.active && LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts: InkStatusItem {
                     text: "Split view · " + (ResultsState.rail-mode == ResultsRailMode.matrix ? "plate" : "list") + " and image";
                 }
                 // Under the pointer.
-                if LayoutState.mode != WorkspaceMode.results: HorizontalLayout {
+                if !StartState.active && LayoutState.mode != WorkspaceMode.results: HorizontalLayout {
                     spacing: 2px;
                     InkStatusItem {
                         visible: ImagePixelInfo.mouse_pos != "";

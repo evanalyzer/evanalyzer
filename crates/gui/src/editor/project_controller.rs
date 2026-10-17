@@ -13,6 +13,7 @@ use crate::UiState;
 use crate::UnsavedChangesState;
 use crate::WarningState;
 use crate::editor::classification_controller::ClassificationController;
+use crate::editor::start_page_controller as start_page;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
@@ -165,6 +166,9 @@ impl ProjectController {
             }
         })
         .ok();
+        // Nothing open: the start page.
+        start_page::set_active(&self.ui, true, None);
+        start_page::push_recent(&self.ui, &self.app_state);
         info!("New project created!")
     }
 
@@ -227,6 +231,9 @@ impl ProjectController {
             .set_new_image_root(&image_root_dir);
         // Opening wrote to the project above - nothing of that to undo.
         self.app_state.clear_undo_history();
+        // Next: picking an image.
+        start_page::remember_current_project(&self.app_state);
+        start_page::set_active(&self.ui, false, Some(crate::WorkspaceMode::Images));
         info!("Project opened!")
     }
 
@@ -299,6 +306,7 @@ impl ProjectController {
         }
 
         info!("Legacy project imported ({} warning(s))", warnings.len());
+        start_page::set_active(&self.ui, false, Some(crate::WorkspaceMode::Images));
         if !warnings.is_empty() {
             let message = format!(
                 "The project imported successfully, but {} item(s) from the old format had no exact equivalent and were skipped or approximated:\n\n- {}\n\nReview the affected pipeline steps before running this project. Use \"Save As\" to keep this project in the new format.",
@@ -695,6 +703,7 @@ impl ProjectController {
                         Ok(_) => {
                             info!("Project saved as: {}", path.display());
                             in_thread.app_state.clear_dirty();
+                            start_page::remember_current_project(&in_thread.app_state);
                         }
                         Err(msg) => {
                             warn!("Project not saved: {}", msg);
@@ -799,6 +808,7 @@ impl ProjectController {
                             Ok(_) => {
                                 info!("Project saved: {}", path.display());
                                 in_thread.app_state.clear_dirty();
+                                start_page::remember_current_project(&in_thread.app_state);
                             }
                             Err(msg) => {
                                 warn!("Project not saved: {}", msg);
@@ -825,6 +835,7 @@ impl ProjectController {
                 SaveProjectActions::Success => {
                     info!("Project saved");
                     in_thread.app_state.clear_dirty();
+                    start_page::remember_current_project(&in_thread.app_state);
                 }
                 SaveProjectActions::PleaseSelectFile => {
                     warn!("Project has no path to save to");
@@ -1041,6 +1052,12 @@ impl ProjectController {
         }
     }
 
+    /// Opens the project file at `path` - first asking about unsaved
+    /// changes, as File › Open does.
+    pub(crate) fn open_project_guarded(self: &Arc<Self>, path: PathBuf) {
+        self.guard_discard(PendingAction::OpenProject(path));
+    }
+
     /// Opens the "New from Project Template" dialog.
     ///
     /// The dialog opens immediately with an empty list; the available
@@ -1181,6 +1198,8 @@ impl ProjectController {
             project.pipelines.first().map(|p| p.id)
         };
         self.app_state.mark_dirty();
+        // A template's pipelines: shown.
+        start_page::set_active(&self.ui, false, Some(crate::WorkspaceMode::Pipelines));
 
         self.project_settings_controller
             .sync_project_settings_to_slint();
@@ -1849,6 +1868,7 @@ pub(crate) mod tests {
         ui: AppWindow,
         ui_state: Arc<UiState>,
         controller: Arc<ProjectController>,
+        start: Arc<crate::editor::start_page_controller::StartPageController>,
         dir: tempfile::TempDir,
     }
 
@@ -1858,10 +1878,17 @@ pub(crate) mod tests {
         let (ui_state, controller) = make_controller_on(ui.as_weak(), ui_state);
         controller.attach_callbacks();
         controller.template_controller.attach_callbacks();
+        let start = Arc::new(crate::editor::start_page_controller::StartPageController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            controller.clone(),
+        ));
+        start.attach_callbacks();
         Window {
             ui,
             ui_state,
             controller,
+            start,
             dir: tempfile::tempdir().unwrap(),
         }
     }
@@ -1939,6 +1966,88 @@ pub(crate) mod tests {
             .unwrap();
             path
         }
+    }
+
+    #[test]
+    fn new_shows_the_start_page_and_opening_a_project_leaves_it_for_images() {
+        let w = with_window(project_with_pipeline("Old"));
+        let start = || w.ui.global::<crate::StartState>();
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        assert!(start().get_active(), "File › New: the start page");
+
+        // Open project…: the file, then Images (next: an image).
+        let path = w.saved_project("ev.evaproj", &project_with_pipeline("From disk"));
+        start().invoke_open_project();
+        choose_file(&w.ui, &path);
+        drain_ui_queue();
+        assert!(!start().get_active());
+        assert_eq!(w.ui.global::<crate::LayoutState>().get_mode(), crate::WorkspaceMode::Images);
+
+        // Remembered, first; listed when the page shows again.
+        let recent = w.ui_state.load_app_settings().recent_projects;
+        assert_eq!(recent[0].path, path);
+        assert_eq!(recent[0].pipelines, 1);
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        let rows = start().get_recent();
+        assert_eq!(slint::Model::row_data(&rows, 0).unwrap().path, path.to_string_lossy().as_ref());
+        assert!(!slint::Model::row_data(&rows, 0).unwrap().missing);
+
+        // A recent one opens with a click; ✕ takes it off the list.
+        start().invoke_open_recent(0);
+        drain_ui_queue();
+        assert_eq!(w.pipeline_names(), ["From disk"]);
+        assert!(!start().get_active());
+        start().invoke_forget_recent(0);
+        drain_ui_queue();
+        assert!(w.ui_state.load_app_settings().recent_projects.is_empty());
+    }
+
+    #[test]
+    fn an_empty_project_leaves_the_start_page_for_pipelines() {
+        let w = with_window(ProjectWithRuntime::default());
+        w.start.show_start();
+        drain_ui_queue();
+        let start = w.ui.global::<crate::StartState>();
+        assert!(start.get_active(), "nothing to open at startup: the start page");
+        start.invoke_empty_project();
+        drain_ui_queue();
+        assert!(!start.get_active());
+        assert_eq!(w.ui.global::<crate::LayoutState>().get_mode(), crate::WorkspaceMode::Pipelines);
+    }
+
+    #[test]
+    fn startup_opens_the_last_project_when_so_set_and_it_is_still_there() {
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
+        let gone = w.dir.path().join("gone.evaproj");
+        let entry = |path: &PathBuf| evanalyzer_app::global::RecentProject {
+            path: path.clone(),
+            name: "x".into(),
+            images: 0,
+            pipelines: 0,
+            opened_at: 0,
+        };
+        // Gone: the start page, the entry marked missing.
+        w.ui_state.update_app_settings(|s| {
+            s.open_last_project = true;
+            s.remember_project(entry(&path));
+            s.remember_project(entry(&gone));
+        });
+        w.start.show_start();
+        drain_ui_queue();
+        let start = w.ui.global::<crate::StartState>();
+        assert!(start.get_active());
+        assert!(slint::Model::row_data(&start.get_recent(), 0).unwrap().missing);
+        assert!(start.get_open_last());
+
+        // There: opened right away.
+        w.ui_state.update_app_settings(|s| s.remember_project(entry(&path)));
+        w.start.show_start();
+        drain_ui_queue();
+        assert!(!start.get_active());
+        assert_eq!(w.pipeline_names(), ["Last"]);
     }
 
     #[test]

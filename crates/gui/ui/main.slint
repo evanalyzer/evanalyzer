@@ -35,6 +35,7 @@ import { CommandPalette } from "shell/command_palette.slint";
 import { TopBar } from "shell/top_bar.slint";
 import { BottomBar } from "shell/bottom_bar.slint";
 import { Workspace } from "shell/workspace.slint";
+import { RecentProjectRow, StartState } from "api/start.slint";
 import { InkBanner, InkTone } from "ink/ink.slint";
 import { Ink, InkScheme } from "ink/palette.slint";
 import { ImageMissingDialog } from "dialogs/images_missing_dialog.slint";
@@ -83,6 +84,8 @@ import {
 } from "dialogs/object_list_confirm_delete_manual_annotated_dialog.slint";
 
 export {
+    StartState,
+    RecentProjectRow,
     GlobalAppState,
     ViewportMemoryState,
     RetainedTile,

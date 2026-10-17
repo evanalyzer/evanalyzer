@@ -1,0 +1,35 @@
+// api/start.slint — the Rust interface of the start page (board AA): shown
+// while nothing is open yet - at startup and after File › New.
+
+// A project opened before, as the start page lists it.
+export struct RecentProjectRow {
+    name: string,
+    path: string,
+    // "81 images · 4 pipelines".
+    meta: string,
+    // "Today 09:12", "14 Oct".
+    when: string,
+    // Its file isn't there (e.g. on a drive not connected).
+    missing: bool,
+}
+
+export global StartState {
+    // Nothing open: the start page covers the workspace.
+    in-out property <bool> active: false;
+    in property <[RecentProjectRow]> recent: [];
+    // Startup opens the last project instead of this page (a user setting).
+    in-out property <bool> open-last: false;
+
+    callback open-images-folder();
+    callback open-project();
+    // A project without images: pipelines can be shown or built anyway.
+    callback empty-project();
+    callback from-template();
+    callback connect();
+    callback open-recent(int);
+    // A missing one: its file picked again.
+    callback locate-recent(int);
+    callback forget-recent(int);
+    callback clear-recent();
+    callback open-last-changed(bool);
+}
