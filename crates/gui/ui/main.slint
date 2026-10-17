@@ -178,7 +178,9 @@ export component AppWindow inherits Window {
     // `UiState::set_window_title`.
     in-out property <string> window_title: "EVAnalyzer";
     title: root.window_title;
-    icon: @image-url("icons/icon.png");
+    // The window and taskbar icon: a PNG (icon-orange.svg rendered at
+    // 256 px), as the window system wants pixels.
+    icon: @image-url("icons/icon-orange.png");
     preferred-width: 1500px;
     preferred-height: 900px;
     min-width: 1500px;

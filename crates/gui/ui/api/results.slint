@@ -15,6 +15,28 @@ export struct BreadcrumbItem {
     label: string,
 }
 
+// Split with image: the selected object of the analysis - where it is
+// (full-image pixels) and its card's facts.
+export struct SplitObject {
+    active: bool,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    class-name: string,
+    class-color: color,
+    id: string,
+    area: string,
+    mean: string,
+    position: string,
+}
+
+// Split with image, Plate: one of the well's images under the image.
+export struct SplitThumb {
+    key: string,
+    image: image,
+}
+
 export struct MatrixCell {
     key: string,       // e.g. "D5" (well) or "img_03" (field)
     value: float,
@@ -96,6 +118,47 @@ export struct ChartBoxplotBox {
 }
 
 export global ResultsState {
+    // -- Split with image (board Z) --
+    // Results left, the image right (List and Plate; not Charts).
+    in-out property <bool> split: false;
+    // The results pane's width.
+    in-out property <length> split-w: 640px;
+    // Selecting an object flies the image to it (off: only highlighted).
+    in-out property <bool> split-follow: true;
+    // Plate: the objects colored by the plate's property (else by class).
+    in-out property <bool> split-by-value: false;
+    // The image shown ("Well C3 · D3_03.vsi"), its name (the filmstrip's
+    // accent), the selected object of how many ("n / total").
+    in-out property <string> split-title;
+    in-out property <string> split-image-key;
+    in-out property <int> split-pos: 0;
+    in-out property <int> split-total: 0;
+    in-out property <SplitObject> split-sel;
+    // The well's images as thumbnails (`active-well-images` order).
+    in-out property <[SplitThumb]> split-thumbs;
+    // The image's channels (the card's mean is of `split-channel`).
+    in-out property <[string]> split-channels;
+    in-out property <int> split-channel: 0;
+    callback split-channel-changed(int);
+    callback split-changed(bool);
+    callback split-width-changed(length);
+    callback split-follow-changed(bool);
+    callback split-by-value-changed(bool);
+    // ‹ / ›: the previous / next object (list: row; plate: in the image).
+    callback split-step(int);
+    // A click on the image (viewport coordinates): the object there.
+    callback split-image-clicked(length, length);
+    // A well's image to show (its name).
+    callback split-show-image(string);
+    callback split-open-in-images();
+    // Esc: no object selected.
+    callback split-clear();
+    // List, Split: a row selected (its object shown on the image).
+    callback list-row-selected(int);
+    // The split is on screen (or not): its objects on the image (or the
+    // project's).
+    callback split-shown(bool);
+
     // Set when the analysis that wrote the open database didn't finish
     // (cancelled, failed, interrupted) - the results are incomplete.
     in-out property <string> run-warning: "";

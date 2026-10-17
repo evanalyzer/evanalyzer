@@ -123,6 +123,31 @@ pub struct PlaneFilter {
     pub t_stack: u32,
 }
 
+/// The objects of one image of an analysis (Results › Split with image).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ImageObjectsFilter {
+    pub image_rel_path: String,
+    pub plane: PlaneFilter,
+    /// A value per object too (Color by value) - `None`: none.
+    pub value_column: Option<Column>,
+}
+
+/// An object of an analysis, as the split image draws and lists it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResultObject {
+    pub object_id: String,
+    /// Its first class (-1 none).
+    pub class_id: i32,
+    /// `[xmin, ymin, xmax, ymax]` in full-image pixels.
+    pub bbox_px: [u32; 4],
+    pub centroid_px: [f32; 2],
+    pub area_px: u64,
+    /// Its mean intensity per channel (gray values).
+    pub means: Vec<f32>,
+    /// `ImageObjectsFilter::value_column`'s value.
+    pub value: Option<f64>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pagination {
     pub limit: i32,

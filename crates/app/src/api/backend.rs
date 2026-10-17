@@ -197,6 +197,11 @@ pub trait ResultsSource: Send + Sync {
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors>;
     fn histogram(&self, filter: &HistogramFilter) -> Result<HistogramResult, InternalErrors>;
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors>;
+    /// The objects of one image (Results › Split with image).
+    fn image_objects(
+        &self,
+        filter: &crate::api::ImageObjectsFilter,
+    ) -> Result<Vec<crate::api::ResultObject>, InternalErrors>;
     /// Writes the export's files into `export.output_dir` (on the backend's
     /// machine). Blocks; stops early with `Cancelled` once `cancel` is set.
     fn export(

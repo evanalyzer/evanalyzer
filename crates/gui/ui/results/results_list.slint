@@ -26,8 +26,9 @@ export component ResultsListView inherits Rectangle {
         padding: 12px;
         spacing: 12px;
 
-        // -- The settings: what to show, how the rows are --
-        Rectangle {
+        // -- The settings: what to show, how the rows are (split with the
+        // image: in the table's head instead) --
+        if !ResultsState.split: Rectangle {
             width: root.side-w;
             background: Ink.panel;
             border-radius: Ink.radius-lg;
@@ -159,9 +160,42 @@ export component ResultsListView inherits Rectangle {
                         padding-left: 16px;
                         padding-right: 12px;
                         spacing: 6px;
+                        // Split with the image: what is shown, as fields.
+                        if ResultsState.split: InkMultiSelect {
+                            y: (parent.height - self.height) / 2;
+                            summary-text: "Images · " + ResultsState.list-image-summary;
+                            items <=> ResultsState.list-image-items;
+                            show-select-all: true;
+                            show-search: true;
+                            pill-width: 120px;
+                            filter-changed(text) => { ResultsState.list-image-filter-changed(text); }
+                            item-selected(key, value, selected) => { ResultsState.list-image-selected(key, selected); }
+                            select-all => { ResultsState.list-image-select-all(); }
+                            select-none => { ResultsState.list-image-select-none(); }
+                        }
+                        if ResultsState.split: InkMultiSelect {
+                            y: (parent.height - self.height) / 2;
+                            summary-text: "Classes · " + ResultsState.list-class-summary;
+                            items <=> ResultsState.list-class-items;
+                            show-select-all: true;
+                            pill-width: 130px;
+                            item-selected(key, value, selected) => { ResultsState.list-class-selected(key, selected); }
+                            select-all => { ResultsState.list-class-select-all(); }
+                            select-none => { ResultsState.list-class-select-none(); }
+                        }
+                        if ResultsState.split: InkMultiSelect {
+                            y: (parent.height - self.height) / 2;
+                            summary-text: "Columns";
+                            items <=> ResultsState.list-columns;
+                            show-select-all: true;
+                            pill-width: 90px;
+                            item-selected(key, value, selected) => { ResultsState.list-columns-item-selected(key, selected); }
+                            select-all => { ResultsState.list-columns-select-all(); }
+                            select-none => { ResultsState.list-columns-select-none(); }
+                        }
                         Text {
                             horizontal-stretch: 1;
-                            text: ResultsState.list-group-by-summary
+                            text: ResultsState.split ? "" : ResultsState.list-group-by-summary
                                 + (ResultsState.list-class-summary != "" ? " · " + ResultsState.list-class-summary : "")
                                 + (ResultsState.list-image-summary != "" ? " · " + ResultsState.list-image-summary : "");
                             font-size: Ink.fs-md;
@@ -263,6 +297,19 @@ export component ResultsListView inherits Rectangle {
                             }
                         }
 
+                        // Split: a row selected from the image (or ↑ ↓)
+                        // is scrolled into view.
+                        property <int> selected-row: ResultsState.list-selected-row;
+                        changed selected-row => {
+                            if ResultsState.split && self.selected-row >= 0 {
+                                if self.selected-row * 30px < -body-list.content-y {
+                                    body-list.content-y = -self.selected-row * 30px;
+                                } else if (self.selected-row + 1) * 30px > -body-list.content-y + body-list.visible-height {
+                                    body-list.content-y = -((self.selected-row + 1) * 30px - body-list.visible-height);
+                                }
+                            }
+                        }
+
                         body-list := ScrollView {
                             vertical-stretch: 1;
                             accessible-role: list;
@@ -288,16 +335,28 @@ export component ResultsListView inherits Rectangle {
                                     height: 1px;
                                     x: 0;
                                 }
+                                // Split: the selected row's accent edge.
+                                if ResultsState.split && index == ResultsState.list-selected-row: Rectangle {
+                                    x: -body-list.content-x;
+                                    width: 3px;
+                                    background: Ink.focus;
+                                }
 
                                 ta := TouchArea {
                                     mouse-cursor: pointer;
                                     // A click selects; a double click (or "Show on
                             // image") shows the object on its image.
+                            // Split with the image: a click shows it there.
                             clicked => {
                                 ResultsState.list-selected-row = index;
+                                if ResultsState.split {
+                                    ResultsState.list-row-selected(index);
+                                }
                             }
                             double-clicked => {
-                                ResultsState.list-row-clicked(index);
+                                if !ResultsState.split {
+                                    ResultsState.list-row-clicked(index);
+                                }
                             }
                                 }
 
@@ -349,7 +408,7 @@ export component ResultsListView inherits Rectangle {
 
                                 // The selected object: on its image (at the right of
                         // what's in view, also when scrolled sideways).
-                        if index == ResultsState.list-selected-row && ResultsState.list-group-by-summary == "Objects": InkButton {
+                        if index == ResultsState.list-selected-row && ResultsState.list-group-by-summary == "Objects" && !ResultsState.split: InkButton {
                             x: -body-list.content-x + body-list.visible-width - self.width - 10px;
                             y: (parent.height - self.height) / 2;
                             // Its own size (in a plain Rectangle it'd fill the row).
@@ -397,7 +456,7 @@ export component ResultsListView inherits Rectangle {
                         x: 16px;
                         height: parent.height;
                         vertical-alignment: center;
-                        text: "Double-click a row - or Show on image - to see the object on its image";
+                        text: ResultsState.split ? "Click a row - or ↑ ↓ - to find its object on the image" : "Double-click a row - or Show on image - to see the object on its image";
                     }
                 }
             }

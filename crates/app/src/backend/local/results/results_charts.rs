@@ -433,6 +433,61 @@ impl ResultCharts {
     }
 }
 
+impl ResultCharts {
+    /// The objects of one image, by id - see [`ImageObjectsFilter`].
+    pub fn image_objects(
+        &self,
+        database: &ResultsGenerator,
+        filter: &ImageObjectsFilter,
+    ) -> Result<Vec<ResultObject>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let value_expr = match &filter.value_column {
+            Some(column) => chart_value_expr(column)?,
+            None => "NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT object_id::VARCHAR, coalesce(object_class_id[1], -1), \
+             bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
+             centroid_x_px, centroid_y_px, area_px, intensity_mean_gray, \
+             ({value_expr})::DOUBLE \
+             FROM objects WHERE image_rel_path = ? AND z_stack = ? AND t_stack = ? \
+             ORDER BY object_id"
+        );
+        let mut stmt = database.connection().prepare(&sql).map_err(err)?;
+        stmt.query_map(
+            duckdb::params![filter.image_rel_path, filter.plane.z_stack, filter.plane.t_stack],
+            |row| {
+                let means = match row.get::<_, duckdb::types::Value>(9)? {
+                    duckdb::types::Value::List(values) => values
+                        .into_iter()
+                        .map(|v| match v {
+                            duckdb::types::Value::Double(d) => d as f32,
+                            duckdb::types::Value::Float(f) => f,
+                            _ => f32::NAN,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                Ok(ResultObject {
+                    object_id: row.get(0)?,
+                    class_id: row.get(1)?,
+                    bbox_px: [row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?],
+                    centroid_px: [
+                        row.get::<_, Option<f64>>(6)?.unwrap_or(0.0) as f32,
+                        row.get::<_, Option<f64>>(7)?.unwrap_or(0.0) as f32,
+                    ],
+                    area_px: row.get::<_, Option<u64>>(8)?.unwrap_or(0),
+                    means,
+                    value: row.get(10)?,
+                })
+            },
+        )
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)
+    }
+}
+
 /// `column_aggregate_expr`, wrapped with a chart-specific error message —
 /// that function's own wording ("cannot be aggregated for the plate view
 /// yet") is misleading when the failure actually surfaced from a
@@ -899,6 +954,33 @@ mod tests {
     }
 
     // -- paint_scatter ----------------------------------------------------
+
+    /// Split with image: an image's objects - their boxes, classes and
+    /// the value to color them by; not the other images'.
+    #[test]
+    fn image_objects_are_the_objects_of_that_image() {
+        let mut objects: Vec<ObjectSpec> = (1..=3)
+            .map(|i| ObjectSpec::new("img1.tif", "ClassA", 1, i * 10))
+            .collect();
+        objects.push(ObjectSpec::new("img2.tif", "ClassB", 2, 99));
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .image_objects(
+                &generator,
+                &ImageObjectsFilter {
+                    image_rel_path: "img1.tif".into(),
+                    plane: plane(),
+                    value_column: Some(Column::AreaSizePx),
+                },
+            )
+            .expect("objects");
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().all(|o| o.class_id == 1));
+        let mut values: Vec<f64> = result.iter().filter_map(|o| o.value).collect();
+        values.sort_by(f64::total_cmp);
+        assert_eq!(values, [10.0, 20.0, 30.0]);
+        assert_eq!(result[0].area_px as f64, result[0].value.unwrap());
+    }
 
     #[test]
     fn paint_scatter_returns_one_point_per_object_on_the_diagonal() {

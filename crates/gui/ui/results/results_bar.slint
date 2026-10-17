@@ -58,11 +58,34 @@ export component ResultsBarNav inherits HorizontalLayout {
         InkSegmented {
             width: 190px;
             label: "Results view";
+            // Split works with List and Plate.
+            disabled-index: ResultsState.split ? 2 : -1;
+            disabled-why: "Split view works with List and Plate";
             model: ["List", "Plate", "Charts"];
             selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : 0;
             picked(i) => {
                 ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : ResultsRailMode.list;
                 ResultsState.rail-mode-selected(ResultsState.rail-mode);
+            }
+        }
+    }
+
+    // Full | Split with image (board Z).
+    VerticalLayout {
+        alignment: center;
+        InkSegmented {
+            width: 200px;
+            label: "Layout";
+            model: ["Full", "Split with image"];
+            selected: ResultsState.split ? 1 : 0;
+            picked(i) => {
+                ResultsState.split = i == 1;
+                ResultsState.split-changed(i == 1);
+                // Split works with List and Plate.
+                if i == 1 && ResultsState.rail-mode == ResultsRailMode.charts {
+                    ResultsState.rail-mode = ResultsRailMode.list;
+                    ResultsState.rail-mode-selected(ResultsState.rail-mode);
+                }
             }
         }
     }

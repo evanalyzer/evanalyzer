@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use crate::UiState;
 use crate::editor::view_channel::{Samples, ViewChannel};
 use crate::editor::viewport_controller::ViewportState;
@@ -246,6 +247,10 @@ pub struct ViewportCache {
     cache_high_res: Mutex<IndexedTileCache>,
     cache_low_res: Mutex<IndexedTileCache>,
     pub active_high_res_data: RwLock<Option<(RenderSource, ReadContext)>>,
+    /// The results' split view: opening this image (path) shows this box
+    /// (image pixels) instead of the whole image - see
+    /// [`crate::editor::results_overlay::focus_view`].
+    pub focus: Mutex<Option<(PathBuf, [f32; 4])>>,
 }
 
 impl ViewportCache {
@@ -260,6 +265,7 @@ impl ViewportCache {
             cache_high_res: Mutex::new(IndexedTileCache::new(high_res_capacity)),
             cache_low_res: Mutex::new(IndexedTileCache::new(low_res_capacity)),
             active_high_res_data: RwLock::new(None),
+            focus: Mutex::new(None),
         }
     }
 
@@ -368,19 +374,38 @@ impl ViewportCache {
                 ));
             }
 
-            // Fit to screen: Calculate the zoom (Window / Image)
-            zoom = (v_w / highest_res.width as f32).min(v_h / highest_res.height as f32);
+            let focus = self
+                .focus
+                .lock()
+                .unwrap()
+                .as_ref()
+                .filter(|(focus_path, _)| *focus_path == path)
+                .map(|(_, bbox)| *bbox);
+            if let Some(bbox) = focus {
+                (zoom, off_x, off_y) = crate::editor::results_overlay::focus_view(
+                    v_w,
+                    v_h,
+                    highest_res.width as f32,
+                    highest_res.height as f32,
+                    bbox,
+                );
+                wanted_w = highest_res.width as f32 * zoom;
+                wanted_h = highest_res.height as f32 * zoom;
+            } else {
+                // Fit to screen: Calculate the zoom (Window / Image)
+                zoom = (v_w / highest_res.width as f32).min(v_h / highest_res.height as f32);
 
-            // Add a 5% margin so the image doesn't touch the window edges
-            zoom *= 0.95;
+                // Add a 5% margin so the image doesn't touch the window edges
+                zoom *= 0.95;
 
-            // Calculate the "Wanted" size at this new zoom level
-            wanted_w = highest_res.width as f32 * zoom;
-            wanted_h = highest_res.height as f32 * zoom;
+                // Calculate the "Wanted" size at this new zoom level
+                wanted_w = highest_res.width as f32 * zoom;
+                wanted_h = highest_res.height as f32 * zoom;
 
-            // Center the image
-            off_x = (v_w - wanted_w) / 2.0;
-            off_y = (v_h - wanted_h) / 2.0;
+                // Center the image
+                off_x = (v_w - wanted_w) / 2.0;
+                off_y = (v_h - wanted_h) / 2.0;
+            }
         } else {
             // Recalculate wanted_w/h for the current zoom if not a new reader
             wanted_w = highest_res.width as f32 * zoom;
