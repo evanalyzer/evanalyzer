@@ -146,13 +146,13 @@ export component Viewport inherits Rectangle {
             width: ViewportObjectState.compare-swapped ? parent.width - self.x : root.width * ViewportObjectState.compare-at;
             height: parent.height;
             clip: true;
-            Image {
-                source: ViewportState.compare_image;
+            for tile in ViewportState.compare_tiles: Image {
+                source: tile.image;
                 image-fit: fill;
-                x: root.screen_x(ViewportState.cmp_img_x) - cmp-clip.x;
-                y: root.screen_y(ViewportState.cmp_img_y);
-                width: root.screen_len(ViewportState.cmp_img_w);
-                height: root.screen_len(ViewportState.cmp_img_h);
+                x: root.screen_x(tile.img-x) - cmp-clip.x;
+                y: root.screen_y(tile.img-y);
+                width: root.screen_len(tile.img-w);
+                height: root.screen_len(tile.img-h);
                 visible: root.fits(self.x + cmp-clip.x, self.y, self.width, self.height);
             }
         }

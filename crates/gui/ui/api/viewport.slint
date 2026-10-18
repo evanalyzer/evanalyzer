@@ -73,12 +73,10 @@ export global ViewportState {
 
     // Compare: the breakpoint image, over the original, cut at the
     // divider (`ViewportObjectState.compare-at`). Empty while off.
-    in-out property <image> compare_image;
+    // Compare: the breakpoint images, one per captured tile, each where it
+    // lies in the image (image pixels; `zoom` etc. unused).
+    in-out property <[RetainedTile]> compare_tiles: [];
     in-out property <bool> compare_ready: false;
-    in-out property <float> cmp_img_x: 0;
-    in-out property <float> cmp_img_y: 0;
-    in-out property <float> cmp_img_w: 0;
-    in-out property <float> cmp_img_h: 0;
 
     in-out property <float> obj_img_x: 0;
     in-out property <float> obj_img_y: 0;

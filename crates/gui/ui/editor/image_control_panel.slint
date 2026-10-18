@@ -6,6 +6,7 @@ import { ChannelState, HistogramState, IntensityProjection } from "../api/state.
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState } from "../api/layout.slint";
+import { ResultsState } from "../api/results.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkSelect, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
 
@@ -249,6 +250,9 @@ component FieldRow inherits Rectangle {
 }
 
 export component ImageControlPanel inherits Rectangle {
+    // In the results' split view (a drawer over the image): ✕ closes the
+    // drawer, no pin.
+    in property <bool> in-split: false;
     property <[string]> fps-names: ["1 fps", "2 fps", "5 fps", "10 fps", "20 fps", "25 fps"];
     property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
     property <string> channel-name: ChannelState.channels.length > ChannelState.selected_channel_index
@@ -320,14 +324,19 @@ export component ImageControlPanel inherits Rectangle {
         InkPanelHead {
             title: "Image";
             subtitle: ImageMetaData.nr_series > 1 ? "Series \{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "";
-            pinnable: true;
+            pinnable: !root.in-split;
             pinned: LayoutState.image-pinned;
             // The series: in the top bar's image chip (always in view).
             pin-toggled => {
                 LayoutState.image-pinned = !LayoutState.image-pinned;
             }
             close => {
-                LayoutState.image-open = false;
+                if root.in-split {
+                    ResultsState.split-image-panel = false;
+                    ResultsState.split-image-panel-changed(false);
+                } else {
+                    LayoutState.image-open = false;
+                }
             }
         }
 

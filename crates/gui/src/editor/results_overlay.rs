@@ -1,8 +1,8 @@
 //! The results' split view on the image: every object of the analysis on
 //! the shown image as an ellipse in its box (the results keep boxes, not
 //! outlines), in its class's color or the value's heatmap color. The
-//! selected one is yellow (as a selected object in the editor), drawn on
-//! top and bolder; the others are dimmed meanwhile. Drawn instead of the project's
+//! selected one is drawn on top and bolder (the viewer's yellow crosshair
+//! points at it); the others are dimmed meanwhile. Drawn instead of the project's
 //! objects (see `ViewportController::sync_objects_to_slint_viewport`).
 
 /// The objects to draw, in image pixels.
@@ -18,8 +18,6 @@ pub struct ResultsOverlay {
 const OUTLINE_ALPHA: f32 = 0.95;
 const FILL_ALPHA: f32 = 0.12;
 const DIMMED: f32 = 0.3;
-/// The selected object's color (`0xFCE903`, the editor's selection).
-pub const SELECTED_RGB: [u8; 3] = [0xFC, 0xE9, 0x03];
 
 /// Draws `overlay` into `buffer` (`buf_w` × `buf_h`, transparent before),
 /// image pixel `p` at `p * zoom + off` on it.
@@ -45,7 +43,6 @@ pub fn draw_results_overlay(
         } else {
             1.0
         };
-        let rgb = if selected { &SELECTED_RGB } else { rgb };
         // Half the outline's width.
         let half = if selected { 1.25 } else { 0.75 };
         // The box's outer edges on screen (`xmax` is inclusive).
@@ -266,7 +263,7 @@ mod tests {
         draw_results_overlay(&mut buf, &overlay, 30, 10, 1.0, 0.0, 0.0);
         assert!(buf[5 * 30].a < buf[5 * 30 + 20].a, "the dimmed one is fainter");
         let p = buf[5 * 30 + 20];
-        assert_eq!([p.r, p.g, p.b], SELECTED_RGB, "the selected one is yellow");
+        assert_eq!([p.r, p.g, p.b], [0, 255, 0], "the selected one in its own colour");
     }
 
     #[test]

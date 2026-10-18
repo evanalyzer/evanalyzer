@@ -50,6 +50,7 @@ impl ResultsStateController {
         state.set_split(settings.on);
         state.set_split_w(settings.width_px.max(0.0));
         state.set_split_follow(settings.follow);
+        state.set_split_image_panel(settings.image_panel);
 
         let manager = self.clone();
         state.on_split_changed(move |on| {
@@ -69,6 +70,10 @@ impl ResultsStateController {
         let manager = self.clone();
         state.on_split_follow_changed(move |follow| {
             manager._app_state.update_app_settings(|s| s.results_split.follow = follow);
+        });
+        let manager = self.clone();
+        state.on_split_image_panel_changed(move |open| {
+            manager._app_state.update_app_settings(|s| s.results_split.image_panel = open);
         });
         // The split shown or not (mode, tab, Full/Split): its objects on
         // the image, or the project's again.
@@ -479,16 +484,19 @@ impl ResultsStateController {
             let object = split.selected.and_then(|i| split.objects.get(i).cloned());
             (split.image.clone(), object, split.objects.len(), split.selected, split.channel, split.region)
         };
-        // A tile (no object selected): its box on the image.
+        // The selected object: the viewer's yellow crosshair, as a list row
+        // opened in the full view; a tile (no object): its box.
+        let mark = |[x0, y0, x1, y1]: [u32; 4], paint_as_rectangle: bool| crate::ObjectHighlightBox {
+            x_px: x0 as f32,
+            y_px: y0 as f32,
+            w_px: (x1.saturating_sub(x0) + 1) as f32,
+            h_px: (y1.saturating_sub(y0) + 1) as f32,
+            active: true,
+            paint_as_rectangle,
+        };
         let highlight = match (&object, region) {
-            (None, Some([x0, y0, x1, y1])) => crate::ObjectHighlightBox {
-                x_px: x0 as f32,
-                y_px: y0 as f32,
-                w_px: (x1.saturating_sub(x0) + 1) as f32,
-                h_px: (y1.saturating_sub(y0) + 1) as f32,
-                active: true,
-                paint_as_rectangle: true,
-            },
+            (Some(o), _) => mark(o.bbox_px, false),
+            (None, Some(bbox)) => mark(bbox, true),
             _ => crate::ObjectHighlightBox::default(),
         };
         let classes: HashMap<i32, (String, u32)> = self

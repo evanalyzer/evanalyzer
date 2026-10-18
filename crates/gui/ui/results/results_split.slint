@@ -1,8 +1,7 @@
 // results/results_split.slint — Results, split with the image (board Z):
 // the results left, the image right. The image is the one viewer
 // (`Viewport`, moved into the right pane by the workspace); here what is
-// on and around it: the head over the image, the selected object's lines
-// and card, the hint, the well's filmstrip, and the divider.
+// on and around it: the head over the image, the selected object's card, the hint, the well's filmstrip, and the divider.
 
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { ViewportState } from "../api/viewport.slint";
@@ -67,7 +66,6 @@ component HudButton inherits Rectangle {
 // Follow selection, Color by (plate), Open in Images.
 export component SplitImageHead inherits Hud {
     property <bool> plate: ResultsState.rail-mode == ResultsRailMode.matrix;
-    property <bool> channel-open: false;
 
     height: 36px;
 
@@ -97,16 +95,6 @@ export component SplitImageHead inherits Hud {
             horizontal-stretch: 1;
             min-width: 60px;
         }
-        // The channel the card's mean is of.
-        if ResultsState.split-channels.length > 1: channel := HudButton {
-            text: "· " + ResultsState.split-channels[ResultsState.split-channel] + " ▾";
-            label: "Channel of the mean intensity";
-            y: (parent.height - self.height) / 2;
-            clicked => {
-                ResultsState.split-channel-changed(Math.mod(ResultsState.split-channel + 1, ResultsState.split-channels.length));
-            }
-        }
-
         if root.plate: Text {
             text: "Color by";
             font-size: 10.5px;
@@ -175,6 +163,18 @@ export component SplitImageHead inherits Hud {
                 background: #2E2E33;
             }
         }
+        // The image controls: channels, histogram, overlay (a drawer).
+        HudButton {
+            text: "Image";
+            icon: InkIcons.image-controls;
+            label: "Image controls";
+            on: ResultsState.split-image-panel;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                ResultsState.split-image-panel = !ResultsState.split-image-panel;
+                ResultsState.split-image-panel-changed(ResultsState.split-image-panel);
+            }
+        }
         HudButton {
             text: "Follow selection";
             icon: InkIcons.focus;
@@ -196,49 +196,21 @@ export component SplitImageHead inherits Hud {
     }
 }
 
-// The selected object on the image (drawn yellow in the objects' layer):
-// faint lines through it, with a gap round it, and its card beside it.
-// Covers the image; takes no input.
+// The selected object's card beside it, past the viewer's yellow crosshair
+// (the same as a list row opened in the full view). Covers the image; takes
+// no input.
 export component SplitSelection inherits Rectangle {
     property <length> cx: ViewportState.offset_x + (ResultsState.split-sel.x + ResultsState.split-sel.w / 2) * ViewportState.zoom_factor * 1px;
     property <length> cy: ViewportState.offset_y + (ResultsState.split-sel.y + ResultsState.split-sel.h / 2) * ViewportState.zoom_factor * 1px;
-    property <length> r: max(14px, max(ResultsState.split-sel.w, ResultsState.split-sel.h) / 2 * ViewportState.zoom_factor * 1px + 7px);
-
-    // The lines, with a gap round the object.
-    Rectangle {
-        x: root.cx;
-        y: 0;
-        width: 1px;
-        height: max(0px, root.cy - root.r);
-        background: #5E95EA.with-alpha(0.35);
-    }
-    Rectangle {
-        x: root.cx;
-        y: root.cy + root.r;
-        width: 1px;
-        height: max(0px, root.height - self.y);
-        background: #5E95EA.with-alpha(0.35);
-    }
-    Rectangle {
-        x: 0;
-        y: root.cy;
-        width: max(0px, root.cx - root.r);
-        height: 1px;
-        background: #5E95EA.with-alpha(0.35);
-    }
-    Rectangle {
-        x: root.cx + root.r;
-        y: root.cy;
-        width: max(0px, root.width - self.x);
-        height: 1px;
-        background: #5E95EA.with-alpha(0.35);
-    }
+    // To the end of the viewer's crosshair arms (its gap round the object,
+    // then 44 px of arm): the card goes beyond.
+    property <length> r: max(max(ResultsState.split-sel.w, ResultsState.split-sel.h) / 2 * ViewportState.zoom_factor * 1px + 8px, 14px) + 44px;
 
     // The card: right of the object, else left; kept on the image.
     card := Hud {
         property <length> right-x: root.cx + root.r + 12px;
         x: self.right-x + self.width <= root.width - 8px ? self.right-x : max(8px, root.cx - root.r - 12px - self.width);
-        y: clamp(root.cy - root.r, 54px, max(54px, root.height - self.height - 48px));
+        y: clamp(root.cy - self.height / 2, 54px, max(54px, root.height - self.height - 48px));
         width: max(170px, card-box.preferred-width);
         height: card-box.preferred-height;
 

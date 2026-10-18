@@ -136,10 +136,14 @@ export global ResultsState {
     in-out property <SplitObject> split-sel;
     // The well's images as thumbnails (`active-well-images` order).
     in-out property <[SplitThumb]> split-thumbs;
-    // The image's channels (the card's mean is of `split-channel`).
+    // The image's channels (the card's mean is of `split-channel` - the
+    // channel picked in the image controls).
     in-out property <[string]> split-channels;
     in-out property <int> split-channel: 0;
     callback split-channel-changed(int);
+    // The image controls (channels, histogram, overlay) over the image.
+    in-out property <bool> split-image-panel: false;
+    callback split-image-panel-changed(bool);
     callback split-changed(bool);
     callback split-width-changed(length);
     callback split-follow-changed(bool);
