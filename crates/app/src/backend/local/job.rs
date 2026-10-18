@@ -113,6 +113,8 @@ mod tests {
                 zoom: 1.0,
             },
             breakpoint: None,
+            max_visible_tiles: None,
+            breakpoint_tiles: 1,
         })
         .unwrap();
         drain(&job);

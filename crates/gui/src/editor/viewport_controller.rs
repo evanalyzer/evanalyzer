@@ -238,7 +238,9 @@ pub struct ViewportOverlayState {
     pub(crate) object_transparency: f32,
 }
 
-/// Raw breakpoint image data retained for re-rendering when histogram settings change.
+/// One tile's breakpoint image, kept for re-rendering when its histogram
+/// window or the view mode changes. A preview captures up to the breakpoint
+/// tiles setting of them (see `ViewportMemorySettings::breakpoint_tiles`).
 pub struct BreakpointChannelData {
     pub image: Arc<ImageContainer>,
     /// Segmentation/instance label maps captured at the same breakpoint
@@ -279,9 +281,17 @@ pub struct ViewportController {
     pub(crate) viewport_state: Arc<RwLock<ViewportState>>,
     pub(crate) overlay_state: Arc<RwLock<ViewportOverlayState>>,
     pub(crate) drawing_tasks: Tasks,
-    /// Raw breakpoint image stored for re-rendering with live histogram settings.
-    pub(crate) breakpoint_channel: Arc<RwLock<Option<BreakpointChannelData>>>,
-    /// Which of `breakpoint_channel`'s buffers to render (image/segmentation/
+    /// The breakpoint images of the last preview, one per captured tile -
+    /// freed when the breakpoint is cleared, an analysis starts or another
+    /// image opens (see [`Self::clear_breakpoint`]).
+    pub(crate) breakpoint_tiles: Arc<RwLock<Vec<BreakpointChannelData>>>,
+    /// Bumped whenever the compared picture changes (its tiles, histogram
+    /// window, view mode, log scale, compare switched on): the worker
+    /// renders it again only then - a pan or zoom just moves it.
+    pub(crate) compare_epoch: AtomicU64,
+    /// How often the compare was rendered (for the log and the tests).
+    pub(crate) compare_renders: AtomicU64,
+    /// Which of `breakpoint_tiles`' buffers to render (image/segmentation/
     /// instances). Stored as the raw `BreakpointViewMode` discriminant.
     pub(crate) breakpoint_view_mode: Arc<AtomicU8>,
     /// Compare (top bar, only with a breakpoint image): the original is
@@ -376,7 +386,9 @@ impl ViewportController {
                 object_transparency: 0.8,
             })),
             drawing_tasks,
-            breakpoint_channel: Arc::new(RwLock::new(None)),
+            breakpoint_tiles: Arc::new(RwLock::new(Vec::new())),
+            compare_epoch: AtomicU64::new(0),
+            compare_renders: AtomicU64::new(0),
             breakpoint_view_mode: Arc::new(AtomicU8::new(BreakpointViewMode::default() as u8)),
             compare: Arc::new(AtomicBool::new(false)),
             breakpoint_histogram: RwLock::new(None),
@@ -444,6 +456,8 @@ impl ViewportController {
     /// ask for it. Called when an analysis starts on this computer; the
     /// caches fill up again as the viewport is used.
     pub fn release_preview_memory_for_analysis(&self) {
+        // The breakpoint images always: up to ~190 MB a tile.
+        self.clear_breakpoint();
         if !self.memory_settings().free_caches_on_analysis {
             return;
         }
@@ -710,12 +724,9 @@ impl ViewportController {
         }
     }
 
-    /// Stores the raw breakpoint `ImageContainer` for rendering via the normal
-    /// viewport worker path (histogram sliders apply just like any other channel).
-    ///
-    /// If the breakpoint toggle is already active a high-res redraw is triggered
-    /// immediately so the new image appears without requiring a pan or zoom.
-    #[allow(clippy::too_many_arguments)]
+    /// The breakpoint image of one tile, replacing all others (one tile
+    /// captured) - see [`Self::add_breakpoint_tile`].
+    #[cfg(test)]
     pub fn set_breakpoint_channel(
         &self,
         image: ImageContainer,
@@ -728,9 +739,8 @@ impl ViewportController {
         nr_bits: u16,
         channel_idx: Option<i32>,
     ) {
-        {
-            let mut ch = self.breakpoint_channel.write().unwrap();
-            *ch = Some(BreakpointChannelData {
+        self.add_breakpoint_tile(
+            BreakpointChannelData {
                 image: Arc::new(image),
                 segmentation: segmentation.map(Arc::new),
                 instances: instances.map(Arc::new),
@@ -740,8 +750,26 @@ impl ViewportController {
                 tile_height,
                 nr_bits,
                 channel_idx,
+            },
+            true,
+        );
+    }
+
+    /// A tile's breakpoint image from a preview: `first` (the run's first)
+    /// drops the last run's tiles, else it replaces the tile at the same
+    /// place or joins them.
+    pub fn add_breakpoint_tile(&self, tile: BreakpointChannelData, first: bool) {
+        {
+            let mut tiles = self.breakpoint_tiles.write().unwrap();
+            if first {
+                tiles.clear();
+            }
+            tiles.retain(|t| {
+                (t.tile_offset_x, t.tile_offset_y) != (tile.tile_offset_x, tile.tile_offset_y)
             });
+            tiles.push(tile);
         }
+        self.bump_compare();
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
@@ -758,7 +786,43 @@ impl ViewportController {
         }
     }
 
-    /// The image couldn't be read: its renders (the last image's) go.
+    /// No breakpoint images any more (the breakpoint cleared, an analysis
+    /// starting): their RAM is freed - also the compare's render of them,
+    /// at the next render.
+    pub fn clear_breakpoint(&self) {
+        let had = {
+            let mut tiles = self.breakpoint_tiles.write().unwrap();
+            let had = !tiles.is_empty();
+            *tiles = Vec::new();
+            had
+        };
+        if !had {
+            return;
+        }
+        *self.breakpoint_histogram.write().unwrap() = None;
+        self.bump_compare();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let view = ui.global::<ViewportSlintState>();
+                view.set_compare_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
+                view.set_compare_ready(false);
+                ui.global::<PipelinesPanelState>().set_has_breakpoint_image(false);
+            }
+        })
+        .ok();
+        self.trigger_image_redraw();
+    }
+
+    /// See [`Self::compare_epoch`].
+    pub(crate) fn compare_epoch(&self) -> u64 {
+        self.compare_epoch.load(Ordering::SeqCst)
+    }
+
+    fn bump_compare(&self) {
+        self.compare_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
     pub fn clear_rendered_image(&self) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -777,7 +841,8 @@ impl ViewportController {
     /// compare are gone.
     pub fn clear_shown_image(&self) {
         self.bump_content_generation();
-        *self.breakpoint_channel.write().unwrap() = None;
+        *self.breakpoint_tiles.write().unwrap() = Vec::new();
+        self.bump_compare();
         *self.breakpoint_histogram.write().unwrap() = None;
         self.compare.store(false, Ordering::Relaxed);
         *self.histograms.lock().expect("Poisoned") = [(Vec::new(), 1.0), (Vec::new(), 1.0)];
@@ -792,7 +857,7 @@ impl ViewportController {
                 ui.set_object_image(slint::Image::default());
                 let view = ui.global::<ViewportSlintState>();
                 view.set_retained_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
-                view.set_compare_image(slint::Image::default());
+                view.set_compare_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
                 view.set_compare_ready(false);
                 view.set_object_ready(false);
                 ui.global::<HistogramState>()
@@ -836,6 +901,7 @@ impl ViewportController {
     /// Log or linear counts - the curves are drawn anew.
     pub fn set_histogram_log(&self, log: bool) {
         if self.histogram_log.swap(log, Ordering::Relaxed) != log {
+            self.bump_compare();
             self.trigger_image_redraw();
         }
     }
@@ -860,6 +926,7 @@ impl ViewportController {
     /// Sets it (`None`: auto-adjusted at the next render) and redraws.
     pub fn set_breakpoint_histogram(&self, settings: Option<HistogramSettings>) {
         *self.breakpoint_histogram.write().unwrap() = settings;
+        self.bump_compare();
         if self.comparing() {
             self.trigger_image_redraw();
         }
@@ -869,14 +936,15 @@ impl ViewportController {
     /// footer shows it: in the image's units ("128"), a label map's label
     /// ("label 3"); `None` outside it or without one.
     pub fn breakpoint_value_at(&self, x: f32, y: f32) -> Option<String> {
-        let guard = self.breakpoint_channel.read().unwrap();
-        let bp = guard.as_ref()?;
-        let bx = (x.floor() as i64).checked_sub(bp.tile_offset_x as i64)?;
-        let by = (y.floor() as i64).checked_sub(bp.tile_offset_y as i64)?;
-        if bx < 0 || by < 0 || bx >= bp.tile_width as i64 || by >= bp.tile_height as i64 {
-            return None;
-        }
-        let idx = by as usize * bp.tile_width + bx as usize;
+        let tiles = self.breakpoint_tiles.read().unwrap();
+        let (px, py) = (x.floor() as i64, y.floor() as i64);
+        let bp = tiles.iter().find(|t| {
+            px >= t.tile_offset_x as i64
+                && py >= t.tile_offset_y as i64
+                && px < (t.tile_offset_x + t.tile_width) as i64
+                && py < (t.tile_offset_y + t.tile_height) as i64
+        })?;
+        let idx = (py as usize - bp.tile_offset_y) * bp.tile_width + (px as usize - bp.tile_offset_x);
         let image = match self.breakpoint_view_mode() {
             BreakpointViewMode::Image => &bp.image,
             BreakpointViewMode::Segmentation => bp.segmentation.as_ref().unwrap_or(&bp.image),
@@ -906,13 +974,15 @@ impl ViewportController {
         if self.compare.swap(on, Ordering::Relaxed) == on {
             return;
         }
+        // On: rendered anew; off: the render is dropped at the next render.
+        self.bump_compare();
         if !on {
             let ui_weak = self.ui.clone();
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let view = ui.global::<ViewportSlintState>();
                     view.set_compare_ready(false);
-                    view.set_compare_image(slint::Image::default());
+                    view.set_compare_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
                 }
             })
             .ok();
@@ -920,11 +990,11 @@ impl ViewportController {
         self.trigger_image_redraw();
     }
 
-    /// The breakpoint image of a compare, where it lies in the image.
+    /// The breakpoint images of a compare, each where it lies in the image
+    /// (`(buffer, rect)`, image pixels): Slint moves them with a pan or zoom.
     pub fn sync_compare_to_slint(
         &self,
-        pixel_buffer: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
-        rect: ImageRect,
+        tiles: Vec<(slint::SharedPixelBuffer<slint::Rgb8Pixel>, ImageRect)>,
     ) {
         let compare = self.compare.clone();
         let ui_weak = self.ui.clone();
@@ -935,11 +1005,18 @@ impl ViewportController {
             }
             if let Some(ui) = ui_weak.upgrade() {
                 let view = ui.global::<ViewportSlintState>();
-                view.set_cmp_img_x(rect.x);
-                view.set_cmp_img_y(rect.y);
-                view.set_cmp_img_w(rect.w);
-                view.set_cmp_img_h(rect.h);
-                view.set_compare_image(slint::Image::from_rgb8(pixel_buffer));
+                let tiles: Vec<RetainedTile> = tiles
+                    .into_iter()
+                    .map(|(buffer, rect)| RetainedTile {
+                        image: slint::Image::from_rgb8(buffer),
+                        img_x: rect.x,
+                        img_y: rect.y,
+                        img_w: rect.w,
+                        img_h: rect.h,
+                        ..Default::default()
+                    })
+                    .collect();
+                view.set_compare_tiles(Rc::new(VecModel::from(tiles)).into());
                 view.set_compare_ready(true);
             }
         })
@@ -957,6 +1034,7 @@ impl ViewportController {
     pub fn set_breakpoint_view_mode(&self, mode: i32) {
         self.breakpoint_view_mode
             .store(BreakpointViewMode::from_i32(mode) as u8, Ordering::Relaxed);
+        self.bump_compare();
         if self.comparing() {
             self.trigger_image_redraw();
         }
@@ -2161,8 +2239,9 @@ mod breakpoint_state_tests {
             Some(3),
         );
 
-        let stored = controller.breakpoint_channel.read().unwrap();
-        let data = stored.as_ref().expect("breakpoint channel must be set");
+        let stored = controller.breakpoint_tiles.read().unwrap();
+        assert_eq!(stored.len(), 1);
+        let data = stored.first().expect("breakpoint channel must be set");
         assert!(data.segmentation.is_some());
         assert!(data.instances.is_none());
         assert_eq!(data.tile_offset_x, 10);
@@ -2180,8 +2259,9 @@ mod breakpoint_state_tests {
 
         controller.set_breakpoint_channel(gray_image(), None, None, 5, 5, 1, 1, 16, Some(1));
 
-        let stored = controller.breakpoint_channel.read().unwrap();
-        let data = stored.as_ref().unwrap();
+        let stored = controller.breakpoint_tiles.read().unwrap();
+        assert_eq!(stored.len(), 1, "replaced, not added");
+        let data = stored.first().unwrap();
         assert_eq!(data.tile_offset_x, 5);
         assert_eq!(data.nr_bits, 16);
         assert_eq!(data.channel_idx, Some(1));

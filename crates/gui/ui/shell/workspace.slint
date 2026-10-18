@@ -5,7 +5,7 @@
 
 import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton, InkDivider } from "../ink/ink.slint";
 import { Places, LayoutState, WorkspaceMode } from "../api/layout.slint";
-import { GlobalAppState, DialogType } from "../api/state.slint";
+import { ChannelState, GlobalAppState, DialogType } from "../api/state.slint";
 import { Viewport } from "../editor/viewport.slint";
 import { PreviewRendering } from "../dialogs/preview_rendering_dialog.slint";
 import { PipelinesPanel, TuningPanel } from "../editor/pipelines_panel.slint";
@@ -248,6 +248,13 @@ export component Workspace inherits Rectangle {
         border-width: 1px;
         border-color: #2E2E33;
     }
+    // The card's mean: of the channel picked there.
+    property <int> picked-channel: ChannelState.selected_channel_index < ChannelState.channels.length ? ChannelState.channels[ChannelState.selected_channel_index].idx : 0;
+    changed picked-channel => {
+        ResultsState.split-channel = self.picked-channel;
+        ResultsState.split-channel-changed(self.picked-channel);
+    }
+
     if root.split: SplitDivider {
         x: root.split-left;
         y: 12px;
@@ -258,32 +265,37 @@ export component Workspace inherits Rectangle {
     }
 
     // -- Right --
-    if root.on-image: VerticalLayout {
-        x: parent.width - Float.right-w - Float.gap;
-        y: Float.gap;
+    // Results, split with the image: only the image controls, over the
+    // image's right side (its head's "Image"), above the navigator - the
+    // same panel, not a second one.
+    property <bool> split-image-panel: root.split && ResultsState.split-image-panel;
+    if root.on-image || root.split-image-panel: VerticalLayout {
+        x: root.split-image-panel ? root.pane-x + root.pane-w - Float.right-w - 10px : parent.width - Float.right-w - Float.gap;
+        y: root.split-image-panel ? 12px + 56px : Float.gap;
         width: Float.right-w;
-        height: parent.height - 2 * Float.gap;
+        height: root.split-image-panel ? max(160px, root.pane-h - root.strip-h - 56px - 150px) : parent.height - 2 * Float.gap;
         spacing: 8px;
         alignment: start;
 
-        HorizontalLayout {
+        if !root.split-image-panel: HorizontalLayout {
             alignment: end;
             PanelSwitches { }
         }
 
-        if LayoutState.classes-open: InkPanel {
+        if LayoutState.classes-open && !root.split-image-panel: InkPanel {
             max-height: 340px;
             ClassificationPanel { }
         }
 
-        if LayoutState.image-open: InkPanel {
+        if LayoutState.image-open || root.split-image-panel: InkPanel {
             vertical-stretch: 1;
             ImageControlPanel {
+                in-split: root.split-image-panel;
                 vertical-stretch: 1;
             }
         }
 
-        if LayoutState.objects-open && !LayoutState.objects-as-table: InkPanel {
+        if LayoutState.objects-open && !LayoutState.objects-as-table && !root.split-image-panel: InkPanel {
             vertical-stretch: 1;
             ObjectListPanel {
                 vertical-stretch: 1;

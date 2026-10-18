@@ -96,6 +96,18 @@ impl ViewportImageController {
             state.set_objects_as_table(settings.objects_as_table);
             state.set_object_card(settings.object_card);
             state.set_reduce_motion(settings.reduce_motion);
+            // Automatic: the numbers it gives here shown (and kept as the
+            // starting point if switched off).
+            let ram = this_computer_ram_bytes();
+            let auto_preview = ViewportMemorySettings::auto_preview_tiles(ram);
+            let auto_breakpoint = ViewportMemorySettings::auto_breakpoint_tiles(ram);
+            let gb = ram as f64 / (1024.0 * 1024.0 * 1024.0);
+            state.set_auto_preview_tiles_note(format!("{gb:.0} GB RAM here: {auto_preview}").into());
+            state.set_auto_breakpoint_tiles_note(format!("{gb:.0} GB RAM: {auto_breakpoint}").into());
+            state.set_preview_tiles_auto(settings.preview_tiles_auto);
+            state.set_preview_tiles(if settings.preview_tiles_auto { auto_preview } else { settings.preview_tiles } as i32);
+            state.set_breakpoint_tiles_auto(settings.breakpoint_tiles_auto);
+            state.set_breakpoint_tiles(settings.effective_breakpoint_tiles(ram) as i32);
             state.set_auto_scale_new_images(settings.auto_scale_new_images);
             state.set_color_channels_without_wavelength(settings.color_channels_without_wavelength);
         }
@@ -108,6 +120,7 @@ impl ViewportImageController {
             return;
         };
         let state = ui.global::<ViewportMemoryState>();
+        let before = self.viewport_controller.memory_settings();
         let settings = ViewportMemorySettings {
             tile_history_enabled: state.get_tile_history_enabled(),
             tile_history_budget_mb: state.get_tile_history_budget_mb().max(0) as u32,
@@ -121,11 +134,24 @@ impl ViewportImageController {
             objects_as_table: state.get_objects_as_table(),
             object_card: state.get_object_card(),
             reduce_motion: state.get_reduce_motion(),
+            preview_tiles_auto: state.get_preview_tiles_auto(),
+            // Automatic: the number shown is what auto gives - the own one
+            // stays (it's the field's starting point when switched off).
+            preview_tiles: if state.get_preview_tiles_auto() {
+                before.preview_tiles
+            } else {
+                state.get_preview_tiles().max(1) as u32
+            },
+            breakpoint_tiles_auto: state.get_breakpoint_tiles_auto(),
+            breakpoint_tiles: if state.get_breakpoint_tiles_auto() {
+                before.breakpoint_tiles
+            } else {
+                state.get_breakpoint_tiles().max(1) as u32
+            },
             auto_scale_new_images: state.get_auto_scale_new_images(),
             color_channels_without_wavelength: state.get_color_channels_without_wavelength(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
         };
-        let before = self.viewport_controller.memory_settings();
         if settings.objects_as_table != before.objects_as_table {
             ui.global::<LayoutState>()
                 .set_objects_as_table(settings.objects_as_table);
@@ -1264,6 +1290,10 @@ mod tests {
         state.set_objects_as_table(true);
         state.set_object_card(true);
         state.set_reduce_motion(true);
+        state.set_preview_tiles_auto(false);
+        state.set_preview_tiles(100);
+        state.set_breakpoint_tiles_auto(false);
+        state.set_breakpoint_tiles(2);
         state.set_auto_scale_new_images(false);
         state.set_color_channels_without_wavelength(true);
 
@@ -1284,6 +1314,10 @@ mod tests {
             auto_scale_new_images: false,
             color_channels_without_wavelength: true,
             reduce_motion: true,
+            preview_tiles_auto: false,
+            preview_tiles: 100,
+            breakpoint_tiles_auto: false,
+            breakpoint_tiles: 2,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(

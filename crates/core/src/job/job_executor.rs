@@ -191,6 +191,9 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
+    /// How many tiles send their breakpoint image: the visible ones nearest
+    /// the viewport centre (at least 1).
+    pub breakpoint_tiles: usize,
 
     /// The project's class colors (`0xRRGGBB`), handed to every image's pipeline cache
     pub class_colors: Arc<HashMap<ObjectClass, u32>>,
@@ -221,6 +224,7 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
+            breakpoint_tiles: 1,
             class_colors,
         }
     }
@@ -639,10 +643,14 @@ impl<'a> JobExecutor {
         // Strategy: among visible tiles, pick the one whose centre is closest
         // to the viewport centre (in image-pixel space).  When no viewport
         // settings are available, fall back to the geometrically middle tile.
-        let breakpoint_target: Option<(usize, usize)> = if self.breakpoint.is_some() {
-            Self::breakpoint_target_tile(&tiles, self.preview_tile_settings.as_ref())
+        let breakpoint_targets: Vec<(usize, usize)> = if self.breakpoint.is_some() {
+            Self::breakpoint_target_tiles(
+                &tiles,
+                self.preview_tile_settings.as_ref(),
+                self.breakpoint_tiles,
+            )
         } else {
-            None
+            Vec::new()
         };
 
         // Visible/hidden only depends on tile geometry (x, y), never on which
@@ -766,9 +774,8 @@ impl<'a> JobExecutor {
                         return Err(InternalErrors::Cancelled);
                     }
 
-                    let is_bp_target = breakpoint_target
-                        .map(|(ox, oy)| tile.offset_x == ox && tile.offset_y == oy)
-                        .unwrap_or(false);
+                    let is_bp_target = breakpoint_targets
+                        .contains(&(tile.offset_x, tile.offset_y));
 
                     // A fresh reader per tile, not pooled: measured to be
                     // faster in practice than sharing a small mutex-guarded
@@ -1423,44 +1430,60 @@ impl<'a> JobExecutor {
     /// of pixels the user can't see just to get the small visible patch. Shrinking
     /// the tile as zoom increases keeps the analyzed area closer to what's on
     /// screen, so feedback for that area arrives faster.
-    /// The tile a breakpoint captures (its offset): among the tiles visible in
-    /// the viewport (all tiles if none is), the one whose centre is closest
-    /// to the viewport centre; without viewport settings the middle tile.
-    fn breakpoint_target_tile(
+    /// The tiles a breakpoint captures (their offsets), at most `count`
+    /// (at least 1): among the tiles visible in the viewport (all tiles if
+    /// none is), the ones whose centres are closest to the viewport centre;
+    /// without viewport settings the middle tiles.
+    fn breakpoint_target_tiles(
         tiles: &[ImageTile],
         settings: Option<&PreviewTileSettings>,
-    ) -> Option<(usize, usize)> {
-        match settings {
+        count: usize,
+    ) -> Vec<(usize, usize)> {
+        let count = count.max(1);
+        let candidates: Vec<&ImageTile> = match settings {
             Some(settings) => {
-                let visible: Vec<&ImageTile> = tiles
-                    .iter()
-                    .filter(|t| settings.is_tile_visible(t))
-                    .collect();
-                let candidates = if visible.is_empty() {
-                    tiles.iter().collect::<Vec<_>>()
+                let visible: Vec<&ImageTile> =
+                    tiles.iter().filter(|t| settings.is_tile_visible(t)).collect();
+                if visible.is_empty() {
+                    tiles.iter().collect()
                 } else {
                     visible
-                };
-                if candidates.len() == 1 {
-                    candidates.first().map(|t| (t.offset_x, t.offset_y))
-                } else {
-                    // Viewport centre in image-pixel coordinates:
-                    //   screen_x = img_x * zoom + offset_x  →  img_x = (screen_x - offset_x) / zoom
-                    let cx = (settings.viewport_width / 2.0 - settings.offset_x) / settings.zoom;
-                    let cy = (settings.viewport_height / 2.0 - settings.offset_y) / settings.zoom;
-                    candidates
-                        .iter()
-                        .map(|t| {
-                            let tx = t.offset_x as f32 + t.width as f32 / 2.0;
-                            let ty = t.offset_y as f32 + t.height as f32 / 2.0;
-                            (t, (tx - cx).powi(2) + (ty - cy).powi(2))
-                        })
-                        .min_by(|(_, da), (_, db)| da.total_cmp(db))
-                        .map(|(t, _)| (t.offset_x, t.offset_y))
                 }
             }
-            None => tiles.get(tiles.len() / 2).map(|t| (t.offset_x, t.offset_y)),
-        }
+            None => tiles.iter().collect(),
+        };
+        // The centre: the viewport's in image pixels
+        // (screen = img * zoom + offset), else the middle tile's.
+        let centre = match settings {
+            Some(settings) => Some((
+                (settings.viewport_width / 2.0 - settings.offset_x) / settings.zoom,
+                (settings.viewport_height / 2.0 - settings.offset_y) / settings.zoom,
+            )),
+            None => tiles.get(tiles.len() / 2).map(|t| {
+                (
+                    t.offset_x as f32 + t.width as f32 / 2.0,
+                    t.offset_y as f32 + t.height as f32 / 2.0,
+                )
+            }),
+        };
+        let Some((cx, cy)) = centre else {
+            return Vec::new();
+        };
+        let mut by_distance: Vec<(&ImageTile, f32)> = candidates
+            .into_iter()
+            .map(|t| {
+                let tx = t.offset_x as f32 + t.width as f32 / 2.0;
+                let ty = t.offset_y as f32 + t.height as f32 / 2.0;
+                (t, (tx - cx).powi(2) + (ty - cy).powi(2))
+            })
+            .collect();
+        // Stable: equally near tiles keep their order.
+        by_distance.sort_by(|(_, da), (_, db)| da.total_cmp(db));
+        by_distance
+            .into_iter()
+            .take(count)
+            .map(|(t, _)| (t.offset_x, t.offset_y))
+            .collect()
     }
 
     fn preview_tile_size(&self) -> usize {
@@ -2896,13 +2919,29 @@ mod full_run_integration_tests {
     }
 
     #[test]
+    fn a_breakpoint_on_several_tiles_takes_the_nearest_visible_ones_first() {
+        let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
+        // Centre at (700, 650): bottom-right nearest, then top-right
+        // (its centre 106 px further), then bottom-left.
+        let settings = viewport(200.0 - 700.0, 200.0 - 650.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 3),
+            [(512, 512), (512, 0), (0, 512)]
+        );
+        // More wanted than there are: all of them, once.
+        assert_eq!(JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 9).len(), 4);
+        // 0 means 1.
+        assert_eq!(JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 0).len(), 1);
+    }
+
+    #[test]
     fn the_breakpoint_captures_the_visible_tile_closest_to_the_viewport_centre() {
         let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
         // The viewport (400x400 at zoom 1) panned so its centre lies at image
         // pixel (700, 650): over the bottom-right tile, with others visible too.
         let settings = viewport(200.0 - 700.0, 200.0 - 650.0);
         assert_eq!(
-            JobExecutor::breakpoint_target_tile(&tiles, Some(&settings)),
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 1).first().copied(),
             Some((512, 512))
         );
     }
@@ -2912,22 +2951,22 @@ mod full_run_integration_tests {
         let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
         // No viewport settings: the middle tile of the list.
         assert_eq!(
-            JobExecutor::breakpoint_target_tile(&tiles, None),
+            JobExecutor::breakpoint_target_tiles(&tiles, None, 1).first().copied(),
             Some((0, 512))
         );
         // Viewport far away from the image: the closest of all tiles.
         let away = viewport(-5000.0, -5000.0);
         assert_eq!(
-            JobExecutor::breakpoint_target_tile(&tiles, Some(&away)),
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&away), 1).first().copied(),
             Some((512, 512))
         );
         // A single visible tile is taken as is.
         let only_first = viewport(0.0, 0.0);
         assert_eq!(
-            JobExecutor::breakpoint_target_tile(&tiles[..1], Some(&only_first)),
+            JobExecutor::breakpoint_target_tiles(&tiles[..1], Some(&only_first), 1).first().copied(),
             Some((0, 0))
         );
-        assert_eq!(JobExecutor::breakpoint_target_tile(&[], None), None);
+        assert_eq!(JobExecutor::breakpoint_target_tiles(&[], None, 1).first().copied(), None);
     }
 
     /// The id of pipeline 1's first step (the Threshold of

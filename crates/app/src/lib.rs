@@ -206,7 +206,6 @@ pub mod analysis {
 }
 
 pub mod preview {
-    pub use crate::api::MAX_PREVIEW_VISIBLE_TILES;
     pub use crate::api::PreviewRequest;
     pub use crate::api::PreviewViewport;
     pub use crate::api::StartPreviewError;

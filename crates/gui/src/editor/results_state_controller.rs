@@ -7148,10 +7148,14 @@ mod tests {
         assert_eq!((state.get_split_pos(), state.get_split_total()), (2, 3), "row 2 of 3");
         assert_eq!(state.get_split_title(), rel_path.as_str());
 
+        let highlight = ui.global::<crate::ViewportObjectState>().get_object_highlight();
+        assert!(highlight.active && !highlight.paint_as_rectangle, "the yellow crosshair");
+
         // Esc: nothing selected, the objects stay.
         state.invoke_split_clear();
         drain_ui_queue();
         assert!(!state.get_split_sel().active);
+        assert!(!ui.global::<crate::ViewportObjectState>().get_object_highlight().active);
         assert_eq!(state.get_list_selected_row(), -1);
         assert_eq!(controller.viewport().results_overlay().unwrap().selected, None);
 
@@ -7211,11 +7215,14 @@ mod tests {
         assert_eq!((highlight.x_px, highlight.y_px), (0.0, 0.0));
         assert!(!state.get_split_sel().active, "no object selected");
 
-        // Selecting an object instead: the box goes.
+        // Selecting an object instead: the box becomes its crosshair, as a
+        // list row opened in the full view.
         state.invoke_split_image_clicked(5.0, 5.0);
         drain_ui_queue();
         assert!(state.get_split_sel().active);
-        assert!(!ui.global::<crate::ViewportObjectState>().get_object_highlight().active);
+        let highlight = ui.global::<crate::ViewportObjectState>().get_object_highlight();
+        assert!(highlight.active && !highlight.paint_as_rectangle, "the crosshair");
+        assert_eq!((highlight.x_px, highlight.w_px), (0.0, 11.0));
     }
 
     #[test]
@@ -7229,5 +7236,22 @@ mod tests {
         assert!(saved.on);
         assert_eq!(saved.width_px, 512.0);
         assert!(!saved.follow);
+        assert!(!saved.image_panel, "closed by default");
+        state.invoke_split_image_panel_changed(true);
+        assert!(controller._app_state.load_app_settings().results_split.image_panel);
+    }
+
+    /// The card's mean is of the channel picked in the image controls.
+    #[test]
+    fn split_the_cards_mean_follows_the_picked_channel() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        assert_eq!(state.get_split_sel().mean, "127", "channel 0's mean");
+        state.invoke_split_channel_changed(5);
+        drain_ui_queue();
+        assert_eq!(state.get_split_sel().mean, "–", "no such channel: nothing");
+        let _ = controller;
     }
 }

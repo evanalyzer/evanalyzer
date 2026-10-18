@@ -236,6 +236,14 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   can't take dropped files. Code: `shell/start_page.slint`,
   `editor/start_page_controller.rs`. Generated code +0.5 MB
   (37.83 → 38.36 MB).
+- **Round of 2026-10-18:** the split view's selected object gets the
+  viewer's yellow crosshair (card beside it); the image controls open as a
+  drawer over the split image (the same panel, moved - a second copy cost
+  0.4 MB); breakpoint compare renders its images once per change and lets
+  Slint move them (pan/zoom as fast as without compare); a breakpoint
+  captures several tiles; Settings › Viewport has Preview tiles and
+  Breakpoint tiles (Auto or a number - two rows, ~110 KB each: number
+  fields are costly). Generated code 38.45 → 38.69 MB.
 - **Build:** generated code 34.9 MB → 32.78 MB → 34.0 MB → 34.98 MB
   (Results views, objects filter, dialogs as on the boards; before that:
   dialogs movable/non-modal ~0.33 MB - `InkDialog` is copied into each of

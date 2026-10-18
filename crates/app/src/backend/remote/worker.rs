@@ -468,13 +468,21 @@ impl Session {
                 Ok(()) => self.reply(id, Reply::Done, none()),
                 Err(e) => self.fail(id, &e),
             },
-            Request::StartPreview(req) => match self.backend.start_preview(req) {
+            Request::StartPreview(mut req) => {
+                // The preview runs here: a number asked for is capped at
+                // what this computer can take.
+                let cap = crate::workspace::settings::ViewportMemorySettings::auto_preview_tiles(
+                    crate::backend::local::system::cpu_ram_diagnostics().1,
+                );
+                req.max_visible_tiles = req.max_visible_tiles.map(|n| n.min(cap));
+                match self.backend.start_preview(req) {
                 Ok(job) => self.stream_job(id, job),
-                Err(StartPreviewError::TooManyTiles { tiles }) => {
-                    self.reply(id, Reply::PreviewTooManyTiles { tiles }, Vec::new())
+                Err(StartPreviewError::TooManyTiles { tiles, max }) => {
+                    self.reply(id, Reply::PreviewTooManyTiles { tiles, max }, Vec::new())
                 }
                 Err(StartPreviewError::Failed(e)) => self.fail(id, &e),
-            },
+                }
+            }
             Request::StartTraining(req) => {
                 let save_to = req.save_to.clone();
                 self.train(id, req, save_to)
@@ -1017,7 +1025,7 @@ mod session_tests {
         }
         fn start_preview(&self, _: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
             Err(match self.preview_tiles {
-                Some(tiles) => StartPreviewError::TooManyTiles { tiles },
+                Some(tiles) => StartPreviewError::TooManyTiles { tiles, max: 4 },
                 None => StartPreviewError::Failed(broken("preview")),
             })
         }
@@ -1256,13 +1264,15 @@ mod session_tests {
                 project_path: PathBuf::from("/data/project"),
                 viewport: Default::default(),
                 breakpoint: None,
+                max_visible_tiles: None,
+                breakpoint_tiles: 1,
             })
         };
         let (session, rx) = session_with(FailingBackend {
             preview_tiles: Some(1234),
         });
         let (_, reply) = reply_to(&session, &rx, preview());
-        assert!(matches!(reply, Reply::PreviewTooManyTiles { tiles: 1234 }));
+        assert!(matches!(reply, Reply::PreviewTooManyTiles { tiles: 1234, max: 4 }));
 
         let (session, rx) = failing_session();
         let (_, reply) = reply_to(&session, &rx, preview());

@@ -1,5 +1,6 @@
 use super::spawn_job;
-use crate::api::{MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, RunningJob, StartPreviewError};
+use crate::api::{PreviewRequest, RunningJob, StartPreviewError};
+use crate::workspace::settings::ViewportMemorySettings;
 use evanalyzer_core::PreviewTileSettings;
 use log::{error, info};
 
@@ -22,12 +23,15 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
         process_all_tiles: false,
     });
 
+    // As asked, else what this computer can take.
+    let max = request
+        .max_visible_tiles
+        .unwrap_or_else(|| ViewportMemorySettings::auto_preview_tiles(crate::backend::local::system::cpu_ram_diagnostics().1))
+        .max(1) as usize;
     match job.count_preview_visible_tiles() {
-        Ok(tiles) if tiles > MAX_PREVIEW_VISIBLE_TILES => {
-            info!(
-                "Preview rejected: viewport covers {tiles} tiles (max {MAX_PREVIEW_VISIBLE_TILES})"
-            );
-            return Err(StartPreviewError::TooManyTiles { tiles });
+        Ok(tiles) if tiles > max => {
+            info!("Preview rejected: viewport covers {tiles} tiles (max {max})");
+            return Err(StartPreviewError::TooManyTiles { tiles, max });
         }
         // Not being able to count is no reason to block the preview - the
         // job itself reports a real read error if there is one.
@@ -36,6 +40,7 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
     }
 
     job.breakpoint = request.breakpoint;
+    job.breakpoint_tiles = request.breakpoint_tiles.max(1) as usize;
 
     let parallelism = evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes());
     Ok(spawn_job(job, parallelism, Some(out_objects)))

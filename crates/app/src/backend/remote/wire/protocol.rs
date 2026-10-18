@@ -60,7 +60,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -243,6 +243,7 @@ pub(crate) enum Reply {
     Jobs(Vec<JobInfo>),
     PreviewTooManyTiles {
         tiles: usize,
+        max: usize,
     },
     /// Pixels of a `BreakpointReached` event follow as blobs.
     JobEvent(WireProgressEvent),

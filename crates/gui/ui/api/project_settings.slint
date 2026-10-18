@@ -119,6 +119,15 @@ export global ViewportMemoryState {
     in-out property <bool> object_card: false;
     // No animated moves (the results' split view jumps to an object).
     in-out property <bool> reduce_motion: false;
+    // Preview / breakpoint tiles: automatic (from the RAM) or the numbers.
+    in-out property <bool> preview_tiles_auto: true;
+    in-out property <int> preview_tiles: 4;
+    in-out property <bool> breakpoint_tiles_auto: true;
+    in-out property <int> breakpoint_tiles: 1;
+    // What automatic gives on this computer, e.g. "16 GB RAM: 4" - set from
+    // Rust.
+    in property <string> auto_preview_tiles_note;
+    in property <string> auto_breakpoint_tiles_note;
     // An image opened the first time: auto-scaled (all channels); channels
     // without a wavelength colored. Both kept in the project afterwards.
     in-out property <bool> auto_scale_new_images: true;

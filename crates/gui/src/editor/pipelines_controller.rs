@@ -256,6 +256,8 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>()
                 .on_clear_breakpoint(move || {
                     *manager.breakpoint.lock().unwrap() = None;
+                    // Its images go too (up to ~190 MB a tile).
+                    manager.viewport_controller.clear_breakpoint();
                 });
 
 

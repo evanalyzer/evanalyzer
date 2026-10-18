@@ -9,7 +9,6 @@ use crate::{
 };
 use evanalyzer_app::analysis::AnalysisRequest;
 use evanalyzer_app::analysis::ProgressEvent;
-use evanalyzer_app::preview::MAX_PREVIEW_VISIBLE_TILES;
 use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
 use evanalyzer_app::preview::StartPreviewError;
@@ -17,6 +16,7 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;
+use crate::editor::viewport_controller::BreakpointChannelData;
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Runs `$body` with `$state` the progress state of the job: the preview's
@@ -154,21 +154,28 @@ impl PipelineWorker {
                             step_id,
                             mode,
                         });
+                // Tiles: the preview's limit (auto: the running computer's),
+                // the breakpoint's this computer's - its images are kept here.
+                let memory = self.viewport_controller.memory_settings();
                 match self.app_state.backend().start_preview(PreviewRequest {
                     settings: task.project_settings,
                     project_path: task.project_path,
                     viewport,
                     breakpoint,
+                    max_visible_tiles: memory.requested_preview_tiles(),
+                    breakpoint_tiles: memory.effective_breakpoint_tiles(
+                        crate::editor::viewport_cache::this_computer_ram_bytes(),
+                    ),
                 }) {
                     Ok(job) => job,
-                    Err(StartPreviewError::TooManyTiles { tiles }) => {
+                    Err(StartPreviewError::TooManyTiles { tiles, max }) => {
                         // Tell the user to zoom in instead of silently grinding
                         // through hundreds of tiles.
                         self.pipeline_controller.disable_auto_preview();
                         let ui_handle = self.app_state.ui_handle.clone();
                         let message = format!(
                             "Zoomed out too far to preview live: the visible area covers {tiles} tiles \
-                             (max {MAX_PREVIEW_VISIBLE_TILES}). Zoom in, then run the preview again. \
+                             (max {max}, Settings › Viewport). Zoom in, then run the preview again. \
                              Auto preview has been turned off."
                         );
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -219,6 +226,8 @@ impl PipelineWorker {
             *cancel_slot.lock().unwrap() = Some(job.cancel_handle());
             let mut last_ui_update = std::time::Instant::now();
             let mut pipeline_start: Option<std::time::Instant> = None;
+            // A run's first breakpoint tile replaces the last run's ones.
+            let mut first_breakpoint_tile = true;
             for event in job.events() {
                 match event {
                     ProgressEvent::TilesScheduled { total_tiles } => {
@@ -377,17 +386,21 @@ impl PipelineWorker {
                         );
                         // Store the raw ImageContainer so the viewport worker can
                         // re-render it with live histogram/LUT settings.
-                        self_handle.viewport_controller.set_breakpoint_channel(
-                            image,
-                            segmentation,
-                            instances,
-                            tile_offset_x,
-                            tile_offset_y,
-                            tile_width,
-                            tile_height,
-                            nr_bits,
-                            channel_idx,
+                        self_handle.viewport_controller.add_breakpoint_tile(
+                            BreakpointChannelData {
+                                image: Arc::new(image),
+                                segmentation: segmentation.map(Arc::new),
+                                instances: instances.map(Arc::new),
+                                tile_offset_x,
+                                tile_offset_y,
+                                tile_width,
+                                tile_height,
+                                nr_bits,
+                                channel_idx,
+                            },
+                            first_breakpoint_tile,
                         );
+                        first_breakpoint_tile = false;
                     }
                     ProgressEvent::ImageFailed { path } => {
                         error!("Pipeline image failed: {}", path.display());

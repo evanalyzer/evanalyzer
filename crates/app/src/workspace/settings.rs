@@ -79,6 +79,9 @@ pub struct ResultsSplitSettings {
     pub width_px: f32,
     /// A selected object is shown on the image (else only selected).
     pub follow: bool,
+    /// The image controls (channels, histogram, overlay) open over the
+    /// image.
+    pub image_panel: bool,
 }
 
 impl Default for ResultsSplitSettings {
@@ -86,6 +89,7 @@ impl Default for ResultsSplitSettings {
         Self {
             on: false,
             width_px: 640.0,
+            image_panel: false,
             follow: true,
         }
     }
@@ -176,6 +180,19 @@ pub struct ViewportMemorySettings {
     /// No animated moves: the results' split view jumps to an object
     /// instead of flying there.
     pub reduce_motion: bool,
+
+    /// A preview covers at most [`Self::preview_tiles`] tiles - or, with
+    /// this, what the computer running it can take
+    /// ([`Self::auto_preview_tiles`]).
+    pub preview_tiles_auto: bool,
+    pub preview_tiles: u32,
+
+    /// How many tiles show their breakpoint image (the visible ones nearest
+    /// the viewport centre) - [`Self::breakpoint_tiles`], or with this as
+    /// many as this computer's RAM allows ([`Self::auto_breakpoint_tiles`]).
+    /// Kept in RAM while a breakpoint is set (~190 MB per 4096 x 4096 tile).
+    pub breakpoint_tiles_auto: bool,
+    pub breakpoint_tiles: u32,
 }
 
 impl ViewportMemorySettings {
@@ -206,6 +223,34 @@ impl ViewportMemorySettings {
         (tile, overview)
     }
 
+    /// Preview tiles a computer with `total_ram_bytes` takes: one per 4 GB
+    /// (16 GB: 4), between 1 and 32.
+    pub fn auto_preview_tiles(total_ram_bytes: u64) -> u32 {
+        ((total_ram_bytes / (4 << 30)) as u32).clamp(1, 32)
+    }
+
+    /// Breakpoint tiles a computer with `total_ram_bytes` keeps: about 5 %
+    /// of its RAM at ~250 MB a tile (the images and their render) - 16 GB:
+    /// 3, 8 GB: 1, between 1 and 16.
+    pub fn auto_breakpoint_tiles(total_ram_bytes: u64) -> u32 {
+        ((total_ram_bytes / 20 / (250 << 20)) as u32).clamp(1, 16)
+    }
+
+    /// The preview's tile limit to ask for: `None` lets the computer that
+    /// runs it decide (auto).
+    pub fn requested_preview_tiles(&self) -> Option<u32> {
+        (!self.preview_tiles_auto).then_some(self.preview_tiles.max(1))
+    }
+
+    /// The breakpoint tiles in effect on a computer with `total_ram_bytes`.
+    pub fn effective_breakpoint_tiles(&self, total_ram_bytes: u64) -> u32 {
+        if self.breakpoint_tiles_auto {
+            Self::auto_breakpoint_tiles(total_ram_bytes)
+        } else {
+            self.breakpoint_tiles.max(1)
+        }
+    }
+
     /// The cache sizes (tile, overview) in MB in effect on a computer with
     /// `total_ram_bytes`.
     pub fn effective_cache_mb(&self, total_ram_bytes: u64) -> (u32, u32) {
@@ -233,6 +278,10 @@ impl Default for ViewportMemorySettings {
             auto_scale_new_images: true,
             color_channels_without_wavelength: false,
             reduce_motion: false,
+            preview_tiles_auto: true,
+            preview_tiles: 4,
+            breakpoint_tiles_auto: true,
+            breakpoint_tiles: 1,
         }
     }
 }
@@ -377,6 +426,27 @@ mod tests {
             pipelines: 0,
             opened_at: 0,
         }
+    }
+
+    #[test]
+    fn preview_and_breakpoint_tiles_follow_the_ram_unless_set() {
+        let gb = |n: u64| n << 30;
+        assert_eq!(ViewportMemorySettings::auto_preview_tiles(gb(16)), 4, "as before");
+        assert_eq!(ViewportMemorySettings::auto_preview_tiles(gb(2)), 1);
+        assert_eq!(ViewportMemorySettings::auto_preview_tiles(gb(512)), 32);
+        assert_eq!(ViewportMemorySettings::auto_breakpoint_tiles(gb(8)), 1);
+        assert_eq!(ViewportMemorySettings::auto_breakpoint_tiles(gb(16)), 3);
+        assert_eq!(ViewportMemorySettings::auto_breakpoint_tiles(gb(512)), 16);
+
+        let mut settings = ViewportMemorySettings::default();
+        assert_eq!(settings.requested_preview_tiles(), None, "auto: the running computer decides");
+        assert_eq!(settings.effective_breakpoint_tiles(gb(16)), 3);
+        settings.preview_tiles_auto = false;
+        settings.preview_tiles = 100;
+        settings.breakpoint_tiles_auto = false;
+        settings.breakpoint_tiles = 0;
+        assert_eq!(settings.requested_preview_tiles(), Some(100));
+        assert_eq!(settings.effective_breakpoint_tiles(gb(16)), 1, "at least one");
     }
 
     #[test]

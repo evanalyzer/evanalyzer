@@ -2,7 +2,7 @@ use crate::{
     HistogramData, UiState,
     editor::{
         histogram_controller::HistogramController,
-        view_channel::{SampleSlice, Samples, ViewChannel},
+        view_channel::{SampleSlice, ViewChannel},
         viewport_cache::{ReadContext, ViewportCache, to_z_projection},
         viewport_controller::{DrawingTaskContainer, ImageRect, ViewportController, ViewportState},
         viewport_task::{DrawingTask, TaskDispatch},
@@ -11,7 +11,6 @@ use crate::{
 use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use log::{debug, info, warn};
 use slint::{Rgb8Pixel, SharedPixelBuffer};
@@ -43,7 +42,6 @@ pub(crate) struct ChannelCtx<'a> {
 const NUM_BINS: usize = 512;
 
 /// The breakpoint image, ready to render, and where it lies.
-type BreakpointRead = Result<(Arc<Vec<ViewChannel>>, ReadContext), InternalErrors>;
 
 impl ViewportWorker {
     pub fn new(
@@ -490,55 +488,138 @@ impl ViewportWorker {
         if comparing && !is_low_res && version_tracker.load(Ordering::SeqCst) == current_version
         {
             self.render_compare(&viewport_state, &mut b.compare);
+        } else if !comparing {
+            // Compare off (or no breakpoint): its render's RAM is freed.
+            b.compare = None;
         }
 
         busy.store(false, Ordering::SeqCst);
         task.reset_job();
     }
 
-    /// Compare: the breakpoint image, rendered like in the breakpoint view
-    /// (its own histogram window, white; label maps in their colours), sent
-    /// as the second image. In buffers of its own, so the frame shown stays
-    /// untouched.
-    fn render_compare(&self, viewport_state: &ViewportState, pool: &mut FramePool) {
-        let (read, is_label) = self.read_breakpoint(viewport_state);
-        let Ok((render_src, prepared)) = read else {
+    /// Compare: the breakpoint images (one per captured tile), rendered
+    /// like the breakpoint view (their own histogram window, white; label
+    /// maps in their colours) and sent as the second image, each where its
+    /// tile lies. Rendered only when the picture changes (see
+    /// `ViewportController::compare_epoch`) - after a pan or zoom Slint just
+    /// moves them; on Windows, which shows screen-sized frames, the kept
+    /// renders are only composited again.
+    fn render_compare(&self, viewport_state: &ViewportState, slot: &mut Option<CompareRender>) {
+        let epoch = self.viewport_controller.compare_epoch();
+        let fresh = slot.as_ref().is_some_and(|c| c.epoch == epoch);
+        if !fresh {
+            *slot = self.render_compare_tiles(epoch);
+        }
+        let Some(render) = slot.as_ref() else {
             return;
         };
-        // Label maps have no histogram.
-        let mut curves = Vec::new();
-        let native = pool.next_native(prepared.image_w as u32, prepared.image_h as u32);
-        let slice = native.make_mut_slice();
-        slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
-        if let Some(channel) = render_src.first() {
-            if is_label {
-                if let Samples::Image(image) = &channel.samples
-                    && let ImageContainer::U32(img) = &**image
-                {
-                    render_labels_to_rgb8(img.data.as_slice(), slice);
-                }
-            } else if let Some(data) = channel.slice() {
-                // Its own window (auto-adjusted at first), not the channel's:
-                // after a filter its values lie elsewhere.
-                let histogram = self.viewport_controller.breakpoint_histogram().unwrap_or_else(|| {
-                    let (min, max, min_limit, max_limit) =
-                        auto_adjust_range(channel.slice(), channel.is_rgb);
-                    let auto = HistogramSettings {
-                        min,
-                        max,
-                        min_limit,
-                        max_limit,
-                    };
-                    *self.viewport_controller.breakpoint_histogram.write().unwrap() =
-                        Some(auto.clone());
-                    // The panel shows it: its sliders.
-                    if self.viewport_controller.histogram_side() == 1 {
-                        self.histogram_controller.sync_histogram_settings_to_slint();
-                    }
-                    auto
-                });
-                let ctx = channel_ctx(data, histogram, channel.color, channel.c_stack);
-                let color = ctx.color;
+        if cfg!(target_os = "windows") {
+            let vp_w = viewport_state.viewport_width.max(1.0) as usize;
+            let vp_h = viewport_state.viewport_height.max(1.0) as usize;
+            let mut screen = SharedPixelBuffer::<Rgb8Pixel>::new(vp_w as u32, vp_h as u32);
+            let dest = screen.make_mut_slice();
+            for (native, tile) in &render.tiles {
+                composite_into_screen(native.as_slice(), &tile_context(tile, viewport_state), dest, vp_w, vp_h);
+            }
+            let rect = ImageRect::from_screen(
+                0.0,
+                0.0,
+                vp_w as f32,
+                vp_h as f32,
+                viewport_state.zoom,
+                viewport_state.offset_x,
+                viewport_state.offset_y,
+            );
+            self.viewport_controller.sync_compare_to_slint(vec![(screen, rect)]);
+        } else if !fresh {
+            self.viewport_controller.sync_compare_to_slint(
+                render
+                    .tiles
+                    .iter()
+                    .map(|(native, tile)| {
+                        let rect = ImageRect {
+                            x: tile.offset_x as f32,
+                            y: tile.offset_y as f32,
+                            w: tile.width as f32,
+                            h: tile.height as f32,
+                        };
+                        (native.clone(), rect)
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    /// Renders every breakpoint tile in the buffer the view mode picks
+    /// (falling back to the intensity image if the pipeline hadn't made
+    /// that one yet at the breakpoint) - and the histogram of them all.
+    /// `None` without breakpoint images.
+    fn render_compare_tiles(&self, epoch: u64) -> Option<CompareRender> {
+        use crate::editor::viewport_controller::BreakpointViewMode;
+        let tiles = self.viewport_controller.breakpoint_tiles.read().unwrap();
+        if tiles.is_empty() {
+            return None;
+        }
+        self.viewport_controller.compare_renders.fetch_add(1, Ordering::Relaxed);
+        let mode = self.viewport_controller.breakpoint_view_mode();
+        let source = |bp: &crate::editor::viewport_controller::BreakpointChannelData| match mode {
+            BreakpointViewMode::Image => bp.image.clone(),
+            BreakpointViewMode::Segmentation => {
+                bp.segmentation.clone().unwrap_or_else(|| bp.image.clone())
+            }
+            BreakpointViewMode::Instances => bp.instances.clone().unwrap_or_else(|| bp.image.clone()),
+        };
+        let channel_of = |bp: &crate::editor::viewport_controller::BreakpointChannelData| {
+            let image = source(bp);
+            let is_rgb = matches!(&*image, ImageContainer::F32Rgb(_));
+            ViewChannel::wrap(&ImageChannel {
+                image,
+                color: [1.0, 1.0, 1.0],
+                // The channel the breakpointed pipeline started from: its
+                // settings are looked up by `c_stack`.
+                c_stack: bp.channel_idx.unwrap_or(0),
+                name: "Breakpoint".to_string(),
+                is_rgb,
+                is_visible: true,
+            })
+        };
+
+        // One window for all tiles: set, or auto-adjusted from the first.
+        let histogram = self.viewport_controller.breakpoint_histogram().or_else(|| {
+            let first = channel_of(&tiles[0]);
+            if matches!(&*source(&tiles[0]), ImageContainer::U32(_)) {
+                return None;
+            }
+            let (min, max, min_limit, max_limit) = auto_adjust_range(first.slice(), first.is_rgb);
+            let auto = HistogramSettings {
+                min,
+                max,
+                min_limit,
+                max_limit,
+            };
+            *self.viewport_controller.breakpoint_histogram.write().unwrap() = Some(auto.clone());
+            // The panel shows it: its sliders.
+            if self.viewport_controller.histogram_side() == 1 {
+                self.histogram_controller.sync_histogram_settings_to_slint();
+            }
+            Some(auto)
+        });
+
+        let mut rendered = Vec::with_capacity(tiles.len());
+        let mut bins: Vec<f32> = Vec::new();
+        let mut color = [1.0f32; 3];
+        let mut nr_bits = 8;
+        for bp in tiles.iter() {
+            nr_bits = bp.nr_bits;
+            let mut native = SharedPixelBuffer::<Rgb8Pixel>::new(bp.tile_width as u32, bp.tile_height as u32);
+            let slice = native.make_mut_slice();
+            let channel = channel_of(bp);
+            if let ImageContainer::U32(img) = &*source(bp) {
+                // Label maps have no histogram.
+                render_labels_to_rgb8(img.data.as_slice(), slice);
+            } else if let (Some(data), Some(window)) = (channel.slice(), histogram.clone()) {
+                let ctx = channel_ctx(data, window, channel.color, channel.c_stack);
+                color = ctx.color;
                 let hists = prepare_image_channels_for_slint(
                     &[ctx],
                     slice,
@@ -547,134 +628,108 @@ impl ViewportWorker {
                     &vec![channel.c_stack],
                     channel.is_rgb,
                 );
-                curves = histogram_to_svg_fast(
-                    &hists.into_iter().map(|h| (h, color)).collect(),
-                    NUM_BINS,
-                    self.viewport_controller.histogram_log(),
-                );
+                for h in hists {
+                    if bins.len() < h.len() {
+                        bins.resize(h.len(), 0.0);
+                    }
+                    for (sum, v) in bins.iter_mut().zip(h) {
+                        *sum += v;
+                    }
+                }
             }
+            rendered.push((
+                native,
+                CompareTile {
+                    offset_x: bp.tile_offset_x,
+                    offset_y: bp.tile_offset_y,
+                    width: bp.tile_width,
+                    height: bp.tile_height,
+                },
+            ));
         }
-        self.viewport_controller.publish_histogram(
-            1,
-            curves,
-            2f32.powi(prepared.bit_depth as i32),
-        );
-
-        let (buffer, shown) = if cfg!(target_os = "windows") {
-            let vp_w = prepared.viewport_width.max(1.0) as usize;
-            let vp_h = prepared.viewport_height.max(1.0) as usize;
-            let native = native.clone();
-            let screen = pool.next_screen(vp_w as u32, vp_h as u32);
-            composite_to_screen(
-                native.as_slice(),
-                &prepared,
-                screen.make_mut_slice(),
-                vp_w,
-                vp_h,
-            );
-            let mut display = prepared.clone();
-            display.draw_x = 0.0;
-            display.draw_y = 0.0;
-            display.zoomed_w = vp_w as f32;
-            display.zoomed_h = vp_h as f32;
-            (screen.clone(), display)
+        drop(tiles);
+        let curves = if bins.is_empty() {
+            Vec::new()
         } else {
-            (native.clone(), prepared)
+            histogram_to_svg_fast(&vec![(bins, color)], NUM_BINS, self.viewport_controller.histogram_log())
         };
-        self.viewport_controller.sync_compare_to_slint(
-            buffer,
-            ImageRect::from_screen(
-                shown.draw_x,
-                shown.draw_y,
-                shown.zoomed_w,
-                shown.zoomed_h,
-                shown.zoom,
-                shown.offset_x,
-                shown.offset_y,
-            ),
-        );
+        self.viewport_controller
+            .publish_histogram(1, curves, 2f32.powi(nr_bits as i32));
+        Some(CompareRender {
+            epoch,
+            tiles: rendered,
+        })
     }
-    /// The breakpoint image to render (in the buffer the breakpoint view
-    /// mode picks) and whether it is a label map, not intensities.
-    fn read_breakpoint(
-        &self,
-        viewport_state: &ViewportState,
-    ) -> (BreakpointRead, bool) {
-        match &*self.viewport_controller.breakpoint_channel.read().unwrap() {
-            Some(bp) => {
-                // Pick the buffer matching the user's selected view
-                // mode, falling back to the intensity image if the
-                // pipeline hadn't produced that buffer yet at this
-                // breakpoint step (e.g. Segmentation selected but the
-                // breakpoint is before `Threshold`).
-                let source_image = match self.viewport_controller.breakpoint_view_mode() {
-                    crate::editor::viewport_controller::BreakpointViewMode::Image => {
-                        bp.image.clone()
-                    }
-                    crate::editor::viewport_controller::BreakpointViewMode::Segmentation => {
-                        bp.segmentation.clone().unwrap_or_else(|| bp.image.clone())
-                    }
-                    crate::editor::viewport_controller::BreakpointViewMode::Instances => {
-                        bp.instances.clone().unwrap_or_else(|| bp.image.clone())
-                    }
-                };
-                let is_label_render = matches!(&*source_image, ImageContainer::U32(_));
-                let is_rgb = matches!(&*source_image, ImageContainer::F32Rgb(_));
-                let channel = ImageChannel {
-                    image: source_image,
-                    color: [1.0, 1.0, 1.0],
-                    // Must match the channel the breakpointed pipeline
-                    // actually started from - the render loop below
-                    // looks up histogram/LUT settings by `c_stack`,
-                    // and hardcoding 0 here made the breakpoint image
-                    // render using an unrelated channel's histogram
-                    // range whenever the pipeline started from any
-                    // other channel (usually all-black, since the
-                    // real data then falls outside that channel's
-                    // configured min/max window). Irrelevant for
-                    // label rendering (is_label_render bypasses the
-                    // histogram lookup entirely), but harmless there.
-                    c_stack: bp.channel_idx.unwrap_or(0),
-                    name: "Breakpoint".to_string(),
-                    is_rgb,
-                    is_visible: true,
-                };
-                let prepared = ReadContext {
-                    zoomed_w: bp.tile_width as f32 * viewport_state.zoom,
-                    zoomed_h: bp.tile_height as f32 * viewport_state.zoom,
-                    zoom: viewport_state.zoom,
-                    draw_x: bp.tile_offset_x as f32 * viewport_state.zoom
-                        + viewport_state.offset_x,
-                    draw_y: bp.tile_offset_y as f32 * viewport_state.zoom
-                        + viewport_state.offset_y,
-                    offset_x: viewport_state.offset_x,
-                    offset_y: viewport_state.offset_y,
-                    read_off_x: bp.tile_offset_x,
-                    read_off_y: bp.tile_offset_y,
-                    res_idx: 0,
-                    image_w: bp.tile_width,
-                    image_h: bp.tile_height,
-                    bit_depth: bp.nr_bits,
-                    _nr_color_channels: if is_rgb { 3 } else { 1 },
-                    viewport_width: viewport_state.viewport_width,
-                    viewport_height: viewport_state.viewport_height,
-                    full_image_w: bp.tile_offset_x + bp.tile_width,
-                    full_image_h: bp.tile_offset_y + bp.tile_height,
-                };
-                (
-                    Ok((Arc::new(vec![ViewChannel::wrap(&channel)]), prepared)),
-                    is_label_render,
-                )
+}
+
+/// The compare's render: each breakpoint tile drawn, at the compare epoch
+/// it shows (see `ViewportController::compare_epoch`).
+struct CompareRender {
+    epoch: u64,
+    tiles: Vec<(SharedPixelBuffer<Rgb8Pixel>, CompareTile)>,
+}
+
+/// Where a breakpoint tile lies in the image (full-image pixels).
+struct CompareTile {
+    offset_x: usize,
+    offset_y: usize,
+    width: usize,
+    height: usize,
+}
+
+/// A tile's placement on screen in the current view (for compositing).
+fn tile_context(tile: &CompareTile, view: &ViewportState) -> ReadContext {
+    ReadContext {
+        zoomed_w: tile.width as f32 * view.zoom,
+        zoomed_h: tile.height as f32 * view.zoom,
+        zoom: view.zoom,
+        draw_x: tile.offset_x as f32 * view.zoom + view.offset_x,
+        draw_y: tile.offset_y as f32 * view.zoom + view.offset_y,
+        offset_x: view.offset_x,
+        offset_y: view.offset_y,
+        read_off_x: tile.offset_x,
+        read_off_y: tile.offset_y,
+        res_idx: 0,
+        image_w: tile.width,
+        image_h: tile.height,
+        bit_depth: 8,
+        _nr_color_channels: 3,
+        viewport_width: view.viewport_width,
+        viewport_height: view.viewport_height,
+        full_image_w: tile.offset_x + tile.width,
+        full_image_h: tile.offset_y + tile.height,
+    }
+}
+
+/// Like [`composite_to_screen`], but writes only the screen pixels the
+/// image covers - several tiles go into one frame.
+fn composite_into_screen(
+    native: &[Rgb8Pixel],
+    prepared: &ReadContext,
+    screen: &mut [Rgb8Pixel],
+    vp_w: usize,
+    vp_h: usize,
+) {
+    let (img_w, img_h) = (prepared.image_w, prepared.image_h);
+    let inv_x = img_w as f32 / prepared.zoomed_w.max(f32::EPSILON);
+    let inv_y = img_h as f32 / prepared.zoomed_h.max(f32::EPSILON);
+    let x0 = prepared.draw_x.max(0.0) as usize;
+    let x1 = ((prepared.draw_x + prepared.zoomed_w).ceil().max(0.0) as usize).min(vp_w);
+    let y0 = prepared.draw_y.max(0.0) as usize;
+    let y1 = ((prepared.draw_y + prepared.zoomed_h).ceil().max(0.0) as usize).min(vp_h);
+    for sy in y0..y1 {
+        let ty = ((sy as f32 - prepared.draw_y) * inv_y) as usize;
+        if ty >= img_h {
+            continue;
+        }
+        let row = &mut screen[sy * vp_w..(sy + 1) * vp_w];
+        for (sx, out) in row.iter_mut().enumerate().take(x1).skip(x0) {
+            let tx = ((sx as f32 - prepared.draw_x) * inv_x) as usize;
+            if tx < img_w {
+                *out = native[ty * img_w + tx];
             }
-            None => (
-                Err(InternalErrors::ImageReadError(
-                    "No breakpoint image captured yet".into(),
-                )),
-                false,
-            ),
         }
     }
-
 }
 
 /// How a channel is drawn: its values through the histogram window, in
@@ -758,50 +813,8 @@ struct RenderBuffers {
     pool_idx: usize,
     screen_buffer_pool: [SharedPixelBuffer<Rgb8Pixel>; 2],
     screen_pool_idx: usize,
-    /// The compare's breakpoint image (1 x 1 until a compare).
-    compare: FramePool,
-}
-
-/// Double-buffered render targets (see `RenderBuffers::new` for why two).
-struct FramePool {
-    native: [SharedPixelBuffer<Rgb8Pixel>; 2],
-    native_idx: usize,
-    screen: [SharedPixelBuffer<Rgb8Pixel>; 2],
-    screen_idx: usize,
-}
-
-impl FramePool {
-    fn new() -> Self {
-        let tiny = || SharedPixelBuffer::<Rgb8Pixel>::new(1, 1);
-        Self {
-            native: [tiny(), tiny()],
-            native_idx: 0,
-            screen: [tiny(), tiny()],
-            screen_idx: 0,
-        }
-    }
-
-    fn next<'a>(
-        pool: &'a mut [SharedPixelBuffer<Rgb8Pixel>; 2],
-        idx: &mut usize,
-        w: u32,
-        h: u32,
-    ) -> &'a mut SharedPixelBuffer<Rgb8Pixel> {
-        *idx = (*idx + 1) % 2;
-        let buffer = &mut pool[*idx];
-        if buffer.width() != w || buffer.height() != h {
-            *buffer = SharedPixelBuffer::new(w, h);
-        }
-        buffer
-    }
-
-    fn next_native(&mut self, w: u32, h: u32) -> &mut SharedPixelBuffer<Rgb8Pixel> {
-        Self::next(&mut self.native, &mut self.native_idx, w, h)
-    }
-
-    fn next_screen(&mut self, w: u32, h: u32) -> &mut SharedPixelBuffer<Rgb8Pixel> {
-        Self::next(&mut self.screen, &mut self.screen_idx, w, h)
-    }
+    /// The compare's render of the breakpoint images (none until a compare).
+    compare: Option<CompareRender>,
 }
 
 impl RenderBuffers {
@@ -838,7 +851,7 @@ impl RenderBuffers {
             pool_idx,
             screen_buffer_pool,
             screen_pool_idx,
-            compare: FramePool::new(),
+            compare: None,
         }
     }
 }
@@ -1314,16 +1327,20 @@ mod tests {
         auto_adjust_range(samples, is_rgb)
     }
 
+    /// The compare's first tile image (empty without one).
+    fn compare_image(r: &Render) -> slint::Image {
+        slint::Model::row_data(&r.view().get_compare_tiles(), 0)
+            .map(|t| t.image)
+            .unwrap_or_default()
+    }
+
     fn gray_container(pixels: Vec<f32>) -> ImageContainer {
         let len = pixels.len();
-        let image = Image::<f32, 1>::new(
-            ImageSize {
-                width: len,
-                height: 1,
-            },
-            pixels,
-        )
-        .unwrap();
+        gray_container_sized(pixels, len, 1)
+    }
+
+    fn gray_container_sized(pixels: Vec<f32>, width: usize, height: usize) -> ImageContainer {
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, pixels).unwrap();
         ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -2033,7 +2050,7 @@ mod tests {
         r.worker.viewport_controller.set_compare(true);
         // Nothing captured yet: no second image.
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
-        assert_eq!(r.view().get_compare_image().size().width, 0);
+        assert_eq!(compare_image(&r).size().width, 0);
 
         let labels = ImageContainer::U32(ManagedImage {
             data: Image::<u32, 1>::new(
@@ -2064,7 +2081,7 @@ mod tests {
         for mode in [0, 1, 2] {
             r.worker.viewport_controller.set_breakpoint_view_mode(mode);
             r.draw(TaskDispatch::HighRes, DrawingTask::default());
-            assert!(r.view().get_compare_image().size().width > 0, "mode {mode}");
+            assert!(compare_image(&r).size().width > 0, "mode {mode}");
         }
     }
 
@@ -2131,13 +2148,9 @@ mod tests {
         assert_eq!(r.ui.get_display_image().size(), file_size, "the file");
         let view = r.view();
         assert!(view.get_compare_ready());
-        assert_eq!(view.get_compare_image().size().width, 8);
-        let rect = [
-            view.get_cmp_img_x(),
-            view.get_cmp_img_y(),
-            view.get_cmp_img_w(),
-            view.get_cmp_img_h(),
-        ];
+        let tile = slint::Model::row_data(&view.get_compare_tiles(), 0).expect("the tile");
+        assert_eq!(tile.image.size().width, 8);
+        let rect = [tile.img_x, tile.img_y, tile.img_w, tile.img_h];
         for (got, want) in rect.into_iter().zip([2.0, 3.0, 8.0, 1.0]) {
             assert!((got - want).abs() < 1e-3, "{rect:?}");
         }
@@ -2145,10 +2158,78 @@ mod tests {
         r.worker.viewport_controller.set_compare(false);
         drain_ui_queue();
         assert!(!r.view().get_compare_ready());
-        assert_eq!(r.view().get_compare_image().size().width, 0);
+        assert_eq!(compare_image(&r).size().width, 0);
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
-        assert_eq!(r.view().get_compare_image().size().width, 0);
+        assert_eq!(compare_image(&r).size().width, 0);
         assert_eq!(r.ui.get_display_image().size(), file_size);
+    }
+
+    /// The compare is rendered once per picture: a pan only moves it, a
+    /// new view mode renders it again.
+    #[test]
+    fn a_pan_moves_the_compared_breakpoint_image_without_rendering_it_again() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let vc = r.worker.viewport_controller.clone();
+        vc.set_breakpoint_channel(gray_container(vec![0.1, 0.5, 0.9, 0.2]), None, None, 0, 0, 4, 1, 8, Some(0));
+        vc.set_compare(true);
+        drain_ui_queue();
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        let renders = || vc.compare_renders.load(Ordering::Relaxed);
+        assert_eq!(renders(), 1);
+        {
+            let mut view = vc.viewport_state.write().unwrap();
+            view.offset_x += 40.0;
+            view.zoom *= 1.5;
+        }
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert_eq!(renders(), 1, "pan and zoom: not rendered again");
+        vc.set_breakpoint_view_mode(1);
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert_eq!(renders(), 2, "another view: rendered again");
+    }
+
+    /// Several tiles: each shown where it lies, each one's values read;
+    /// the next run's first tile replaces them; clearing frees them all.
+    #[test]
+    fn breakpoint_tiles_are_shown_side_by_side_and_freed_when_cleared() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let vc = r.worker.viewport_controller.clone();
+        let tile = |x: usize, value: f32| crate::editor::viewport_controller::BreakpointChannelData {
+            image: Arc::new(gray_container(vec![value; 4])),
+            segmentation: None,
+            instances: None,
+            tile_offset_x: x,
+            tile_offset_y: 0,
+            tile_width: 4,
+            tile_height: 1,
+            nr_bits: 8,
+            channel_idx: Some(0),
+        };
+        vc.add_breakpoint_tile(tile(0, 0.25), true);
+        vc.add_breakpoint_tile(tile(4, 0.5), false);
+        vc.set_compare(true);
+        drain_ui_queue();
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        let tiles = r.view().get_compare_tiles();
+        assert_eq!(slint::Model::row_count(&tiles), 2);
+        let xs: Vec<f32> = slint::Model::iter(&tiles).map(|t| t.img_x).collect();
+        assert_eq!(xs, [0.0, 4.0]);
+        assert_eq!(vc.breakpoint_value_at(1.5, 0.5).as_deref(), Some("64"));
+        assert_eq!(vc.breakpoint_value_at(5.5, 0.5).as_deref(), Some("128"));
+
+        // The next preview's first tile: the last run's go.
+        vc.add_breakpoint_tile(tile(8, 0.5), true);
+        assert_eq!(vc.breakpoint_tiles.read().unwrap().len(), 1);
+
+        vc.clear_breakpoint();
+        drain_ui_queue();
+        assert!(vc.breakpoint_tiles.read().unwrap().is_empty());
+        assert!(!r.ui.global::<crate::PipelinesPanelState>().get_has_breakpoint_image());
+        assert_eq!(slint::Model::row_count(&r.view().get_compare_tiles()), 0);
+        assert_eq!(vc.breakpoint_value_at(1.5, 0.5), None);
     }
 
     // -- channel colours -------------------------------------------------------
@@ -2405,6 +2486,26 @@ mod tests {
         );
         let (full_w, full_h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
         let (cx, cy) = (full_w as f32 / 2.0, full_h as f32 / 2.0);
+        // BENCH_COMPARE=1: a 4096 x 4096 breakpoint tile at the centre,
+        // compared - as after a breakpoint preview there.
+        if std::env::var("BENCH_COMPARE").is_ok() {
+            let side = 4096usize.min(full_w as usize).min(full_h as usize);
+            let values: Vec<f32> = (0..side * side).map(|i| ((i * 2654435761) % 1000) as f32 / 1000.0).collect();
+            r.worker.viewport_controller.set_breakpoint_channel(
+                gray_container_sized(values, side, side),
+                None,
+                None,
+                (cx as usize).saturating_sub(side / 2),
+                (cy as usize).saturating_sub(side / 2),
+                side,
+                side,
+                8,
+                Some(0),
+            );
+            r.worker.viewport_controller.set_compare(true);
+            drain_ui_queue();
+            println!("compare: a {side} x {side} breakpoint tile at the centre");
+        }
         let center = |r: &Render, zoom: f32, cx: f32, cy: f32| {
             set_view(r, zoom, vp_w / 2.0 - cx * zoom, vp_h / 2.0 - cy * zoom)
         };
@@ -2544,7 +2645,7 @@ mod tests {
 
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
 
-        let pixels = r.view().get_compare_image().to_rgb8().expect("an RGB8 frame");
+        let pixels = compare_image(&r).to_rgb8().expect("an RGB8 frame");
         assert_eq!(pixels.width(), 8);
         let pixels = pixels.as_slice();
         assert!(pixels.iter().any(|p| p.r > 0), "something was drawn");

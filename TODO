@@ -22,6 +22,15 @@
   C. own bar everywhere - most consistent, most risk (Wayland: no shadow/rounded corners, Windows 11 Snap Layouts on the maximise button lost).
   Needs Slint's unstable winit API (`with_winit_window` → `drag_window` / `drag_resize_window`); can't be tested here (no display). Decide by the users' OS mix.
 
+## Next (decided 2026-10-18)
+
+- [x] Results split view: the selected object marked with the viewer's yellow crosshair (as a list row opened in the full view), its card beside it; the ring and the faint lines are gone.
+- [x] Results split view: the image controls (channels, histogram, overlay) as a drawer over the image ("Image" in its head) - the same panel as in Images, not a copy; the card's mean follows the channel picked there.
+- [x] Breakpoint compare: pan/zoom no longer lags - the breakpoint images are rendered only when they change (tiles, histogram, view mode, log), a pan or zoom just moves them. Zoom 222 → 104 ms, pan 65-114 → 28-52 ms, pan back 32-38 → 9-12 ms (BENCHMARK.md).
+- [x] Breakpoint on tiled whole slides: every visible tile nearest the viewport centre, up to the breakpoint tiles setting (was one). Freed when the breakpoint is cleared or an analysis starts.
+- [x] Settings › Viewport: "Preview tiles" and "Breakpoint tiles", each Auto (from the RAM) or a number. Preview: auto = the computer running it (a server caps a number asked for at what its RAM allows); breakpoint: this computer (the images are kept here). Remote protocol 18 → 19.
+- [ ] Start page: the bubbles more random - three proposals on the design canvas (board AC: Scattered / Depth / Sample), waiting for a pick.
+
 ## Results
 
 - [ ] Results › List: "Rows 1–200 of N" - the total needs a COUNT over the whole filter on every change (a second query per page/filter). Not now: the list must stay fast, and the page's rows say enough (2026-10-17).

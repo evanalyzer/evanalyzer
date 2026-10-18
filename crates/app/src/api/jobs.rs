@@ -17,12 +17,6 @@ use std::{
     },
 };
 
-/// Previews covering more tiles than this are rejected: at low zoom the
-/// viewport of a whole-slide image can span hundreds of tiles, each
-/// potentially producing huge numbers of ROIs that the viewport renderer and
-/// object list can't handle responsively.
-pub const MAX_PREVIEW_VISIBLE_TILES: usize = 4;
-
 /// The visible area a preview is restricted to, in screen pixels.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct PreviewViewport {
@@ -43,14 +37,27 @@ pub struct PreviewRequest {
     /// Stop at (or snapshot) a pipeline step and stream its image back via
     /// `ProgressEvent::BreakpointReached`.
     pub breakpoint: Option<BreakpointSettings>,
+    /// Previews covering more tiles are rejected (at low zoom a whole slide
+    /// spans hundreds). `None`: what the computer running it can take
+    /// ([`ViewportMemorySettings::auto_preview_tiles`]); a server also caps
+    /// a number asked for at that.
+    ///
+    /// [`ViewportMemorySettings::auto_preview_tiles`]: crate::workspace::settings::ViewportMemorySettings::auto_preview_tiles
+    pub max_visible_tiles: Option<u32>,
+    /// How many tiles send their breakpoint image (the visible ones nearest
+    /// the viewport centre) - they are kept where the window is, so the
+    /// window's computer decides.
+    pub breakpoint_tiles: u32,
 }
 
 #[derive(Debug)]
 pub enum StartPreviewError {
-    /// The viewport covers more than [`MAX_PREVIEW_VISIBLE_TILES`] tiles -
-    /// the user has to zoom in first.
+    /// The viewport covers more than `max` tiles (see
+    /// [`PreviewRequest::max_visible_tiles`]) - the user has to zoom in
+    /// first.
     TooManyTiles {
         tiles: usize,
+        max: usize,
     },
     Failed(InternalErrors),
 }
