@@ -167,11 +167,12 @@ To do:
 - [ ] **Old annotations**: projects from before 2026-10-19 keep wrong intensities (bounding-box and zoom bugs) until "Re-measure manual annotations" (objects panel ⋯) runs once; object classifiers trained on intensity features should be trained again afterwards. Maybe offer it when such a project opens.
 
 Known, not fixed:
-- [ ] **CLI test fails**: `run_then_export_csv_and_xlsx_via_the_cli_end_to_end` (crates/cli/src/commands/analyze.rs:495) - the CSV export now starts with an "Image" column, the test expects "Object ID" first. Fails the same on a clean HEAD (before this work).
-- [ ] **libtorch is 2x faster as a plugin than linked in** (Cellpose-SAM, 1024 px, CPU: 65 s vs 125-137 s; also with the new code linked in) and its peak RAM ~0.2 GB higher - not explained yet (BENCHMARK.md "AI models: Cellpose through the plugin"). Likely threads/OpenMP shared with the program when linked in.
-- [ ] **GeoJSON export/import is blocked in server mode**: the files are read and written on this computer, the file browser browses the server. Measuring works on a server (through the backend's image source).
-- [ ] The libtorch_cuda relink and the CUDA -> CPU plugin fallback on Linux - see "AI plugin" below.
-- [ ] `libs/llm` (gitignored) still holds 2.3 GB of model files of the removed LLM crate - delete if not needed.
+- [x] **CLI test fixed** (2026-10-19): the test expected "Object ID" as the first column; the list export starts with "Image" on purpose (as the results list, checked by the exporter's own test) - the test now expects that and finds the id column by name.
+- [ ] **Later: why is libtorch 2x faster as a plugin than linked in?** (Cellpose-SAM, 1024 px, CPU: 65 s vs 125-137 s, also with the new code linked in; peak RAM ~0.2 GB higher as a plugin; BENCHMARK.md "AI models: Cellpose through the plugin"). The plugin - what ships - is the fast one, so only for understanding/regressions. Plan: log libtorch's thread count in both; compare the loaded OpenMP/BLAS libraries (`/proc/<pid>/maps`); `perf record` both runs; `heaptrack` for the RAM.
+- [x] **GeoJSON export/import works in server mode** (2026-10-19): files are read and written through the backend's `FileSystem` (on the server, like the results export), measured through its image source; `annotations_go_to_geojson_and_back_through_the_server` (crates/app/tests/remote.rs) tests it end to end.
+- [x] libtorch_cuda relink and CUDA -> CPU fallback fixed (2026-10-19), see "AI plugin" below.
+- [ ] **Measure the read cell size** for annotation measuring (`CELL = 1024` in crates/app/src/workspace/annotation_measure.rs; chosen by judgment): many annotations per image (e.g. a GeoJSON import or re-measure of 1000 nuclei, spread over a slide and clustered), cells of 512 / 1024 / 2048 / 4096, on this computer and through a server connection - time and peak RAM.
+- [x] `libs/llm` removed.
 
 ## AI plugin
 
@@ -187,9 +188,9 @@ Done 2026-10-19: libtorch is loaded only on the first AI step, from a plugin lib
 
 Open:
 - [ ] Smoke test the packages on real machines: "no plugin", "CPU plugin", "CUDA plugin without GPU", "CUDA plugin with GPU" - Linux, Windows (DLL search flags), macOS (install names, ad-hoc signing of `ai/cpu`).
-- [ ] The `torch_cuda` relink moved to [`ai_engine/build.rs`](crates/ai_engine/build.rs) (kept: unverified whether the plugin would load `libtorch_cuda` without it). CI checks the plugin links it.
+- [x] **No more `torch_cuda` relink** (2026-10-19): the app loads `libtorch_cuda.so` / `torch_cuda.dll` from the plugin's folder right after the plugin, before its first libtorch call (it registers CUDA when loaded; the CPU build has none) - `crates/ai_engine/build.rs` is gone, the release checks now check that the CUDA library is packaged in `ai/cuda`. Test: `the_cuda_library_next_to_the_plugin_is_loaded_with_it`. Still to confirm on a GPU machine (smoke test above): CUDA available, engine "libtorch (CUDA)". Note: with libtorch linked into a test binary (`torch` feature) CUDA is no longer registered there - those tests run on the CPU.
 - [ ] The Windows plugin build (`cargo xwin rustc … --crate-type cdylib`) has not run yet - first release CI run.
-- [ ] If the CUDA plugin loads but fails to set up, the CPU one is tried next - on Linux its `libtorch_cpu.so` name is then already taken by the CUDA one's (same SONAME), which works (CUDA libtorch runs on the CPU) but is not the CPU build.
+- [x] **No second libtorch** (2026-10-19): only a plugin that fails to *load* lets the next one be tried; one that loads but fails to set up is set up again for the CPU (CUDA libtorch runs there too), else it is the error - its library is kept (leaked), never closed.
 - Once loaded, libtorch can't be unloaded; a libtorch crash still takes down the app (no process isolation).
 - Maybe later: one plugin build for both variants (only the shipped libtorch differs). Untested.
 

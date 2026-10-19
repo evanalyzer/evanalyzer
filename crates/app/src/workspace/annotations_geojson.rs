@@ -1,4 +1,6 @@
-//! Manual annotations as GeoJSON: one `<image>.geojson` per image (the
+//! Manual annotations as GeoJSON - read and written through the backend's
+//! [`FileSystem`] (this computer, or the server the project is on): one
+//! `<image>.geojson` per image (the
 //! image's path relative to the project, mirrored in the folder), a
 //! `FeatureCollection` of `Polygon`/`MultiPolygon` features in image pixel
 //! coordinates (y down) - the layout QuPath reads and writes, no schema of
@@ -16,6 +18,7 @@
 //! centre lies inside). Imported annotations are measured on their image
 //! (every channel), as drawn ones are.
 
+use crate::api::FileSystem;
 use crate::workspace::extensions::annotations_ext::same_shape;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::project_ext::ProjectExt;
@@ -325,7 +328,11 @@ fn feature(
 
 /// Writes the manual annotations of every image that has any to
 /// `<folder>/<image path>.geojson`.
-pub fn export_geojson(project: &ProjectWithRuntime, folder: &Path) -> Result<ExportReport, String> {
+pub fn export_geojson(
+    project: &ProjectWithRuntime,
+    files: &dyn FileSystem,
+    folder: &Path,
+) -> Result<ExportReport, String> {
     let mut report = ExportReport::default();
     for (rel_path, image) in &project.settings.images.list {
         let features: Vec<Value> = image
@@ -342,12 +349,16 @@ pub fn export_geojson(project: &ProjectWithRuntime, folder: &Path) -> Result<Exp
         }
         let file = folder.join(geojson_name(rel_path));
         if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            files
+                .create_dir_all(dir)
+                .map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         report.objects += features.len();
         let collection = json!({ "type": "FeatureCollection", "features": features });
         let text = serde_json::to_string_pretty(&collection).map_err(|e| e.to_string())?;
-        std::fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))?;
+        files
+            .write_file(&file, text.as_bytes())
+            .map_err(|e| format!("{}: {e}", file.display()))?;
         report.files += 1;
     }
     Ok(report)
@@ -363,17 +374,23 @@ fn geojson_name(rel_path: &Path) -> PathBuf {
 // --- Import --------------------------------------------------------------
 
 /// Every `.geojson` file below `folder`.
-fn geojson_files(folder: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = std::fs::read_dir(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            geojson_files(&path, out)?;
-        } else if path
+fn geojson_files(
+    files: &dyn FileSystem,
+    folder: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let entries = files
+        .list_dir(folder)
+        .map_err(|e| format!("{}: {e}", folder.display()))?;
+    for entry in entries {
+        if entry.is_dir {
+            geojson_files(files, &entry.path, out)?;
+        } else if entry
+            .path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("geojson"))
         {
-            out.push(path);
+            out.push(entry.path);
         }
     }
     Ok(())
@@ -516,12 +533,16 @@ pub struct PendingImport {
 
 /// Step 1: reads the `.geojson` files below `folder` for the images of
 /// `project` (shapes, classes by name, planes); measures nothing yet.
-pub fn read_geojson(project: &ProjectWithRuntime, folder: &Path) -> Result<PendingImport, String> {
-    let mut files = Vec::new();
-    geojson_files(folder, &mut files)?;
-    files.sort();
+pub fn read_geojson(
+    project: &ProjectWithRuntime,
+    files: &dyn FileSystem,
+    folder: &Path,
+) -> Result<PendingImport, String> {
+    let mut found = Vec::new();
+    geojson_files(files, folder, &mut found)?;
+    found.sort();
     let mut pending = PendingImport::default();
-    for file in files {
+    for file in found {
         let Some(rel_path) = matching_image(project, folder, &file) else {
             pending.report.unmatched_files.push(file);
             continue;
@@ -529,8 +550,10 @@ pub fn read_geojson(project: &ProjectWithRuntime, folder: &Path) -> Result<Pendi
         let Some(image) = project.settings.images.list.get(&rel_path) else {
             continue;
         };
-        let text =
-            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let bytes = files
+            .read_file(&file)
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+        let text = String::from_utf8_lossy(&bytes);
         let value: Value = serde_json::from_str(&text)
             .map_err(|e| format!("{}: not GeoJSON: {e}", file.display()))?;
         // A FeatureCollection, a list of features (older QuPath), or one.
@@ -714,7 +737,7 @@ pub fn apply_import(
     report
 }
 
-/// All three steps at once, measuring on the image files of this computer:
+/// All three steps at once, files and images on this computer:
 /// reads the `.geojson` files below `folder`, measures them, puts them
 /// into the project (see [`apply_import`]).
 pub fn import_geojson(
@@ -722,7 +745,8 @@ pub fn import_geojson(
     folder: &Path,
     replace: bool,
 ) -> Result<ImportReport, String> {
-    let mut pending = read_geojson(project, folder)?;
+    let files = crate::backend::LocalFileSystem::default();
+    let mut pending = read_geojson(project, &files, folder)?;
     measure_pending(&mut pending, |path, series, objects| {
         let source = crate::backend::local::image_reader::ReaderPool::open(path)
             .map_err(|e| e.to_string())?;
@@ -952,7 +976,12 @@ mod tests {
             series.objects.push(excluded);
         }
         let dir = tempfile::tempdir().unwrap();
-        let report = export_geojson(&source, dir.path()).unwrap();
+        let report = export_geojson(
+            &source,
+            &crate::backend::LocalFileSystem::default(),
+            dir.path(),
+        )
+        .unwrap();
         assert_eq!(
             report,
             ExportReport {
