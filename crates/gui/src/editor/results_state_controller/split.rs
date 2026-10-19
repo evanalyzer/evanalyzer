@@ -25,7 +25,7 @@ const FLY_MS: f32 = 400.0;
 pub(super) struct SplitState {
     /// The image shown (`image_rel_path`) and its objects, by `object_id`.
     pub(super) image: Option<String>,
-    objects: Arc<Vec<ResultObject>>,
+    pub(super) objects: Arc<Vec<ResultObject>>,
     /// Index into `objects`.
     selected: Option<usize>,
     /// A region shown instead of an object (an image heatmap's tile), in
@@ -37,6 +37,10 @@ pub(super) struct SplitState {
     well_images: Vec<(String, String)>,
     /// The channel of the card's mean.
     channel: usize,
+    /// Plate "Color by value": the objects in the heatmap's colors. Kept
+    /// here - the overlay is also pushed from the database thread, where
+    /// the window can't be reached.
+    by_value: bool,
     /// Thumbnails made so far, by `rel_path`.
     thumbs: HashMap<String, SharedPixelBuffer<Rgb8Pixel>>,
 }
@@ -87,7 +91,10 @@ impl ResultsStateController {
             }
         });
         let manager = self.clone();
-        state.on_split_by_value_changed(move |_| manager.split_push_overlay());
+        state.on_split_by_value_changed(move |on| {
+            manager.split.lock().expect("Poisoned").by_value = on;
+            manager.split_push_overlay();
+        });
         let manager = self.clone();
         state.on_split_channel_changed(move |channel| {
             manager.split.lock().expect("Poisoned").channel = channel.max(0) as usize;
@@ -316,11 +323,18 @@ impl ResultsStateController {
         self.split_push_selection(false);
 
         // Not in the viewer yet: opened, at the object when following.
-        let absolute = {
-            use evanalyzer_app::project::ProjectExt;
-            self._app_state
-                .get_project()
-                .get_image_absolute_path_from_relative(&PathBuf::from(&rel_path))
+        // The series it is shown in (its own choice, else the project's):
+        // the card's channel names are that series'.
+        let (absolute, series) = {
+            use evanalyzer_app::project::{ImageEntryExt, ProjectExt};
+            let project = self._app_state.get_project();
+            let absolute = project.get_image_absolute_path_from_relative(&PathBuf::from(&rel_path));
+            let series = absolute
+                .as_ref()
+                .and_then(|path| project.find_image(path))
+                .map(|image| image.active_series(&project.images.settings))
+                .unwrap_or_else(|| project.images.settings.selected_series.unwrap_or(0));
+            (absolute, series)
         };
         let in_viewer = self.split_in_viewer(&rel_path);
         let follow = self.split_follow();
@@ -362,7 +376,10 @@ impl ResultsStateController {
                 }
             };
             let objects = match objects {
-                Ok(objects) => objects,
+                Ok(objects) => {
+                    log::debug!("Split view: {} objects of {rel_path}", objects.len());
+                    objects
+                }
                 Err(err) => {
                     error!("Could not read the objects of {rel_path}: {err}");
                     Vec::new()
@@ -373,7 +390,7 @@ impl ResultsStateController {
                 .and_then(|path| manager._app_state.get_image_source(path).ok())
                 .and_then(|source| {
                     let meta = source.meta();
-                    let info = meta.series.values().next()?;
+                    let info = meta.series.get(&series).or_else(|| meta.series.values().next())?;
                     Some(info.channels.values().map(|c| c.name.clone()).collect::<Vec<_>>())
                 })
                 .unwrap_or_default();
@@ -406,18 +423,18 @@ impl ResultsStateController {
 
     /// The image's objects on it, in their class's color (or, Plate
     /// "Color by value", the heatmap's).
-    fn split_push_overlay(&self) {
-        let by_value = self
-            .ui
-            .upgrade()
-            .is_some_and(|ui| ui.global::<ResultsState>().get_split_by_value())
-            && self.in_plate();
+    pub(super) fn split_push_overlay(&self) {
+        let by_value = self.split.lock().expect("Poisoned").by_value && self.in_plate();
         let (objects, selected, image) = {
             let split = self.split.lock().expect("Poisoned");
             (split.objects.clone(), split.selected, split.image.clone())
         };
         // Another image opened meanwhile (in Images): not its objects.
         if image.as_deref().is_some_and(|rel| !self.split_in_viewer(rel)) {
+            warn!(
+                "Split view: {image:?} is not the image in the viewer ({:?}) - its objects are dropped",
+                self._app_state.get_project().tmp_settings.current_image
+            );
             {
                 let mut split = self.split.lock().expect("Poisoned");
                 split.generation += 1;

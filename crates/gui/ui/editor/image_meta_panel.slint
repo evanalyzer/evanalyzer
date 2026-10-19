@@ -60,6 +60,9 @@ export component ImageMetaPanel inherits Rectangle {
     property <length> field-w: 130px;
 
     background: Ink.ground.mix(Ink.panel, 0.35);
+    // At the panel's bottom: its rounded corners (a clip doesn't round).
+    border-bottom-left-radius: Ink.radius-lg - 1px;
+    border-bottom-right-radius: Ink.radius-lg - 1px;
     // As high as its content.
     preferred-height: 32px + body.preferred-height;
 

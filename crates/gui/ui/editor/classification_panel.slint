@@ -8,7 +8,7 @@ import { ImagesListState } from "../api/images_list.slint";
 import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
 import { ToolState, ViewportObjectState } from "../api/viewport.slint";
 import { ClassItemData, ClassificationState } from "../api/classification.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkButton, InkButtonKind, InkIconButton } from "../ink/ink.slint";
 import { FocusBanner } from "pipeline_focus.slint";
 
 export component ClassificationPanel inherits Rectangle {
@@ -61,6 +61,21 @@ export component ClassificationPanel inherits Rectangle {
             more(x, y) => {
                 list-menu.show();
             }
+
+            // Left of + and ⋯ (each 24 px, 2 px apart, 6 px from the
+            // edge): the classes found in the images, merged in - the
+            // usual first step after opening an image.
+            InkIconButton {
+                x: parent.width - 6px - 3 * 24px - 2 * 2px;
+                y: (Ink.head-h - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.sparkle;
+                label: "Add the classes found in the images";
+                enabled: ImagesListState.images_list.length > 0;
+                clicked => {
+                    ClassificationState.class_auto_add_and_merge();
+                }
+            }
         }
 
         VerticalLayout {
@@ -106,10 +121,29 @@ export component ClassificationPanel inherits Rectangle {
                                 }
                             }
                         }
-                        if ClassificationState.classes_list.length == 0: VerticalLayout {
-                            padding: 8px;
-                            InkHint {
-                                text: "No classes yet. + adds one; ⋯ adds the classes found in the images.";
+                        // Only the background so far: the classes found in
+                        // the images are one click away.
+                        if ClassificationState.classes_list.length <= 1: VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: center;
+                                InkButton {
+                                    text: "Add classes from the image";
+                                    icon: InkIcons.sparkle;
+                                    kind: InkButtonKind.primary;
+                                    enabled: ImagesListState.images_list.length > 0;
+                                    clicked => {
+                                        ClassificationState.class_auto_add_and_merge();
+                                    }
+                                }
+                            }
+                            Text {
+                                text: ImagesListState.images_list.length > 0 ? "or + to create one yourself" : "Open images first, or + to create one yourself";
+                                font-size: Ink.fs-sm;
+                                color: Ink.text-mute;
+                                horizontal-alignment: center;
                             }
                         }
                     }

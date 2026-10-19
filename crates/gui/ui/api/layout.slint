@@ -13,10 +13,15 @@ export global LayoutState {
     /// The objects as a wide table at the bottom (design K), not as a list
     /// on the right.
     in-out property <bool> objects-as-table: false;
-    /// The image panel: channels, histogram, Z/T, overlay.
+    /// The image panel: channels, overlay, histogram.
     in-out property <bool> image-open: false;
     /// Pinned: it stays open when another panel opens.
     in-out property <bool> image-pinned: false;
+
+    /// The Z / T bar at the bottom of the image is folded to a pill.
+    in-out property <bool> stack-bar-folded: false;
+    /// The Pipelines panel shows the list of pipelines above the steps.
+    in-out property <bool> pipelines-list-open: false;
 
     /// The Tuning panel (the pinned settings) is put away.
     in-out property <bool> tuning-hidden: false;

@@ -1,0 +1,103 @@
+// editor/object_details.slint — the selected object's details, in a card
+// beside the Objects panel (left of it, level with the list's selected
+// line): its classes (removable on a manual one), area, circularity, and
+// the mean and sum of each channel. Its actions are in the list's line.
+
+import { ChannelState } from "../api/state.slint";
+import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
+import { Ink, InkCaption, InkChip, InkIconButton, InkIcons, InkFact } from "../ink/ink.slint";
+
+export component ObjectDetails inherits Rectangle {
+    property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
+
+    height: body.preferred-height;
+    background: Ink.glass;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: Ink.shadow;
+    accessible-role: groupbox;
+    accessible-label: "Object " + root.sel.label_name;
+
+    // Clicks stay on the card, not the image under it.
+    TouchArea { }
+
+    body := VerticalLayout {
+        padding: Ink.pad-panel;
+        padding-top: 8px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            InkCaption {
+                horizontal-stretch: 1;
+                text: "OBJECT " + root.sel.label_name;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            InkIconButton {
+                size: 22px;
+                icon: InkIcons.close;
+                label: "Unselect";
+                clicked => {
+                    ObjectListState.selected_object = { id: 0 };
+                    ObjectListState.object_selected(-1);
+                }
+            }
+        }
+
+        if root.sel.display_name != "": Text {
+            text: root.sel.display_name;
+            font-size: Ink.fs-sm;
+            color: Ink.text-mute;
+            overflow: elide;
+        }
+
+        // Its classes, each removable.
+        if root.sel.class_names.length > 0: HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            for name[i] in root.sel.class_names: InkChip {
+                text: name;
+                swatch: root.sel.class_colors[i];
+                removable: root.sel.editable;
+                remove => {
+                    ObjectListState.object_remove_class(root.sel.id, root.sel.class_ids[i]);
+                }
+            }
+        }
+
+        InkFact {
+            label: "Area";
+            value: root.sel.area > 0 ? root.sel.area + " px²" : "–";
+            extra: root.sel.area_nm2 != "" ? root.sel.area_nm2 + " nm²" : "";
+        }
+        InkFact {
+            label: "Circularity";
+            value: root.sel.circularity != "" ? root.sel.circularity : "–";
+        }
+        InkFact {
+            label: "Shared by";
+            value: root.sel.label_count + " objects";
+        }
+        if root.sel.coloc-with != "": InkFact {
+            label: "Coloc with";
+            value: root.sel.coloc-with;
+        }
+        // One line per channel of the image (not per measured value): the
+        // card keeps its height while the full values arrive.
+        for ch in ChannelState.channels: InkFact {
+            label: ch.name;
+            value: "μ " + (root.sel.intensity_avgs.length > ch.idx && root.sel.intensity_avgs[ch.idx] != "" ? root.sel.intensity_avgs[ch.idx] : "–");
+            extra: "Σ " + (root.sel.intensities.length > ch.idx && root.sel.intensities[ch.idx] != "" ? root.sel.intensities[ch.idx] : "–");
+        }
+
+        if !root.sel.editable: Text {
+            text: "From the pipeline · read-only";
+            font-size: Ink.fs-xs;
+            color: Ink.text-mute;
+        }
+    }
+}

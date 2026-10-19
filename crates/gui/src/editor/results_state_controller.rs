@@ -7310,6 +7310,41 @@ mod tests {
         assert!(controller._app_state.load_app_settings().results_split.image_panel);
     }
 
+    /// Plate "Color by value" also when the overlay is pushed from the
+    /// database thread (where the window can't be reached), as it is right
+    /// after an image's objects are read.
+    #[test]
+    fn split_color_by_value_holds_when_pushed_from_the_database_thread() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        {
+            let mut split = controller.split.lock().unwrap();
+            let mut objects = (*split.objects).clone();
+            assert!(!objects.is_empty(), "row 0's objects");
+            for object in &mut objects {
+                object.value = Some(1.0);
+            }
+            split.objects = Arc::new(objects);
+        }
+        state.invoke_split_by_value_changed(false);
+        let by_class = controller.viewport().results_overlay().unwrap().objects[0].1;
+        state.invoke_split_by_value_changed(true);
+        let by_value = controller.viewport().results_overlay().unwrap().objects[0].1;
+        assert_ne!(by_value, by_class, "the heatmap's color, not the class'");
+
+        std::thread::scope(|s| {
+            s.spawn(|| controller.split_push_overlay());
+        });
+        assert_eq!(
+            controller.viewport().results_overlay().unwrap().objects[0].1,
+            by_value,
+            "still by value"
+        );
+    }
+
     /// The card's mean is of the channel picked in the image controls.
     #[test]
     fn split_the_cards_mean_follows_the_picked_channel() {

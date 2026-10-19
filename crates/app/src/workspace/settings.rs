@@ -164,9 +164,6 @@ pub struct ViewportMemorySettings {
     /// right panel (its ⋯ still switches).
     pub objects_as_table: bool,
 
-    /// The card of the selected object next to it on the image.
-    pub object_card: bool,
-
     /// An image opened the first time (no scaling in the project yet) is
     /// auto-scaled, every channel; off: the full value range. The scaling
     /// is kept in the project either way.
@@ -280,7 +277,6 @@ impl Default for ViewportMemorySettings {
             free_caches_on_analysis: true,
             edit_during_analysis: true,
             objects_as_table: false,
-            object_card: false,
             auto_scale_new_images: true,
             color_channels_without_wavelength: false,
             reduce_motion: false,

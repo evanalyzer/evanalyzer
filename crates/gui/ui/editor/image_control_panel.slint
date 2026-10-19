@@ -1,14 +1,14 @@
 // editor/image_control_panel.slint — the Image panel: which series and
 // channels are shown and how - the objects overlay, the histogram (black
-// and white point), the Z projection or slice, the time frame.
+// and white point). Z and T: the stack bar over the image.
 
-import { ChannelState, HistogramState, IntensityProjection } from "../api/state.slint";
+import { ChannelState, HistogramState } from "../api/state.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ResultsState } from "../api/results.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
-import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkSelect, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
 
 // One channel: its color (a click switches it on/off), name, index. The
 // selected one is the histogram's.
@@ -21,7 +21,7 @@ component ChannelRow inherits Rectangle {
     callback select;
     callback toggle;
 
-    height: 26px;
+    height: 24px;
     accessible-role: list-item;
     accessible-label: root.name;
     accessible-item-selected: root.selected;
@@ -253,8 +253,6 @@ export component ImageControlPanel inherits Rectangle {
     // In the results' split view (a drawer over the image): ✕ closes the
     // drawer, no pin.
     in property <bool> in-split: false;
-    property <[string]> fps-names: ["1 fps", "2 fps", "5 fps", "10 fps", "20 fps", "25 fps"];
-    property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
     property <string> channel-name: ChannelState.channels.length > ChannelState.selected_channel_index
         ? ChannelState.channels[ChannelState.selected_channel_index].name : "";
     property <float> hist-range: HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
@@ -272,15 +270,6 @@ export component ImageControlPanel inherits Rectangle {
     // Typed in the image's units, back to 0..1.
     pure function typed(t: string) -> float {
         t.to-float() / max(HistogramState.value-scale, 1.0)
-    }
-
-    pure function fps-index(hz: int) -> int {
-        hz >= 25 ? 5 : hz >= 20 ? 4 : hz >= 10 ? 3 : hz >= 5 ? 2 : hz >= 2 ? 1 : 0
-    }
-
-    function projection(p: IntensityProjection) {
-        ChannelState.intensity_projection = p;
-        ChannelState.trigger_channel_state_changed();
     }
 
     // Black / white typed in: within the axis, the handles follow.
@@ -340,295 +329,209 @@ export component ImageControlPanel inherits Rectangle {
             }
         }
 
+        // The channels scroll; the toggles and the histogram below stay in
+        // view.
         Flickable {
             vertical-stretch: 1;
-            content-height: body.preferred-height;
+            min-height: min(channels.preferred-height, 3 * 24px + 12px);
+            preferred-height: channels.preferred-height;
+            content-height: channels.preferred-height;
 
-            body := VerticalLayout {
-                padding: Ink.pad-panel;
+            channels := VerticalLayout {
+                padding-left: Ink.pad-panel;
+                padding-right: Ink.pad-panel;
                 padding-top: 8px;
-                spacing: 8px;
+                padding-bottom: 4px;
+                spacing: 0px;
                 alignment: start;
+                for ch[i] in ChannelState.channels: ChannelRow {
+                    idx: ch.idx;
+                    name: ch.name;
+                    tint: ch.color;
+                    active: ch.active;
+                    selected: ChannelState.selected_channel_index == i;
+                    select => {
+                        ChannelState.selected_channel_index = i;
+                        ChannelState.trigger_active_channel_selection_changed();
+                    }
+                    toggle => {
+                        ChannelState.channels[i].active = !ChannelState.channels[i].active;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+            }
+        }
 
-                // -- Channels --
-                VerticalLayout {
-                    spacing: 0px;
-                    for ch[i] in ChannelState.channels: ChannelRow {
-                        idx: ch.idx;
-                        name: ch.name;
-                        tint: ch.color;
-                        active: ch.active;
-                        selected: ChannelState.selected_channel_index == i;
-                        select => {
-                            ChannelState.selected_channel_index = i;
-                            ChannelState.trigger_active_channel_selection_changed();
+        InkDivider { }
+
+        VerticalLayout {
+            padding: Ink.pad-panel;
+            padding-top: 8px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                InkSwitch {
+                    text: "Grayscale";
+                    checked: ChannelState.grayscale;
+                    toggled(on) => {
+                        ChannelState.grayscale = on;
+                        ChannelState.grayscale_toggled(on);
+                    }
+                }
+                InkSwitch {
+                    text: "Show objects";
+                    checked: ViewportObjectState.show_objects;
+                    toggled(on) => {
+                        ViewportObjectState.show_objects = on;
+                    }
+                }
+            }
+
+            FieldRow {
+                label: "Overlay";
+                InkNumberField {
+                    x: 72px;
+                    width: parent.width - 72px;
+                    label: "Overlay opacity in percent";
+                    value: round(ViewportObjectState.object_transparency * 100);
+                    step: 5;
+                    unit: "%";
+                    changed(text) => {
+                        ViewportObjectState.object_transparency = clamp(text.to-float(), 0, 100) / 100;
+                        ViewportObjectState.object_transparency_changed(ViewportObjectState.object_transparency);
+                    }
+                }
+            }
+
+            InkDivider { }
+
+            // -- Histogram --
+            HorizontalLayout {
+                spacing: 6px;
+                InkCaption {
+                    horizontal-stretch: 1;
+                    text: "HISTOGRAM" + (HistogramState.side == 1 ? " · breakpoint" : root.channel-name != "" ? " · " + root.channel-name : "");
+                    overflow: elide;
+                }
+
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.quiet;
+                    text: "Auto-scale";
+                    clicked => {
+                        HistogramState.auto_adjust_clicked();
+                    }
+                }
+                // Every channel (the original's).
+                if HistogramState.side == 0: InkButton {
+                    small: true;
+                    kind: InkButtonKind.quiet;
+                    text: "All channels";
+                    clicked => {
+                        HistogramState.auto_adjust_all_clicked();
+                    }
+                }
+            }
+
+            // Comparing: whose histogram is shown and changed.
+            if root.comparing: InkSegmented {
+                model: ["Original", "Breakpoint"];
+                label: "Histogram of";
+                selected: HistogramState.side;
+                picked(i) => {
+                    HistogramState.side = i;
+                    HistogramState.side-changed(i);
+                }
+            }
+
+            Histogram { }
+
+            // Log counts; the values to type in; this image's scaling for
+            // all (the original's only).
+            HorizontalLayout {
+                spacing: 6px;
+                InkSwitch {
+                    text: "Log";
+                    checked: HistogramState.log-scale;
+                    toggled(on) => {
+                        HistogramState.log-scale = on;
+                        HistogramState.log-scale-changed(on);
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.quiet;
+                    text: root.show-values ? "Values ‹" : "Values ›";
+                    clicked => {
+                        root.show-values = !root.show-values;
+                    }
+                }
+                if HistogramState.side == 0: InkButton {
+                    small: true;
+                    kind: InkButtonKind.quiet;
+                    text: "Use for all images";
+                    clicked => {
+                        HistogramState.apply-to-all-images();
+                    }
+                }
+            }
+
+            if root.show-values: GridLayout {
+                spacing-horizontal: 6px;
+                spacing-vertical: 4px;
+                Row {
+                    Text {
+                        text: "Black / white";
+                        font-size: Ink.fs-xs;
+                        color: Ink.text-mute;
+                    }
+                    Text {
+                        text: "Axis min / max";
+                        font-size: Ink.fs-xs;
+                        color: Ink.text-mute;
+                    }
+                }
+                Row {
+                    InkTextField {
+                        mono: true;
+                        label: "Black point";
+                        value: HistogramText.shown(HistogramState.histogram_min_val_abs);
+                        accepted(t) => {
+                            root.set-black(root.typed(t));
                         }
-                        toggle => {
-                            ChannelState.channels[i].active = !ChannelState.channels[i].active;
-                            ChannelState.trigger_channel_state_changed();
+                    }
+                    InkTextField {
+                        mono: true;
+                        label: "Axis min";
+                        value: HistogramText.shown(HistogramState.histogram_min_lim);
+                        accepted(t) => {
+                            root.set-axis(root.typed(t), HistogramState.histogram_max_lim);
                         }
                     }
                 }
-
-                HorizontalLayout {
-                    spacing: 16px;
-                    InkSwitch {
-                        text: "Grayscale";
-                        checked: ChannelState.grayscale;
-                        toggled(on) => {
-                            ChannelState.grayscale = on;
-                            ChannelState.grayscale_toggled(on);
+                Row {
+                    InkTextField {
+                        mono: true;
+                        label: "White point";
+                        value: HistogramText.shown(HistogramState.histogram_max_val_abs);
+                        accepted(t) => {
+                            root.set-white(root.typed(t));
                         }
                     }
-                    InkSwitch {
-                        text: "Show objects";
-                        checked: ViewportObjectState.show_objects;
-                        toggled(on) => {
-                            ViewportObjectState.show_objects = on;
-                        }
-                    }
-                }
-
-                FieldRow {
-                    label: "Overlay";
-                    InkNumberField {
-                        x: 72px;
-                        width: parent.width - 72px;
-                        label: "Overlay opacity in percent";
-                        value: round(ViewportObjectState.object_transparency * 100);
-                        step: 5;
-                        unit: "%";
-                        changed(text) => {
-                            ViewportObjectState.object_transparency = clamp(text.to-float(), 0, 100) / 100;
-                            ViewportObjectState.object_transparency_changed(ViewportObjectState.object_transparency);
-                        }
-                    }
-                }
-
-                InkDivider { }
-
-                // -- Histogram --
-                HorizontalLayout {
-                    spacing: 6px;
-                    InkCaption {
-                        horizontal-stretch: 1;
-                        text: "HISTOGRAM" + (HistogramState.side == 1 ? " · breakpoint" : root.channel-name != "" ? " · " + root.channel-name : "");
-                        overflow: elide;
-                    }
-
-                    InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        text: "Auto-scale";
-                        clicked => {
-                            HistogramState.auto_adjust_clicked();
-                        }
-                    }
-                    // Every channel (the original's).
-                    if HistogramState.side == 0: InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        text: "All channels";
-                        clicked => {
-                            HistogramState.auto_adjust_all_clicked();
-                        }
-                    }
-                }
-
-                // Comparing: whose histogram is shown and changed.
-                if root.comparing: InkSegmented {
-                    model: ["Original", "Breakpoint"];
-                    label: "Histogram of";
-                    selected: HistogramState.side;
-                    picked(i) => {
-                        HistogramState.side = i;
-                        HistogramState.side-changed(i);
-                    }
-                }
-
-                Histogram { }
-
-                // Log counts; the values to type in; this image's scaling for
-                // all (the original's only).
-                HorizontalLayout {
-                    spacing: 6px;
-                    InkSwitch {
-                        text: "Log";
-                        checked: HistogramState.log-scale;
-                        toggled(on) => {
-                            HistogramState.log-scale = on;
-                            HistogramState.log-scale-changed(on);
-                        }
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-                    InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        text: root.show-values ? "Values ‹" : "Values ›";
-                        clicked => {
-                            root.show-values = !root.show-values;
-                        }
-                    }
-                    if HistogramState.side == 0: InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        text: "Use for all images";
-                        clicked => {
-                            HistogramState.apply-to-all-images();
-                        }
-                    }
-                }
-
-                if root.show-values: GridLayout {
-                    spacing-horizontal: 6px;
-                    spacing-vertical: 4px;
-                    Row {
-                        Text {
-                            text: "Black / white";
-                            font-size: Ink.fs-xs;
-                            color: Ink.text-mute;
-                        }
-                        Text {
-                            text: "Axis min / max";
-                            font-size: Ink.fs-xs;
-                            color: Ink.text-mute;
-                        }
-                    }
-                    Row {
-                        InkTextField {
-                            mono: true;
-                            label: "Black point";
-                            value: HistogramText.shown(HistogramState.histogram_min_val_abs);
-                            accepted(t) => {
-                                root.set-black(root.typed(t));
-                            }
-                        }
-                        InkTextField {
-                            mono: true;
-                            label: "Axis min";
-                            value: HistogramText.shown(HistogramState.histogram_min_lim);
-                            accepted(t) => {
-                                root.set-axis(root.typed(t), HistogramState.histogram_max_lim);
-                            }
-                        }
-                    }
-                    Row {
-                        InkTextField {
-                            mono: true;
-                            label: "White point";
-                            value: HistogramText.shown(HistogramState.histogram_max_val_abs);
-                            accepted(t) => {
-                                root.set-white(root.typed(t));
-                            }
-                        }
-                        InkTextField {
-                            mono: true;
-                            label: "Axis max";
-                            value: HistogramText.shown(HistogramState.histogram_max_lim);
-                            accepted(t) => {
-                                root.set-axis(HistogramState.histogram_min_lim, root.typed(t));
-                            }
-                        }
-                    }
-                }
-
-                // -- Z --
-                if ImageMetaData.nr_z_stacks > 1: VerticalLayout {
-                    spacing: 6px;
-                    InkDivider { }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        InkCaption {
-                            width: 16px;
-                            text: "Z";
-                        }
-                        InkSegmented {
-                            horizontal-stretch: 1;
-                            label: "Z projection";
-                            model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid"];
-                            selected: ChannelState.intensity_projection == IntensityProjection.max ? 1
-                                : ChannelState.intensity_projection == IntensityProjection.min ? 2
-                                : ChannelState.intensity_projection == IntensityProjection.avg ? 3
-                                : ChannelState.intensity_projection == IntensityProjection.sum ? 4
-                                : ChannelState.intensity_projection == IntensityProjection.middle ? 5
-                                : 0;
-                            picked(i) => {
-                                root.projection(i == 1 ? IntensityProjection.max
-                                    : i == 2 ? IntensityProjection.min
-                                    : i == 3 ? IntensityProjection.avg
-                                    : i == 4 ? IntensityProjection.sum
-                                    : i == 5 ? IntensityProjection.middle
-                                    : IntensityProjection.single-stack);
-                            }
-                        }
-                    }
-                    if ChannelState.intensity_projection == IntensityProjection.single-stack: FieldRow {
-                        label: "Slice";
-                        InkNumberField {
-                            x: 72px;
-                            width: parent.width - 72px;
-                            label: "Z slice";
-                            value: ChannelState.selected_z_stack + 1;
-                            min: 1;
-                            max: ImageMetaData.nr_z_stacks;
-                            unit: "/ " + ImageMetaData.nr_z_stacks;
-                            changed(text) => {
-                                ChannelState.selected_z_stack = clamp(round(text.to-float()) - 1, 0, ImageMetaData.nr_z_stacks - 1);
-                                ChannelState.trigger_channel_state_changed();
-                            }
-                        }
-                    }
-                }
-
-                // -- T --
-                if ImageMetaData.nr_t_stacks > 1: VerticalLayout {
-                    spacing: 6px;
-                    InkDivider { }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        InkCaption {
-                            width: 16px;
-                            text: "T";
-                        }
-                        InkIconButton {
-                            size: Ink.control-h;
-                            icon: ChannelState.is_play_active ? InkIcons.pause : InkIcons.play;
-                            label: ChannelState.is_play_active ? "Pause" : "Play";
-                            active: ChannelState.is_play_active;
-                            clicked => {
-                                ChannelState.is_play_active = !ChannelState.is_play_active;
-                                ChannelState.toggle_play(ChannelState.is_play_active);
-                            }
-                        }
-                        InkNumberField {
-                            label: "Frame";
-                            value: ChannelState.selected_t_stack + 1;
-                            min: 1;
-                            max: ImageMetaData.nr_t_stacks;
-                            unit: "/ " + ImageMetaData.nr_t_stacks;
-                            changed(text) => {
-                                ChannelState.selected_t_stack = clamp(round(text.to-float()) - 1, 0, ImageMetaData.nr_t_stacks - 1);
-                                ChannelState.trigger_channel_state_changed();
-                            }
-                        }
-                        InkSelect {
-                            width: 76px;
-                            horizontal-stretch: 0;
-                            label: "Playback speed";
-                            model: root.fps-names;
-                            selected: root.fps-index(ChannelState.play_back_speed_hz);
-                            picked(i, name) => {
-                                ChannelState.play_back_speed_hz = root.fps-values[i];
-                                ChannelState.is_play_active = false;
-                                ChannelState.toggle_play(false);
-                            }
+                    InkTextField {
+                        mono: true;
+                        label: "Axis max";
+                        value: HistogramText.shown(HistogramState.histogram_max_lim);
+                        accepted(t) => {
+                            root.set-axis(HistogramState.histogram_min_lim, root.typed(t));
                         }
                     }
                 }
             }
         }
     }
-
 }

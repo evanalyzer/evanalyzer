@@ -1,5 +1,5 @@
 import { ViewportObjectState } from "../api/viewport.slint";
-import { Places } from "../api/layout.slint";
+import { LayoutState, Places } from "../api/layout.slint";
 // pipelines_panel.slint
 // EVAnalyzer - Pipelines panel.
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
@@ -2609,6 +2609,19 @@ export component PipelinesPanel inherits Rectangle {
     property <bool> has-pipeline: PipelinesPanelState.pipelines.length > 0;
     // A pipeline is shown (none: -1, see `deselect-pipeline`).
     property <bool> pipeline-selected: root.has-pipeline && PipelinesPanelState.active-pipeline-id >= 0;
+    // The pipelines above the steps (none shown: the body lists them).
+    property <bool> list-shown: LayoutState.pipelines-list-open && root.pipeline-selected;
+    property <length> pipeline-row-h: 40px;
+
+    // The head's ⌄: the list above the steps; with no pipeline shown the
+    // body lists them anyway - a new one then.
+    function toggle-list() {
+        if root.has-pipeline {
+            LayoutState.pipelines-list-open = !LayoutState.pipelines-list-open;
+        } else {
+            PipelinesPanelState.new-pipeline();
+        }
+    }
 
     VerticalLayout {
         spacing: 0px;
@@ -2625,9 +2638,10 @@ export component PipelinesPanel inherits Rectangle {
                 switcher := Rectangle {
                     horizontal-stretch: 1;
                     accessible-role: button;
-                    accessible-label: "Pipelines";
+                    accessible-label: LayoutState.pipelines-list-open ? "Hide the pipelines" : "Show the pipelines";
+                    accessible-expanded: LayoutState.pipelines-list-open;
                     accessible-action-default => {
-                        pipelines-popup.show();
+                        root.toggle-list();
                     }
 
                     Rectangle {
@@ -2648,7 +2662,7 @@ export component PipelinesPanel inherits Rectangle {
                                 overflow: elide;
                             }
                             Image {
-                                source: InkIcons.caret-down;
+                                source: root.list-shown ? InkIcons.caret-up : InkIcons.caret-down;
                                 width: 10px;
                                 colorize: Ink.text-mute;
                             }
@@ -2667,7 +2681,7 @@ export component PipelinesPanel inherits Rectangle {
                     switch-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            pipelines-popup.show();
+                            root.toggle-list();
                         }
                     }
                 }
@@ -2720,6 +2734,85 @@ export component PipelinesPanel inherits Rectangle {
                 background: Ink.border-soft;
             }
         }
+
+        // -- The pipelines, above the steps: which run (☑), the shown one
+        // (a click on another shows it, on it again shows none). At most
+        // four rows, more scroll --
+        if root.list-shown: VerticalLayout {
+            vertical-stretch: 0;
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-bottom: 6px;
+
+            HorizontalLayout {
+                height: 30px;
+                padding-left: 6px;
+                spacing: 4px;
+                InkCaption {
+                    horizontal-stretch: 1;
+                    text: "PIPELINES · " + PipelinesPanelState.enabled-pipeline-count + " OF " + PipelinesPanelState.pipelines.length + " RUN";
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkIconButton {
+                        size: 24px;
+                        icon: InkIcons.add;
+                        label: "New pipeline";
+                        clicked => {
+                            PipelinesPanelState.new-pipeline();
+                        }
+                    }
+                }
+            }
+
+            Flickable {
+                height: min(PipelinesPanelState.pipelines.length, 4) * root.pipeline-row-h;
+                content-height: PipelinesPanelState.pipelines.length * root.pipeline-row-h;
+                VerticalLayout {
+                    for p in PipelinesPanelState.pipelines: PipelineTab {
+                        height: root.pipeline-row-h;
+                        pipeline: p;
+                        active: p.id == PipelinesPanelState.active-pipeline-id;
+                        selected => {
+                            if p.id == PipelinesPanelState.active-pipeline-id {
+                                PipelinesPanelState.deselect-pipeline();
+                            } else {
+                                PipelinesPanelState.active-pipeline-id = p.id;
+                                PipelinesPanelState.select-pipeline(p.id);
+                                PipelineFocusState.pipeline-selected(p.id);
+                            }
+                        }
+                        double-clicked => {
+                            PipelinesPanelState.pipeline-more(p.id);
+                        }
+                        alt-clicked => {
+                            PipelineFocusState.toggle-pipeline-focus(p.id);
+                        }
+                        focus-clicked => {
+                            PipelineFocusState.toggle-pipeline-focus(p.id);
+                        }
+                        toggled => {
+                            PipelinesPanelState.toggle-pipeline(p.id);
+                        }
+                        move-up => {
+                            PipelinesPanelState.move-pipeline-up(p.id);
+                        }
+                        move-down => {
+                            PipelinesPanelState.move-pipeline-down(p.id);
+                        }
+                        move-by(rows) => {
+                            PipelinesPanelState.move-pipeline-by(p.id, rows);
+                        }
+                        more-clicked => {
+                            PipelinesPanelState.pipeline-more(p.id);
+                        }
+                    }
+                }
+            }
+        }
+        if root.list-shown: InkDivider { }
 
         // -- The project's problems --
         if PipelinesPanelState.project-problems.length > 0: Rectangle {
@@ -3114,96 +3207,6 @@ export component PipelinesPanel inherits Rectangle {
                     font-size: Ink.fs-xs;
                     font-family: Ink.font-mono;
                     vertical-alignment: center;
-                }
-            }
-        }
-    }
-
-    pipelines-popup := PopupWindow {
-        x: 6px;
-        y: Ink.head-h - 4px;
-        close-policy: close-on-click-outside;
-
-        InkMenuFrame {
-            open-y: root.absolute-position.y + Ink.head-h - 4px;
-            menu-width: min(root.width + 40px, 380px);
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                height: 24px;
-                Text {
-                    horizontal-stretch: 1;
-                    text: "PIPELINES";
-                    font-size: Ink.fs-xs;
-                    font-weight: 600;
-                    letter-spacing: 0.6px;
-                    color: Ink.text-mute;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: "☑ = included in Run";
-                    font-size: Ink.fs-xs;
-                    color: Ink.text-faint;
-                    vertical-alignment: center;
-                }
-            }
-            for p in PipelinesPanelState.pipelines: PipelineTab {
-                pipeline: p;
-                active: p.id == PipelinesPanelState.active-pipeline-id;
-                // The shown one again: shows none.
-                selected => {
-                    if p.id == PipelinesPanelState.active-pipeline-id {
-                        PipelinesPanelState.deselect-pipeline();
-                    } else {
-                        PipelinesPanelState.active-pipeline-id = p.id;
-                        PipelinesPanelState.select-pipeline(p.id);
-                        PipelineFocusState.pipeline-selected(p.id);
-                    }
-                    pipelines-popup.close();
-                }
-                // Double-click edits the pipeline, Alt+click focuses it.
-                double-clicked => {
-                    PipelinesPanelState.pipeline-more(p.id);
-                    pipelines-popup.close();
-                }
-                alt-clicked => {
-                    PipelineFocusState.toggle-pipeline-focus(p.id);
-                }
-                focus-clicked => {
-                    PipelineFocusState.toggle-pipeline-focus(p.id);
-                }
-                toggled => {
-                    PipelinesPanelState.toggle-pipeline(p.id);
-                }
-                move-up => {
-                    PipelinesPanelState.move-pipeline-up(p.id);
-                }
-                move-down => {
-                    PipelinesPanelState.move-pipeline-down(p.id);
-                }
-                move-by(rows) => {
-                    PipelinesPanelState.move-pipeline-by(p.id, rows);
-                }
-                more-clicked => {
-                    PipelinesPanelState.pipeline-more(p.id);
-                    pipelines-popup.close();
-                }
-            }
-            InkMenuSeparator { }
-            if root.pipeline-selected: InkMenuItem {
-                icon: InkIcons.close;
-                text: "Show no pipeline";
-                clicked => {
-                    PipelinesPanelState.deselect-pipeline();
-                    pipelines-popup.close();
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.add;
-                text: "New pipeline";
-                clicked => {
-                    PipelinesPanelState.new-pipeline();
-                    pipelines-popup.close();
                 }
             }
         }
