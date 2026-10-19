@@ -12,6 +12,8 @@ import {
     InkSwitch,
 } from "../ink/ink.slint";
 import { ViewportMemoryState } from "../api/project_settings.slint";
+import { FileBrowserState } from "../api/file_browser.slint";
+import { DialogType, GlobalAppState } from "../api/state.slint";
 import { RecentProjectRow, StartState } from "../api/start.slint";
 
 // One way in: an icon, what it does, its shortcut.
@@ -243,9 +245,13 @@ export component StartPage inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: "Start";
 
+    // The circles drift - only while nothing covers the page: on Windows
+    // (drawn by the CPU) each step redraws most of the window, and a dialog
+    // over it (the file browser) would wait for those redraws.
     Timer {
         interval: 100ms;
-        running: !ViewportMemoryState.reduce_motion;
+        running: !ViewportMemoryState.reduce_motion && !FileBrowserState.visible
+            && GlobalAppState.active_dialog == DialogType.none;
         triggered => {
             root.phase += 0.1;
         }

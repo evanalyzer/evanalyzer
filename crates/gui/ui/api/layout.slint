@@ -19,6 +19,8 @@ export global LayoutState {
     in-out property <bool> classes-folded: false;
     in-out property <bool> image-folded: false;
     in-out property <bool> objects-folded: false;
+    /// The navigator: 0 auto (only while zoomed in), 1 always, 2 never.
+    in-out property <int> navigator-mode: 0;
     /// Tab: every panel away (the Z / T bar and Tuning stay).
     in-out property <bool> panels-hidden: false;
     /// The objects as a wide table at the bottom (design K), not as a list

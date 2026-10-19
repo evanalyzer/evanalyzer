@@ -89,6 +89,18 @@ pub struct PanelSettings {
     pub objects_folded: bool,
     pub image_bar_folded: bool,
     pub pipelines_list_open: bool,
+    pub navigator: NavigatorMode,
+}
+
+/// When the image's navigator (the mini-map) shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NavigatorMode {
+    /// Only while part of the image is outside the view (zoomed in).
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 impl Default for PanelSettings {
@@ -103,6 +115,7 @@ impl Default for PanelSettings {
             objects_folded: false,
             image_bar_folded: false,
             pipelines_list_open: false,
+            navigator: NavigatorMode::Auto,
         }
     }
 }
@@ -478,6 +491,9 @@ mod tests {
         assert_eq!(old.panels, PanelSettings::default());
         let some: PanelSettings = serde_json::from_str(r#"{"imageFolded": true}"#).unwrap();
         assert!(some.image_folded && some.classes_open);
+        assert_eq!(some.navigator, NavigatorMode::Auto);
+        let never: PanelSettings = serde_json::from_str(r#"{"navigator": "never"}"#).unwrap();
+        assert_eq!(never.navigator, NavigatorMode::Never);
     }
 
     #[test]

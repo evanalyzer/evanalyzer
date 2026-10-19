@@ -61,7 +61,7 @@ export global ObjectDetailsPlace {
 // What can be done to the selected object, in the list's and the table's
 // line of it: a manual annotation's class set, or it deleted (its shape is
 // edited with the brush and eraser); a pipeline object (read-only) copied
-// into the manual annotations.
+// as an annotation (into the manual annotations).
 component ObjectActions inherits HorizontalLayout {
     in property <bool> editable;
     spacing: 4px;
@@ -76,7 +76,8 @@ component ObjectActions inherits HorizontalLayout {
     if !root.editable: InkButton {
         small: true;
         icon: InkIcons.copy;
-        text: "Copy to manual";
+        text: "Copy as annotation";
+        tip: "An editable copy among the manual annotations - to change it or train with it";
         kind: InkButtonKind.primary;
         clicked => {
             AnnotationState.open-copy-dialog-for(ObjectListState.selected_object.id);
@@ -488,7 +489,7 @@ export component ObjectListPanel inherits Rectangle {
             InkMenuSeparator { }
             InkMenuItem {
                 icon: InkIcons.copy;
-                text: "Copy pipeline objects to manual…";
+                text: "Copy pipeline objects as annotations…";
                 clicked => {
                     AnnotationState.open-copy-dialog();
                 }

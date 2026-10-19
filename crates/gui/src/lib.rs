@@ -931,6 +931,11 @@ pub(crate) fn apply_panels(ui: &AppWindow, ui_state: &UiState) {
     layout.set_objects_folded(panels.objects_folded);
     layout.set_stack_bar_folded(panels.image_bar_folded);
     layout.set_pipelines_list_open(panels.pipelines_list_open);
+    layout.set_navigator_mode(match panels.navigator {
+        evanalyzer_app::global::NavigatorMode::Auto => 0,
+        evanalyzer_app::global::NavigatorMode::Always => 1,
+        evanalyzer_app::global::NavigatorMode::Never => 2,
+    });
 }
 
 fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
@@ -945,6 +950,11 @@ fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
         objects_folded: layout.get_objects_folded(),
         image_bar_folded: layout.get_stack_bar_folded(),
         pipelines_list_open: layout.get_pipelines_list_open(),
+        navigator: match layout.get_navigator_mode() {
+            1 => evanalyzer_app::global::NavigatorMode::Always,
+            2 => evanalyzer_app::global::NavigatorMode::Never,
+            _ => evanalyzer_app::global::NavigatorMode::Auto,
+        },
     }
 }
 
@@ -1436,6 +1446,7 @@ mod ui_state_tests {
         layout.set_image_folded(true);
         layout.set_stack_bar_folded(true);
         layout.set_classes_open(false);
+        layout.set_navigator_mode(2);
         layout.invoke_panels_changed();
         let saved = ui_state.load_app_settings().panels;
         assert!(saved.image_folded && saved.image_bar_folded && !saved.classes_open);
@@ -1445,6 +1456,7 @@ mod ui_state_tests {
         let layout = next.global::<LayoutState>();
         assert!(layout.get_image_folded() && layout.get_stack_bar_folded());
         assert!(!layout.get_classes_open() && layout.get_objects_open());
+        assert_eq!(layout.get_navigator_mode(), 2);
     }
 
     #[test]

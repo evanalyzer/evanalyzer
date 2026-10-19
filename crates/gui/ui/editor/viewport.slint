@@ -4,10 +4,10 @@ import { ClassificationState } from "../api/classification.slint";
 import { Ink } from "../ink/palette.slint";
 import { InkIcons } from "../ink/icons.slint";
 import { LayoutState } from "../api/layout.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ResultsState } from "../api/results.slint";
 
-import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
 import { StackBar } from "viewport_stack_bar.slint";
 
@@ -346,13 +346,6 @@ export component Viewport inherits Rectangle {
             border-color: ViewportObjectState.act_tool_state == ToolState.Eraser ? Ink.err : #FFFFFF;
         }
 
-        ScaleBar {
-            x: root.inset-left;
-            // Above the Z / T bar.
-            y: parent.height - self.height - root.inset-bottom - (stack-bar.visible ? stack-bar.height + 12px : 0px);
-            bar_width: ViewportState.scale_bar_width;
-            unit_text: ViewportState.scale_bar_text;
-        }
     }
 
     changed width => {
@@ -510,19 +503,81 @@ export component Viewport inherits Rectangle {
     }
 
     // Z / T, at the bottom left; the navigator keeps its corner.
+    // The insets already end a gap away from the panels: the bar and the
+    // navigator line up with the panels' edges (and the Tuning dock's);
+    // without panels a margin.
+    property <length> margin: root.split-mode ? 10px : 12px;
+    property <length> edge-left: root.inset-left > 0 ? root.inset-left : root.margin;
+    property <length> edge-right: root.inset-right > 0 ? root.inset-right : root.margin;
+
     stack-bar := StackBar {
-        x: root.inset-left + (root.split-mode ? 10px : 12px);
-        y: parent.height - self.height - (root.split-mode ? 10px : 12px) - root.inset-bottom;
-        room: root.width - root.inset-left - root.inset-right - 2 * (root.split-mode ? 10px : 12px)
-            - (navigator.visible ? navigator.width + 12px : 0px);
+        x: root.edge-left;
+        y: parent.height - self.height - root.margin - root.inset-bottom;
+        room: root.width - root.edge-left - root.edge-right
+            - (root.split-mode && navigator.visible ? navigator.width + 12px : 0px);
     }
 
-    // Above the image's touch area: clicks in it move the view.
+    // Above the image's touch area: clicks in it move the view. Top right,
+    // on the right panels' edge (the results' split pane: bottom right, its
+    // image panel is at the top).
     navigator := Navigator {
-        x: parent.width - self.width - (root.split-mode ? 10px : 12px) - root.inset-right;
-        y: parent.height - self.height - (root.split-mode ? 10px : 12px) - root.inset-bottom;
+        mode: LayoutState.navigator-mode;
+        x: parent.width - self.width - root.edge-right;
+        y: root.split-mode ? parent.height - self.height - root.margin - root.inset-bottom : root.margin;
         viewport-width: root.width;
         viewport-height: root.height;
+    }
+
+    // The scale bar and the zoom: under the navigator - in its place when
+    // it's hidden (in the split pane above it).
+    scale-row := HorizontalLayout {
+        property <bool> nav: navigator.visible;
+        width: max(150px, ViewportState.scale_bar_width + 60px);
+        height: 34px;
+        x: parent.width - self.width - root.edge-right;
+        y: root.split-mode
+            ? parent.height - self.height - root.margin - root.inset-bottom - (self.nav ? navigator.height + 8px : 0px)
+            : root.margin + (self.nav ? navigator.height + 8px : 0px);
+        spacing: 8px;
+        visible: ImageMetaData.image_name != "";
+        accessible-role: text;
+        accessible-label: "Scale bar " + ViewportState.scale_bar_text + ", zoom " + round(ViewportState.zoom_factor * 100) + " percent";
+        VerticalLayout {
+            alignment: end;
+            spacing: 3px;
+            visible: ViewportState.scale_bar_width > 0;
+            Text {
+                text: ViewportState.scale_bar_text;
+                font-size: Ink.fs-secondary;
+                font-weight: 600;
+                color: #FFFFFF;
+                horizontal-alignment: center;
+                stroke: #000000A0;
+                stroke-width: 0.5px;
+            }
+            Rectangle {
+                width: ViewportState.scale_bar_width;
+                height: 3px;
+                border-radius: 1px;
+                background: #FFFFFF;
+                border-width: 0.5px;
+                border-color: #000000A0;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: end;
+            Text {
+                text: round(ViewportState.zoom_factor * 100) + " %";
+                font-family: Ink.font-mono;
+                font-size: Ink.fs-secondary;
+                color: #E4E4E7;
+                stroke: #000000A0;
+                stroke-width: 0.5px;
+            }
+        }
     }
 
     // Compare: the line between them, dragged sideways; a click on its
