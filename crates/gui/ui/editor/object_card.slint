@@ -131,7 +131,7 @@ export component ObjectCard inherits Rectangle {
                     icon: InkIcons.copy;
                     text: "Copy to manual";
                     clicked => {
-                        AnnotationState.copy-to-manual(ObjectListState.selected_object.id);
+                        AnnotationState.open-copy-dialog-for(ObjectListState.selected_object.id);
                     }
                 }
             }

@@ -53,7 +53,7 @@ impl AnnotationController {
         let state = ui.global::<AnnotationState>();
 
         let m = self.clone();
-        state.on_copy_to_manual(move |row_id| m.copy_to_manual(row_id));
+        state.on_open_copy_dialog_for(move |row_id| m.open_copy_dialog_for(row_id));
 
         let m = self.clone();
         state.on_open_copy_dialog(move || m.open_copy_dialog());
@@ -194,19 +194,27 @@ impl AnnotationController {
         });
     }
 
-    /// One pipeline object: copied with its classes, the copy selected - its
-    /// class can be changed right away.
-    fn copy_to_manual(self: &Arc<Self>, row_id: i32) {
-        self.app_state.begin_undo_step();
-        let mut project = self.app_state.get_project_write();
-        let Some(id) = resolve_object_id(&project, row_id) else {
-            return;
+    /// Shows the copy dialog for one pipeline object: its own classes, or
+    /// another one.
+    fn open_copy_dialog_for(&self, row_id: i32) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let rows = {
+            let project = self.app_state.get_project();
+            let Some(object) = resolve_object_id(&project, row_id)
+                .and_then(|id| project.get_preview_objects().iter().find(|o| o.id == id))
+            else {
+                return;
+            };
+            let mut classes: Vec<(ObjectClass, usize)> =
+                object.object_class.iter().map(|c| (c.clone(), 1)).collect();
+            classes.sort_by_key(|(c, _)| c.to_i32());
+            class_rows(&project, &classes)
         };
-        if let Some(copy) = project.copy_preview_objects_to_manual(&[id], None).pop() {
-            project.set_selected_object(Some(copy));
-        }
-        drop(project);
-        self.refresh();
+        let state = ui.global::<AnnotationState>();
+        state.set_pipeline_classes(ModelRc::new(VecModel::from(rows)));
+        state.set_copy_single(row_id);
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::CopyToManual);
     }
 
     /// Fills the copy dialog with the classes of the open image's pipeline
@@ -217,8 +225,9 @@ impl AnnotationController {
             let project = self.app_state.get_project();
             class_rows(&project, &project.preview_object_classes())
         };
-        ui.global::<AnnotationState>()
-            .set_pipeline_classes(ModelRc::new(VecModel::from(rows)));
+        let state = ui.global::<AnnotationState>();
+        state.set_pipeline_classes(ModelRc::new(VecModel::from(rows)));
+        state.set_copy_single(-1);
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::CopyToManual);
     }
@@ -227,11 +236,16 @@ impl AnnotationController {
     /// the class the copies get, -1 their own.
     fn copy_all_to_manual(self: &Arc<Self>, target_class: i32) {
         let Some(ui) = self.ui.upgrade() else { return };
+        let target = (target_class >= 0).then(|| class_from_row_id(target_class));
+        let single = ui.global::<AnnotationState>().get_copy_single();
+        if single >= 0 {
+            ui.global::<AnnotationState>().set_copy_single(-1);
+            return self.copy_one_to_manual(single, target);
+        }
         let classes = ticked(&ui.global::<AnnotationState>().get_pipeline_classes());
         if classes.is_empty() {
             return; // nothing ticked - not "all"
         }
-        let target = (target_class >= 0).then(|| class_from_row_id(target_class));
         self.app_state.begin_undo_step();
         let mut project = self.app_state.get_project_write();
         let ids = project.preview_object_ids(&classes);
@@ -241,6 +255,21 @@ impl AnnotationController {
             "Copied {} pipeline objects to the manual annotations",
             copied.len()
         );
+        self.refresh();
+    }
+
+    /// One pipeline object copied, with its classes or `target`; the copy
+    /// is selected.
+    fn copy_one_to_manual(self: &Arc<Self>, row_id: i32, target: Option<ObjectClass>) {
+        self.app_state.begin_undo_step();
+        let mut project = self.app_state.get_project_write();
+        let Some(id) = resolve_object_id(&project, row_id) else {
+            return;
+        };
+        if let Some(copy) = project.copy_preview_objects_to_manual(&[id], target).pop() {
+            project.set_selected_object(Some(copy));
+        }
+        drop(project);
         self.refresh();
     }
 

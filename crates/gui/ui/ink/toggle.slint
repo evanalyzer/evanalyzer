@@ -4,10 +4,12 @@
 import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 
-/// A checkbox, with its text to the right (optional).
+/// A checkbox, with its text to the right (optional) - and a colour swatch
+/// before the text (optional, e.g. a class's colour).
 export component InkCheckbox inherits Rectangle {
     in-out property <bool> checked;
     in property <string> text;
+    in property <color> swatch: transparent;
     in property <bool> enabled: true;
     callback toggled(bool);
 
@@ -18,7 +20,8 @@ export component InkCheckbox inherits Rectangle {
 
     height: 20px;
     horizontal-stretch: 0;
-    preferred-width: 14px + (root.text == "" ? 0px : 8px + label.preferred-width);
+    property <length> text-x: root.swatch == transparent ? 22px : 38px;
+    preferred-width: 14px + (root.text == "" ? 0px : root.text-x - 14px + label.preferred-width);
     accessible-role: checkbox;
     accessible-label: root.text;
     accessible-checked: root.checked;
@@ -48,8 +51,15 @@ export component InkCheckbox inherits Rectangle {
                 colorize: Ink.on-primary;
             }
         }
-        label := Text {
+        if root.swatch != transparent: Rectangle {
             x: 22px;
+            width: 10px;
+            height: 10px;
+            border-radius: Ink.radius-xs;
+            background: root.swatch;
+        }
+        label := Text {
+            x: root.text-x;
             height: parent.height;
             text: root.text;
             font-size: Ink.fs-md;
