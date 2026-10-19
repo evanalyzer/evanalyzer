@@ -5857,6 +5857,75 @@ mod tests {
         }
     }
 
+    /// Leak check: the results opened 15 times (`BENCH_ROUNDS`), each time List, Plate,
+    /// Charts and the split view's selection - RAM must level off.
+    /// `EVADB=<file.evadb> cargo test --release -p evanalyzer_gui --lib
+    /// bench_soak_results -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_soak_results() {
+        let Ok(path) = std::env::var("EVADB") else {
+            return;
+        };
+        let rss = || {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            status
+                .lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0)
+                / 1024.0
+        };
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        let state = ui.global::<ResultsState>();
+        let start = rss();
+        let rounds: usize = std::env::var("BENCH_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(15);
+        // BENCH_PART=open: only reopening; =views: opened once, then only
+        // the views and the split's selections.
+        let part = std::env::var("BENCH_PART").unwrap_or_default();
+        if part == "views" {
+            controller.open_database(PathBuf::from(&path));
+            drain_ui_queue();
+        }
+        for round in 1..=rounds {
+            if part != "views" {
+                controller.open_database(PathBuf::from(&path));
+                drain_ui_queue();
+            }
+            if part == "open" {
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
+                if round % 5 == 0 || round == 1 {
+                    println!("round {round:>2}: RSS +{:.0} MB", rss() - start);
+                }
+                continue;
+            }
+            for mode in [ResultsRailMode::Matrix, ResultsRailMode::Charts, ResultsRailMode::List] {
+                state.set_rail_mode(mode);
+                state.invoke_rail_mode_selected(mode);
+                drain_ui_queue();
+            }
+            state.set_split(true);
+            for row in 0..20 {
+                state.invoke_list_row_selected(row);
+            }
+            drain_ui_queue();
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            unsafe {
+                libc::malloc_trim(0);
+            }
+            if round % 5 == 0 || round == 1 {
+                println!("round {round:>2}: RSS +{:.0} MB", rss() - start);
+            }
+        }
+    }
+
     #[test]
     fn toggle_active_well_disabled_flips_the_database_and_refreshes_the_well_grid() {
         let (ui, controller) = controller_with_open_database();

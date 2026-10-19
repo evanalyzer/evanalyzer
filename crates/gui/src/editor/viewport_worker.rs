@@ -2556,6 +2556,70 @@ mod tests {
         );
     }
 
+    /// Leak check: 400 settled renders over and over the same tour (zoom
+    /// levels, pans, compare on and off) - RAM must level off, not climb.
+    /// `EVANALYZER_BENCH_SLIDE=<slide.tif> cargo test --release -p
+    /// evanalyzer_gui --lib bench_soak_viewport -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_soak_viewport() {
+        let Ok(slide) = std::env::var("EVANALYZER_BENCH_SLIDE") else {
+            return;
+        };
+        let (rss_start, _) = rss_mb();
+        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(slide.into()));
+        {
+            let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+            vp.viewport_width = 1920.0;
+            vp.viewport_height = 1080.0;
+        }
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let (full_w, full_h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
+        let (cx, cy) = (full_w as f32 / 2.0, full_h as f32 / 2.0);
+        let trim = || {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        };
+        println!("{:>6} {:>9} {:>9}", "render", "RSS MB", "peak MB");
+        let start = Instant::now();
+        for i in 0..400usize {
+            let zoom = [0.05f32, 0.25, 1.0][i % 3];
+            let x = cx + ((i / 3) % 8) as f32 * 700.0;
+            set_view(&r, zoom, 960.0 - x * zoom, 540.0 - cy * zoom);
+            // Every 50th: compare on/off with a breakpoint tile, as a user
+            // switching breakpoints would.
+            if i % 50 == 25 {
+                let side = 2048usize;
+                r.worker.viewport_controller.set_breakpoint_channel(
+                    gray_container_sized(vec![0.5; side * side], side, side),
+                    None,
+                    None,
+                    cx as usize,
+                    cy as usize,
+                    side,
+                    side,
+                    8,
+                    Some(0),
+                );
+                r.worker.viewport_controller.set_compare(true);
+            } else if i % 50 == 35 {
+                r.worker.viewport_controller.set_compare(false);
+                r.worker.viewport_controller.clear_breakpoint();
+            }
+            drain_ui_queue();
+            r.draw(TaskDispatch::HighRes, DrawingTask::default());
+            if i % 50 == 49 {
+                trim();
+                let (rss, peak) = rss_mb();
+                println!("{:>6} {:>9.0} {:>9.0}", i + 1, rss - rss_start, peak - rss_start);
+            }
+        }
+        println!("400 renders in {:.1} s", start.elapsed().as_secs_f64());
+    }
+
     // -- worker threads and further frame kinds ---------------------------------
 
     #[test]

@@ -17,6 +17,8 @@ use log::{LevelFilter, info, warn};
 use std::{path::PathBuf, sync::Arc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Startup times (log level debug) are measured from here.
+    evanalyzer_gui::mark_process_start();
     let args = parse_args();
     // The server's log level may come from its config file, so the logger
     // waits for that.

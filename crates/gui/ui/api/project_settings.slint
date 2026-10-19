@@ -123,6 +123,8 @@ export global ViewportMemoryState {
     in-out property <bool> preview_tiles_auto: true;
     in-out property <int> preview_tiles: 4;
     in-out property <bool> breakpoint_tiles_auto: true;
+    // Drawn in software, not by the graphics card (after a restart).
+    in-out property <bool> software_renderer: false;
     in-out property <int> breakpoint_tiles: 1;
     // What automatic gives on this computer, e.g. "16 GB RAM: 4" - set from
     // Rust.

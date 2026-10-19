@@ -107,6 +107,7 @@ impl ViewportImageController {
             state.set_preview_tiles_auto(settings.preview_tiles_auto);
             state.set_preview_tiles(if settings.preview_tiles_auto { auto_preview } else { settings.preview_tiles } as i32);
             state.set_breakpoint_tiles_auto(settings.breakpoint_tiles_auto);
+            state.set_software_renderer(settings.software_renderer);
             state.set_breakpoint_tiles(settings.effective_breakpoint_tiles(ram) as i32);
             state.set_auto_scale_new_images(settings.auto_scale_new_images);
             state.set_color_channels_without_wavelength(settings.color_channels_without_wavelength);
@@ -143,6 +144,7 @@ impl ViewportImageController {
                 state.get_preview_tiles().max(1) as u32
             },
             breakpoint_tiles_auto: state.get_breakpoint_tiles_auto(),
+            software_renderer: state.get_software_renderer(),
             breakpoint_tiles: if state.get_breakpoint_tiles_auto() {
                 before.breakpoint_tiles
             } else {
@@ -1294,6 +1296,7 @@ mod tests {
         state.set_preview_tiles(100);
         state.set_breakpoint_tiles_auto(false);
         state.set_breakpoint_tiles(2);
+        state.set_software_renderer(true);
         state.set_auto_scale_new_images(false);
         state.set_color_channels_without_wavelength(true);
 
@@ -1318,6 +1321,7 @@ mod tests {
             preview_tiles: 100,
             breakpoint_tiles_auto: false,
             breakpoint_tiles: 2,
+            software_renderer: true,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(

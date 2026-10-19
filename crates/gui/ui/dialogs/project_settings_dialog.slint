@@ -107,6 +107,7 @@ export component ProjectSettingsDialog inherits InkDialog {
     property <string> kw-tile-cache: "Tile cache image tiles read from disk memory RAM MB megabytes performance";
     property <string> kw-preview-tiles: "Preview tiles maximum whole slide zoom live preview automatic RAM";
     property <string> kw-breakpoint-tiles: "Breakpoint tiles image compare memory RAM automatic";
+    property <string> kw-renderer: "Draw in software renderer graphics card GPU driver virtual machine remote desktop RAM";
     property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
     property <string> kw-free-caches: "Free caches when an analysis starts release memory RAM analysis run";
     property <string> kw-edit-during-analysis: "Edit while an analysis runs preview pipelines block wait analysis run";
@@ -148,7 +149,7 @@ export component ProjectSettingsDialog inherits InkDialog {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
-        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-preview-tiles) || root.matches(root.kw-breakpoint-tiles) || root.matches(root.kw-free-caches) || root.matches(root.kw-edit-during-analysis) || root.matches(root.kw-objects-table) || root.matches(root.kw-object-card) || root.matches(root.kw-reduce-motion) || root.matches(root.kw-auto-scale) || root.matches(root.kw-channel-colors))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-preview-tiles) || root.matches(root.kw-breakpoint-tiles) || root.matches(root.kw-renderer) || root.matches(root.kw-free-caches) || root.matches(root.kw-edit-during-analysis) || root.matches(root.kw-objects-table) || root.matches(root.kw-object-card) || root.matches(root.kw-reduce-motion) || root.matches(root.kw-auto-scale) || root.matches(root.kw-channel-colors))
     }
 
     pure function shows-section(section: int) -> bool {
@@ -595,6 +596,17 @@ export component ProjectSettingsDialog inherits InkDialog {
                                                 maximum: 64;
                                                 step-size: 1;
                                                 value <=> ViewportMemoryState.breakpoint_tiles;
+                                            }
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-renderer): InkSettingRow {
+                                        control-width: 168px;
+                                        label: "Draw in software";
+                                        description: "Without the graphics card: about 135 MB less RAM, and smoother on computers without a working graphics driver (virtual machines, remote desktop, older computers). Slower on very large screens. Takes effect after a restart.";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ViewportMemoryState.software_renderer;
                                             }
                                         }
                                     }
