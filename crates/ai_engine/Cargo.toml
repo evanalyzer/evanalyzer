@@ -1,0 +1,44 @@
+[package]
+name = "evanalyzer_ai_engine"
+description = "Runs AI models: the engine-neutral interface, the engines (libtorch, …) and the loader of the libtorch plugin"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+# Only an rlib here: the libtorch plugin is the same crate built as a cdylib
+# on request - `cargo build-ai-plugin` (see .cargo/config.toml), i.e.
+# `cargo rustc -p evanalyzer_ai_engine --features torch --crate-type cdylib`.
+# Declaring the cdylib would make cargo link a (torch-less) copy of it in
+# every build that depends on this crate.
+[lib]
+name = "evanalyzer_ai_engine"
+doctest = false
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+postcard = { workspace = true }
+log = { workspace = true }
+# The CUDA driver probe, and the plugin loader (`torch-plugin`).
+libloading = { workspace = true }
+tch = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+
+[features]
+# The libtorch engine, linked in: in the plugin build, and in tests. Pulls in
+# libtorch - never in the app's own build (features merge per cargo
+# command: building the app and the plugin in one command would link
+# libtorch into the app).
+torch = ["dep:tch"]
+# Loads the libtorch plugin on the first model run (the app).
+torch-plugin = []
+# `torch::test_support::trace_and_save_model` for the analysis' model tests.
+test-support = ["torch", "dep:tempfile"]
+
+[[example]]
+name = "make_bench_models"
+required-features = ["test-support"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

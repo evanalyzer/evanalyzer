@@ -1,3 +1,7 @@
+//! With the `torch` feature this crate links libtorch (CPU or CUDA build,
+//! from `LIBTORCH`) - in the plugin build and in tests; the app itself
+//! doesn't, and loads the plugin only on the first AI step.
+
 fn main() {
     relink_torch_cuda();
 }
@@ -17,21 +21,25 @@ fn main() {
 /// repeated references to the same shared object and keeps only the first,
 /// `--as-needed`-affected decision, so the reassertion is a no-op under mold.
 /// Overriding `-fuse-ld` to `bfd` *after* the existing `-fuse-ld=mold` flag
-/// (gcc honors the last `-fuse-ld` it sees) switches just this final binary
-/// link to bfd, where the reassertion works. This only affects the final
-/// `evanalyzer` executable's link step — compiling the intermediate rlibs
-/// doesn't invoke a system linker at all, so it costs nothing in build time.
+/// (gcc honors the last `-fuse-ld` it sees) switches just this plugin
+/// library's link to bfd, where the reassertion works.
 ///
-/// Gated on the CUDA build of libtorch actually being present, so CPU-only
-/// builds are unaffected.
+/// Gated on the `torch` feature and on the CUDA build of libtorch actually
+/// being present, so CPU-only builds are unaffected. `rustc-link-arg`, not
+/// `-cdylib`: the plugin's cdylib comes from `--crate-type` (see
+/// Cargo.toml), which cargo's per-target link args don't see; the tests of
+/// this crate get the same (harmless) flags.
 ///
 /// Windows has the same problem in a different form: an import library only
-/// adds its DLL to the executable's import table when a symbol from it is
+/// adds its DLL to the library's import table when a symbol from it is
 /// actually referenced, so `torch_cuda.dll` is left out and never loaded
 /// (CUDA unavailable at runtime, although every CUDA DLL ships next to the
-/// exe). There, `/INCLUDE:` forces a reference to a function `torch_cuda`
+/// plugin). There, `/INCLUDE:` forces a reference to a function `torch_cuda`
 /// exports - `int at::cuda::warp_size()`, in its MSVC-mangled name.
 fn relink_torch_cuda() {
+    if std::env::var_os("CARGO_FEATURE_TORCH").is_none() {
+        return;
+    }
     let Some(libtorch) = std::env::var_os("LIBTORCH") else {
         return;
     };
@@ -39,12 +47,12 @@ fn relink_torch_cuda() {
     let lib = std::path::Path::new(&libtorch).join("lib");
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("linux") if lib.join("libtorch_cuda.so").exists() => {
-            println!("cargo:rustc-link-arg-bins=-Wl,--no-as-needed");
-            println!("cargo:rustc-link-arg-bins=-ltorch_cuda");
-            println!("cargo:rustc-link-arg-bins=-fuse-ld=bfd");
+            println!("cargo:rustc-link-arg=-Wl,--no-as-needed");
+            println!("cargo:rustc-link-arg=-ltorch_cuda");
+            println!("cargo:rustc-link-arg=-fuse-ld=bfd");
         }
         Ok("windows") if lib.join("torch_cuda.lib").exists() => {
-            println!("cargo:rustc-link-arg-bins=/INCLUDE:?warp_size@cuda@at@@YAHXZ");
+            println!("cargo:rustc-link-arg=/INCLUDE:?warp_size@cuda@at@@YAHXZ");
         }
         _ => {}
     }

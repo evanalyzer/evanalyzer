@@ -269,7 +269,7 @@ mod tests {
     /// Speed and RAM of `remove_scope` with millions of objects: half of them
     /// in the ending scope, every tenth remaining one pointing at one of
     /// them (parent + coloc partner). Run with
-    /// `cargo test --release -p evanalyzer_core --features ai --lib -- --ignored bench_end_scope --nocapture`.
+    /// `cargo test --release -p evanalyzer_core --lib -- --ignored bench_end_scope --nocapture`.
     #[test]
     #[ignore]
     fn bench_end_scope() {

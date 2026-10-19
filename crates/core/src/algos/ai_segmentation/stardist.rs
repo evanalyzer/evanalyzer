@@ -8,12 +8,13 @@
 
 use std::path::PathBuf;
 
+use evanalyzer_ai_engine::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
-use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::run_with_model},
+    ai_devices,
+    algos::{ExecutionScope, ImageAlgorithm},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -86,59 +87,28 @@ impl ImageAlgorithm for Stardist {
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        // All tensor work happens on a device slot of the AI scheduler
-        // (see `run_with_model`); the tensors are dropped with it, before the
-        // CPU-only candidate building below.
-        let (prob_flat, dist_flat, grid_h, grid_w, n_rays) = run_with_model(
-            &self.model_path,
-            |e| {
-                InternalErrors::Generic(format!(
-                    "Failed to load StarDist model from {}: {e}",
-                    self.model_path.display()
-                ))
-            },
-            |model, device| {
-                Ok({
-                    let input = Tensor::from_slice(input_image.as_slice())
-                        .to_device(device)
-                        .to_kind(Kind::Float)
-                        .reshape([1, 1, height as i64, width as i64]);
-
-                    let (prob_tensor, dist_tensor) = Self::split_outputs(&model, input)?;
-
-                    let prob_sizes = prob_tensor.size();
-                    let dist_sizes = dist_tensor.size();
-                    let grid_h = prob_sizes[prob_sizes.len() - 2] as usize;
-                    let grid_w = prob_sizes[prob_sizes.len() - 1] as usize;
-                    let n_rays = dist_sizes[dist_sizes.len() - 3] as usize;
-
-                    let prob_flat: Vec<f32> = prob_tensor
-                        .f_to_device(Device::Cpu)
-                        .and_then(|t| t.f_reshape([(grid_h * grid_w) as i64]))
-                        .map_err(|e| {
-                            InternalErrors::Generic(format!("StarDist inference failed: {e}"))
-                        })
-                        .and_then(|t| {
-                            Vec::try_from(&t).map_err(|e| {
-                                InternalErrors::Generic(format!("StarDist inference failed: {e}"))
-                            })
-                        })?;
-
-                    let dist_flat: Vec<f32> = dist_tensor
-                        .f_to_device(Device::Cpu)
-                        .and_then(|t| t.f_reshape([(n_rays * grid_h * grid_w) as i64]))
-                        .map_err(|e| {
-                            InternalErrors::Generic(format!("StarDist inference failed: {e}"))
-                        })
-                        .and_then(|t| {
-                            Vec::try_from(&t).map_err(|e| {
-                                InternalErrors::Generic(format!("StarDist inference failed: {e}"))
-                            })
-                        })?;
-                    (prob_flat, dist_flat, grid_h, grid_w, n_rays)
-                })
-            },
-        )?;
+        let request = Request {
+            model: self.model_path.clone(),
+            task: Task::StarDist,
+        };
+        let image = Image {
+            width,
+            height,
+            channels: 1,
+            data: input_image.as_slice(),
+        };
+        let Response::StarDist {
+            prob: prob_flat,
+            dist: dist_flat,
+            grid_height: grid_h,
+            grid_width: grid_w,
+            n_rays,
+        } = ai_devices::infer(&request, image)?
+        else {
+            return Err(InternalErrors::Generic(
+                "StarDist: the AI engine gave another kind of answer".into(),
+            ));
+        };
 
         let candidates = self.build_candidates(
             &prob_flat, &dist_flat, grid_h, grid_w, n_rays, width, height,
@@ -185,73 +155,6 @@ impl ImageAlgorithm for Stardist {
 }
 
 impl Stardist {
-    /// Runs the model and splits its output into `(probability, distance)` tensors,
-    /// supporting both the two-separate-tensors and the single-concatenated-tensor
-    /// TorchScript export conventions.
-    fn split_outputs(model: &CModule, input: Tensor) -> Result<(Tensor, Tensor), InternalErrors> {
-        // Without `no_grad`, the model's own weights (loaded with
-        // `requires_grad = true`, the default for `nn.Parameter`) make this
-        // forward pass record a full autograd graph even though `.eval()`
-        // was called - wasting memory that's never needed for inference.
-        let output = tch::no_grad(|| model.forward_is(&[IValue::Tensor(input)]))
-            .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))?;
-
-        let tensors: Vec<Tensor> = match output {
-            IValue::Tensor(t) => vec![t],
-            IValue::Tuple(items) | IValue::GenericList(items) => items
-                .into_iter()
-                .filter_map(|v| match v {
-                    IValue::Tensor(t) => Some(t),
-                    _ => None,
-                })
-                .collect(),
-            other => {
-                return Err(InternalErrors::Generic(format!(
-                    "StarDist model returned an unsupported output type: {other:?}"
-                )));
-            }
-        };
-
-        match tensors.as_slice() {
-            [single] => {
-                let sizes = single.size();
-                if sizes.len() < 3 {
-                    return Err(InternalErrors::Generic(
-                        "StarDist model output has too few dimensions".into(),
-                    ));
-                }
-                let channel_dim = sizes.len() as i64 - 3;
-                let channels = sizes[sizes.len() - 3];
-                if channels < 2 {
-                    return Err(InternalErrors::Generic(
-                        "StarDist model output has fewer than 2 channels; expected a probability channel plus ray-distance channels".into(),
-                    ));
-                }
-                let prob = single.narrow(channel_dim, 0, 1);
-                let dist = single.narrow(channel_dim, 1, channels - 1);
-                Ok((prob, dist))
-            }
-            [_, _, ..] => {
-                let prob_idx = tensors.iter().position(|t| {
-                    let sizes = t.size();
-                    sizes.len() >= 3 && sizes[sizes.len() - 3] == 1
-                });
-                match prob_idx {
-                    Some(idx) => {
-                        let dist_idx = if idx == 0 { 1 } else { 0 };
-                        Ok((tensors[idx].shallow_clone(), tensors[dist_idx].shallow_clone()))
-                    }
-                    None => Err(InternalErrors::Generic(
-                        "StarDist model returned multiple outputs but none has a single-channel probability map".into(),
-                    )),
-                }
-            }
-            [] => Err(InternalErrors::Generic(
-                "StarDist model returned no tensor outputs".into(),
-            )),
-        }
-    }
-
     /// Builds one star-convex polygon candidate per grid cell whose probability
     /// reaches `probability_threshold`, rescaling coordinates back to image
     /// resolution if the model predicts on a coarser grid than the input.
@@ -521,7 +424,8 @@ impl Stardist {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    #[cfg(feature = "libtorch-in-process")]
+    use evanalyzer_ai_engine::torch::test_support::{tch::Tensor, trace_and_save_model};
     use kornia_image::{Image, ImageSize};
 
     fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {
@@ -559,6 +463,7 @@ mod tests {
         assert!(matches!(err, InternalErrors::Generic(_)));
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_end_to_end_rasterizes_a_candidate_around_a_high_probability_pixel() {
         // Grid resolution == image resolution (no downsampling), so the
@@ -607,6 +512,7 @@ mod tests {
         assert_eq!(inst.as_slice()[0], 0);
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_errors_when_the_model_output_has_too_few_dimensions() {
         let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.squeeze_dim(0).squeeze_dim(0));
@@ -621,6 +527,7 @@ mod tests {
         assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_errors_when_the_model_output_has_fewer_than_two_channels() {
         let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());

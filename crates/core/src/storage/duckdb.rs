@@ -1111,9 +1111,16 @@ mod tests {
         let mib: f64 = if let Some(v) = limit.strip_suffix(" GiB") {
             v.trim().parse::<f64>().unwrap() * 1024.0
         } else {
-            limit.trim_end_matches(" MiB").trim().parse::<f64>().unwrap()
+            limit
+                .trim_end_matches(" MiB")
+                .trim()
+                .parse::<f64>()
+                .unwrap()
         };
-        assert!((mib - want as f64 * 1_000_000.0 / 1_048_576.0).abs() < 64.0, "{limit} vs {want} MB");
+        assert!(
+            (mib - want as f64 * 1_000_000.0 / 1_048_576.0).abs() < 64.0,
+            "{limit} vs {want} MB"
+        );
     }
 
     use super::*;

@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use crate::{
     ai_learning::model::load_from_file,
     ai_learning::training::pixel::compute_pixel_features,
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
+    algos::{
+        ExecutionScope, ImageAlgorithm, ai_segmentation::classifier_cache::load_cached_classifier,
+    },
     image::ImageContainer,
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };

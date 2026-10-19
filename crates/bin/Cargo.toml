@@ -12,16 +12,18 @@ evanalyzer_gui    = { workspace = true }
 evanalyzer_cli    = { workspace = true }
 evanalyzer_app    = { workspace = true }
 evanalyzer_server    = { workspace = true }
-evanalyzer_llm    = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 rpassword = { workspace = true }
 
-# Off by default: local-LLM pipeline generation is too slow on CPU for a
-# shipped desktop build right now. Build with `--features llm` to include it.
 [features]
-llm = ["dep:evanalyzer_llm"]
+default = ["libtorch"]
+# AI models (Cellpose, StarDist, U-Net, YOLOv5) through the libtorch plugin,
+# loaded on the first model run - the plugin itself is built on its own:
+# `cargo build-ai-plugin`. `--no-default-features` builds
+# without it (trained classifiers still work).
+libtorch = ["evanalyzer_app/libtorch"]
 
 [[bin]]
 name = "evanalyzer"

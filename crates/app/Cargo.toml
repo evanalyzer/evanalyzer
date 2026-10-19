@@ -33,6 +33,10 @@ getrandom = { workspace = true }
 postcard = { workspace = true }
 
 
+[features]
+# AI models through the libtorch plugin (see `evanalyzer_core`'s feature).
+libtorch = ["evanalyzer_core/libtorch"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 serde-reflection = { workspace = true }

@@ -1,7 +1,6 @@
 #![allow(unused_imports)]
 
 // Register algos
-#[cfg(feature = "ai")]
 mod ai_segmentation;
 mod filters;
 mod flow_control;
@@ -12,21 +11,13 @@ mod script;
 mod segmentation;
 mod spartial_transform;
 
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::cellpose::Cellpose;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::pixel_classifier::PixelClassifier;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::pixel_classifier::SegmentationMapping;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::stardist::Stardist;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNet;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNetOutputMode;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::yolov5::YoloClassMapping;
-#[cfg(feature = "ai")]
 pub use self::ai_segmentation::yolov5::Yolov5;
 
 pub use self::filters::blur::Blur;
@@ -66,11 +57,8 @@ pub use self::morphology::fill_object_holes::FillObjectHoles;
 pub use self::morphology::morphological_transformation::KernelShapes;
 pub use self::morphology::morphological_transformation::MorphOps;
 pub use self::morphology::morphological_transformation::MorphologicalCommand;
-#[cfg(feature = "ai")]
 pub use self::object::ai_object_classifier::AiClassifyMatchHandling;
-#[cfg(feature = "ai")]
 pub use self::object::ai_object_classifier::AiObjectClassifier;
-#[cfg(feature = "ai")]
 pub use self::object::ai_object_classifier::ClassificationMapping;
 pub use self::object::classify_objects::ClassifyMatchHandling;
 pub use self::object::classify_objects::ClassifyObjects;

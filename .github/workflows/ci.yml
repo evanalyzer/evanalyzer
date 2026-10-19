@@ -60,13 +60,11 @@ jobs:
           key: linux-x86_64-test
 
       - name: Download native dependencies (libtorch CPU)
-        # The `ai` (libtorch) feature is force-enabled workspace-wide - see
-        # the comment on `evanalyzer_core` in the root Cargo.toml - so a
-        # plain `cargo test` needs libtorch present even though this job
-        # never asks for `--features ai` explicitly. DuckDB does not need a
-        # download on Linux: crates/core/Cargo.toml enables its `bundled`
-        # feature for `cfg(target_os = "linux")`, so it's compiled from
-        # source instead.
+        # The AI engine crate's `torch` engine links libtorch, and the model
+        # steps' tests run it in-process (`libtorch-in-process`
+        # below). DuckDB does not need a download on Linux:
+        # crates/core/Cargo.toml enables its `bundled` feature for
+        # `cfg(target_os = "linux")`, so it's compiled from source instead.
         run: ./libs/download.sh linux-cpu
 
       - name: Unzip libtorch
@@ -78,7 +76,12 @@ jobs:
       - name: Run tests with coverage instrumentation
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
-        run: cargo llvm-cov --workspace --no-report
+        # `libtorch-in-process`: the AI model steps' tests run libtorch in
+        # the test process; `libtorch`: the plugin loader, whose test builds
+        # and loads the real plugin.
+        run: >-
+          cargo llvm-cov --workspace --no-report
+          --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
 
       - name: Generate coverage reports
         run: |

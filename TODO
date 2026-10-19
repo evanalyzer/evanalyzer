@@ -31,7 +31,7 @@
 - [x] Settings › Viewport: "Preview tiles" and "Breakpoint tiles", each Auto (from the RAM) or a number. Preview: auto = the computer running it (a server caps a number asked for at what its RAM allows); breakpoint: this computer (the images are kept here). Remote protocol 18 → 19.
 - [ ] Start page: the bubbles more random - three proposals on the design canvas (board AC: Scattered / Depth / Sample), waiting for a pick.
 
-- [ ] Startup and RAM (measured 2026-10-18, BENCHMARK.md): libtorch is linked into the GUI and costs every start ~0.5 s warm / ~1.6 s cold before `main`, and ~190 MB RAM, AI used or not. Loading it only when an AI step runs (the "AI plugin" plan below) would roughly halve the startup and take ~190 MB off every session. The biggest remaining win for older computers.
+- [x] Startup and RAM: libtorch is loaded only when an AI step runs (the "AI plugin" below, 2026-10-19). Window on screen 358 → 164 ms warm, 1080 → 488 ms cold; idle RAM 517 → 207 MB (BENCHMARK.md).
 - [x] Older computers without a working graphics driver: Settings › Viewport › "Draw in software" (Slint's own renderer, read at startup; `SLINT_BACKEND` wins) - ~135 MB less RAM, no Mesa software OpenGL. No automatic detection (decided 2026-10-19: keep it simple; Reduce motion stops the start page's cells).
 - [ ] Linux packages: the app needs `libxkbcommon-x11` on X11 (winit panics without it) - list it as a dependency.
 
@@ -156,47 +156,27 @@
 - [ ] **Shift-click step selection** for "Create component" - today a from/to range dialog (the step list has no multi-selection).
 - [ ] **"New empty component"** - not built; rarely needed since "Create component" exists.
 - [ ] **Run the component checks on save** - `check_components` runs on load ([`project_ext.rs`](crates/app/src/workspace/extensions/project_ext.rs)) and in the editor, not on save. Runs still refuse a broken component at expansion, so mostly cosmetic.
-- [ ] **LLM prompt doesn't know components** (`crates/llm`, unfinished anyway).
 - [ ] **Check the picker's component look on screen** (◆ Components chip, component colour, "used N×", Library section) - never looked at, no headless screenshot in the tests.
 - [ ] Optional, only if someone needs it: "don't merge this local class" at the tile merge - `classes_to_not_merge` only knows project classes, so local objects are always merged; would need a setting in the component definition.
 ## AI plugin
 
-Load libtorch only on first AI use, from a plugin library (`cdylib`) next to the executable. Measured 2026-10-15 (Linux, release GUI): ~377 MB RSS right after start, of which libtorch is ~117 MB (CPU) and ~165 MB more with the CUDA libs (`libcublasLt` alone has an 81 MB `.bss` that is filled at load). Loading it takes ~0.2 s (CPU) / ~0.3 s (CUDA) with warm disk cache - likely seconds on a cold start. Today it is linked into the binary, so every user pays this at startup even without using AI. Same pattern as ONNX Runtime execution providers, ggml backends, Blender's GPU kernels.
+Done 2026-10-19: libtorch is loaded only on the first AI step, from a plugin library next to the program (`ai/cpu`, `ai/cuda`). The app no longer links libtorch.
 
-*Boundary:* all libtorch work already sits inside the four `run_with_model` calls ([`unet.rs:120`](crates/core/src/algos/ai_segmentation/unet.rs#L120), [`cellpose.rs:129`](crates/core/src/algos/ai_segmentation/cellpose.rs#L129), [`stardist.rs:92`](crates/core/src/algos/ai_segmentation/stardist.rs#L92), [`yolov5.rs:122`](crates/core/src/algos/ai_segmentation/yolov5.rs#L122)), which return only plain data. Their closure bodies + `TorchScheduler` move into the plugin; pre/post-processing stays in core.
+- One crate, `crates/ai_engine` (`evanalyzer_ai_engine`), one module per part:
+  - `api` - engine-neutral: `Request`/`Task` (one variant per model kind), `Response`, `EngineConfig`, the `InferenceEngine` trait, the C interface (`eva_ai_api_version`, `eva_ai_init`, `eva_ai_infer`, `eva_ai_free`; postcard bytes, image by pointer).
+  - `torch` (feature `torch`, the only code with `tch`): scheduler (device slots, per-device model cache, OOM retry), the four models' tensor code, the C exports (`catch_unwind`, log forwarding).
+  - `runtime` - plugin loader (feature `torch-plugin`) and CUDA driver probe; the crate root picks the engine once: `torch` linked in (tests) > the plugin > "no AI model support". Plugin search: `EVANALYZER_AI_PLUGIN`, next to the program, `ai/cuda` (driver sees a GPU, CPU not asked for), `ai/cpu`, then `ai/cuda` (CUDA libtorch on the CPU). CUDA probe through the NVIDIA driver (`cuInit` + `cuDeviceGetCount`), not libtorch.
+  - The plugin = this crate as a cdylib with `torch`: `cargo build-ai-plugin` (`cargo rustc --crate-type cdylib`; no cdylib in the manifest, or every build depending on the crate would link a torch-less copy).
+- Features: core/app/bin `libtorch` (bin default); the old `ai` feature is gone - trained classifiers (Burn, smartcore) are always built.
+- Another engine (e.g. Burn once the models are converted) = a module with an `InferenceEngine` and one arm in `start` (crates/ai_engine/src/lib.rs); the model steps only build `Request`s.
 
-*Crates:*
-- `crates/ai_api` (new, no libtorch): `API_VERSION`, serde types `InferRequest`/`InferResponse` (one variant per model), `InitConfig` (devices, gpu_slots, cores), `DeviceInfo`, `#[repr(C)] Buf { ptr, len }`, the C function signatures.
-- `crates/ai_plugin` (new, `cdylib`, the only crate depending on `tch`): [`model_cache.rs`](crates/core/src/algos/ai_segmentation/model_cache.rs) scheduler (device slots, per-device model cache, OOM retry) + the four model inference functions + the torch tests (`test_support`, scheduler tests, `cellpose_sam_real_model.rs`). Built twice from the same source: `LIBTORCH=<cpu>` and `LIBTORCH=<cuda>`.
-- `crates/core`: no `tch` dependency. New `ai_runtime` module (`OnceLock<Result<Plugin, String>>`, `libloading`); each `run_with_model(...)` becomes `ai_runtime::infer(InferRequest::.., input)`. smartcore/burn classifiers stay in core.
-
-*C interface:*
-```c
-u32  eva_ai_api_version(void);
-i32  eva_ai_init(Buf init_config, LogFn log, Buf* out_err);       // once
-i32  eva_ai_devices(Buf* out_device_info, Buf* out_err);
-i32  eva_ai_infer(Buf request, const f32* input, usize input_len,
-                  Buf* out_response, Buf* out_err);               // thread-safe
-void eva_ai_free(Buf buf);                                        // plugin frees its own memory
-```
-Input images by pointer (no copy), params/results as postcard bytes, `catch_unwind` around every export, log callback forwarded into the app's `log`. `eva_ai_infer` is called from many rayon workers at once; the plugin's scheduler blocks as today.
-
-*Loading:* only from next to the executable (no system path - DLL hijacking). `--ai-devices cpu` → `ai/cpu` only (CUDA libs never loaded); `auto`/GPU list → `ai/cuda` if installed and a GPU is found, else `ai/cpu`. Separate folders are required (both ship a different `libtorch_cpu` under the same name). Linux: rpath `$ORIGIN`. Windows: `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`. Check `api_version` before `init`. Missing/failed plugin → clean "AI support not installed / failed to load: …" error on the AI step, not a crash.
-
-*Watch out:*
-- The GUI's startup CUDA probe (`cuda_is_available` → [`gui/src/lib.rs:638`](crates/gui/src/lib.rs#L638), [`resources.rs:252`](crates/core/src/utils/resources.rs#L252)) must not go through the plugin, or libtorch is loaded at startup again. Replace with a driver probe (`libcuda.so.1`/`nvcuda.dll`: `cuInit` + `cuDeviceGetCount`) + "is `ai/cuda` installed".
-- The `torch_cuda` relink hack in [`bin/build.rs`](crates/bin/build.rs) should become unnecessary: the CUDA plugin loads `libtorch_cuda`/`torch_cuda.dll` by path in `eva_ai_init` before the first torch call. Unverified - check on Linux and Windows.
-- Once loaded, libtorch can't be unloaded - memory is deferred, not saved, for AI users.
-- No crash isolation: a libtorch segfault still takes down the app.
-- macOS: the plugin dylibs must be signed/notarized too.
-- Maybe later: the CUDA libtorch contains a full `libtorch_cpu`, so one plugin build might serve both variants (only the shipped libtorch differs). Untested - start with two builds.
-
-*Steps (each one testable):*
-- [ ] 1. Pure refactor in core: turn each `run_with_model` closure into a named function with plain input/output types; no behavior change.
-- [ ] 2. Create `ai_api` + `ai_plugin`, move those functions and `TorchScheduler` there; core links it as a normal Rust dependency first (tests the boundary types without dynamic loading).
-- [ ] 3. Switch to `cdylib` + `ai_runtime` loader; core tests find the plugin via `EVANALYZER_AI_PLUGIN`.
-- [ ] 4. Replace the CUDA probe with the driver probe; remove the `bin/build.rs` relink.
-- [ ] 5. Installers: base app + `ai/cpu` or `ai/cuda`; smoke test "no plugin", "CPU plugin", "CUDA plugin without GPU". Measure startup RSS/time before and after.
+Open:
+- [ ] Smoke test the packages on real machines: "no plugin", "CPU plugin", "CUDA plugin without GPU", "CUDA plugin with GPU" - Linux, Windows (DLL search flags), macOS (install names, ad-hoc signing of `ai/cpu`).
+- [ ] The `torch_cuda` relink moved to [`ai_engine/build.rs`](crates/ai_engine/build.rs) (kept: unverified whether the plugin would load `libtorch_cuda` without it). CI checks the plugin links it.
+- [ ] The Windows plugin build (`cargo xwin rustc … --crate-type cdylib`) has not run yet - first release CI run.
+- [ ] If the CUDA plugin loads but fails to set up, the CPU one is tried next - on Linux its `libtorch_cpu.so` name is then already taken by the CUDA one's (same SONAME), which works (CUDA libtorch runs on the CPU) but is not the CPU build.
+- Once loaded, libtorch can't be unloaded; a libtorch crash still takes down the app (no process isolation).
+- Maybe later: one plugin build for both variants (only the shipped libtorch differs). Untested.
 
 ## UI component library
 
@@ -205,3 +185,10 @@ Done with the Ink redesign (2026-10-17): the old `components/` folder is gone - 
 Kept private on purpose (one screen's own, not a copy of an Ink piece): the step picker's category header and filter chips (category colours), pipeline step / parameter rows, the plate's wells, About's cards. `FormLabel` (AI training, component dialogs) stays a plain `Text` in Ink's style: `InkLabel`'s elide costs ~2 KB per use, 35 uses.
 
 - [ ] Lower priority: `std-widgets` `ScrollView` (14×) / `ListView` (6×) / `TextEdit` (2×) are still Slint's own - an Ink scroll bar would make scrolling look the same everywhere.
+
+
+# Drawing tool
+
+- [ ] Add magic wand
+- [ ] Allow to modify shape of still drawed elements
+- [ ] In the ui manual drawn objects are shown beside those from the pipeline result / preview. Those from pipeline/preview are not editable which is okay. Check that in the ui when clicking on a object comming from the pipeline the delete, set class etc. options are disabled so the user knows that such an element can not be modified. For in application ai pixel classifier training it would be fine to allow the user to transform an object in the preview comming from a pipeline into a manual annotation (copies the object to manual). Afterwards the user is possible to edit it and can use it for pixel classifier training. Use case behind is: User creats simple pipeline which detects objects as a starting point for training. Then user manually corrects the automaticlly found objects and manually segments them and trains or retrains the model with the new corrected data. Is this a good idea? how would you implement it? I think there may be two use cases: just convert one of the automatic detectd to "manual" for training or a couple or all. And how to delete the manuel annotations again for a new training (probably somehting like an option delete all manual annotation of class x/y) it would also be fine to save a manual annotation as to relaod them into the project. please make me suggestions befor implementing.

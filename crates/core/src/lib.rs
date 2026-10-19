@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 pub mod ai_devices;
-#[cfg(feature = "ai")]
 pub mod ai_learning;
 mod algos;
 mod dataset;
@@ -17,10 +16,10 @@ mod utils;
 pub use crate::storage::duckdb::shared_connection as open_results_database;
 pub use crate::utils::resources::SystemDiagnostics;
 pub use crate::utils::resources::cpu_ram_diagnostics;
-pub use crate::utils::resources::cuda_is_available;
 pub use crate::utils::resources::recommended_parallelism;
 pub use crate::utils::resources::recommended_reader_pool_size;
 pub use crate::utils::resources::system_diagnostics;
+pub use evanalyzer_ai_engine::cuda_is_available;
 
 // Image reader
 pub use crate::image::ChannelInfo;
@@ -79,15 +78,10 @@ pub use crate::dataset::DatasetContext;
 pub use crate::dataset::tracking::simple_tracker::SimpleTracker;
 
 // AI classifier training
-#[cfg(feature = "ai")]
 pub use crate::ai_learning::model::SavedClassifier;
-#[cfg(feature = "ai")]
 pub use crate::ai_learning::model::{
     load_from_file as load_classifier_from_file, save_to_file as save_classifier_to_file,
 };
-#[cfg(feature = "ai")]
 pub use crate::ai_learning::training::object::ObjectTrainingJob;
-#[cfg(feature = "ai")]
 pub use crate::ai_learning::training::pixel::PixelTrainingJob;
-#[cfg(feature = "ai")]
 pub use crate::ai_learning::training_job::TrainingImage;

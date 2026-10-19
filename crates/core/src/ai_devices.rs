@@ -1,6 +1,9 @@
 //! Which devices AI models (Cellpose, StarDist, U-Net, YOLOv5) run on, set
-//! once at startup from the command line (`--ai-devices`, `--gpu-slots`).
+//! once at startup from the command line (`--ai-devices`, `--gpu-slots`),
+//! and [`infer`]: a model run on the engine they set up.
 
+use evanalyzer_ai_engine::{DeviceSelection, EngineConfig, Image, Request, Response};
+use evanalyzer_cfg::core_types::InternalErrors;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -58,6 +61,25 @@ pub fn configure_ai_devices(options: AiDeviceOptions) -> bool {
 /// without any being set.
 pub(crate) fn ai_device_options() -> &'static AiDeviceOptions {
     OPTIONS.get_or_init(AiDeviceOptions::default)
+}
+
+/// Runs `request` on `image` with the AI engine (see
+/// `evanalyzer_ai_engine`), set up with these options on the first call.
+pub(crate) fn infer(request: &Request, image: Image<'_>) -> Result<Response, InternalErrors> {
+    evanalyzer_ai_engine::infer(request, image, engine_config).map_err(InternalErrors::Generic)
+}
+
+fn engine_config() -> EngineConfig {
+    let options = ai_device_options();
+    EngineConfig {
+        devices: match &options.devices {
+            AiDeviceSelection::Auto => DeviceSelection::Auto,
+            AiDeviceSelection::Cpu => DeviceSelection::Cpu,
+            AiDeviceSelection::Gpus(gpus) => DeviceSelection::Gpus(gpus.clone()),
+        },
+        gpu_slots: options.gpu_slots,
+        cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
+    }
 }
 
 /// Parses `--gpu-slots`: a number of at least 1.
@@ -120,6 +142,13 @@ mod tests {
         for s in ["auto", "cpu", "0,3"] {
             assert_eq!(s.parse::<AiDeviceSelection>().unwrap().to_string(), s);
         }
+    }
+
+    #[test]
+    fn the_device_options_reach_the_engine() {
+        let config = engine_config();
+        assert!(config.gpu_slots >= 1);
+        assert!(config.cores >= 1);
     }
 
     #[test]

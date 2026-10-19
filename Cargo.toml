@@ -6,22 +6,6 @@ members = [
     "crates/gui/ui",
 ]
 
-# `crates/llm` (local-LLM pipeline generation via candle) is opt-in only - it's
-# too slow on CPU for a shipped desktop feature right now, and pulls in a heavy
-# dependency tree (candle, llguidance, tokenizers). Excluding it from
-# default-members keeps plain `cargo build`/`test`/`check` (no `-p`, no
-# `--workspace`) from building it; `-p evanalyzer_llm` or `--workspace` still can.
-default-members = [
-    "crates/app",
-    "crates/bin",
-    "crates/cfg",
-    "crates/cli",
-    "crates/core",
-    "crates/gui",
-    "crates/gui/ui",
-    "crates/server"
-]
-
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
@@ -31,15 +15,14 @@ publish = false
 
 
 [workspace.dependencies]
-# Toggle the AI (libtorch/tch) feature here — remove "ai" from features to disable.
 # Toggle GPL-derived Bio-Formats readers (CZI, ND2, LIF, LSM, and others) here
 # via "bioformats-gpl" — remove it to build a BSD-2-Clause-only bioformats,
 # which drops those formats but is safe to distribute closed-source without
 # the AGPL/commercial dual-license question applying to that dependency.
-evanalyzer_core = { path = "crates/core", features = ["ai", "bioformats-gpl"] }
+evanalyzer_core = { path = "crates/core", features = ["bioformats-gpl"] }
 evanalyzer_cfg = { path = "crates/cfg" }
+evanalyzer_ai_engine = { path = "crates/ai_engine" }
 evanalyzer_app = { path = "crates/app" }
-evanalyzer_llm = { path = "crates/llm" }
 evanalyzer_gui    = { path = "crates/gui" }
 evanalyzer_cli    = { path = "crates/cli" }
 evanalyzer_server = { path = "crates/server" }
@@ -80,14 +63,11 @@ serde = "1.0.229"
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 burn = { version = "0.21", default-features = false, features = ["ndarray", "autodiff"] }
-candle-core = "0.11.0"
-candle-transformers = "0.11.0"
-tokenizers = "0.23.2"
-llguidance = "1.9.1"
 clru = "0.6.3"
 sysinfo = "0.39.6"
 petname = "3.2.0"
 tch =  "0.24.0"
+libloading = "0.8.9"
 smartcore = "0.5.5"
 approx = "0.5"
 ctrlc = "3"
