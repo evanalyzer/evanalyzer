@@ -39,6 +39,7 @@ export component DeleteManualAnnotationsDialog inherits InkDialog {
         }
         for row[i] in AnnotationState.manual-classes: InkCheckbox {
             text: row.name + " · " + row.count;
+            swatch: row.color;
             checked: row.checked;
             toggled(on) => {
                 AnnotationState.manual-classes[i].checked = on;

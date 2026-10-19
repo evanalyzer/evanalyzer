@@ -15,15 +15,18 @@ export struct AnnotationClassRow {
 export global AnnotationState {
     // -- Copy pipeline objects to manual (dialogs/copy_to_manual_dialog) --
 
-    // The selected pipeline object (row id as in ObjectListState): copied,
-    // with its classes; the copy is selected then.
-    callback copy-to-manual(int);
-    // Fills `pipeline-classes` (the open image's preview objects), then
-    // the dialog shows.
+    // The dialog for one pipeline object (row id as in ObjectListState):
+    // `copy-single` set to it, `pipeline-classes` its classes.
+    callback open-copy-dialog-for(int);
+    // The dialog for all of the open image's pipeline objects:
+    // `pipeline-classes` their classes (ticked), `copy-single` -1.
     callback open-copy-dialog();
     in-out property <[AnnotationClassRow]> pipeline-classes;
-    // Copies the preview objects of the ticked classes. target-class: the
-    // class the copies get, -1 their own.
+    // The one object the dialog copies (row id), -1: the ticked classes'.
+    in-out property <int> copy-single: -1;
+    // Copies (the one object, or the preview objects of the ticked
+    // classes). target-class: the class the copies get, -1 their own. One
+    // object's copy is selected then.
     callback copy-all-to-manual(int);
 
     // -- Delete manual annotations (dialogs/delete_manual_dialog) --
