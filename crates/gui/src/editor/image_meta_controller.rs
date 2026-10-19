@@ -19,8 +19,10 @@ use std::sync::Arc;
 /// Emission wavelengths (nm) offered as colour tiles for a channel - spread
 /// over the visible range the viewer can draw (see `wavelength_to_rgb_float`:
 /// 420-700 nm, with exact pure blue/green/red at 450/532/635 nm).
-const WAVELENGTH_OPTIONS: [f32; 11] = [
-    420.0, 450.0, 470.0, 490.0, 532.0, 550.0, 570.0, 580.0, 600.0, 620.0, 635.0,
+/// The first, 0, is white (no wavelength - as a channel the file gives
+/// none is shown).
+const WAVELENGTH_OPTIONS: [f32; 12] = [
+    0.0, 420.0, 450.0, 470.0, 490.0, 532.0, 550.0, 570.0, 580.0, 600.0, 620.0, 635.0,
 ];
 
 pub struct ImageMetaController {

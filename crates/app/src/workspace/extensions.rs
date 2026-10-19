@@ -1,3 +1,4 @@
+pub mod annotations_ext;
 pub mod classification_ext;
 pub mod image_entry_ext;
 pub mod object_ext;

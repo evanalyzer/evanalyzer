@@ -1,7 +1,7 @@
 use crate::{
     AppWindow, UiState,
     editor::{
-        ai_learning_controller::AiLearningController,
+        ai_learning_controller::AiLearningController, annotations_controller::AnnotationController,
         classification_controller::ClassificationController, focus_controller::FocusController,
         histogram_controller::HistogramController, image_meta_controller::ImageMetaController,
         images_list_controller::ImagesListController, object_list_controller::ObjectListController,
@@ -17,6 +17,7 @@ use crate::{
 use std::sync::Arc;
 
 pub mod ai_learning_controller;
+pub mod annotations_controller;
 pub mod classification_controller;
 pub mod command_palette_controller;
 pub mod connection_controller;
@@ -58,6 +59,7 @@ pub struct Editor {
     image_meta_controller: Arc<ImageMetaController>,
     project_settings_controller: Arc<ProjectSettingsController>,
     classification_controller: Arc<ClassificationController>,
+    annotation_controller: Arc<AnnotationController>,
     ai_learning_controller: Arc<AiLearningController>,
     object_list_controller: Arc<ObjectListController>,
     pipelines_controller: Arc<PipelinesController>,
@@ -106,6 +108,14 @@ impl Editor {
             viewport_controller.clone(),
         ));
 
+        let annotation_controller = Arc::new(AnnotationController::new(
+            ui.clone(),
+            app_state.clone(),
+            object_list_controller.clone(),
+            classification_controller.clone(),
+            viewport_controller.clone(),
+        ));
+
         let ai_learning_controller =
             Arc::new(AiLearningController::new(ui.clone(), app_state.clone()));
 
@@ -144,6 +154,7 @@ impl Editor {
             image_list_controller.clone(),
             object_list_controller.clone(),
             classification_controller.clone(),
+            annotation_controller.clone(),
         ));
 
         let template_controller = Arc::new(TemplateController::new(ui.clone(), app_state.clone()));
@@ -249,6 +260,7 @@ impl Editor {
             image_meta_controller,
             project_settings_controller,
             classification_controller,
+            annotation_controller,
             ai_learning_controller,
             object_list_controller,
             pipelines_controller,
@@ -270,6 +282,7 @@ impl Editor {
         self.image_meta_controller.attach_callbacks();
         self.project_settings_controller.attach_callbacks();
         self.classification_controller.attach_callbacks();
+        self.annotation_controller.attach_callbacks();
         self.ai_learning_controller.attach_callbacks();
         self.viewport_object_controller.attach_callbacks();
         self.object_list_controller.attach_callbacks();

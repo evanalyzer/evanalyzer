@@ -1,0 +1,54 @@
+// api/annotations.slint — the Rust interface of the manual-annotation
+// actions: copying pipeline (preview) objects into the manual annotations
+// (training data), deleting manual annotations in bulk.
+
+// A class in the annotation dialogs: how many objects have it, whether it
+// is ticked. id -1: objects without a class.
+export struct AnnotationClassRow {
+    id: int,
+    name: string,
+    color: color,
+    count: int,
+    checked: bool,
+}
+
+export global AnnotationState {
+    // -- Copy pipeline objects to manual (dialogs/copy_to_manual_dialog) --
+
+    // The selected pipeline object (row id as in ObjectListState): copied,
+    // with its classes; the copy is selected then.
+    callback copy-to-manual(int);
+    // Fills `pipeline-classes` (the open image's preview objects), then
+    // the dialog shows.
+    callback open-copy-dialog();
+    in-out property <[AnnotationClassRow]> pipeline-classes;
+    // Copies the preview objects of the ticked classes. target-class: the
+    // class the copies get, -1 their own.
+    callback copy-all-to-manual(int);
+
+    // -- Delete manual annotations (dialogs/delete_manual_dialog) --
+
+    // Fills `manual-classes` and `delete-summary`, then the dialog shows.
+    callback open-delete-dialog();
+    in-out property <[AnnotationClassRow]> manual-classes;
+    // Ticks or scope changed: Rust updates `delete-summary`.
+    callback delete-selection-changed(bool /* all images */);
+    // "312 annotations on 14 images" - what Delete would delete.
+    in property <string> delete-summary;
+    in property <int> delete-count;
+    // Deletes the manual annotations of the ticked classes, on the open
+    // image (false) or all images (true).
+    callback delete-manual(bool);
+
+    // -- GeoJSON (one <image>.geojson per image, QuPath's layout) --
+
+    // Picks a folder, writes the manual annotations of every image there.
+    callback export-geojson();
+    // Picks a folder, reads its .geojson files into the matching images:
+    // added to their manual annotations, or replacing them (true).
+    callback import-geojson(bool);
+
+    // Measures every manual annotation again on its image (all channels,
+    // full resolution), in the background.
+    callback remeasure();
+}

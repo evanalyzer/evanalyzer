@@ -41,10 +41,13 @@ pub use evanalyzer_cfg::core_types::ImageTile;
 pub use evanalyzer_cfg::core_types::ZProjection;
 
 // Object
+pub use crate::ai_learning::utils::{bbox_overlaps_tile, tile_grid};
 pub use crate::object::Intensity;
 pub use crate::object::Object;
 pub use crate::object::ObjectInit;
+pub use crate::object::intensities::{ChannelTile, IntensityAccumulator, MaskIntensities};
 pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+pub use crate::pipeline::pipeline_cache::{channel_pixel_slice, sample_channel_pixel};
 
 // Job execution
 pub use crate::algos::{

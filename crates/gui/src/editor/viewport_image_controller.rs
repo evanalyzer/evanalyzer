@@ -581,7 +581,8 @@ impl ViewportImageController {
                 if !channel.is_rgb {
                     if let Some(raw_val) = channel.value_at(idx) {
                         //let _normalized_val = raw_val * 100.0;
-                        let scaled_val = raw_val * 2.0f32.powf(ctx.bit_depth as f32);
+                        let scaled_val =
+                            crate::editor::view_channel::raw_value(raw_val, ctx.bit_depth);
                         pixel_values.push(format!("{}: {:.0}", channel.name, scaled_val));
                     }
                 }

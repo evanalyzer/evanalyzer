@@ -2,7 +2,7 @@
 //! `evanalyzer_core` (and DuckDB) to do the actual work.
 
 mod filesystem;
-mod image_reader;
+pub(crate) mod image_reader;
 pub(crate) mod job;
 mod local_backend;
 pub mod results;

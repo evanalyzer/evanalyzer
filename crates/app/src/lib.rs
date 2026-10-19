@@ -134,9 +134,15 @@ pub mod utils {
 pub mod project {
     pub use crate::workspace::ProjectOwner;
     pub use crate::workspace::ProjectWithRuntime;
+    pub use crate::workspace::annotation_measure::measure_on_source;
+    pub use crate::workspace::annotations_geojson::{
+        ExportReport, ImportReport, PendingImport, apply_import, export_geojson, import_geojson,
+        measure_pending, read_geojson,
+    };
     pub use crate::workspace::class_ids::{
         ClassIdChange, change_class_id, free_class_ids, next_class_id,
     };
+    pub use crate::workspace::extensions::annotations_ext::{AnnotationScope, AnnotationsExt};
     pub use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
     pub use crate::workspace::extensions::object_ext::ObjectExt;
     pub use crate::workspace::extensions::project_ext::ConfigValueSource;
@@ -221,7 +227,7 @@ pub mod images {
     pub use crate::api::PyramidInfo;
     pub use crate::api::TileRequest;
     pub use crate::workspace::images::{
-        Erased, erase_mask, object_from_mask, stroke_mask, union_mask,
+        Erased, erase_mask, annotation_from_mask, stroke_mask, union_mask,
     };
     pub use crate::workspace::plate_layout::{PlateLayout, WellImages, plate_layout, texts_in_group};
 }

@@ -1,36 +1,39 @@
 //! Image work the UI does on pixels it already has.
 
-use crate::api::ImageContainer;
 use bitvec::prelude::{BitVec, Lsb0};
-use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_core::Object;
 use kornia_image::ImageSize;
-use std::sync::Arc;
+use std::collections::HashSet;
 
-/// Builds a manually annotated object from a painted `mask` (covering
-/// `bbox` = `[x1, y1, x2, y2]` in full-image pixels), measuring its
-/// intensities on every channel in `images`. `origin_image` is the channel
-/// the user painted on; it provides the object's plane.
-pub fn object_from_mask(
+/// A manually annotated object from its painted `mask` (covering `bbox` =
+/// `[x1, y1, x2, y2]` in full-image pixels, inclusive) on `plane` of an
+/// image of `full_image_width` x `full_image_height`: shape, area and
+/// outline from the mask; no intensities - they are measured on the image
+/// file afterwards (`measure_on_source`), whatever the zoom it was drawn at.
+pub fn annotation_from_mask(
     full_image_width: usize,
     full_image_height: usize,
     mask: BitVec<u64, Lsb0>,
     bbox: [u32; 4],
-    origin_image: &ImageContainer,
-    images: &[(i32, Arc<ImageContainer>)],
+    plane: ImagePlane,
     object_class: ObjectClass,
 ) -> ObjectMetricSettings {
-    Object::from_mask(
+    let classes = if object_class == ObjectClass::Unset {
+        HashSet::new()
+    } else {
+        HashSet::from([object_class])
+    };
+    Object::from_mask_geometry(
         &ImageSize {
             width: full_image_width,
             height: full_image_height,
         },
         mask,
         bbox,
-        origin_image,
-        images,
-        object_class,
+        plane,
+        classes,
     )
     .to_object_settings()
 }

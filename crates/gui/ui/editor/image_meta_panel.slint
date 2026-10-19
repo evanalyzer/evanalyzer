@@ -25,7 +25,7 @@ component WavelengthTile inherits Rectangle {
     width: 18px;
     height: 18px;
     accessible-role: button;
-    accessible-label: root.option.nm + " nm";
+    accessible-label: root.option.nm > 0 ? root.option.nm + " nm" : "White";
     accessible-checked: root.selected;
 
     face := Rectangle {
@@ -307,7 +307,7 @@ export component ImageMetaPanel inherits Rectangle {
                         }
                         if channel.wavelength_overridden: EditedTag { }
                         Text {
-                            text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : "–";
+                            text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : channel.wavelength_overridden ? "white" : "–";
                             font-size: Ink.fs-sm;
                             font-family: Ink.font-mono;
                             color: channel.wavelength_overridden ? Ink.focus : channel.emission_wave_length > 0 ? Ink.text : Ink.text-faint;

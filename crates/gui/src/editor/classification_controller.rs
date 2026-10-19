@@ -1,18 +1,19 @@
 use crate::UiState;
 use crate::editor::object_list_controller::{ObjectListController, resolve_object_id};
 use crate::editor::viewport_controller::ViewportController;
+use crate::helper::color_generators::color_from_hex;
 use crate::{
     AppWindow, ClassItemData, ClassSettingsSlint, ClassificationSettingsState, ClassificationState,
     ObjectListState,
 };
 use evanalyzer_app::prelude::classification_ext::ClassificationExt;
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::{AnnotationsExt, ProjectExt};
 use evanalyzer_app::project::{free_class_ids, next_class_id};
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 use log::{info, warn};
-use slint::{Color, Model};
+use slint::Model;
 use slint::{ComponentHandle, ModelNotify};
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
@@ -55,14 +56,21 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ObjectListState>()
                 .on_object_add_class(move |object_id, class_id| {
+                    // A change of its own on the undo stack; only manual
+                    // annotations change (pipeline objects are read-only).
+                    manager.app_state.begin_undo_step();
                     let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
+                    if let Some(id) = resolve_object_id(&project, object_id)
+                        .filter(|id| project.is_manual_object(id.clone()))
+                    {
                         // let class_id = project.get_selected_object_class();
                         if class_id >= 0 {
                             let class_id = ObjectClass::Global(class_id as u32);
                             project.add_class_to_object(id, class_id);
                         }
                     }
+                    drop(project);
+                    manager.app_state.mark_dirty();
                     manager
                         .object_list_controller
                         .sync_selected_object_to_slint(false);
@@ -76,14 +84,21 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ObjectListState>()
                 .on_object_replace_class(move |object_id, class_id| {
+                    // A change of its own on the undo stack; only manual
+                    // annotations change (pipeline objects are read-only).
+                    manager.app_state.begin_undo_step();
                     let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
+                    if let Some(id) = resolve_object_id(&project, object_id)
+                        .filter(|id| project.is_manual_object(id.clone()))
+                    {
                         // let class_id = project.get_selected_object_class();
                         if class_id >= 0 {
                             let class_id = ObjectClass::Global(class_id as u32);
                             project.replace_classes_of_object(id, class_id);
                         }
                     }
+                    drop(project);
+                    manager.app_state.mark_dirty();
                     manager
                         .object_list_controller
                         .sync_selected_object_to_slint(false);
@@ -97,11 +112,18 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ObjectListState>()
                 .on_object_remove_class(move |object_id, class_id| {
+                    // A change of its own on the undo stack; only manual
+                    // annotations change (pipeline objects are read-only).
+                    manager.app_state.begin_undo_step();
                     let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
+                    if let Some(id) = resolve_object_id(&project, object_id)
+                        .filter(|id| project.is_manual_object(id.clone()))
+                    {
                         let class_id = ObjectClass::Global(class_id as u32);
                         project.remove_class_from_object(id, &class_id);
                     }
+                    drop(project);
+                    manager.app_state.mark_dirty();
                     manager
                         .object_list_controller
                         .sync_selected_object_to_slint(false);
@@ -115,25 +137,15 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ObjectListState>()
                 .on_object_delete(move |object_id| {
+                    // A change of its own on the undo stack; only manual
+                    // annotations change (pipeline objects are read-only).
+                    manager.app_state.begin_undo_step();
                     let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
+                    if let Some(id) = resolve_object_id(&project, object_id)
+                        .filter(|id| project.is_manual_object(id.clone()))
+                    {
                         project.delete_object(id);
                     }
-                    project.set_selected_object(None);
-                    drop(project);
-                    manager.app_state.mark_dirty();
-                    manager.object_list_controller.sync_objects_to_slint();
-                    // The object's classes changed: so do the class counts.
-                    manager.sync_classification_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
-
-            // Delete manual annotated objects
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_delete_all_manual_annotated(move || {
-                    let mut project = manager.app_state.get_project_write();
-                    project.delete_all_manual_annoted_objects();
                     project.set_selected_object(None);
                     drop(project);
                     manager.app_state.mark_dirty();
@@ -414,10 +426,6 @@ impl ClassificationController {
         };
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let r = ((class.color >> 16) & 0xff) as u8;
-                let g = ((class.color >> 8) & 0xff) as u8;
-                let b = (class.color & 0xff) as u8;
-
                 let class_settings_state = ui.global::<ClassificationSettingsState>();
                 let mut class_settings_slint: ClassSettingsSlint = ClassSettingsSlint::default();
                 class_settings_slint.class_id = class.id as i32;
@@ -429,7 +437,7 @@ impl ClassificationController {
                     .collect();
                 class_settings_state.set_id_options(ModelRc::new(VecModel::from(id_options)));
                 class_settings_state.set_id_index(0);
-                class_settings_slint.color = Color::from_rgb_u8(r, g, b);
+                class_settings_slint.color = color_from_hex(class.color);
                 class_settings_slint.name = class.name.clone().into();
                 class_settings_slint.notes = class.notes.clone().into();
 
@@ -478,15 +486,12 @@ impl Model for ClassificationModelBridge {
         let project = self.app_state.get_project();
         let classes = project.classification.classes().clone();
         classes.get(row).map(|c| {
-            let r = ((c.color >> 16) & 0xff) as u8;
-            let g = ((c.color >> 8) & 0xff) as u8;
-            let b = (c.color & 0xff) as u8;
             let count = project.count_objects_for_class(&c.global()) as i32;
             let visible = project.is_class_visible(&c.global());
             ClassItemData {
                 id: c.id as i32,
                 name: (&c.name).into(),
-                color: Color::from_rgb_u8(r, g, b),
+                color: color_from_hex(c.color),
                 count,
                 visible,
             }
@@ -506,6 +511,7 @@ impl Model for ClassificationModelBridge {
 mod tests {
     use super::*;
     use crate::editor::test_support::test_ui_state;
+    use slint::Color;
 
     fn make_controller() -> (Arc<UiState>, Arc<ClassificationController>) {
         make_controller_with_ui(slint::Weak::default())

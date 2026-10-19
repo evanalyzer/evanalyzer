@@ -1,0 +1,63 @@
+// dialogs/import_annotations_dialog.slint — before picking the folder of
+// .geojson files: add them to the images' manual annotations, or replace
+// those of the images that have a file.
+
+import { Places } from "../api/layout.slint";
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { AnnotationState } from "../api/annotations.slint";
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkSegmented } from "../ink/ink.slint";
+
+export component ImportAnnotationsDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 200px;
+    title: "Import annotations";
+    subtitle: "GeoJSON - from EVAnalyzer or QuPath";
+    card-width: 380px;
+    property <bool> replace: false;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+
+    VerticalLayout {
+        spacing: 10px;
+        Text {
+            text: "Pick the folder with one .geojson file per image (named after the image).";
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-sm;
+        }
+        InkSegmented {
+            model: ["Add to the annotations", "Replace them"];
+            selected: root.replace ? 1 : 0;
+            picked(i) => {
+                root.replace = i == 1;
+            }
+        }
+        Text {
+            text: root.replace ? "The manual annotations of every image with a file are deleted first (Undo brings them back)." : "Annotations already there (the same pixels) are not added again.";
+            wrap: word-wrap;
+            color: Ink.text-mute;
+            font-size: Ink.fs-xs;
+        }
+    }
+
+    InkDialogFooter {
+        InkButton {
+            text: "Cancel";
+            kind: InkButtonKind.quiet;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+            }
+        }
+        InkButton {
+            text: "Choose folder…";
+            kind: InkButtonKind.primary;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                AnnotationState.import-geojson(root.replace);
+            }
+        }
+    }
+}

@@ -12,6 +12,7 @@ import { LayoutState } from "../api/layout.slint";
 import { ListView } from "std-widgets.slint";
 import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkSearchField, InkPickerRow, InkSwatchName, InkFact } from "../ink/ink.slint";
 import { ClassificationState } from "../api/classification.slint";
+import { AnnotationState } from "../api/annotations.slint";
 
 
 // The widths of the table's fixed columns; the channels share the rest.
@@ -51,11 +52,14 @@ component HeadCell inherits Text {
     overflow: elide;
 }
 
-// What can be done to the selected object: set its class, edit, copy,
-// delete - under the list's selected object, in the table's footer.
+// What can be done to the selected object, under the list's selected
+// object, in the table's footer: a manual annotation's class set, or it
+// deleted (its shape is edited with the brush and eraser); a pipeline object copied into the manual annotations (it is
+// read-only).
 component ObjectActions inherits HorizontalLayout {
+    in property <bool> editable;
     spacing: 4px;
-    InkButton {
+    if root.editable: InkButton {
         small: true;
         text: "Set class…";
         kind: InkButtonKind.primary;
@@ -63,26 +67,19 @@ component ObjectActions inherits HorizontalLayout {
             GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
         }
     }
+    if !root.editable: InkButton {
+        small: true;
+        icon: InkIcons.copy;
+        text: "Copy to manual";
+        kind: InkButtonKind.primary;
+        clicked => {
+            AnnotationState.copy-to-manual(ObjectListState.selected_object.id);
+        }
+    }
     Rectangle {
         horizontal-stretch: 1;
     }
-    InkIconButton {
-        size: 24px;
-        icon: InkIcons.edit;
-        label: "Edit";
-        clicked => {
-            ObjectListState.object_edit(ObjectListState.selected_object.id);
-        }
-    }
-    InkIconButton {
-        size: 24px;
-        icon: InkIcons.copy;
-        label: "Copy";
-        clicked => {
-            ObjectListState.object_copy(ObjectListState.selected_object.id);
-        }
-    }
-    InkIconButton {
+    if root.editable: InkIconButton {
         size: 24px;
         icon: InkIcons.delete;
         label: "Delete object";
@@ -414,7 +411,7 @@ export component ObjectListPanel inherits Rectangle {
                     for name[i] in root.sel.class_names: InkChip {
                         text: name;
                         swatch: root.sel.class_colors[i];
-                        removable: true;
+                        removable: root.sel.editable;
                         remove => {
                             ObjectListState.object_remove_class(root.sel.id, root.sel.class_ids[i]);
                         }
@@ -440,8 +437,15 @@ export component ObjectListPanel inherits Rectangle {
                     extra: "Σ " + (sum != "" ? sum : "–");
                 }
 
+                if !root.sel.editable: Text {
+                    text: "From the pipeline · read-only";
+                    font-size: Ink.fs-xs;
+                    color: Ink.text-mute;
+                }
+
                 ObjectActions {
                     padding-top: 4px;
+                    editable: root.sel.editable;
                 }
             }
         }
@@ -487,12 +491,39 @@ export component ObjectListPanel inherits Rectangle {
                     LayoutState.objects-as-table = !root.table;
                 }
             }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.copy;
+                text: "Copy pipeline objects to manual…";
+                clicked => {
+                    AnnotationState.open-copy-dialog();
+                }
+            }
+            InkMenuItem {
+                text: "Export annotations (GeoJSON)…";
+                clicked => {
+                    AnnotationState.export-geojson();
+                }
+            }
+            InkMenuItem {
+                text: "Import annotations (GeoJSON)…";
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.import-annotations;
+                }
+            }
+            InkMenuItem {
+                text: "Re-measure manual annotations";
+                clicked => {
+                    AnnotationState.remeasure();
+                }
+            }
+            InkMenuSeparator { }
             InkMenuItem {
                 icon: InkIcons.delete;
-                text: "Delete all hand-annotated objects…";
+                text: "Delete manual annotations…";
                 danger: true;
                 clicked => {
-                    GlobalAppState.active_dialog = DialogType.object_confirm_delete_manual_annotated;
+                    AnnotationState.open-delete-dialog();
                 }
             }
         }

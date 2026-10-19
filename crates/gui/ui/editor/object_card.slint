@@ -1,10 +1,12 @@
 // editor/object_card.slint — the selected object, on the image next to it
 // (design F): its classes, area, the mean of each channel; change its class,
-// delete it. Follows the object while the image moves; stays inside the
+// delete it - or, for a read-only pipeline object, copy it into the manual
+// annotations. Follows the object while the image moves; stays inside the
 // view.
 
 import { ChannelState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ObjectListState } from "../api/object_list.slint";
+import { AnnotationState } from "../api/annotations.slint";
 import { ViewportState } from "../api/viewport.slint";
 import { Ink, InkButton, InkButtonKind, InkCaption, InkChip, InkIconButton, InkIcons, InkFact } from "../ink/ink.slint";
 
@@ -90,7 +92,13 @@ export component ObjectCard inherits Rectangle {
                 value: ObjectListState.selected_object.intensity_avgs.length > channel.idx ? ObjectListState.selected_object.intensity_avgs[channel.idx] : "";
             }
 
-            HorizontalLayout {
+            if !ObjectListState.selected_object.editable: Text {
+                text: "From the pipeline · read-only";
+                font-size: Ink.fs-xs;
+                color: Ink.text-mute;
+            }
+
+            if ObjectListState.selected_object.editable: HorizontalLayout {
                 spacing: 6px;
                 padding-top: 4px;
                 InkButton {
@@ -111,6 +119,19 @@ export component ObjectCard inherits Rectangle {
                     text: "Delete";
                     clicked => {
                         GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+                    }
+                }
+            }
+            if !ObjectListState.selected_object.editable: HorizontalLayout {
+                padding-top: 4px;
+                alignment: start;
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.primary;
+                    icon: InkIcons.copy;
+                    text: "Copy to manual";
+                    clicked => {
+                        AnnotationState.copy-to-manual(ObjectListState.selected_object.id);
                     }
                 }
             }

@@ -1,0 +1,94 @@
+// dialogs/copy_to_manual_dialog.slint — copies the open image's pipeline
+// (preview) objects into its manual annotations: those of the ticked
+// classes, with their own classes or one class for all. A pipeline's
+// result as the start of classifier training data, corrected by hand.
+
+import { Places } from "../api/layout.slint";
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ClassificationState } from "../api/classification.slint";
+import { AnnotationState } from "../api/annotations.slint";
+import { Ink, InkButton, InkButtonKind, InkCaption, InkCheckbox, InkDialog, InkDialogFooter, InkListRow, InkSegmented } from "../ink/ink.slint";
+
+export component CopyToManualDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 180px;
+    title: "Copy pipeline objects to manual";
+    subtitle: "on this image";
+    card-width: 380px;
+    // One class for all copies (-1: their own classes).
+    property <bool> one-class: false;
+    property <int> target-class: -1;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+
+    VerticalLayout {
+        spacing: 10px;
+
+        InkCaption {
+            text: "OBJECTS OF THESE CLASSES";
+        }
+        if AnnotationState.pipeline-classes.length == 0: Text {
+            text: "No pipeline objects on this image - run the preview first.";
+            wrap: word-wrap;
+            color: Ink.text-mute;
+            font-size: Ink.fs-sm;
+        }
+        for row[i] in AnnotationState.pipeline-classes: InkCheckbox {
+            text: row.name + " · " + row.count;
+            checked: row.checked;
+            toggled(on) => {
+                AnnotationState.pipeline-classes[i].checked = on;
+            }
+        }
+
+        InkCaption {
+            text: "THE COPIES' CLASS";
+        }
+        InkSegmented {
+            model: ["Their own classes", "One class for all"];
+            selected: root.one-class ? 1 : 0;
+            picked(i) => {
+                root.one-class = i == 1;
+            }
+        }
+        if root.one-class: Rectangle {
+            height: min(rows.preferred-height, 180px);
+            Flickable {
+                content-height: rows.preferred-height;
+                rows := VerticalLayout {
+                    alignment: start;
+                    for data in ClassificationState.classes_list: InkListRow {
+                        title: data.name;
+                        swatch: data.color;
+                        selected: root.target-class == data.id;
+                        clicked => {
+                            root.target-class = data.id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    InkDialogFooter {
+        InkButton {
+            text: "Cancel";
+            kind: InkButtonKind.quiet;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+            }
+        }
+        InkButton {
+            text: "Copy";
+            kind: InkButtonKind.primary;
+            enabled: AnnotationState.pipeline-classes.length > 0 && (!root.one-class || root.target-class >= 0);
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                AnnotationState.copy-all-to-manual(root.one-class ? root.target-class : -1);
+            }
+        }
+    }
+}

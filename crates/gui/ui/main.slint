@@ -7,6 +7,7 @@ import { ImageItemData, ImagesListState, PlateWell, WellState } from "api/images
 import { ClassificationState } from "api/classification.slint";
 import { ClassSettingsSlint, ClassificationSettingsState } from "api/classification_class_edit.slint";
 import { ObjectItemDataSlint, ObjectListState } from "api/object_list.slint";
+import { AnnotationState, AnnotationClassRow } from "api/annotations.slint";
 import { CommandAuthor, CommandDef, CommandPickerState, DefaultParamPreview } from "api/command_selection.slint";
 import { PipelineDeleteConfirmState, PipelineEditState } from "api/pipeline_edit.slint";
 import { ComponentBindingRow, ComponentClassRow, ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "api/create_component.slint";
@@ -79,9 +80,9 @@ import { ExportDialog } from "results/export_dialog.slint";
 
 import { FileBrowserDialog } from "dialogs/file_browser_dialog.slint";
 import { ClassSelectDialog } from "dialogs/classification_select_dialog.slint";
-import {
-    ConfirmDeleteManualAnnotatedObjectDialog,
-} from "dialogs/object_list_confirm_delete_manual_annotated_dialog.slint";
+import { DeleteManualAnnotationsDialog } from "dialogs/delete_manual_dialog.slint";
+import { CopyToManualDialog } from "dialogs/copy_to_manual_dialog.slint";
+import { ImportAnnotationsDialog } from "dialogs/import_annotations_dialog.slint";
 
 export {
     StartState,
@@ -107,6 +108,8 @@ export {
     ClassificationSettingsState,
     ClassSettingsSlint,
     ObjectListState,
+    AnnotationState,
+    AnnotationClassRow,
     ObjectItemDataSlint,
     ToolbarState,
     ToolState,
@@ -271,7 +274,9 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
             if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
             if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }
-            if (GlobalAppState.active_dialog == DialogType.object-confirm-delete-manual-annotated): ConfirmDeleteManualAnnotatedObjectDialog { }
+            if (GlobalAppState.active_dialog == DialogType.delete-manual-annotations): DeleteManualAnnotationsDialog { }
+            if (GlobalAppState.active_dialog == DialogType.copy-to-manual): CopyToManualDialog { }
+            if (GlobalAppState.active_dialog == DialogType.import-annotations): ImportAnnotationsDialog { }
 
             if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
                 width: 100%;
