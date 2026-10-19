@@ -9,11 +9,12 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::color_from_hex;
 use crate::{
     AnnotationClassRow, AnnotationState, AppWindow, DialogType, FileRequest, GlobalAppState,
-    WarningState,
+    ImportClassRow, WarningState,
 };
 use evanalyzer_app::project::{
-    AnnotationScope, AnnotationsExt, ExportReport, ImportReport, ProjectExt, ProjectWithRuntime,
-    apply_import, export_geojson, measure_on_source, measure_pending, read_geojson,
+    AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, ProjectExt,
+    ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
+    image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -27,7 +28,22 @@ pub struct AnnotationController {
     pub(crate) object_list_controller: Arc<ObjectListController>,
     pub(crate) classification_controller: Arc<ClassificationController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
+    /// A .geojson file read for the open image, waiting for the user's
+    /// class mapping (the import dialog).
+    pending_import: std::sync::Mutex<Option<ReadImport>>,
 }
+
+/// A file read for an image, and what the import dialog's targets mean.
+struct ReadImport {
+    pending: PendingImport,
+    /// The project classes the targets 3 + k stand for.
+    classes: Vec<u32>,
+}
+
+/// The import dialog's fixed targets, before the project's classes.
+const TARGET_NEW: i32 = 0;
+const TARGET_NONE: i32 = 1;
+const TARGET_SKIP: i32 = 2;
 
 impl AnnotationController {
     pub fn new(
@@ -43,6 +59,7 @@ impl AnnotationController {
             object_list_controller,
             classification_controller,
             viewport_controller,
+            pending_import: std::sync::Mutex::new(None),
         }
     }
 
@@ -71,10 +88,16 @@ impl AnnotationController {
         state.on_delete_manual(move |all_images| m.delete_manual(all_images));
 
         let m = self.clone();
+        state.on_open_export_dialog(move || m.open_export_dialog());
+
+        let m = self.clone();
         state.on_export_geojson(move || m.export_geojson());
 
         let m = self.clone();
-        state.on_import_geojson(move |replace| m.import_geojson(replace));
+        state.on_pick_import_file(move || m.pick_import_file());
+
+        let m = self.clone();
+        state.on_apply_import(move |replace| m.apply_import(replace));
 
         let m = self.clone();
         state.on_remeasure(move || m.remeasure());
@@ -352,28 +375,85 @@ impl AnnotationController {
         self.refresh();
     }
 
-    /// Picks a folder, writes every image's manual annotations there.
+    /// The open image (its path in the project) and the series shown, its
+    /// name for the dialogs - or a message that none is open.
+    fn open_image(&self) -> Option<(PathBuf, i32, String)> {
+        let project = self.app_state.get_project();
+        let Some(rel_path) = project.get_current_relative_path() else {
+            drop(project);
+            self.show_message("No image open", "Open the image whose annotations to export or import first.".into(), true);
+            return None;
+        };
+        let name = rel_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Some((rel_path, project.get_selected_series_idx(), name))
+    }
+
+    /// The export dialog: the open image's manual annotations by class,
+    /// all ticked.
+    fn open_export_dialog(self: &Arc<Self>) {
+        let Some((rel_path, _, name)) = self.open_image() else { return };
+        let Some(ui) = self.ui.upgrade() else { return };
+        let rows = {
+            let project = self.app_state.get_project();
+            let classes: Vec<(ObjectClass, usize)> = image_annotation_classes(&project, &rel_path)
+                .into_iter()
+                .map(|(id, count)| (id.map_or(ObjectClass::Unset, ObjectClass::Global), count))
+                .collect();
+            class_rows(&project, &classes)
+        };
+        let state = ui.global::<AnnotationState>();
+        state.set_geojson_image(name.into());
+        state.set_export_classes(ModelRc::new(VecModel::from(rows)));
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::ExportAnnotations);
+    }
+
+    /// Asks where to save (named after the image, changeable), writes the
+    /// open image's annotations of the ticked classes there.
     fn export_geojson(self: &Arc<Self>) {
-        let mut request = FileRequest::open_folder("Export annotations to");
+        let Some(ui) = self.ui.upgrade() else { return };
+        let Some((rel_path, _, name)) = self.open_image() else { return };
+        let classes: std::collections::HashSet<Option<u32>> =
+            ticked(&ui.global::<AnnotationState>().get_export_classes())
+                .into_iter()
+                .map(|c| match c {
+                    ObjectClass::Global(id) => Some(id),
+                    _ => None,
+                })
+                .collect();
+        if classes.is_empty() {
+            return self.show_message("Nothing exported", "Tick the classes to export.".into(), true);
+        }
+        let stem = Path::new(&name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or(name);
+        let mut request = FileRequest::save_file("Export annotations as")
+            .filter("GeoJSON", &["geojson"])
+            .file_name(&format!("{stem}.geojson"));
         if let Some(dir) = self.project_folder() {
             request = request.start_in(dir);
         }
         let m = self.clone();
-        self.app_state.file_browser.open(request, move |folder| {
-            let Some(folder) = folder else { return };
+        self.app_state.file_browser.open(request, move |file| {
+            let Some(file) = file else { return };
+            let file = with_geojson_extension(file);
             let m = m.clone();
             // Written through the backend: on a server, over the network.
             crate::helper::ui_thread::spawn(move || {
                 let backend = m.app_state.backend();
-                // A snapshot: the project isn't locked while files are written.
+                // A snapshot: the project isn't locked while the file is written.
                 let project = ProjectWithRuntime {
                     settings: m.app_state.get_project().settings.clone(),
                     tmp_settings: Default::default(),
                 };
-                match export_geojson(&project, backend.files(), &folder) {
-                    Ok(report) => m.show_message(
+                match export_image_geojson(&project, backend.files(), &rel_path, &classes, &file) {
+                    Ok(count) => m.show_message(
                         "Annotations exported",
-                        export_message(&report, &folder),
+                        format!("{} written to {}.", plural(count, "annotation", "annotations"), file.display()),
                         true,
                     ),
                     Err(e) => m.show_message("Export failed", e, false),
@@ -382,38 +462,84 @@ impl AnnotationController {
         });
     }
 
-    /// Picks a folder, reads its .geojson files into the matching images:
-    /// added, or replacing their manual annotations. Reads and measures on
-    /// a worker thread (measuring reads the images), then puts them in.
-    fn import_geojson(self: &Arc<Self>, replace: bool) {
-        let mut request = FileRequest::open_folder("Import annotations from");
+    /// Asks for a .geojson file, reads it for the open image, then shows
+    /// the import dialog: the file's classes, each mapped to its project
+    /// class of the same name, else a new one.
+    fn pick_import_file(self: &Arc<Self>) {
+        let Some((rel_path, series, name)) = self.open_image() else { return };
+        let mut request = FileRequest::open_file("Import annotations from")
+            .filter("GeoJSON", &["geojson", "json"]);
         if let Some(dir) = self.project_folder() {
             request = request.start_in(dir);
         }
         let m = self.clone();
-        self.app_state.file_browser.open(request, move |folder| {
-            let Some(folder) = folder else { return };
+        self.app_state.file_browser.open(request, move |file| {
+            let Some(file) = file else { return };
             let m = m.clone();
             crate::helper::ui_thread::spawn(move || {
                 let backend = m.app_state.backend();
-                let read = read_geojson(&m.app_state.get_project(), backend.files(), &folder);
-                let mut pending = match read {
+                let read = read_image_geojson(&m.app_state.get_project(), backend.files(), &file, &rel_path, series);
+                let pending = match read {
                     Ok(pending) => pending,
                     Err(e) => return m.show_message("Import failed", e, false),
                 };
-                measure_pending(&mut pending, |path, series, objects| {
-                    backend
-                        .open_image(path)
-                        .and_then(|source| measure_on_source(source.as_ref(), series, objects))
-                        .map_err(|e| e.to_string())
+                let (rows, targets, classes) = {
+                    let project = m.app_state.get_project();
+                    import_rows(&project, &pending)
+                };
+                let shapes = pending.shapes() as i32;
+                *m.pending_import.lock().expect("Poisoned") = Some(ReadImport { pending, classes });
+                let file_name = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let ui = m.ui.clone();
+                let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    let Some(ui) = ui.upgrade() else { return };
+                    let state = ui.global::<AnnotationState>();
+                    state.set_geojson_image(name.into());
+                    state.set_import_file(file_name.into());
+                    state.set_import_shapes(shapes);
+                    state.set_import_classes(ModelRc::new(VecModel::from(rows)));
+                    state.set_import_targets(ModelRc::new(VecModel::from(targets)));
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::ImportAnnotations);
                 });
-                m.app_state.begin_undo_step();
-                let report = apply_import(&mut m.app_state.get_project_write(), pending, replace);
-                if report.objects > 0 || replace {
-                    m.refresh();
-                }
-                m.show_message("Annotations imported", import_message(&report), true);
             });
+        });
+    }
+
+    /// The read file into the open image with the dialog's class mapping:
+    /// measured on the image (a worker thread - it reads the image), then
+    /// added - or replacing its manual annotations.
+    fn apply_import(self: &Arc<Self>, replace: bool) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let Some(read) = self.pending_import.lock().expect("Poisoned").take() else { return };
+        let mapping: std::collections::HashMap<String, ClassTarget> = ui
+            .global::<AnnotationState>()
+            .get_import_classes()
+            .iter()
+            .map(|row| (row.name.to_string(), target_of(row.target, &read.classes)))
+            .collect();
+        let m = self.clone();
+        crate::helper::ui_thread::spawn(move || {
+            let backend = m.app_state.backend();
+            let mut pending = read.pending;
+            measure_pending(&mut pending, |path, series, objects| {
+                backend
+                    .open_image(path)
+                    .and_then(|source| measure_on_source(source.as_ref(), series, objects))
+                    .map_err(|e| e.to_string())
+            });
+            m.app_state.begin_undo_step();
+            let report = {
+                let mut project = m.app_state.get_project_write();
+                apply_import(&mut project, pending, replace, &mapping)
+            };
+            if report.objects > 0 || replace || !report.created_classes.is_empty() {
+                m.refresh();
+            }
+            m.show_message("Annotations imported", import_message(&report), true);
         });
     }
 
@@ -485,24 +611,82 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-fn export_message(report: &ExportReport, folder: &std::path::Path) -> String {
-    if report.objects == 0 {
-        return "There are no manual annotations to export.".into();
+/// The import dialog's rows (the file's class names, each with its
+/// default target), its targets, the project classes behind them.
+fn import_rows(
+    project: &ProjectWithRuntime,
+    pending: &PendingImport,
+) -> (Vec<ImportClassRow>, Vec<slint::SharedString>, Vec<u32>) {
+    let classes: Vec<(u32, String)> = project
+        .settings
+        .classification
+        .classes()
+        .iter()
+        .filter(|c| c.id != 0)
+        .map(|c| (c.id, c.name.clone()))
+        .collect();
+    let mut targets: Vec<slint::SharedString> =
+        vec!["New class".into(), "No class".into(), "Don't import".into()];
+    targets.extend(classes.iter().map(|(_, name)| slint::SharedString::from(name.as_str())));
+    let ids: Vec<u32> = classes.iter().map(|(id, _)| *id).collect();
+    let rows = pending
+        .file_classes()
+        .into_iter()
+        .map(|class| {
+            let target = match default_class_target(project, &class.name) {
+                ClassTarget::Class(id) => ids.iter().position(|i| *i == id).map_or(TARGET_NEW, |k| 3 + k as i32),
+                ClassTarget::NoClass => TARGET_NONE,
+                ClassTarget::Skip => TARGET_SKIP,
+                ClassTarget::New => TARGET_NEW,
+            };
+            ImportClassRow {
+                name: class.name.into(),
+                count: class.count as i32,
+                color: color_from_hex(class.color.unwrap_or(0x888888)),
+                target,
+            }
+        })
+        .collect();
+    (rows, targets, ids)
+}
+
+/// A target of the import dialog as a mapping.
+fn target_of(target: i32, classes: &[u32]) -> ClassTarget {
+    match target {
+        TARGET_NONE => ClassTarget::NoClass,
+        TARGET_SKIP => ClassTarget::Skip,
+        t if t >= 3 => classes
+            .get((t - 3) as usize)
+            .map_or(ClassTarget::New, |id| ClassTarget::Class(*id)),
+        _ => ClassTarget::New,
     }
-    format!(
-        "{} written to {} in {}.",
-        plural(report.objects, "annotation", "annotations"),
-        plural(report.files, "file", "files"),
-        folder.display()
-    )
+}
+
+/// A name typed without `.geojson` gets it.
+fn with_geojson_extension(file: PathBuf) -> PathBuf {
+    if file
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("geojson") || e.eq_ignore_ascii_case("json"))
+    {
+        file
+    } else {
+        let mut name = file.into_os_string();
+        name.push(".geojson");
+        PathBuf::from(name)
+    }
 }
 
 fn import_message(report: &ImportReport) -> String {
     let mut lines = vec![format!(
-        "{} added to {}.",
-        plural(report.objects, "annotation", "annotations"),
-        plural(report.images, "image", "images")
+        "{} added to the image.",
+        plural(report.objects, "annotation", "annotations")
     )];
+    if report.skipped_by_class > 0 {
+        lines.push(format!(
+            "{} not imported (their class is set to \"Don't import\").",
+            plural(report.skipped_by_class, "shape", "shapes")
+        ));
+    }
     if report.duplicates > 0 {
         lines.push(format!(
             "{} already there (the same pixels).",
@@ -522,29 +706,9 @@ fn import_message(report: &ImportReport) -> String {
         ));
     }
     if !report.unmeasured_images.is_empty() {
-        lines.push(format!(
-            "Not measured (image file not readable): {} - their intensities are missing.",
-            plural(report.unmeasured_images.len(), "image", "images")
-        ));
-    }
-    if !report.unmatched_files.is_empty() {
-        let names: Vec<String> = report
-            .unmatched_files
-            .iter()
-            .take(5)
-            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .collect();
-        let more = report.unmatched_files.len().saturating_sub(names.len());
-        lines.push(format!(
-            "No image in the project for {}: {}{}.",
-            plural(report.unmatched_files.len(), "file", "files"),
-            names.join(", "),
-            if more > 0 {
-                format!(" and {more} more")
-            } else {
-                String::new()
-            }
-        ));
+        lines.push(
+            "Not measured (the image file can't be read) - their intensities are missing.".into(),
+        );
     }
     lines.join("\n")
 }
@@ -622,30 +786,79 @@ mod tests {
     #[test]
     fn the_import_message_lists_what_happened() {
         let report = ImportReport {
-            images: 2,
             objects: 34,
             duplicates: 1,
             created_classes: vec!["Tumor".into()],
-            unmatched_files: vec!["x/a.geojson".into()],
             skipped_features: 3,
+            skipped_by_class: 2,
             unmeasured_images: vec![],
         };
         assert_eq!(
             import_message(&report),
-            "34 annotations added to 2 images.\n1 annotation was already there (the same pixels).\n\
-             New classes: Tumor.\n3 features skipped (points, lines or empty shapes).\n\
-             No image in the project for 1 file: a.geojson."
+            "34 annotations added to the image.\n2 shapes not imported (their class is set to \"Don't import\").\n\
+             1 annotation was already there (the same pixels).\nNew classes: Tumor.\n\
+             3 features skipped (points, lines or empty shapes)."
         );
+    }
+
+    /// The import dialog: each class name of the file defaults to the
+    /// project class of that name, else a new one; its targets map back.
+    #[test]
+    fn the_import_dialog_maps_file_classes_onto_the_projects() {
+        use evanalyzer_cfg::settings::classification_settings::Class;
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+        let mut project = ProjectWithRuntime::default();
+        let mut entry = ImageEntry::default();
+        entry.series.insert(0, SeriesSettings { image_width: 20, image_height: 20, ..Default::default() });
+        project.settings.images.list.insert(PathBuf::from("a.tif"), entry);
+        let nuclei = 5;
+        project.settings.classification.classes_mut().push(Class {
+            id: nuclei,
+            color: 0x3080f0,
+            name: "Nuclei".into(),
+            notes: String::new(),
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("qupath.geojson");
+        let shape = |class: Option<&str>| {
+            let mut properties = serde_json::json!({ "objectType": "annotation" });
+            if let Some(name) = class {
+                properties["classification"] = serde_json::json!({ "name": name });
+            }
+            serde_json::json!({
+                "type": "Feature",
+                "geometry": { "type": "Polygon", "coordinates": [[[1, 1], [4, 1], [4, 3], [1, 3], [1, 1]]] },
+                "properties": properties
+            })
+        };
+        std::fs::write(&file, serde_json::json!([shape(Some("nuclei")), shape(Some("Tumor")), shape(None)]).to_string()).unwrap();
+        let pending = read_image_geojson(
+            &project,
+            &evanalyzer_app::fs::LocalFileSystem::default(),
+            &file,
+            Path::new("a.tif"),
+            0,
+        )
+        .unwrap();
+
+        let (rows, targets, classes) = import_rows(&project, &pending);
+        let names: Vec<(String, i32)> = rows.iter().map(|r| (r.name.to_string(), r.target)).collect();
         assert_eq!(
-            export_message(
-                &ExportReport {
-                    files: 1,
-                    objects: 1
-                },
-                std::path::Path::new("/d")
-            ),
-            "1 annotation written to 1 file in /d."
+            names,
+            vec![("nuclei".into(), 3), ("Tumor".into(), TARGET_NEW), (String::new(), TARGET_NONE)]
         );
+        assert_eq!(targets[3], "Nuclei");
+        assert_eq!(target_of(3, &classes), ClassTarget::Class(nuclei));
+        assert_eq!(target_of(TARGET_SKIP, &classes), ClassTarget::Skip);
+        assert_eq!(target_of(TARGET_NONE, &classes), ClassTarget::NoClass);
+        assert_eq!(target_of(TARGET_NEW, &classes), ClassTarget::New);
+    }
+
+    #[test]
+    fn a_typed_export_name_gets_the_geojson_extension() {
+        assert_eq!(with_geojson_extension("/d/cells".into()), PathBuf::from("/d/cells.geojson"));
+        assert_eq!(with_geojson_extension("/d/cells.GeoJSON".into()), PathBuf::from("/d/cells.GeoJSON"));
+        assert_eq!(with_geojson_extension("/d/a.tif".into()), PathBuf::from("/d/a.tif.geojson"));
     }
 
     #[test]

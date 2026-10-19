@@ -1064,7 +1064,8 @@ fn logging_in_at_a_worker_or_a_closing_server_fails_clearly() {
 #[test]
 fn annotations_go_to_geojson_and_back_through_the_server() {
     use evanalyzer_app::project::{
-        apply_import, export_geojson, measure_on_source, measure_pending, read_geojson,
+        apply_import, export_image_geojson, measure_on_source, measure_pending,
+        read_image_geojson,
     };
     let remote = connect();
     let (_dir, settings) = project_with_fixture_image();
@@ -1091,18 +1092,26 @@ fn annotations_go_to_geojson_and_back_through_the_server() {
         });
 
     let out = tempfile::tempdir().unwrap();
-    let report = export_geojson(&project, remote.files(), out.path()).unwrap();
-    assert_eq!((report.files, report.objects), (1, 1));
+    let file = out.path().join("annotations.geojson");
+    let written = export_image_geojson(
+        &project,
+        remote.files(),
+        &rel,
+        &std::collections::HashSet::from([None]),
+        &file,
+    )
+    .unwrap();
+    assert_eq!(written, 1);
 
-    // Into the same project, replacing: the shape back, measured.
-    let mut pending = read_geojson(&project, remote.files(), out.path()).unwrap();
+    // Into the same image, replacing: the shape back, measured.
+    let mut pending = read_image_geojson(&project, remote.files(), &file, &rel, series).unwrap();
     measure_pending(&mut pending, |path, series, objects| {
         remote
             .open_image(path)
             .and_then(|source| measure_on_source(source.as_ref(), series, objects))
             .map_err(|e| e.to_string())
     });
-    let report = apply_import(&mut project, pending, true);
+    let report = apply_import(&mut project, pending, true, &Default::default());
     assert_eq!(report.objects, 1);
     assert!(report.unmeasured_images.is_empty(), "{report:?}");
     let object = &project.images.list[&rel].series[&series].objects[0];

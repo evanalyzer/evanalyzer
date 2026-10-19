@@ -40,7 +40,17 @@ import { Places } from "../api/layout.slint";
 //   - insert-after-idx   : int            - 0-based slot; -1 means "append"
 //   confirm(int)  →  insert this command id at (target-pipeline, insert-after-idx)
 //   toggle-favorite(int), cancel().
-import { InkSearchField, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkCaption, InkHint, InkDivider, InkDialogPlacement } from "../ink/ink.slint";
+import {
+    InkSearchField,
+    InkButton,
+    InkButtonKind,
+    InkDialog,
+    InkDialogFooter,
+    InkCaption,
+    InkHint,
+    InkDivider,
+    InkDialogPlacement,
+} from "../ink/ink.slint";
 import { StepCategory } from "../api/pipelines.slint";
 import { CommandDef, PickerStyle } from "../api/command_selection.slint";
 
@@ -309,6 +319,7 @@ component DetailPane inherits Rectangle {
             font-size: Ink.fs-dialog-title;
             horizontal-alignment: center;
         }
+
         InkHint {
             text: "↑↓ choose · Enter adds it";
             horizontal-alignment: center;
@@ -331,6 +342,7 @@ component DetailPane inherits Rectangle {
                     background: PickerStyle.cmd-color(cmd);
                 }
             }
+
             Text {
                 text: cmd.name;
                 color: Ink.text;
@@ -339,6 +351,7 @@ component DetailPane inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
+
             Text {
                 horizontal-stretch: 1;
                 text: cmd.is-component ? "Component" : PickerStyle.cat-name(cmd.category);
@@ -346,6 +359,7 @@ component DetailPane inherits Rectangle {
                 font-size: Ink.fs-secondary;
                 vertical-alignment: center;
             }
+
             Text {
                 text: cmd.source;
                 color: Ink.text-mute;
@@ -392,6 +406,7 @@ component DetailPane inherits Rectangle {
                             font-size: Ink.fs-secondary;
                             overflow: elide;
                         }
+
                         Text {
                             text: p.value;
                             color: Ink.text;
@@ -674,7 +689,7 @@ export component CommandSelectionDialog inherits InkDialog {
                    // }
 
                     FilterChip {
-                        label: "◆ Components";
+                        label: "Components";
                         count: cat-count-grp;
                         tint: Ink.cat-component;
                         active: filter-components;
@@ -903,7 +918,7 @@ export component CommandSelectionDialog inherits InkDialog {
 
                                 // Components: the chip lists the project's components; without it,
                                 // a search lists the matching ones too.
-                            if (filter-components || query != "") : VerticalLayout {
+                            if (filter-components || query != ""): VerticalLayout {
                                     spacing: 0;
 
                                     if filter-components && unused-component-count > 0: Rectangle {

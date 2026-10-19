@@ -1,6 +1,7 @@
 // api/annotations.slint — the Rust interface of the manual-annotation
 // actions: copying pipeline (preview) objects into the manual annotations
-// (training data), deleting manual annotations in bulk.
+// (training data), deleting manual annotations in bulk, GeoJSON export and
+// import.
 
 // A class in the annotation dialogs: how many objects have it, whether it
 // is ticked. id -1: objects without a class.
@@ -10,6 +11,15 @@ export struct AnnotationClassRow {
     color: color,
     count: int,
     checked: bool,
+}
+
+// A class name found in a file being imported, and where its shapes go.
+export struct ImportClassRow {
+    // "" - shapes without a class.
+    name: string,
+    count: int,
+    color: color,
+    target: int,
 }
 
 export global AnnotationState {
@@ -43,13 +53,33 @@ export global AnnotationState {
     // image (false) or all images (true).
     callback delete-manual(bool);
 
-    // -- GeoJSON (one <image>.geojson per image, QuPath's layout) --
+    // -- GeoJSON: the open image's annotations, to a file and back (from
+    // EVAnalyzer, QuPath or another tool) --
 
-    // Picks a folder, writes the manual annotations of every image there.
+    // The open image's name, for the dialogs.
+    in property <string> geojson-image;
+    // Fills `export-classes` (the open image's manual annotations by class,
+    // ticked), then the export dialog shows.
+    callback open-export-dialog();
+    in-out property <[AnnotationClassRow]> export-classes;
+    // Asks where to save (a file name of the user's choosing), writes the
+    // annotations of the ticked classes.
     callback export-geojson();
-    // Picks a folder, reads its .geojson files into the matching images:
-    // added to their manual annotations, or replacing them (true).
-    callback import-geojson(bool);
+
+    // Asks for a .geojson file and reads it; then `import-file`,
+    // `import-classes` and `import-shapes` are set and the import dialog
+    // shows.
+    callback pick-import-file();
+    in property <string> import-file;
+    in property <int> import-shapes;
+    // Each class name found in the file and where it goes: `target` an index
+    // into `import-targets` (0 a new class, 1 no class, 2 not imported, 3 + k
+    // the project's class k).
+    in-out property <[ImportClassRow]> import-classes;
+    in property <[string]> import-targets;
+    // Measures the read shapes on the image and adds them to its manual
+    // annotations - or replaces those (true).
+    callback apply-import(bool);
 
     // Measures every manual annotation again on its image (all channels,
     // full resolution), in the background.

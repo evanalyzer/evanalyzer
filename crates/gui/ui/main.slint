@@ -82,6 +82,7 @@ import { ClassSelectDialog } from "dialogs/classification_select_dialog.slint";
 import { DeleteManualAnnotationsDialog } from "dialogs/delete_manual_dialog.slint";
 import { CopyToManualDialog } from "dialogs/copy_to_manual_dialog.slint";
 import { ImportAnnotationsDialog } from "dialogs/import_annotations_dialog.slint";
+import { ExportAnnotationsDialog } from "dialogs/export_annotations_dialog.slint";
 
 export {
     StartState,
@@ -277,6 +278,7 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.delete-manual-annotations): DeleteManualAnnotationsDialog { }
             if (GlobalAppState.active_dialog == DialogType.copy-to-manual): CopyToManualDialog { }
             if (GlobalAppState.active_dialog == DialogType.import-annotations): ImportAnnotationsDialog { }
+            if (GlobalAppState.active_dialog == DialogType.export-annotations): ExportAnnotationsDialog { }
 
             if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
                 width: 100%;

@@ -2,6 +2,7 @@
 // channels are shown and how - the objects overlay, the histogram (black
 // and white point). Z and T: the stack bar over the image.
 
+import { ScrollView } from "std-widgets.slint";
 import { ChannelState, HistogramState } from "../api/state.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
@@ -329,14 +330,13 @@ export component ImageControlPanel inherits Rectangle {
 
         // The channels scroll; Grayscale and the histogram below stay in
         // view.
-        if !root.folded: Flickable {
+        if !root.folded: ScrollView {
             vertical-stretch: 1;
             min-height: min(channels.preferred-height, 3 * 24px + 12px);
             // Objects open below: about five rows, the list takes the rest;
             // else every channel.
             preferred-height: LayoutState.objects-open && !LayoutState.objects-folded && !LayoutState.objects-as-table && !root.in-split
                 ? min(channels.preferred-height, 5 * 24px + 12px) : channels.preferred-height;
-            content-height: channels.preferred-height;
 
             channels := VerticalLayout {
                 padding-left: Ink.pad-panel;
