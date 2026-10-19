@@ -62,7 +62,7 @@ component ChannelRow inherits Rectangle {
             Text {
                 horizontal-stretch: 1;
                 text: root.name;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-weight: root.selected ? 600 : 400;
                 color: root.active ? Ink.text : Ink.text-mute;
                 vertical-alignment: center;
@@ -71,9 +71,9 @@ component ChannelRow inherits Rectangle {
             }
             Text {
                 text: "ch " + root.idx;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 font-family: Ink.font-mono;
-                color: Ink.text-faint;
+                color: Ink.text-mute;
                 vertical-alignment: center;
             }
             InkIconButton {
@@ -99,7 +99,7 @@ global HistogramText {
 
 // A value at its line, inside the box.
 component LineValue inherits Text {
-    font-size: Ink.fs-xs;
+    font-size: Ink.fs-caption;
     font-family: Ink.font-mono;
     color: Ink.text-dim;
 }
@@ -234,25 +234,12 @@ component Histogram inherits VerticalLayout {
     }
 }
 
-// "Label  [field]" in the panel's form layout.
-component FieldRow inherits Rectangle {
-    in property <string> label;
-    height: Ink.control-h;
-    Text {
-        x: 0px;
-        width: 64px;
-        text: root.label;
-        font-size: Ink.fs-sm;
-        color: Ink.text-dim;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-}
-
 export component ImageControlPanel inherits Rectangle {
     // In the results' split view (a drawer over the image): ✕ closes the
     // drawer, no pin.
     in property <bool> in-split: false;
+    property <bool> folded: LayoutState.image-folded && !root.in-split;
+    property <int> active-count: round(active-probe.preferred-width / 1px);
     property <string> channel-name: ChannelState.channels.length > ChannelState.selected_channel_index
         ? ChannelState.channels[ChannelState.selected_channel_index].name : "";
     property <float> hist-range: HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
@@ -312,29 +299,43 @@ export component ImageControlPanel inherits Rectangle {
 
         InkPanelHead {
             title: "Image";
+            count: ChannelState.channels.length > 0 ? ChannelState.channels.length + (ChannelState.channels.length == 1 ? " channel" : " channels") : "";
             subtitle: ImageMetaData.nr_series > 1 ? "Series \{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "";
-            pinnable: !root.in-split;
-            pinned: LayoutState.image-pinned;
-            // The series: in the top bar's image chip (always in view).
-            pin-toggled => {
-                LayoutState.image-pinned = !LayoutState.image-pinned;
+            // Over the image the title folds it; in the results' split
+            // view (a drawer) ✕ closes the drawer.
+            foldable: !root.in-split;
+            folded: root.folded;
+            summary: root.channel-name != "" ? root.channel-name + " · " + root.active-count + " on" : "";
+            closable: root.in-split;
+            fold-toggled => {
+                LayoutState.image-folded = !LayoutState.image-folded;
+                LayoutState.panels-changed();
             }
             close => {
-                if root.in-split {
-                    ResultsState.split-image-panel = false;
-                    ResultsState.split-image-panel-changed(false);
-                } else {
-                    LayoutState.image-open = false;
-                }
+                ResultsState.split-image-panel = false;
+                ResultsState.split-image-panel-changed(false);
             }
         }
 
-        // The channels scroll; the toggles and the histogram below stay in
+        // How many channels are on: a 1 px box each (Slint has no count).
+        active-probe := HorizontalLayout {
+            visible: false;
+            height: 0px;
+            spacing: 0px;
+            for ch in ChannelState.channels: Rectangle {
+                width: ch.active ? 1px : 0px;
+            }
+        }
+
+        // The channels scroll; Grayscale and the histogram below stay in
         // view.
-        Flickable {
+        if !root.folded: Flickable {
             vertical-stretch: 1;
             min-height: min(channels.preferred-height, 3 * 24px + 12px);
-            preferred-height: channels.preferred-height;
+            // Objects open below: about five rows, the list takes the rest;
+            // else every channel.
+            preferred-height: LayoutState.objects-open && !LayoutState.objects-folded && !LayoutState.objects-as-table && !root.in-split
+                ? min(channels.preferred-height, 5 * 24px + 12px) : channels.preferred-height;
             content-height: channels.preferred-height;
 
             channels := VerticalLayout {
@@ -362,44 +363,23 @@ export component ImageControlPanel inherits Rectangle {
             }
         }
 
-        InkDivider { }
+        if !root.folded: InkDivider { }
 
-        VerticalLayout {
+        if !root.folded: VerticalLayout {
             padding: Ink.pad-panel;
             padding-top: 8px;
             spacing: 8px;
 
+            // Show objects and their opacity: in the bar at the bottom of
+            // the image (with Z and T), so they are there with this panel
+            // folded too.
             HorizontalLayout {
-                spacing: 16px;
                 InkSwitch {
                     text: "Grayscale";
                     checked: ChannelState.grayscale;
                     toggled(on) => {
                         ChannelState.grayscale = on;
                         ChannelState.grayscale_toggled(on);
-                    }
-                }
-                InkSwitch {
-                    text: "Show objects";
-                    checked: ViewportObjectState.show_objects;
-                    toggled(on) => {
-                        ViewportObjectState.show_objects = on;
-                    }
-                }
-            }
-
-            FieldRow {
-                label: "Overlay";
-                InkNumberField {
-                    x: 72px;
-                    width: parent.width - 72px;
-                    label: "Overlay opacity in percent";
-                    value: round(ViewportObjectState.object_transparency * 100);
-                    step: 5;
-                    unit: "%";
-                    changed(text) => {
-                        ViewportObjectState.object_transparency = clamp(text.to-float(), 0, 100) / 100;
-                        ViewportObjectState.object_transparency_changed(ViewportObjectState.object_transparency);
                     }
                 }
             }
@@ -486,12 +466,12 @@ export component ImageControlPanel inherits Rectangle {
                 Row {
                     Text {
                         text: "Black / white";
-                        font-size: Ink.fs-xs;
+                        font-size: Ink.fs-caption;
                         color: Ink.text-mute;
                     }
                     Text {
                         text: "Axis min / max";
-                        font-size: Ink.fs-xs;
+                        font-size: Ink.fs-caption;
                         color: Ink.text-mute;
                     }
                 }

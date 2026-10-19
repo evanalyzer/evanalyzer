@@ -47,7 +47,7 @@ component Well inherits Rectangle {
             visible: root.well.image-count > 0 && root.height >= 20px;
             y: root.height >= 30px ? parent.height / 2 - self.height + 1px : (parent.height - self.height) / 2;
             text: root.well.image-count;
-            font-size: root.height >= 28px ? Ink.fs-sm : Ink.fs-xs;
+            font-size: root.height >= 28px ? Ink.fs-secondary : Ink.fs-caption;
             font-family: Ink.font-mono;
             color: root.selected ? Ink.focus : Ink.text-dim;
         }
@@ -86,7 +86,7 @@ component Legend inherits HorizontalLayout {
     }
     Text {
         text: root.text;
-        font-size: Ink.fs-xs;
+        font-size: Ink.fs-caption;
         color: Ink.text-mute;
         vertical-alignment: center;
     }
@@ -110,7 +110,7 @@ component SectionTile inherits Rectangle {
 
     Text {
         text: root.text;
-        font-size: Ink.fs-xs;
+        font-size: Ink.fs-caption;
         font-family: Ink.font-mono;
         color: root.selected ? Ink.focus : Ink.text-dim;
     }
@@ -187,7 +187,7 @@ export component PlateView inherits Rectangle {
                 width: root.cell;
                 height: root.label-w;
                 text: root.c0 + c + 1;
-                font-size: Ink.fs-xs;
+                font-size: Ink.fs-caption;
                 font-family: Ink.font-mono;
                 color: Ink.text-mute;
                 horizontal-alignment: center;
@@ -199,7 +199,7 @@ export component PlateView inherits Rectangle {
                 width: root.label-w;
                 height: root.cell-h;
                 text: root.row-name(root.r0 + r);
-                font-size: Ink.fs-xs;
+                font-size: Ink.fs-caption;
                 font-family: Ink.font-mono;
                 color: Ink.text-mute;
                 vertical-alignment: center;

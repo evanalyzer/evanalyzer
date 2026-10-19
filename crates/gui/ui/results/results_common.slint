@@ -18,7 +18,7 @@ component PlaneAxis inherits HorizontalLayout {
 
     Text {
         text: root.axis-label;
-        font-size: 10.5px;
+        font-size: Ink.fs-caption;
         font-family: Ink.font-mono;
         color: Ink.text-mute;
         vertical-alignment: center;
@@ -38,7 +38,7 @@ component PlaneAxis inherits HorizontalLayout {
                 color: Ink.text-dim;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
             }
         }
     }
@@ -57,14 +57,14 @@ component PlaneAxis inherits HorizontalLayout {
                 color: Ink.text-dim;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
             }
         }
     }
 
     Text {
         text: (root.value + 1) + "/" + (root.max + 1);
-        font-size: 10.5px;
+        font-size: Ink.fs-caption;
         font-family: Ink.font-mono;
         color: Ink.text;
         vertical-alignment: center;
@@ -140,7 +140,7 @@ export component LegendBar inherits VerticalLayout {
 
     Text {
         text: root.value-label;
-        font-size: 10.5px;
+        font-size: Ink.fs-caption;
         color: Ink.text-mute;
         letter-spacing: 0.3px;
     }
@@ -178,7 +178,7 @@ export component LegendBar inherits VerticalLayout {
     HorizontalLayout {
         Text {
             text: Math.round(root.min-value);
-            font-size: 10px;
+            font-size: Ink.fs-caption;
             font-family: Ink.font-mono;
             color: Ink.text-mute;
         }
@@ -189,7 +189,7 @@ export component LegendBar inherits VerticalLayout {
 
         Text {
             text: Math.round(root.max-value);
-            font-size: 10px;
+            font-size: Ink.fs-caption;
             font-family: Ink.font-mono;
             color: Ink.text-mute;
         }
@@ -197,9 +197,9 @@ export component LegendBar inherits VerticalLayout {
 
     if root.is-manual: Text {
         text: "Manual";
-        font-size: 9px;
+        font-size: Ink.fs-caption;
         letter-spacing: 0.4px;
-        color: Ink.text-faint;
+        color: Ink.text-mute;
         horizontal-alignment: center;
     }
 
@@ -242,7 +242,7 @@ export component LegendBar inherits VerticalLayout {
                             background: manual-tab-selected ? Ink.raised : Ink.focus;
                             Text {
                                 text: "Auto";
-                                font-size: 11px;
+                                font-size: Ink.fs-secondary;
                                 font-weight: 600;
                                 color: manual-tab-selected ? Ink.text : Ink.text;
                                 horizontal-alignment: center;
@@ -260,7 +260,7 @@ export component LegendBar inherits VerticalLayout {
                             background: manual-tab-selected ? Ink.focus : Ink.raised;
                             Text {
                                 text: "Manual";
-                                font-size: 11px;
+                                font-size: Ink.fs-secondary;
                                 font-weight: 600;
                                 color: manual-tab-selected ? Ink.text : Ink.text;
                                 horizontal-alignment: center;
@@ -275,7 +275,7 @@ export component LegendBar inherits VerticalLayout {
 
                     Text {
                         text: "MIN";
-                        font-size: 9px;
+                        font-size: Ink.fs-caption;
                         letter-spacing: 0.4px;
                         color: Ink.text-mute;
                     }
@@ -298,7 +298,7 @@ export component LegendBar inherits VerticalLayout {
                             // imperatively from the bar's click handler.
                             text: "\{root.min-value}";
                             vertical-alignment: center;
-                            font-size: 11px;
+                            font-size: Ink.fs-secondary;
                             color: Ink.text;
                             single-line: true;
                         }
@@ -306,7 +306,7 @@ export component LegendBar inherits VerticalLayout {
 
                     Text {
                         text: "MAX";
-                        font-size: 9px;
+                        font-size: Ink.fs-caption;
                         letter-spacing: 0.4px;
                         color: Ink.text-mute;
                     }
@@ -323,7 +323,7 @@ export component LegendBar inherits VerticalLayout {
                             height: parent.height;
                             text: "\{root.max-value}";
                             vertical-alignment: center;
-                            font-size: 11px;
+                            font-size: Ink.fs-secondary;
                             color: Ink.text;
                             single-line: true;
                         }
@@ -383,7 +383,7 @@ export component FilterPill inherits Rectangle {
                 Text {
                     horizontal-stretch: 1;
                     text: root.value;
-                    font-size: Ink.fs-md;
+                    font-size: Ink.fs-body;
                     color: Ink.text;
                     vertical-alignment: center;
                     overflow: elide;

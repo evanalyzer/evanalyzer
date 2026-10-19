@@ -152,6 +152,10 @@ export struct PipelineCommand {
         // Position in the pipeline - what the step actions (remove, move,
         // change a parameter) refer to; the list is rebuilt after each change.
         id: int,
+        // Edited since the running analysis started: for the next run.
+        changed-since-run: bool,
+        // A setting of it is pinned into the Tuning dock (its row's ⌖).
+        pinned: bool,
         // The step's stable id - for what must stay with the step when steps
         // above it are inserted or removed (breakpoint, expanded state).
         step-id: string,
@@ -381,6 +385,13 @@ export global PipelinesPanelState {
         /// The opened component is only being looked at ("View"): nothing can be
         /// changed.
         in property <bool> open-component-read-only: false;
+        // An analysis runs with the steps locked (the Steps panel's strip
+        // switches it; it starts as "edit during an analysis" says).
+        in-out property <bool> run-locked: false;
+        // Steps edited since the running analysis started.
+        in property <int> run-changes: 0;
+        // Nothing to edit: a component only viewed, or the run's lock.
+        out property <bool> steps-read-only: self.open-component-read-only || self.run-locked;
         callback view-component(int);
         /// "Edit" in the bar of a component opened with "View".
         callback edit-open-component();
@@ -413,6 +424,10 @@ export global PipelinesPanelState {
     // Pins all settings of the step at this index (its name's ⌖); again:
     // unpins them.
     callback toggle-pin-step(int);
+    // The Tuning dock's "Find a setting": only the pinned settings (or
+    // steps) whose name has it.
+    in-out property <string> tuning-query;
+    callback tuning-query-changed(string);
         callback add-group-item(int, string);    // step-id, param-name
         // Expands/collapses a step's advanced settings (step-id).
         callback toggle-advanced(int);

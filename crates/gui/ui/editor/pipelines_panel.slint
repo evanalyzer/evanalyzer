@@ -1,5 +1,6 @@
 import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState, Places } from "../api/layout.slint";
+import { PipelineRunningState } from "../api/pipeline_running.slint";
 // pipelines_panel.slint
 // EVAnalyzer - Pipelines panel.
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
@@ -21,7 +22,7 @@ import { InkPickerField, InkPickerRow, InkSwatchName, InkDialogPlacement, InkDiv
 
 import { FocusModeButton } from "pipeline_focus.slint";
 import { CommandPaletteState } from "../api/command_palette.slint";
-import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSectionHead, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog, InkDivider, InkSearchField, InkTab } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSectionHead, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog, InkDivider, InkSearchField, InkTab, InkTipSide, InkTipZone, InkInfoButton } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -168,7 +169,7 @@ component PipelineTab inherits Rectangle {
                     spacing: 5px;
                     Text {
                         text: root.pipeline.name;
-                        font-size: Ink.fs-md;
+                        font-size: Ink.fs-body;
                         font-weight: root.active ? 600 : 500;
                         color: root.pipeline.enabled ? Ink.text : Ink.text-mute;
                         overflow: elide;
@@ -191,7 +192,7 @@ component PipelineTab inherits Rectangle {
                 }
                 Text {
                     text: root.pipeline.image-source + " · " + root.pipeline.total-step-count + " steps · " + root.pipeline.enabled-step-count + " on";
-                    font-size: Ink.fs-xs;
+                    font-size: Ink.fs-caption;
                     font-family: Ink.font-mono;
                     color: Ink.text-mute;
                     overflow: elide;
@@ -453,7 +454,7 @@ export component MultiClassDropdown inherits Rectangle {
                     // Placeholder when nothing is selected
                 if root.value == "": Text {
                         text: "None selected";
-                        font-size: 11px;
+                        font-size: Ink.fs-secondary;
                         color: Ink.text-mute;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -512,7 +513,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                             if i == 0: Text {
                                                 text: "BG";
-                                                font-size: 9px;
+                                                font-size: Ink.fs-caption;
                                                 font-family: Ink.font-mono;
                                                 color: Ink.text;
                                                 vertical-alignment: center;
@@ -520,7 +521,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                             if i != 0 && !parent.has-custom-name: Text {
                                                 text: ClassHelper.zeropad2(i);
-                                                font-size: 9px;
+                                                font-size: Ink.fs-caption;
                                                 color: Ink.text;
                                                 vertical-alignment: center;
                                             }
@@ -557,7 +558,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                                 Text {
                                                     text: cls.name;
-                                                    font-size: 9px;
+                                                    font-size: Ink.fs-caption;
                                                     color: Ink.text;
                                                     vertical-alignment: center;
                                                     overflow: elide;
@@ -598,7 +599,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                             Text {
                                                 text: cls.name != "" ? cls.name : "L\{cls.id}";
-                                                font-size: 9px;
+                                                font-size: Ink.fs-caption;
                                                 color: Ink.text;
                                                 vertical-alignment: center;
                                                 overflow: elide;
@@ -613,7 +614,7 @@ export component MultiClassDropdown inherits Rectangle {
                             x: chip-area.shown * 46px;
                             height: 18px;
                             text: "+\{chip-area.selected - chip-area.shown}";
-                            font-size: 9px;
+                            font-size: Ink.fs-caption;
                             color: Ink.text-dim;
                             vertical-alignment: center;
                         }
@@ -681,7 +682,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                         Text {
                                             text: "Background";
-                                            font-size: 11px;
+                                            font-size: Ink.fs-secondary;
                                             color: Ink.text;
                                             vertical-alignment: center;
                                         }
@@ -720,7 +721,7 @@ export component MultiClassDropdown inherits Rectangle {
                                         Text {
                                             width: 96px;
                                             text: "◆ L\{cls.id}";
-                                            font-size: 11px;
+                                            font-size: Ink.fs-secondary;
                                             color: Ink.cat-component;
                                             vertical-alignment: center;
                                         }
@@ -737,7 +738,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                         Text {
                                             text: "(" + cls.name + ")";
-                                            font-size: 11px;
+                                            font-size: Ink.fs-secondary;
                                             color: Ink.text-dim;
                                             vertical-alignment: center;
                                             overflow: elide;
@@ -782,7 +783,7 @@ export component MultiClassDropdown inherits Rectangle {
                                         Text {
                                             width: 96px;
                                             text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
-                                            font-size: 11px;
+                                            font-size: Ink.fs-secondary;
                                             color: Ink.text;
                                             vertical-alignment: center;
                                         }
@@ -804,7 +805,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                                 Text {
                                                     text: "(" + cls.name + ")";
-                                                    font-size: 11px;
+                                                    font-size: Ink.fs-secondary;
                                                     color: Ink.text-dim;
                                                     vertical-alignment: center;
                                                     overflow: elide;
@@ -833,7 +834,7 @@ export component MultiClassDropdown inherits Rectangle {
                                 alignment: center;
                                 Text {
                                     text: "Done";
-                                    font-size: 11px;
+                                    font-size: Ink.fs-secondary;
                                     color: Ink.focus;
                                     font-weight: 500;
                                     vertical-alignment: center;
@@ -887,7 +888,7 @@ component ScalarControls inherits Rectangle {
                     height: parent.height - 8px;
                     text: p.value;
                     font-family: ScriptFont.family;
-                    font-size: 10px;
+                    font-size: Ink.fs-caption;
                     color: Ink.text-dim;
                     wrap: no-wrap;
                     overflow: clip;
@@ -903,7 +904,7 @@ component ScalarControls inherits Rectangle {
                     background: script-ta.has-hover ? Ink.focus : Ink.raised;
                     edit-label := Text {
                         text: "Edit script";
-                        font-size: 10px;
+                        font-size: Ink.fs-caption;
                         color: script-ta.has-hover ? #FFFFFF : Ink.text-dim;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -921,7 +922,7 @@ component ScalarControls inherits Rectangle {
             }
 
             if p.param-type == ParamType.text: InkTextField {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 label: p.display-name;
                 value: p.value;
                 edited(t) => {
@@ -932,7 +933,7 @@ component ScalarControls inherits Rectangle {
             // A number: drag sideways over it, Ctrl + wheel, or ↑↓ change it (no
             // range when min = max).
             if p.param-type == ParamType.number: InkNumberField {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 compact: true;
                 label: p.display-name;
                 value: p.value.to-float();
@@ -957,7 +958,7 @@ component ScalarControls inherits Rectangle {
 
                 spacing: 4px;
                 fp-input := InkTextField {
-                    enabled: !PipelinesPanelState.open-component-read-only;
+                    enabled: !PipelinesPanelState.steps-read-only;
                     label: p.display-name;
                     mono: true;
                     value: p.value;
@@ -970,7 +971,8 @@ component ScalarControls inherits Rectangle {
                     size: Ink.control-h;
                     icon: InkIcons.open;
                     label: "Browse…";
-                    enabled: !PipelinesPanelState.open-component-read-only;
+                    enabled: !PipelinesPanelState.steps-read-only;
+                    disabled-reason: "This component is read-only - open it to edit";
                     clicked => {
                         PipelinesPanelState.browse-token-counter += 1;
                         root.browse-token = PipelinesPanelState.browse-token-counter;
@@ -993,14 +995,14 @@ component ScalarControls inherits Rectangle {
 
             if p.param-type == ParamType.label: Text {
                 text: p.value;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 font-family: Ink.font-mono;
                 color: Ink.text-dim;
                 vertical-alignment: center;
             }
 
             if p.param-type == ParamType.spinner: InkNumberField {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 compact: root.compact;
                 label: p.display-name;
                 value: p.value.to-float();
@@ -1013,7 +1015,7 @@ component ScalarControls inherits Rectangle {
             }
 
             if p.param-type == ParamType.dropdown: InkSelect {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 label: p.display-name;
                 model: p.options;
                 value: p.value;
@@ -1025,7 +1027,7 @@ component ScalarControls inherits Rectangle {
             // A value in a range: a spinner - a dedicated value is easier to
             // set than with a slider.
             if p.param-type == ParamType.slider: InkNumberField {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 compact: root.compact;
                 label: p.display-name;
                 value: p.value.to-float();
@@ -1039,7 +1041,7 @@ component ScalarControls inherits Rectangle {
 
             if p.param-type == ParamType.toggle: HorizontalLayout {
                 InkCheckbox {
-                    enabled: !PipelinesPanelState.open-component-read-only;
+                    enabled: !PipelinesPanelState.steps-read-only;
                     checked: p.value == "true";
                     toggled(on) => {
                         root.changed(on ? "true" : "false");
@@ -1090,7 +1092,7 @@ component ScalarControls inherits Rectangle {
             }
 
             if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units: InkSelect {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 label: p.display-name;
                 model: p.options;
                 value: p.value;
@@ -1101,7 +1103,7 @@ component ScalarControls inherits Rectangle {
 
             if p.param-type == ParamType.image-address:
         ImageAddressPicker {
-                enabled: !PipelinesPanelState.open-component-read-only;
+                enabled: !PipelinesPanelState.steps-read-only;
                 kind: p.options[0];
                 number: p.options[1].to-float();
                 in-component: PipelinesPanelState.open-component-name != "";
@@ -1113,7 +1115,7 @@ component ScalarControls inherits Rectangle {
             if p.param-type == ParamType.image-channel:
         ChannelPicker {
                 height: 24px;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 compact: root.compact;
                 value: p.value.to-float();
                 changed(v) => {
@@ -1125,7 +1127,7 @@ component ScalarControls inherits Rectangle {
 
         // "View": the settings can be read, not changed - the names and
         // their "?" around the controls still work.
-        if PipelinesPanelState.open-component-read-only: TouchArea { }
+        if PipelinesPanelState.steps-read-only: TouchArea { }
     }
 
 
@@ -1160,7 +1162,7 @@ component LeafParamRow inherits HorizontalLayout {
                 accessible-label: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
                 Text {
                     text: root.p.exposed ? "◆" : "◇";
-                    font-size: 9px;
+                    font-size: Ink.fs-caption;
                     color: root.p.exposed ? Ink.cat-component : Ink.text-mute;
                 }
                 leaf-expose-ta := TouchArea {
@@ -1168,6 +1170,12 @@ component LeafParamRow inherits HorizontalLayout {
                     clicked => {
                         root.toggle-exposed();
                     }
+                }
+                InkTipZone {
+                    width: 100%;
+                    height: 100%;
+                    wanted: leaf-expose-ta.has-hover && !leaf-expose-ta.pressed;
+                    text: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
                 }
             }
             if root.in-component && root.p.exposed: Rectangle {
@@ -1189,57 +1197,23 @@ component LeafParamRow inherits HorizontalLayout {
                         root.edit-exposed();
                     }
                 }
+                InkTipZone {
+                    width: 100%;
+                    height: 100%;
+                    wanted: leaf-edit-ta.has-hover && !leaf-edit-ta.pressed;
+                    text: "Edit \{root.p.display-name}";
+                }
             }
             Text {
                 text: root.p.display-name == "" ? root.p.name : root.p.display-name;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: root.p.exposed ? Ink.cat-component : Ink.text-dim;
                 vertical-alignment: center;
                 overflow: elide;
             }
-            if root.p.description != "": leaf-help := Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 14px;
-                height: 14px;
-                border-radius: 7px;
-                background: leaf-help-ta.has-hover ? Ink.focus-ring : Ink.raised;
-                accessible-role: button;
-                accessible-label: "About \{root.p.display-name}";
-                Text {
-                    text: "?";
-                    font-size: 8px;
-                    font-weight: 600;
-                    color: Ink.text-dim;
-                }
-                leaf-help-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        leaf-help-popup.show();
-                    }
-                }
-                leaf-help-popup := PopupWindow {
-                    x: 0px;
-                    y: parent.height + 4px;
-                    width: 240px;
-                    Rectangle {
-                        background: Ink.panel;
-                        border-width: 1px;
-                        border-color: Ink.border;
-                        border-radius: Ink.radius-md;
-                        drop-shadow-blur: 16px;
-                        drop-shadow-offset-y: 4px;
-                        drop-shadow-color: Ink.shadow;
-                        VerticalLayout {
-                            padding: 10px;
-                            Text {
-                                text: root.p.description;
-                                font-size: Ink.fs-sm;
-                                color: Ink.text;
-                                wrap: word-wrap;
-                            }
-                        }
-                    }
-                }
+            if root.p.description != "": InkInfoButton {
+                title: root.p.display-name == "" ? root.p.name : root.p.display-name;
+                text: root.p.description;
             }
         }
 
@@ -1287,6 +1261,12 @@ component LeafParamRow inherits HorizontalLayout {
                     root.toggle-pin();
                 }
             }
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: leaf-pin-ta.has-hover && !leaf-pin-ta.pressed;
+                text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+            }
         }
     }
 
@@ -1300,7 +1280,7 @@ component SectionHeader inherits VerticalLayout {
         spacing: 3px;
         Text {
             text: root.text;
-            font-size: 10px;
+            font-size: Ink.fs-caption;
             font-weight: 700;
             letter-spacing: 0.5px;
             color: Ink.text-dim;
@@ -1332,7 +1312,7 @@ component ParamLabel inherits HorizontalLayout {
             background: expose-ta.has-hover ? Ink.raised : transparent;
             Text {
                 text: p.exposed ? "◆" : "◇";
-                font-size: 10px;
+                font-size: Ink.fs-caption;
                 color: p.exposed ? Ink.cat-component : Ink.text-mute;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -1367,61 +1347,48 @@ component ParamLabel inherits HorizontalLayout {
         }
         Text {
             text: p.display-name == "" ? p.name : p.display-name;
-            font-size: root.wide ? 12px : 11px;
+            font-size: root.wide ? Ink.fs-body : Ink.fs-secondary;
             font-weight: root.wide ? 600 : 400;
             color: p.exposed ? Ink.cat-component : (root.wide ? Ink.text : Ink.text-dim);
             vertical-alignment: center;
             overflow: elide;
         }
 
-        if root.wide ? p.more-help : p.description != "": help-btn := Rectangle {
-            width: 14px;
-            height: 14px;
-            border-radius: 7px;
-            background: help-ta.has-hover || root.help-open ? Ink.focus.with-alpha(0.3) : Ink.border-soft;
-            animate background { duration: 100ms; }
-            Text {
-                text: "?";
-                font-size: 8px;
-                color: Ink.text-dim;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+        // Wide (a section): its longer help unfolds in place; else the card.
+        if root.wide && p.more-help: Rectangle {
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 8px;
+            background: help-ta.has-hover || root.help-open ? Ink.info-tint : transparent;
+            accessible-role: button;
+            accessible-label: "About " + (p.display-name == "" ? p.name : p.display-name);
+            accessible-expanded: root.help-open;
+            accessible-action-default => {
+                root.help-open = !root.help-open;
             }
-
+            Image {
+                source: InkIcons.info;
+                width: 14px;
+                height: 14px;
+                colorize: help-ta.has-hover || root.help-open ? Ink.focus : Ink.text-mute;
+            }
             help-ta := TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
-                    if root.wide {
-                        root.help-open = !root.help-open;
-                    } else {
-                        help-popup.show();
-                    }
+                    root.help-open = !root.help-open;
                 }
             }
-
-            help-popup := PopupWindow {
-                x: 0px;
-                y: parent.height + 3px;
-                width: 240px;
-                Rectangle {
-                    background: Ink.panel;
-                    border-width: 1px;
-                    border-color: Ink.border;
-                    border-radius: 6px;
-                    drop-shadow-blur: 10px;
-                    drop-shadow-color: #000000.with-alpha(0.35);
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 0px;
-                        Text {
-                            text: p.description;
-                            font-size: 11px;
-                            color: Ink.text;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: help-ta.has-hover && !help-ta.pressed;
+                text: root.help-open ? "Hide the help" : "About " + (p.display-name == "" ? p.name : p.display-name);
             }
+        }
+        if !root.wide && p.description != "": InkInfoButton {
+            title: p.display-name == "" ? p.name : p.display-name;
+            text: p.description;
         }
     }
 
@@ -1517,7 +1484,7 @@ component ParamControls inherits Rectangle {
         }
 
         // "View": the settings can be read, not changed.
-        if PipelinesPanelState.open-component-read-only: TouchArea { }
+        if PipelinesPanelState.steps-read-only: TouchArea { }
     }
 
 // Below a setting: what it's wired to, and what a check found about it.
@@ -1526,14 +1493,14 @@ component ParamNotes inherits VerticalLayout {
         spacing: 2px;
         if p.wiring != "": Text {
             text: p.wiring;
-            font-size: 9.5px;
+            font-size: Ink.fs-caption;
             color: Ink.cat-component.with-alpha(0.85);
             wrap: word-wrap;
             height: self.preferred-height;
         }
         if p.problem != "": Text {
             text: "⚠ \{p.problem}";
-            font-size: 10px;
+            font-size: Ink.fs-caption;
             color: p.problem-error ? Ink.err : Ink.warn;
             wrap: word-wrap;
             height: self.preferred-height;
@@ -1563,14 +1530,14 @@ component ProblemRow inherits HorizontalLayout {
             spacing: 1px;
             if root.show-where && item.where != "": Text {
                 text: item.where;
-                font-size: 9.5px;
+                font-size: Ink.fs-caption;
                 font-weight: 600;
                 color: Ink.text-mute;
                 overflow: elide;
             }
             problem-text := Text {
                 text: item.text;
-                font-size: 10.5px;
+                font-size: Ink.fs-caption;
                 color: problem-ta.has-hover && root.show-where ? Ink.text : Ink.text-dim;
                 wrap: word-wrap;
                 height: self.preferred-height;
@@ -1598,7 +1565,7 @@ component ProblemRow inherits HorizontalLayout {
                 accessible-label: item.fix-label;
                 fix-text := Text {
                     text: item.fix-label;
-                    font-size: 10px;
+                    font-size: Ink.fs-caption;
                     color: Ink.text;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -1805,6 +1772,12 @@ component InlineParamRow inherits VerticalLayout {
                         root.toggle-pin();
                     }
                 }
+                InkTipZone {
+                    width: 100%;
+                    height: 100%;
+                    wanted: pin-ta.has-hover && !pin-ta.pressed;
+                    text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+                }
             }
         }
 
@@ -1845,7 +1818,7 @@ component SectionHead inherits Rectangle {
 
             Text {
                 text: root.section.name;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 font-weight: 600;
                 color: Ink.text;
                 vertical-alignment: center;
@@ -1853,7 +1826,7 @@ component SectionHead inherits Rectangle {
 
             if root.section.problem > 0: Text {
                 text: "⚠";
-                font-size: 10px;
+                font-size: Ink.fs-caption;
                 color: root.section.problem == 2 ? Ink.err : Ink.warn;
                 vertical-alignment: center;
             }
@@ -1861,7 +1834,7 @@ component SectionHead inherits Rectangle {
             Text {
                 horizontal-stretch: 1;
                 text: root.section.open ? "" : root.section.summary;
-                font-size: 10.5px;
+                font-size: Ink.fs-caption;
                 color: Ink.text-dim;
                 overflow: elide;
                 vertical-alignment: center;
@@ -1891,7 +1864,7 @@ component CardTableView inherits VerticalLayout {
                 preferred-width: 1px;
                 min-width: 0px;
                 text: column;
-                font-size: Ink.fs-xs;
+                font-size: Ink.fs-caption;
                 font-weight: 600;
                 color: Ink.text-mute;
                 overflow: elide;
@@ -1908,7 +1881,7 @@ component CardTableView inherits VerticalLayout {
             Text {
                 width: 64px;
                 text: row.name;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 font-weight: 600;
                 color: row.problem == 2 ? Ink.err : row.problem == 1 ? Ink.warn : Ink.text;
                 overflow: elide;
@@ -1959,12 +1932,18 @@ component CardTableView inherits VerticalLayout {
                         root.toggle-pin-row(row.name);
                     }
                 }
+                InkTipZone {
+                    width: 100%;
+                    height: 100%;
+                    wanted: row-pin-ta.has-hover && !row-pin-ta.pressed;
+                    text: row-pin.pinned ? "Unpin \{row.name}" : "Pin \{row.name} to the Tuning panel";
+                }
             }
         }
 
         for problem in root.table.problems: Text {
             text: "⚠ \{problem}";
-            font-size: 10px;
+            font-size: Ink.fs-caption;
             color: root.table.problem-error ? Ink.err : Ink.warn;
             wrap: word-wrap;
             height: self.preferred-height;
@@ -1991,7 +1970,7 @@ component StepRow inherits Rectangle {
 
         // Collapsed: a line. Expanded: a card around the settings.
         property <bool> hovered: head-ta.has-hover;
-        property <bool> editable: !PipelinesPanelState.open-component-read-only;
+        property <bool> editable: !PipelinesPanelState.steps-read-only;
         // 0 = off, 1 = stop, 2 = snapshot - for this step.
         property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
 
@@ -2064,7 +2043,7 @@ component StepRow inherits Rectangle {
                                 height: 100%;
                                 text: root.step.step-id;
                                 color: root.bp-state != 0 ? #FFFFFF : gutter-ta.has-hover ? Ink.err : Ink.text-faint;
-                                font-size: Ink.fs-sm;
+                                font-size: Ink.fs-secondary;
                                 font-family: Ink.font-mono;
                                 font-weight: root.bp-state != 0 ? 600 : 400;
                                 horizontal-alignment: center;
@@ -2077,6 +2056,12 @@ component StepRow inherits Rectangle {
                             clicked => {
                                 root.toggle-breakpoint();
                             }
+                        }
+                        InkTipZone {
+                            width: 100%;
+                            height: 100%;
+                            wanted: gutter-ta.has-hover && !gutter-ta.pressed;
+                            text: "Breakpoint at step \{root.step.step-id}";
                         }
                     }
 
@@ -2100,60 +2085,27 @@ component StepRow inherits Rectangle {
                         spacing: 6px;
                         padding-right: 6px;
 
-                        Text {
+                        step-name := Text {
                             text: step.name;
-                            color: Ink.text;
-                            font-size: Ink.fs-lg;
+                            // Locked while an analysis runs: grey.
+                            color: PipelinesPanelState.run-locked ? Ink.text-dim : Ink.text;
+                            font-size: Ink.fs-body;
                             font-weight: 500;
                             vertical-alignment: center;
                             overflow: elide;
+                            // Cut off: the whole name in a tip.
+                            InkTipZone {
+                                width: 100%;
+                                height: 100%;
+                                wanted: head-ta.has-hover && step-name.preferred-width > step-name.width + 0.5px;
+                                text: step.name;
+                                side: InkTipSide.right;
+                            }
                         }
 
-                        if step.help != "": Rectangle {
-                            y: (parent.height - self.height) / 2;
-                            width: 15px;
-                            height: 15px;
-                            border-radius: 7.5px;
-                            background: step-help-ta.has-hover ? Ink.focus-ring : Ink.raised;
-                            accessible-role: button;
-                            accessible-label: "About \{step.name}";
-                            Text {
-                                text: "?";
-                                font-size: 9px;
-                                font-weight: 600;
-                                color: Ink.text-dim;
-                            }
-
-                            step-help-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    step-help-popup.show();
-                                }
-                            }
-
-                            step-help-popup := PopupWindow {
-                                x: 0px;
-                                y: parent.height + 4px;
-                                width: 300px;
-                                Rectangle {
-                                    background: Ink.panel;
-                                    border-width: 1px;
-                                    border-color: Ink.border;
-                                    border-radius: Ink.radius-md;
-                                    drop-shadow-blur: 16px;
-                                    drop-shadow-offset-y: 4px;
-                                    drop-shadow-color: Ink.shadow;
-                                    VerticalLayout {
-                                        padding: 10px;
-                                        Text {
-                                            text: step.help;
-                                            font-size: Ink.fs-sm;
-                                            color: Ink.text;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-                                }
-                            }
+                        if step.help != "": InkInfoButton {
+                            title: step.name;
+                            text: step.help;
                         }
 
                         if step.problems.length > 0: Rectangle {
@@ -2166,9 +2118,23 @@ component StepRow inherits Rectangle {
                             accessible-label: "\{step.problems.length} problems";
                             badge-text := Text {
                                 text: "⚠ \{step.problems.length}";
-                                font-size: Ink.fs-xs;
+                                font-size: Ink.fs-caption;
                                 font-weight: 600;
                                 color: step.problem-errors > 0 ? Ink.err : Ink.warn;
+                            }
+                        }
+
+                        // Edited since the running analysis started: for
+                        // the next run.
+                        if step.changed-since-run: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 7px;
+                                height: 7px;
+                                border-radius: 3.5px;
+                                background: Ink.warn;
+                                accessible-role: text;
+                                accessible-label: "Changed since the run started";
                             }
                         }
 
@@ -2177,7 +2143,7 @@ component StepRow inherits Rectangle {
                             horizontal-stretch: 1;
                             text: step.summary;
                             color: Ink.text-mute;
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             font-family: Ink.font-mono;
                             vertical-alignment: center;
                             overflow: elide;
@@ -2196,20 +2162,9 @@ component StepRow inherits Rectangle {
                             icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
                             label: step.enabled ? "Switch the step off" : "Switch the step on";
                             enabled: root.editable;
+                            disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This component is only viewed";
                             clicked => {
                                 root.toggle-enabled();
-                            }
-                        }
-
-                        // Pins all its settings into the Tuning panel.
-                        InkIconButton {
-                            y: (parent.height - self.height) / 2;
-                            visible: (root.hovered || step.expanded) && (step.parameters.length > 0 || step.advanced-count > 0);
-                            size: 22px;
-                            icon: InkIcons.pin;
-                            label: "Pin all its settings";
-                            clicked => {
-                                PipelinesPanelState.toggle-pin-step(root.idx);
                             }
                         }
 
@@ -2233,6 +2188,26 @@ component StepRow inherits Rectangle {
                             label: "Step actions";
                             clicked => {
                                 step-menu.show();
+                            }
+                        }
+
+                        // ⌖ at the row's end: its settings into the Tuning
+                        // dock (again: out) - highlighted while pinned.
+                        if step.parameters.length > 0 || step.advanced-count > 0: Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            width: 22px;
+                            height: 22px;
+                            border-radius: Ink.radius-md;
+                            background: step.pinned ? Ink.info-tint : transparent;
+                            InkIconButton {
+                                size: 22px;
+                                icon: InkIcons.tune;
+                                tint: step.pinned ? Ink.focus : Ink.text-faint;
+                                label: step.pinned ? "Unpin from Tuning" : "Pin its settings to Tuning";
+                                active: false;
+                                clicked => {
+                                    PipelinesPanelState.toggle-pin-step(root.idx);
+                                }
                             }
                         }
                     }
@@ -2598,6 +2573,12 @@ component InsertPoint inherits Rectangle {
             root.insert();
         }
     }
+    InkTipZone {
+        width: 100%;
+        height: 100%;
+        wanted: ta.has-hover && !ta.pressed;
+        text: "Insert a step here";
+    }
 }
 
 // ----------------------------------------------------------
@@ -2618,6 +2599,7 @@ export component PipelinesPanel inherits Rectangle {
     function toggle-list() {
         if root.has-pipeline {
             LayoutState.pipelines-list-open = !LayoutState.pipelines-list-open;
+            LayoutState.panels-changed();
         } else {
             PipelinesPanelState.new-pipeline();
         }
@@ -2655,7 +2637,7 @@ export component PipelinesPanel inherits Rectangle {
                             spacing: 6px;
                             Text {
                                 text: root.pipeline-selected ? "Steps · " + PipelinesPanelState.active-pipeline-name : "Pipelines";
-                                font-size: Ink.fs-lg;
+                                font-size: Ink.fs-dialog-title;
                                 font-weight: 600;
                                 color: Ink.text;
                                 vertical-alignment: center;
@@ -2669,7 +2651,7 @@ export component PipelinesPanel inherits Rectangle {
                             Text {
                                 horizontal-stretch: 1;
                                 text: PipelinesPanelState.active-pipeline-image-source;
-                                font-size: Ink.fs-sm;
+                                font-size: Ink.fs-secondary;
                                 font-family: Ink.font-mono;
                                 color: Ink.text-mute;
                                 vertical-alignment: center;
@@ -2683,6 +2665,12 @@ export component PipelinesPanel inherits Rectangle {
                         clicked => {
                             root.toggle-list();
                         }
+                    }
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: switch-ta.has-hover && !switch-ta.pressed;
+                        text: LayoutState.pipelines-list-open ? "Hide the pipelines" : "Show the pipelines";
                     }
                 }
 
@@ -2721,6 +2709,7 @@ export component PipelinesPanel inherits Rectangle {
                         icon: InkIcons.more;
                         label: "Pipeline actions";
                         enabled: root.pipeline-selected;
+                        disabled-reason: "Pick a pipeline first";
                         clicked => {
                             pipeline-menu.show();
                         }
@@ -2814,6 +2803,46 @@ export component PipelinesPanel inherits Rectangle {
         }
         if root.list-shown: InkDivider { }
 
+        // -- An analysis runs: the steps locked or not (it runs a copy) --
+        if PipelineRunningState.active && !PipelineRunningState.done: Rectangle {
+            vertical-stretch: 0;
+            height: lock-row.preferred-height;
+            background: PipelinesPanelState.run-locked ? Ink.info-tint : Ink.warn-tint;
+            lock-row := HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 8px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 8px;
+                Image {
+                    width: 14px;
+                    source: PipelinesPanelState.run-locked ? InkIcons.lock : InkIcons.unlock;
+                    colorize: PipelinesPanelState.run-locked ? Ink.focus : Ink.warn;
+                    image-fit: contain;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs."
+                        : "The run uses a snapshot. Edits apply to the next run.";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkButton {
+                        small: true;
+                        text: PipelinesPanelState.run-locked ? "Unlock" : "Lock";
+                        tip: PipelinesPanelState.run-locked ? "Edit the steps while it runs - for the next run" : "Lock the steps until the run ends";
+                        clicked => {
+                            PipelinesPanelState.run-locked = !PipelinesPanelState.run-locked;
+                        }
+                    }
+                }
+            }
+        }
+
         // -- The project's problems --
         if PipelinesPanelState.project-problems.length > 0: Rectangle {
             // As high as its content - a Rectangle would stretch and take
@@ -2842,7 +2871,7 @@ export component PipelinesPanel inherits Rectangle {
                         text: PipelinesPanelState.project-problem-errors > 0
                             ? "\{PipelinesPanelState.project-problems.length} problems - \{PipelinesPanelState.project-problem-errors} make a run fail"
                             : "\{PipelinesPanelState.project-problems.length} things that look unintended";
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         font-weight: 600;
                         color: PipelinesPanelState.project-problem-errors > 0 ? Ink.err : Ink.warn;
                         overflow: elide;
@@ -2909,26 +2938,26 @@ export component PipelinesPanel inherits Rectangle {
                         spacing: 2px;
                         Text {
                             text: "\{PipelinesPanelState.active-pipeline-name} › ◆ \{PipelinesPanelState.open-component-name}";
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                             font-weight: 600;
                             color: Ink.text;
                             wrap: word-wrap;
                         }
                         Text {
                             text: PipelinesPanelState.open-component-read-only ? "Viewing · read only" : "Changes apply to every use of this component · ◇ exposes a setting";
-                            font-size: Ink.fs-xs;
+                            font-size: Ink.fs-caption;
                             color: Ink.text-mute;
                             wrap: word-wrap;
                         }
                         if PipelinesPanelState.open-component-values != "": Text {
                             text: PipelinesPanelState.open-component-values;
-                            font-size: Ink.fs-xs;
+                            font-size: Ink.fs-caption;
                             color: Ink.text-dim;
                             wrap: word-wrap;
                         }
                         if PipelinesPanelState.open-component-problem != "": Text {
                             text: "⚠ \{PipelinesPanelState.open-component-problem}";
-                            font-size: Ink.fs-xs;
+                            font-size: Ink.fs-caption;
                             color: Ink.warn;
                             wrap: word-wrap;
                         }
@@ -3029,7 +3058,7 @@ export component PipelinesPanel inherits Rectangle {
                     spacing: 8px;
                     Text {
                         text: root.has-pipeline ? "This pipeline is empty" : "No pipelines yet";
-                        font-size: Ink.fs-lg;
+                        font-size: Ink.fs-dialog-title;
                         font-weight: 600;
                         color: Ink.text;
                         horizontal-alignment: center;
@@ -3052,7 +3081,7 @@ export component PipelinesPanel inherits Rectangle {
                     }
                 }
 
-                if PipelinesPanelState.active-commands.length > 0 && !PipelinesPanelState.open-component-read-only: InsertPoint {
+                if PipelinesPanelState.active-commands.length > 0 && !PipelinesPanelState.steps-read-only: InsertPoint {
                     insert => {
                         PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, -1);
                     }
@@ -3110,7 +3139,7 @@ export component PipelinesPanel inherits Rectangle {
                         }
                     }
 
-                    if i < PipelinesPanelState.active-commands.length - 1 && !PipelinesPanelState.open-component-read-only: InsertPoint {
+                    if i < PipelinesPanelState.active-commands.length - 1 && !PipelinesPanelState.steps-read-only: InsertPoint {
                         insert => {
                             PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, i);
                         }
@@ -3120,7 +3149,7 @@ export component PipelinesPanel inherits Rectangle {
                     }
                 }
 
-                if root.pipeline-selected && !PipelinesPanelState.open-component-read-only: add-step := Rectangle {
+                if root.pipeline-selected && !PipelinesPanelState.steps-read-only: add-step := Rectangle {
                     height: 30px;
                     accessible-role: button;
                     accessible-label: "Add step";
@@ -3143,7 +3172,7 @@ export component PipelinesPanel inherits Rectangle {
                             Text {
                                 text: "Add step";
                                 color: Ink.text-dim;
-                                font-size: Ink.fs-md;
+                                font-size: Ink.fs-body;
                                 font-weight: 500;
                                 vertical-alignment: center;
                             }
@@ -3174,7 +3203,7 @@ export component PipelinesPanel inherits Rectangle {
                 Text {
                     horizontal-stretch: 1;
                     text: "Breakpoint image";
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-dim;
                     vertical-alignment: center;
                 }
@@ -3196,15 +3225,22 @@ export component PipelinesPanel inherits Rectangle {
                     horizontal-stretch: 1;
                     text: PipelinesPanelState.enabled-pipeline-count + " of " + PipelinesPanelState.pipelines.length + " pipelines · " + PipelinesPanelState.total-enabled-steps + " steps";
                     color: Ink.text-mute;
-                    font-size: Ink.fs-xs;
+                    font-size: Ink.fs-caption;
                     font-family: Ink.font-mono;
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                Text {
+                if PipelinesPanelState.run-changes > 0: Text {
+                    text: PipelinesPanelState.run-changes + (PipelinesPanelState.run-changes == 1 ? " change" : " changes") + " for the next run";
+                    color: Ink.warn;
+                    font-size: Ink.fs-caption;
+                    font-family: Ink.font-mono;
+                    vertical-alignment: center;
+                }
+                if PipelinesPanelState.run-changes == 0: Text {
                     text: "~" + PipelinesPanelState.eta-seconds-per-image + " s/image";
                     color: Ink.text-mute;
-                    font-size: Ink.fs-xs;
+                    font-size: Ink.fs-caption;
                     font-family: Ink.font-mono;
                     vertical-alignment: center;
                 }
@@ -3474,132 +3510,213 @@ export component StepSettingsDialog inherits InkDialog {
 // The pinned settings of the shown pipeline, from all its steps, in one
 // place - to tune a pipeline without opening step after step. Each setting
 // is changed here just like on its card.
+// A filter chip of the Tuning dock.
+component TuneChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+    y: (Ink.head-h - self.height) / 2;
+    height: 26px;
+    preferred-width: chip-text.preferred-width + 20px;
+    border-radius: 13px;
+    background: root.active ? Ink.info-tint : chip-ta.has-hover ? Ink.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+    chip-text := Text {
+        text: root.text;
+        font-size: Ink.fs-secondary;
+        font-weight: root.active ? 600 : 400;
+        color: root.active ? Ink.focus : Ink.text-dim;
+    }
+    chip-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component TuningPanel inherits Rectangle {
     property <[TunedSetting]> tuned: PipelinesPanelState.tuned-settings;
-    // The tab: a step's index, -1 all pinned.
+    // The chip: a step's index, -1 all pinned.
     property <int> tab: -1;
     callback close;
 
-    preferred-height: layout.preferred-height;
-
-    layout := VerticalLayout {
+    VerticalLayout {
         spacing: 0px;
 
-        InkPanelHead {
-            title: "Tuning";
-            count: root.tuned.length;
-            subtitle: "pinned settings";
-            close => {
-                root.close();
-            }
-        }
-
-        // Tabs: all pinned, then a step each (design E).
-        HorizontalLayout {
-            height: 30px;
-            padding-left: Ink.pad-panel;
-            padding-right: Ink.pad-panel;
-            spacing: 14px;
-            InkTab {
-                text: "All pinned";
-                note: "· \{root.tuned.length}";
-                active: root.tab < 0;
-                clicked => {
-                    root.tab = -1;
+        // -- Head: Tuning, a chip per step, find a setting, ✕ --
+        Rectangle {
+            height: Ink.head-h;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 6px;
+                spacing: 4px;
+                Text {
+                    text: "Tuning";
+                    font-size: Ink.fs-dialog-title;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
                 }
-            }
-            for t[i] in root.tuned: InkTab {
-                visible: i == 0 || root.tuned[i - 1].step != t.step;
-                width: self.visible ? self.preferred-width : 0px;
-                text: t.step-name;
-                active: root.tab == t.step;
-                clicked => {
-                    root.tab = t.step;
+                Rectangle {
+                    width: 8px;
+                }
+                TuneChip {
+                    text: "All pinned · \{root.tuned.length}";
+                    active: root.tab < 0;
+                    clicked => {
+                        root.tab = -1;
+                    }
+                }
+                for t[i] in root.tuned: TuneChip {
+                    visible: i == 0 || root.tuned[i - 1].step != t.step;
+                    width: self.visible ? self.preferred-width : 0px;
+                    text: t.step-name;
+                    active: root.tab == t.step;
+                    clicked => {
+                        root.tab = t.step;
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkSearchField {
+                        width: 150px;
+                        height: Ink.control-h;
+                        placeholder: "Find a setting";
+                        text <=> PipelinesPanelState.tuning-query;
+                        edited(t) => {
+                            PipelinesPanelState.tuning-query-changed(t);
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkIconButton {
+                        size: 26px;
+                        icon: InkIcons.close;
+                        label: "Close Tuning";
+                        clicked => {
+                            root.close();
+                        }
+                    }
                 }
             }
             Rectangle {
-                horizontal-stretch: 1;
+                y: parent.height - 1px;
+                height: 1px;
+                background: Ink.border-soft;
             }
         }
-        InkDivider { }
 
+        if root.tuned.length == 0: InkHint {
+            x: 14px;
+            text: PipelinesPanelState.tuning-query != "" ? "No pinned setting is called that." : "Nothing pinned.";
+        }
+
+        // -- A column per step (330 px), side by side; more scroll --
         Flickable {
             vertical-stretch: 1;
-            preferred-height: min(rows.preferred-height, 360px);
-            content-height: rows.preferred-height;
+            content-width: cols.preferred-width;
+            content-height: max(self.height, cols.preferred-height);
 
-            rows := VerticalLayout {
-                padding: Ink.pad-panel;
-                padding-top: 8px;
-                spacing: 6px;
+            cols := HorizontalLayout {
                 alignment: start;
+                spacing: 0px;
+                for t[i] in root.tuned: Rectangle {
+                    property <bool> first: i == 0 || root.tuned[i - 1].step != t.step;
+                    visible: self.first && (root.tab < 0 || root.tab == t.step);
+                    width: self.visible ? 330px : 0px;
 
-                for t[i] in root.tuned: VerticalLayout {
-                    spacing: 4px;
-                    // Only the chosen step's on its tab.
-                    visible: root.tab < 0 || root.tab == t.step;
-                    height: self.visible ? self.preferred-height : 0px;
+                    col := VerticalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        spacing: 10px;
+                        alignment: start;
 
-                    // The step, above its first setting (on "All pinned").
-                    if root.tab < 0 && (i == 0 || root.tuned[i - 1].step != t.step): HorizontalLayout {
-                        spacing: 6px;
-                        padding-top: i == 0 ? 0px : 6px;
-                        Rectangle {
-                            width: 3px;
-                            Rectangle {
-                                width: 3px;
-                                height: 12px;
-                                border-radius: 1.5px;
-                                background: Cat.color(t.category);
+                        HorizontalLayout {
+                            spacing: 6px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 3px;
+                                    height: 14px;
+                                    border-radius: 1.5px;
+                                    background: Cat.color(t.category);
+                                }
+                            }
+                            Text {
+                                text: t.step-id;
+                                font-size: Ink.fs-secondary;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-mute;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: t.step-name;
+                                font-size: Ink.fs-body;
+                                font-weight: 600;
+                                color: Ink.text;
+                                vertical-alignment: center;
+                                overflow: elide;
                             }
                         }
-                        Text {
-                            text: t.step-id;
-                            font-size: Ink.fs-sm;
-                            font-family: Ink.font-mono;
-                            color: Ink.text-faint;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            horizontal-stretch: 1;
-                            text: t.step-name;
-                            font-size: Ink.fs-sm;
-                            font-weight: 600;
-                            color: Ink.text-dim;
-                            vertical-alignment: center;
-                            overflow: elide;
+
+                        // Its pinned settings.
+                        for u in root.tuned: HorizontalLayout {
+                            visible: u.step == t.step;
+                            height: self.visible ? self.preferred-height : 0px;
+                            spacing: 10px;
+                            Text {
+                                horizontal-stretch: 1;
+                                text: u.param.display-name;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            ParamControls {
+                                width: 150px;
+                                p: u.param;
+                                changed(v) => {
+                                    PipelinesPanelState.param-changed(u.step, u.param.name, v);
+                                }
+                            }
+                            InkIconButton {
+                                y: (parent.height - self.height) / 2;
+                                size: 20px;
+                                icon: InkIcons.unpin;
+                                label: "Unpin \{u.param.display-name}";
+                                clicked => {
+                                    PipelinesPanelState.toggle-pin(u.step, u.param.name);
+                                }
+                            }
                         }
                     }
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Text {
-                            width: 112px;
-                            text: t.param.display-name;
-                            font-size: Ink.fs-sm;
-                            color: Ink.text-dim;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        ParamControls {
-                            horizontal-stretch: 1;
-                            p: t.param;
-                            changed(v) => {
-                                PipelinesPanelState.param-changed(t.step, t.param.name, v);
-                            }
-                        }
-                        InkIconButton {
-                            y: (parent.height - self.height) / 2;
-                            size: 20px;
-                            icon: InkIcons.unpin;
-                            label: "Unpin \{t.param.display-name}";
-                            clicked => {
-                                PipelinesPanelState.toggle-pin(t.step, t.param.name);
-                            }
-                        }
+                    // The line between the columns.
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        background: Ink.border-soft;
                     }
                 }
             }
         }
+    }
+
+    // Locked while the analysis runs (the settings can't change).
+    if PipelinesPanelState.run-locked: TouchArea {
+        y: Ink.head-h;
+        height: parent.height - Ink.head-h;
     }
 }

@@ -46,7 +46,7 @@ component SectionToggle inherits Rectangle {
         }
         Text {
             text: root.title;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-weight: 600;
             color: Ink.text;
             vertical-alignment: center;
@@ -54,7 +54,7 @@ component SectionToggle inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.summary;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             vertical-alignment: center;
             overflow: elide;
@@ -206,7 +206,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                 spacing: 6px;
                                 Text {
                                     text: "No settings match “" + root.query + "”";
-                                    font-size: 13px;
+                                    font-size: Ink.fs-heading;
                                     font-weight: 600;
                                     color: Ink.text;
                                     horizontal-alignment: center;
@@ -214,7 +214,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
                                 Text {
                                     text: "Try another word, e.g. “plate”, “merge” or “memory”.";
-                                    font-size: 11px;
+                                    font-size: Ink.fs-secondary;
                                     color: Ink.text-dim;
                                     horizontal-alignment: center;
                                 }
@@ -328,7 +328,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                                 Text {
                                                     text: "Rows";
                                                     width: 56px;
-                                                    font-size: 11px;
+                                                    font-size: Ink.fs-secondary;
                                                     color: Ink.text-dim;
                                                     vertical-alignment: center;
                                                 }
@@ -349,7 +349,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                                 Text {
                                                     text: "Columns";
                                                     width: 56px;
-                                                    font-size: 11px;
+                                                    font-size: Ink.fs-secondary;
                                                     color: Ink.text-dim;
                                                     vertical-alignment: center;
                                                 }
@@ -390,7 +390,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                                         width: 100%;
                                                         height: 100%;
                                                         color: Ink.text;
-                                                        font-size: 11px;
+                                                        font-size: Ink.fs-secondary;
                                                         accepted => {
                                                             ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
                                                         }
@@ -623,7 +623,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                     if root.shows(3, root.kw-edit-during-analysis): InkSettingRow {
                                         control-width: 168px;
                                         label: "Edit while an analysis runs";
-                                        description: "Pipelines can be edited and the image previewed while an analysis runs - its progress is shown over the image. Off: the window waits until the analysis is done, for a computer that needs all its RAM for the analysis.";
+                                        description: "The steps can be edited and previewed while an analysis runs - the run uses a copy, edits apply to the next run. Off: the steps start locked and no preview runs, for a computer that needs all its RAM for the analysis. The Steps panel switches it during a run.";
                                         HorizontalLayout {
                                             alignment: end;
                                             Switch {
@@ -710,7 +710,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
                     Text {
                         text: "Project: saved with it. This computer: here.";
-                        font-size: 12px;
+                        font-size: Ink.fs-body;
                         color: Ink.text-dim;
                         vertical-alignment: center;
                         horizontal-stretch: 1;

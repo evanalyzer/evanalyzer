@@ -240,8 +240,10 @@ impl PipelineWorker {
                                     running.set_processed(0);
                                 });
                                 if !is_preview {
-                                    ui.global::<PipelineRunningState>()
-                                        .set_whole_image_phase(false);
+                                    let running = ui.global::<PipelineRunningState>();
+                                    running.set_whole_image_phase(false);
+                                    running.set_tiles_total(total);
+                                    running.set_tiles_done(0);
                                 }
                             }
                         });
@@ -270,8 +272,10 @@ impl PipelineWorker {
                                     running.set_processed(0);
                                 });
                                 if !is_preview {
-                                    ui.global::<PipelineRunningState>()
-                                        .set_whole_image_phase(false);
+                                    let running = ui.global::<PipelineRunningState>();
+                                    running.set_whole_image_phase(false);
+                                    running.set_images_total(total);
+                                    running.set_images_done(0);
                                 }
                             }
                         });
@@ -298,6 +302,14 @@ impl PipelineWorker {
                                 .viewport_controller
                                 .trigger_image_redraw_objects();
                         }
+                        // One image tile by tile: the time left by tiles.
+                        let eta = pipeline_start
+                            .filter(|_| tile_index > 0 && !is_preview)
+                            .map(|t| {
+                                let per_tile = t.elapsed().as_secs_f64() / tile_index as f64;
+                                time_left(per_tile * total_tiles.saturating_sub(tile_index) as f64)
+                            })
+                            .unwrap_or_default();
                         let ui_handle = self.app_state.ui_handle.clone();
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
@@ -306,8 +318,13 @@ impl PipelineWorker {
                                     running.set_total(total_tiles as i32);
                                 });
                                 if !is_preview {
-                                    ui.global::<PipelineRunningState>()
-                                        .set_whole_image_phase(false);
+                                    let running = ui.global::<PipelineRunningState>();
+                                    running.set_whole_image_phase(false);
+                                    running.set_tiles_done(tile_index as i32);
+                                    running.set_tiles_total(total_tiles as i32);
+                                    if running.get_images_total() <= 1 {
+                                        running.set_eta(eta.into());
+                                    }
                                 }
                             }
                         });
@@ -350,6 +367,11 @@ impl PipelineWorker {
                             .map(|t| secs_per_image(t.elapsed(), index))
                             .unwrap_or(0.0);
                         let eta_str = format!("{:.2}", secs_per_image);
+                        let left = time_left(secs_per_image * total.saturating_sub(index) as f64);
+                        let file = path
+                            .file_name()
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_default();
                         let is_last = index == total;
                         let elapsed = last_ui_update.elapsed();
                         if is_last || elapsed >= std::time::Duration::from_millis(100) {
@@ -363,6 +385,13 @@ impl PipelineWorker {
                                         running.set_processed(index);
                                         running.set_total(total);
                                     });
+                                    if !is_preview {
+                                        let running = ui.global::<PipelineRunningState>();
+                                        running.set_images_done(index);
+                                        running.set_images_total(total);
+                                        running.set_last_image(file.into());
+                                        running.set_eta(left.into());
+                                    }
                                     ui.global::<PipelinesPanelState>()
                                         .set_eta_seconds_per_image(eta_str.into());
                                 }
@@ -504,6 +533,19 @@ impl PipelineWorker {
 /// always >= 1 for a real `ImageCompleted` event (see job_executor.rs's
 /// `completed.fetch_add(1, ..) + 1`), but `.max(1)` keeps this from ever
 /// displaying "inf" if that invariant is ever violated.
+/// "~40 s", "~4 min", "~2 h 10 min" - "" when nothing is left.
+fn time_left(secs: f64) -> String {
+    if !secs.is_finite() || secs < 1.0 {
+        return String::new();
+    }
+    let secs = secs.round() as u64;
+    match secs {
+        0..60 => format!("~{secs} s"),
+        60..3600 => format!("~{} min", (secs + 30) / 60),
+        _ => format!("~{} h {} min", secs / 3600, (secs % 3600) / 60),
+    }
+}
+
 fn secs_per_image(elapsed: std::time::Duration, index: usize) -> f64 {
     elapsed.as_secs_f64() / (index.max(1) as f64)
 }
@@ -522,6 +564,15 @@ fn wait_for_task(task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>) -> P
 mod tests {
     use super::*;
     use crate::{DialogType, GlobalAppState};
+
+    #[test]
+    fn the_time_left_is_rounded_to_what_matters() {
+        assert_eq!(time_left(0.4), "");
+        assert_eq!(time_left(f64::INFINITY), "");
+        assert_eq!(time_left(42.0), "~42 s");
+        assert_eq!(time_left(239.0), "~4 min");
+        assert_eq!(time_left(7800.0), "~2 h 10 min");
+    }
 
     #[test]
     fn secs_per_image_treats_index_zero_as_one_instead_of_displaying_inf() {
@@ -710,8 +761,6 @@ mod tests {
     #[test]
     fn an_analysis_run_reports_progress_and_completion() {
         let f = fixture();
-        f.ui.global::<GlobalAppState>()
-            .set_active_dialog(DialogType::PipelineRunning);
         f.worker.run_task(f.task(false));
         drain_ui_queue();
         let running = f.running();
@@ -729,11 +778,9 @@ mod tests {
                 .get_eta_seconds_per_image()
                 .is_empty()
         );
-        // The full run's dialog stays open to show the result.
-        assert_eq!(
-            f.ui.global::<GlobalAppState>().get_active_dialog(),
-            DialogType::PipelineRunning
-        );
+        // Apart from the mixed counter: the images, the one finished last.
+        assert_eq!(running.get_images_done(), running.get_images_total());
+        assert!(!running.get_last_image().is_empty());
         assert!(
             f.worker
                 .pipeline_controller

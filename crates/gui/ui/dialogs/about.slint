@@ -184,7 +184,7 @@ component AboutTab inherits Rectangle {
 
         Text {
             text: root.text;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-weight: root.active ? 600 : 500;
             color: root.active || ta.has-hover ? Ink.text : Ink.text-dim;
             vertical-alignment: center;
@@ -222,13 +222,13 @@ component Fact inherits VerticalLayout {
     spacing: 3px;
     Text {
         text: root.label;
-        font-size: Ink.fs-sm;
+        font-size: Ink.fs-secondary;
         color: Ink.text-dim;
     }
 
     Text {
         text: root.value;
-        font-size: Ink.fs-md;
+        font-size: Ink.fs-body;
         font-weight: 500;
         font-family: root.mono ? Ink.font-mono : Ink.font-sans;
         color: Ink.text;
@@ -261,14 +261,14 @@ component PersonCard inherits Card {
             spacing: 1px;
             Text {
                 text: root.who.name;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-weight: 600;
                 color: Ink.text;
             }
 
             Text {
                 text: root.who.role;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
             }
         }
@@ -311,7 +311,7 @@ component LicenseRow inherits Rectangle {
 
                 Text {
                     text: root.title;
-                    font-size: Ink.fs-md;
+                    font-size: Ink.fs-body;
                     font-weight: 600;
                     color: Ink.text;
                     vertical-alignment: center;
@@ -320,7 +320,7 @@ component LicenseRow inherits Rectangle {
                 Text {
                     horizontal-stretch: 1;
                     text: root.subtitle;
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-dim;
                     vertical-alignment: center;
                     overflow: elide;
@@ -335,7 +335,7 @@ component LicenseRow inherits Rectangle {
                         background: Ink.ok.with-alpha(0.14);
                         badge-text := Text {
                             text: root.badge;
-                            font-size: Ink.fs-xs;
+                            font-size: Ink.fs-caption;
                             font-weight: 600;
                             color: Ink.ok;
                         }
@@ -462,14 +462,14 @@ export component AboutDialog inherits Rectangle {
 
                     Text {
                         text: "EVAnalyzer";
-                        font-size: 28px;
+                        font-size: Ink.fs-display;
                         font-weight: 700;
                         color: #F4F4F5;
                     }
 
                     Text {
                         text: "Enhanced Visual Image Analyzer";
-                        font-size: 12.5px;
+                        font-size: Ink.fs-dialog-title;
                         color: #A1A1AA;
                         wrap: word-wrap;
                     }
@@ -480,7 +480,7 @@ export component AboutDialog inherits Rectangle {
 
                     Text {
                         text: "VERSION";
-                        font-size: 10px;
+                        font-size: Ink.fs-caption;
                         font-weight: 600;
                         letter-spacing: 0.6px;
                         color: #8A8A93;
@@ -488,7 +488,7 @@ export component AboutDialog inherits Rectangle {
 
                     Text {
                         text: AppInfoState.version;
-                        font-size: 22px;
+                        font-size: Ink.fs-figure;
                         font-weight: 500;
                         font-family: Ink.font-mono;
                         color: #F4F4F5;
@@ -506,7 +506,7 @@ export component AboutDialog inherits Rectangle {
                             background: AppInfoState.prerelease ? #FBBF24.with-alpha(0.16) : #4ADE80.with-alpha(0.14);
                             chan := Text {
                                 text: AppInfoState.prerelease ? "pre-release" : "stable";
-                                font-size: 10.5px;
+                                font-size: Ink.fs-caption;
                                 font-weight: 600;
                                 color: AppInfoState.prerelease ? #FCD34D : #86EFAC;
                             }
@@ -519,7 +519,7 @@ export component AboutDialog inherits Rectangle {
                             background: #1F1F23;
                             plat := Text {
                                 text: AppInfoState.platform;
-                                font-size: 10.5px;
+                                font-size: Ink.fs-caption;
                                 color: #A1A1AA;
                             }
                         }
@@ -532,7 +532,7 @@ export component AboutDialog inherits Rectangle {
 
                     Text {
                         text: "© 2019–2026 Joachim Danmayr";
-                        font-size: 10.5px;
+                        font-size: Ink.fs-caption;
                         color: #8A8A93;
                     }
                 }
@@ -618,7 +618,7 @@ export component AboutDialog inherits Rectangle {
                             spacing: 14px;
                             Text {
                                 text: "EVAnalyzer finds, classifies and measures objects in microscopy images with pipelines of steps you can tune live on the image.";
-                                font-size: 12.5px;
+                                font-size: Ink.fs-body;
                                 color: Ink.text-dim;
                                 wrap: word-wrap;
                             }
@@ -688,14 +688,14 @@ export component AboutDialog inherits Rectangle {
                                 spacing: 1px;
                                 Text {
                                     text: "and " + AboutData.contributors.length + " contributors";
-                                    font-size: 12.5px;
+                                    font-size: Ink.fs-heading;
                                     font-weight: 600;
                                     color: Ink.text;
                                 }
 
                                 Text {
                                     text: "Testing";
-                                    font-size: Ink.fs-sm;
+                                    font-size: Ink.fs-secondary;
                                     color: Ink.text-dim;
                                     overflow: elide;
                                 }
@@ -726,14 +726,14 @@ export component AboutDialog inherits Rectangle {
                                 spacing: 2px;
                                 Text {
                                     text: "Free and open source";
-                                    font-size: 12.5px;
+                                    font-size: Ink.fs-heading;
                                     font-weight: 600;
                                     color: Ink.text;
                                 }
 
                                 Text {
                                     text: "AGPL-3.0: use, study, share and change it - what you share or offer as a service stays open.";
-                                    font-size: Ink.fs-sm;
+                                    font-size: Ink.fs-secondary;
                                     color: Ink.text-dim;
                                     overflow: elide;
                                 }
@@ -782,10 +782,10 @@ export component AboutDialog inherits Rectangle {
                         spacing: 10px;
                         Text {
                             text: "CREATED BY";
-                            font-size: 10px;
+                            font-size: Ink.fs-caption;
                             font-weight: 600;
                             letter-spacing: 0.6px;
-                            color: Ink.text-faint;
+                            color: Ink.text-mute;
                         }
 
                         for p in AboutData.creators: PersonCard {
@@ -793,10 +793,10 @@ export component AboutDialog inherits Rectangle {
                         }
                         Text {
                             text: "CONTRIBUTORS";
-                            font-size: 10px;
+                            font-size: Ink.fs-caption;
                             font-weight: 600;
                             letter-spacing: 0.6px;
-                            color: Ink.text-faint;
+                            color: Ink.text-mute;
                         }
 
                         VerticalLayout {
@@ -817,14 +817,14 @@ export component AboutDialog inherits Rectangle {
                                     Text {
                                         horizontal-stretch: 1;
                                         text: p.name;
-                                        font-size: 12.5px;
+                                        font-size: Ink.fs-body;
                                         color: Ink.text;
                                         vertical-alignment: center;
                                     }
 
                                     Text {
                                         text: p.role;
-                                        font-size: Ink.fs-sm;
+                                        font-size: Ink.fs-secondary;
                                         color: Ink.text-dim;
                                         vertical-alignment: center;
                                     }
@@ -848,13 +848,13 @@ export component AboutDialog inherits Rectangle {
                     alignment: start;
                     Text {
                         text: "Computing on: " + AppInfoState.system_source;
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         color: Ink.text-dim;
                     }
 
                     if AppInfoState.system_error != "": Text {
                         text: AppInfoState.system_error;
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         color: Ink.warn;
                         wrap: word-wrap;
                     }
@@ -884,15 +884,15 @@ export component AboutDialog inherits Rectangle {
                                 spacing: 4px;
                                 Text {
                                     text: stat.label;
-                                    font-size: 10px;
+                                    font-size: Ink.fs-caption;
                                     font-weight: 600;
                                     letter-spacing: 0.6px;
-                                    color: Ink.text-faint;
+                                    color: Ink.text-mute;
                                 }
 
                                 Text {
                                     text: stat.value;
-                                    font-size: 20px;
+                                    font-size: Ink.fs-figure;
                                     font-weight: 500;
                                     font-family: Ink.font-mono;
                                     color: Ink.text;
@@ -900,7 +900,7 @@ export component AboutDialog inherits Rectangle {
 
                                 Text {
                                     text: stat.note;
-                                    font-size: Ink.fs-sm;
+                                    font-size: Ink.fs-secondary;
                                     color: Ink.text-dim;
                                 }
                             }
@@ -949,7 +949,7 @@ export component AboutDialog inherits Rectangle {
 
                         Text {
                             text: AppInfoState.third_party_package_count + " libraries";
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             color: Ink.text-dim;
                             vertical-alignment: center;
                         }
@@ -976,7 +976,7 @@ export component AboutDialog inherits Rectangle {
                                     for paragraph in AppInfoState.license_paragraphs: Text {
                                         text: paragraph;
                                         font-family: Ink.font-mono;
-                                        font-size: 10px;
+                                        font-size: Ink.fs-caption;
                                         color: Ink.text-dim;
                                         wrap: word-wrap;
                                     }
@@ -993,7 +993,7 @@ export component AboutDialog inherits Rectangle {
                                         for paragraph in group.text_paragraphs: Text {
                                             text: paragraph;
                                             font-family: Ink.font-mono;
-                                            font-size: 10px;
+                                            font-size: Ink.fs-caption;
                                             color: Ink.text-dim;
                                             wrap: word-wrap;
                                         }
@@ -1046,8 +1046,8 @@ export component AboutDialog inherits Rectangle {
                         Text {
                             horizontal-stretch: 1;
                             text: root.tab == 3 ? "Thank you to everyone who builds these" : "";
-                            font-size: Ink.fs-sm;
-                            color: Ink.text-faint;
+                            font-size: Ink.fs-secondary;
+                            color: Ink.text-mute;
                             horizontal-alignment: right;
                             vertical-alignment: center;
                         }

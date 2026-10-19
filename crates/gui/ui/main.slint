@@ -37,7 +37,7 @@ import { TopBar } from "shell/top_bar.slint";
 import { BottomBar } from "shell/bottom_bar.slint";
 import { Workspace } from "shell/workspace.slint";
 import { RecentProjectRow, StartState } from "api/start.slint";
-import { InkBanner, InkTone } from "ink/ink.slint";
+import { InkBanner, InkTipLayer, InkTone } from "ink/ink.slint";
 import { Ink, InkScheme } from "ink/palette.slint";
 import { ImageMissingDialog } from "dialogs/images_missing_dialog.slint";
 
@@ -60,7 +60,6 @@ import { CommandSelectionDialog } from "dialogs/command_selection_dialog.slint";
 import { PipelineEditDialog, PipelineDeleteConfirmDialog } from "dialogs/pipeline_edit_dialog.slint";
 import { ComponentUpdateDialog, ComponentSettingsDialog } from "dialogs/create_component_dialog.slint";
 import { CreateComponentDialog, ComponentEditChoiceDialog, ExposeChoiceDialog } from "dialogs/create_component_dialog.slint";
-import { PipelineRunningDialog } from "dialogs/pipeline_running_dialog.slint";
 import { TemplateMetaDialog } from "dialogs/template_meta_dialog.slint";
 import { ProjectTemplateDialog } from "dialogs/project_template_dialog.slint";
 import { StepSettingsDialog } from "editor/pipelines_panel.slint";
@@ -193,6 +192,7 @@ export component AppWindow inherits Window {
     min-height: 900px;
     background: Ink.ground;
     default-font-family: Ink.font-sans;
+    default-font-size: Ink.fs-body;
 
     // Menus and popups stay inside the window (see `Ink.window-height`).
     init => {
@@ -376,10 +376,6 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.pipeline-running): PipelineRunningDialog {
-                width: 100%;
-                height: 100%;
-            }
             if (GlobalAppState.active_dialog == DialogType.warning): WarningDialog {
                 width: 100%;
                 height: 100%;
@@ -432,6 +428,12 @@ export component AppWindow inherits Window {
     // The file browser sits above every other overlay: some dialogs (e.g.
     // AI learning) open it while they are themselves still open.
     if FileBrowserState.visible: FileBrowserDialog {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Tooltips, over everything.
+    InkTipLayer {
         width: 100%;
         height: 100%;
     }

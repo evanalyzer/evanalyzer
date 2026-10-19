@@ -20,7 +20,7 @@ export component TemplateMetaDialog inherits InkDialog {
         spacing: 5px;
         Text {
             text: "Name";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -35,7 +35,7 @@ export component TemplateMetaDialog inherits InkDialog {
         spacing: 5px;
         Text {
             text: "Short description";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -50,7 +50,7 @@ export component TemplateMetaDialog inherits InkDialog {
         spacing: 5px;
         Text {
             text: "Description";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -67,7 +67,7 @@ export component TemplateMetaDialog inherits InkDialog {
             spacing: 5px;
             Text {
                 text: "Author";
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
             }
 
@@ -82,7 +82,7 @@ export component TemplateMetaDialog inherits InkDialog {
             spacing: 5px;
             Text {
                 text: "Organization";
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
             }
 
@@ -98,7 +98,7 @@ export component TemplateMetaDialog inherits InkDialog {
         spacing: 5px;
         Text {
             text: "Category";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -122,7 +122,7 @@ export component TemplateMetaDialog inherits InkDialog {
                     padding-right: 8px;
                     Text {
                         text: c;
-                        font-size: 10px;
+                        font-size: Ink.fs-caption;
                         color: Ink.text-dim;
                         vertical-alignment: center;
                     }
@@ -142,7 +142,7 @@ export component TemplateMetaDialog inherits InkDialog {
         spacing: 5px;
         Text {
             text: "Version (optional)";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -155,7 +155,7 @@ export component TemplateMetaDialog inherits InkDialog {
 
         if !root.version-valid: Text {
             text: "A whole number from 1, or leave it empty.";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.err;
         }
     }
@@ -164,7 +164,7 @@ export component TemplateMetaDialog inherits InkDialog {
         spacing: 5px;
         Text {
             text: "Tags";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -187,6 +187,7 @@ export component TemplateMetaDialog inherits InkDialog {
             kind: InkButtonKind.primary;
             text: "Next…";
             enabled: TemplateMetaState.meta.name != "" && TemplateMetaState.meta.category != "" && TemplateMetaState.meta.tags != "" && root.version-valid;
+            disabled-reason: "Name, category and tags are needed";
             clicked => {
                 TemplateMetaState.confirm();
             }

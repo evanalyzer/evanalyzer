@@ -22,14 +22,14 @@ export component ConfirmDeleteClassDialog inherits InkDialog {
             text: "This action cannot be undone. Deleting a class breaks existing annotations and pipeline steps. Ensure you are not using this class before proceeding.";
             wrap: word-wrap;
             color: Ink.text;
-            font-size: 13px;
+            font-size: Ink.fs-heading;
         }
 
         Text {
             text: "Delete class \{ClassificationState.selected_class_name}?";
             wrap: word-wrap;
             color: Ink.text-dim;
-            font-size: 13px;
+            font-size: Ink.fs-heading;
         }
 
         InkDialogFooter {

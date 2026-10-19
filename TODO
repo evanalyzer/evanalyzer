@@ -192,6 +192,19 @@ Open:
 - [x] Split "Color by value" was ignored when the overlay was pushed from the database thread (the window can't be reached there) - the choice is kept in `SplitState`; test `split_color_by_value_holds_when_pushed_from_the_database_thread`.
 - [x] The split card's channel names come from the series the image is shown in (was: the file's first series).
 
+## UI update 2026-10-19 (boards AD–AJ: type scale, tooltips, folding, image bar, run, tuning)
+
+Done (generated code 39.55 -> 40.48 MB). Open:
+- [x] Decided 2026-10-19: modes keep Ctrl+1…3 (tab convention, documented), the panels are on Alt+1…4.
+- [ ] **Probably remove** (checking with users whether it's a use case): the "edited during the run" marks - amber dot per step and "n changes for the next run" in the Steps footer. Backed by `PipelinesController::run_snapshot` (each step's JSON at run start, compared on every step sync while a run is active; `step_fingerprints`, `changed_steps`, `PipelineCommand.changed-since-run`, `PipelinesPanelState.run-changes`, test `a_step_edited_during_a_run_is_marked_for_the_next_run`). Removing it keeps the lock / Unlock strip working.
+- [ ] Check Alt+1…4 on macOS: Option+digit types characters (¡ ™ £) - if the key text isn't the digit there, use Ctrl+Option+digit on Mac only.
+- [ ] Tab hides the panels only while no control has the keyboard focus (in a field / on a button it still moves the focus).
+- [ ] Status bar while running names the image finished *last*, not the one in work: there is no ImageStarted progress event (adding one changes the server protocol).
+- [ ] Problems are on the step card, not under the exact field (problem data has no setting key).
+- [ ] ⓘ cards have no docs links yet (no per-step docs URLs).
+- [x] O toggles the objects; the ellipse tool moved from O to E (agreed 2026-10-19).
+- [ ] Click through in the real app: tooltips (450 ms, neighbours, focus), fold + Tab + View menu, the run (lock/unlock, dots, toast), the Tuning dock, 125 % / 150 % on Windows.
+
 ## AI plugin
 
 Done 2026-10-19: libtorch is loaded only on the first AI step, from a plugin library next to the program (`ai/cpu`, `ai/cuda`). The app no longer links libtorch.

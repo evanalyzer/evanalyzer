@@ -31,7 +31,7 @@ export component ConnectDialog inherits InkDialog {
             vertical-stretch: 0;
             Text {
                 text: "Recent servers";
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
             }
             for server[index] in ConnectState.recent: Rectangle {
@@ -41,7 +41,7 @@ export component ConnectDialog inherits InkDialog {
                 Text {
                     x: 8px;
                     text: server.user + " @ " + server.url;
-                    font-size: 12px;
+                    font-size: Ink.fs-body;
                     vertical-alignment: center;
                     color: Ink.text;
                 }
@@ -57,7 +57,7 @@ export component ConnectDialog inherits InkDialog {
 
         Text {
             text: "Server";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
         LineEdit {
@@ -68,7 +68,7 @@ export component ConnectDialog inherits InkDialog {
         }
         Text {
             text: "User";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
         LineEdit {
@@ -78,7 +78,7 @@ export component ConnectDialog inherits InkDialog {
         }
         Text {
             text: "Password";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
         password-edit := LineEdit {
@@ -94,7 +94,7 @@ export component ConnectDialog inherits InkDialog {
         Text {
             text: ConnectState.busy ? "Connecting ..." : ConnectState.error;
             wrap: word-wrap;
-            font-size: 12px;
+            font-size: Ink.fs-body;
             color: ConnectState.busy ? Ink.text-dim : Ink.err;
         }
 
@@ -110,6 +110,7 @@ export component ConnectDialog inherits InkDialog {
                 kind: InkButtonKind.primary;
                 text: "Connect";
                 enabled: !ConnectState.busy && ConnectState.url != "" && ConnectState.user != "";
+                disabled-reason: ConnectState.busy ? "Connecting…" : "Enter the server address and your user name";
                 clicked => {
                     ConnectState.connect();
                 }
@@ -126,27 +127,27 @@ export component ConnectDialog inherits InkDialog {
                 ? "This is the first connection to " + ConnectState.url + ". Its certificate has the fingerprint below. Compare it with the one your administrator gave you (the server logs it at startup) - connect only if they match."
                 : "The certificate of " + ConnectState.url + " is not the one confirmed before. If your administrator replaced it, compare the new fingerprint with theirs. Otherwise someone may be intercepting the connection - don't connect.";
             wrap: word-wrap;
-            font-size: 13px;
+            font-size: Ink.fs-heading;
             color: Ink.text;
         }
         if ConnectState.step == 2: Text {
             text: "Before:  " + ConnectState.known-fingerprint;
             wrap: word-wrap;
             font-family: "monospace";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
         Text {
             text: (ConnectState.step == 2 ? "Now:  " : "") + ConnectState.fingerprint;
             wrap: word-wrap;
             font-family: "monospace";
-            font-size: 12px;
+            font-size: Ink.fs-body;
             color: ConnectState.step == 2 ? Ink.err : Ink.text;
         }
         Text {
             text: ConnectState.busy ? "Connecting ..." : ConnectState.error;
             wrap: word-wrap;
-            font-size: 12px;
+            font-size: Ink.fs-body;
             color: ConnectState.busy ? Ink.text-dim : Ink.err;
         }
 
@@ -154,6 +155,7 @@ export component ConnectDialog inherits InkDialog {
             InkButton {
                 text: "Back";
                 enabled: !ConnectState.busy;
+                disabled-reason: "Connecting…";
                 clicked => {
                     ConnectState.back();
                 }
@@ -162,6 +164,7 @@ export component ConnectDialog inherits InkDialog {
                 kind: (ConnectState.step == 2) ? InkButtonKind.danger : (ConnectState.step == 1) ? InkButtonKind.primary : InkButtonKind.secondary;
                 text: ConnectState.step == 1 ? "They match - connect" : "Trust the new certificate";
                 enabled: !ConnectState.busy;
+                disabled-reason: "Connecting…";
                 clicked => {
                     ConnectState.trust();
                 }

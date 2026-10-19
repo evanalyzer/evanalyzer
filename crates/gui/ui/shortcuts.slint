@@ -86,12 +86,6 @@ export component GlobalShortcuts inherits FocusScope {
     }
 
     key-pressed(e) => {
-        // Dialogs don't block the window - except the one an analysis
-        // makes it wait behind.
-        if (GlobalAppState.active_dialog == DialogType.pipeline_running) {
-            return reject;
-        }
-
         // -- Compare: hold Space for the whole original --
         if (e.text == " " && !e.modifiers.control && ViewportObjectState.compare && PipelinesPanelState.has-breakpoint-image) {
             ViewportObjectState.show-before = true;
@@ -156,7 +150,7 @@ export component GlobalShortcuts inherits FocusScope {
         }
 
         // -- The selected step (a click on its line) --
-        if (LayoutState.mode == WorkspaceMode.pipelines && root.step-selected && !PipelinesPanelState.open-component-read-only) {
+        if (LayoutState.mode == WorkspaceMode.pipelines && root.step-selected && !PipelinesPanelState.steps-read-only) {
             if (e.text == Key.Return && !e.modifiers.control) {
                 PipelinesPanelState.open-step-settings(root.step.step-id);
                 return accept;
@@ -220,6 +214,28 @@ export component GlobalShortcuts inherits FocusScope {
             return accept;
         }
 
+        // -- Panels -- Tab (nothing else focused: in a field or on a
+        // button it moves the focus) hides / shows them all; Alt+1…4 shows
+        // or hides one.
+        if e.text == Key.Tab && !e.modifiers.shift && self.has-focus {
+            LayoutState.panels-hidden = !LayoutState.panels-hidden;
+            return accept;
+        }
+        if e.modifiers.alt && !e.modifiers.control && (e.text == "1" || e.text == "2" || e.text == "3" || e.text == "4") {
+            if e.text == "1" {
+                LayoutState.steps-open = !LayoutState.steps-open;
+            } else if e.text == "2" {
+                LayoutState.classes-open = !LayoutState.classes-open;
+            } else if e.text == "3" {
+                LayoutState.image-open = !LayoutState.image-open;
+            } else {
+                LayoutState.objects-open = !LayoutState.objects-open;
+            }
+            LayoutState.panels-hidden = false;
+            LayoutState.panels-changed();
+            return accept;
+        }
+
         // -- Z / T -- the stack bar's ◀ ▶ (the slice only while no
         // projection is shown).
         if (e.text == Key.PageUp || e.text == Key.PageDown) && !e.modifiers.control {
@@ -240,7 +256,8 @@ export component GlobalShortcuts inherits FocusScope {
         // a remote-desktop client eating Ctrl+digit, etc.) since Ctrl+1..4
         // already means "switch sidebar tab" below - letters share no keys
         // with that at all. K (not M) for PaintMarker since M is already
-        // Move; every other letter is the tool's own first letter.
+        // Move, E (Ellipse) for PaintOval since O shows / hides the objects;
+        // every other letter is the tool's own first letter.
         if (!e.modifiers.control && (e.text == "m" || e.text == Key.Escape)) {
             ViewportObjectState.act_tool_state = ToolState.Move;
             return accept;
@@ -257,7 +274,7 @@ export component GlobalShortcuts inherits FocusScope {
             ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
             return accept;
         }
-        if (!e.modifiers.control && e.text == "o") {
+        if (!e.modifiers.control && e.text == "e") {
             ViewportObjectState.act_tool_state = ToolState.PaintOval;
             return accept;
         }
@@ -265,7 +282,8 @@ export component GlobalShortcuts inherits FocusScope {
             ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
             return accept;
         }
-        if (!e.modifiers.control && e.text == "#") {
+        // O (and the older #): the objects on the image on / off.
+        if (!e.modifiers.control && (e.text == "o" || e.text == "#")) {
             ViewportObjectState.show_objects = !ViewportObjectState.show_objects;
             return accept;
         }
@@ -344,16 +362,6 @@ export component DialogShortcuts inherits FocusScope {
 // window, which dialogs don't block, the window has the keyboard).
 export global DialogEscape {
     public function close() -> bool {
-        // These represent an in-progress background job (analysis running /
-        // preview rendering) - deliberately NOT wired to Escape. Their
-        // `cancel()` callback only requests cancellation, it doesn't close
-        // the dialog (closing happens once the job actually finishes), so a
-        // reflexive Escape here would look like it did nothing while
-        // silently killing a possibly multi-minute run. Use the dialog's
-        // own Cancel button, which makes that distinction visible.
-        if (GlobalAppState.active_dialog == DialogType.pipeline_running) {
-            return false;
-        }
         if (GlobalAppState.active_dialog == DialogType.command_selection_dialog) {
             CommandPickerState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.project_template) {

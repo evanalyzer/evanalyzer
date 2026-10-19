@@ -16,7 +16,7 @@ export component LineEdit inherits Rectangle {
     in property <string> placeholder-text;
     in property <bool> enabled: true;
     in property <bool> read-only: false;
-    in property <length> font-size: Ink.fs-md;
+    in property <length> font-size: Ink.fs-body;
     in property <string> font-family: Ink.font-sans;
     in property <TextHorizontalAlignment> horizontal-alignment: TextHorizontalAlignment.left;
     in property <InputType> input-type: InputType.text;
@@ -130,7 +130,7 @@ export component ComboBox inherits Rectangle {
             Text {
                 horizontal-stretch: 1;
                 text: root.current-value;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 color: Ink.text;
                 vertical-alignment: center;
                 overflow: elide;
@@ -187,7 +187,7 @@ export component ComboBox inherits Rectangle {
                         x: 8px;
                         width: parent.width - 16px;
                         text: entry;
-                        font-size: Ink.fs-md;
+                        font-size: Ink.fs-body;
                         font-weight: i == root.current-index ? 600 : 400;
                         color: Ink.text;
                         vertical-alignment: center;
@@ -253,7 +253,7 @@ export component CheckBox inherits Rectangle {
             x: 22px;
             height: parent.height;
             text: root.text;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text;
             vertical-alignment: center;
             accessible-role: none;
@@ -329,7 +329,7 @@ export component Switch inherits Rectangle {
             x: 34px;
             height: parent.height;
             text: root.text;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text;
             vertical-alignment: center;
             accessible-role: none;

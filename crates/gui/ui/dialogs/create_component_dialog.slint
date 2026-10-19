@@ -90,7 +90,7 @@ export component CreateComponentDialog inherits InkDialog {
         spacing: 6px;
         Text {
             text: "Classes";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -101,13 +101,13 @@ export component CreateComponentDialog inherits InkDialog {
                 alignment: center;
                 Text {
                     text: row.name;
-                    font-size: 12px;
+                    font-size: Ink.fs-body;
                     color: Ink.text;
                 }
 
                 Text {
                     text: row.detail;
-                    font-size: 10px;
+                    font-size: Ink.fs-caption;
                     color: Ink.text-mute;
                 }
             }
@@ -124,7 +124,7 @@ export component CreateComponentDialog inherits InkDialog {
 
         Text {
             text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
             wrap: word-wrap;
         }
@@ -132,14 +132,14 @@ export component CreateComponentDialog inherits InkDialog {
 
     if CreateComponentState.channels-text != "": Text {
         text: CreateComponentState.channels-text;
-        font-size: 12px;
+        font-size: Ink.fs-body;
         color: Ink.text-dim;
         wrap: word-wrap;
     }
 
     if CreateComponentState.error != "": Text {
         text: CreateComponentState.error;
-        font-size: 12px;
+        font-size: Ink.fs-body;
         color: Ink.err;
         wrap: word-wrap;
     }
@@ -175,7 +175,7 @@ export component ComponentEditChoiceDialog inherits InkDialog {
 
     Text {
         text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
-        font-size: Ink.fs-lg;
+        font-size: Ink.fs-body;
         color: Ink.text;
         wrap: word-wrap;
     }
@@ -251,7 +251,7 @@ export component ExposeChoiceDialog inherits InkDialog {
                 spacing: 2px;
                 Text {
                     text: choice;
-                    font-size: 12px;
+                    font-size: Ink.fs-body;
                     font-weight: 600;
                     color: Ink.text;
                     overflow: elide;
@@ -259,7 +259,7 @@ export component ExposeChoiceDialog inherits InkDialog {
 
                 if ExposeChoiceState.details[i] != "": Text {
                     text: ExposeChoiceState.details[i];
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-dim;
                     overflow: elide;
                 }
@@ -297,7 +297,7 @@ export component ComponentUpdateDialog inherits InkDialog {
 
     Text {
         text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
-        font-size: Ink.fs-lg;
+        font-size: Ink.fs-body;
         color: Ink.text;
         wrap: word-wrap;
     }
@@ -351,7 +351,7 @@ component ParamListRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.param.label;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-weight: root.selected ? 600 : 400;
             color: Ink.text;
             vertical-alignment: center;
@@ -360,7 +360,7 @@ component ParamListRow inherits Rectangle {
         Text {
             max-width: 90px;
             text: root.param.default-value;
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
             font-family: Ink.font-mono;
             color: Ink.text-mute;
             vertical-alignment: center;
@@ -373,7 +373,7 @@ component ParamListRow inherits Rectangle {
 // A form row's label - plain (InkLabel's elide costs ~2 KB a use).
 component FormLabel inherits Text {
     width: 72px;
-    font-size: Ink.fs-sm;
+    font-size: Ink.fs-secondary;
     color: Ink.text-dim;
     vertical-alignment: center;
 }
@@ -583,6 +583,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                         size: 24px;
                         label: "Move up";
                         enabled: root.chosen > 0;
+                        disabled-reason: "Already the first";
                         clicked => {
                             ComponentSettingsState.parameter-moved(root.param.key, -1);
                             root.chosen -= 1;
@@ -593,6 +594,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                         size: 24px;
                         label: "Move down";
                         enabled: root.chosen < ComponentSettingsState.parameters.length - 1;
+                        disabled-reason: "Already the last";
                         clicked => {
                             ComponentSettingsState.parameter-moved(root.param.key, 1);
                             root.chosen += 1;
@@ -671,7 +673,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                     Text {
                         horizontal-stretch: 1;
                         text: root.param.default-value == "" ? "–" : root.param.default-value;
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         font-family: Ink.font-mono;
                         color: Ink.text;
                         vertical-alignment: center;
@@ -746,7 +748,7 @@ export component ComponentSettingsDialog inherits InkDialog {
         Text {
             horizontal-stretch: 1;
             text: "Changes apply to every use of the component";
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             vertical-alignment: center;
         }

@@ -26,14 +26,14 @@ component SeriesRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.title;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-weight: root.current ? 600 : 400;
             color: Ink.text;
             vertical-alignment: center;
         }
         Text {
             text: root.detail;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-family: Ink.font-mono;
             color: Ink.text-dim;
             vertical-alignment: center;
@@ -72,7 +72,7 @@ export component SeriesChooser inherits Rectangle {
         }
         Text {
             text: "Which one do you analyse?";
-            font-size: Ink.fs-lg;
+            font-size: Ink.fs-dialog-title;
             font-weight: 600;
             color: Ink.text;
         }

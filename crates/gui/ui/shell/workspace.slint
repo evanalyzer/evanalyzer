@@ -3,7 +3,7 @@
 // Pipelines, images on the left in Images; classes, objects and the image
 // controls on the right; the annotate tools on top. Results fill it.
 
-import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton, InkDivider } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton, InkDivider, InkButton, InkButtonKind } from "../ink/ink.slint";
 import { Places, LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ChannelState, GlobalAppState, DialogType } from "../api/state.slint";
 import { Viewport } from "../editor/viewport.slint";
@@ -15,6 +15,7 @@ import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
 import { ClassificationPanel } from "../editor/classification_panel.slint";
 import { ObjectListPanel } from "../editor/object_list_panel.slint";
 import { ObjectDetails } from "../editor/object_details.slint";
+import { ObjectDetailsPlace } from "../editor/object_list_panel.slint";
 import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
@@ -26,7 +27,6 @@ import { ImageMetaData } from "../api/image_meta.slint";
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { StartState } from "../api/start.slint";
 import { StartPage } from "start_page.slint";
-import { AnalysisCard } from "../dialogs/pipeline_running_dialog.slint";
 import { PipelineRunningState, PreviewRunState } from "../api/pipeline_running.slint";
 
 // Gap between the panels and the edges.
@@ -36,57 +36,26 @@ global Float {
     out property <length> right-w: Places.right-w;
 }
 
-// The three switches for the right-hand panels.
-component PanelSwitches inherits Rectangle {
-    width: row.preferred-width + 8px;
-    height: 36px;
-
-    glass := Rectangle {
-        background: Ink.glass;
-        border-radius: Ink.radius-lg;
-        border-width: 1px;
-        border-color: Ink.border;
-        drop-shadow-blur: 16px;
-        drop-shadow-offset-y: 4px;
-        drop-shadow-color: Ink.shadow;
-
-        row := HorizontalLayout {
-            padding: 4px;
-            spacing: 2px;
-            InkIconButton {
-                icon: InkIcons.classes;
-                label: "Classes";
-                active: LayoutState.classes-open;
-                clicked => {
-                    LayoutState.classes-open = !LayoutState.classes-open;
-                }
-            }
-            InkIconButton {
-                icon: InkIcons.objects;
-                label: "Objects";
-                active: LayoutState.objects-open;
-                clicked => {
-                    LayoutState.objects-open = !LayoutState.objects-open;
-                }
-            }
-            InkIconButton {
-                icon: InkIcons.image-controls;
-                label: "Image";
-                active: LayoutState.image-open;
-                clicked => {
-                    LayoutState.image-open = !LayoutState.image-open;
-                }
-            }
-        }
-    }
-}
-
 export component Workspace inherits Rectangle {
     in property <image> display_image;
     in property <image> ghost_image;
     in property <image> object_image;
 
     property <bool> on-image: LayoutState.mode != WorkspaceMode.results;
+    // The panels over the image: the left one (Steps, Images), the right
+    // column - away with Tab (`panels-hidden`).
+    property <bool> left-shown: root.on-image && LayoutState.steps-open && !LayoutState.panels-hidden;
+    property <bool> right-shown: root.on-image && !LayoutState.panels-hidden
+        && (LayoutState.classes-open || LayoutState.image-open || LayoutState.objects-open);
+    property <bool> objects-in-column: LayoutState.objects-open && !LayoutState.objects-as-table;
+    // The Tuning dock (pinned settings) at the bottom, between the panels -
+    // the full width with them hidden.
+    property <bool> tuning-shown: LayoutState.mode == WorkspaceMode.pipelines && PipelinesPanelState.tuned-settings.length > 0 && !LayoutState.tuning-hidden;
+    property <length> dock-h: 236px;
+    property <length> dock-x: root.left-shown ? Float.left-w + 2 * Float.gap : Float.gap;
+    property <length> dock-w: root.width - root.dock-x - (root.right-shown ? Float.right-w + 2 * Float.gap : Float.gap);
+    // What the dock and the objects table take at the bottom of the image.
+    property <length> bottom-room: root.tuning-shown ? root.dock-h + Float.gap : root.table-room;
     // Results, split with the image (board Z): the results left, the
     // viewer in a pane right - List and Plate, with an analysis open.
     property <bool> split: LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts;
@@ -102,7 +71,7 @@ export component Workspace inherits Rectangle {
     property <length> pane-h: root.height - 24px;
     property <length> strip-h: ResultsState.rail-mode == ResultsRailMode.matrix && ResultsState.split-thumbs.length > 0 ? 76px : 0px;
     // The objects table at the bottom, and the room it takes there.
-    property <bool> objects-table-shown: root.on-image && LayoutState.objects-open && LayoutState.objects-as-table;
+    property <bool> objects-table-shown: root.on-image && !LayoutState.panels-hidden && LayoutState.objects-open && LayoutState.objects-as-table;
     property <length> table-h: min(320px, root.height * 0.4);
     property <length> table-room: root.objects-table-shown ? root.table-h + Float.gap : 0px;
     property <length> table-x: LayoutState.mode == WorkspaceMode.pipelines ? Float.left-w + 2 * Float.gap : LayoutState.mode == WorkspaceMode.images ? Float.left-w + 20px + 2 * Float.gap : Float.gap;
@@ -113,13 +82,6 @@ export component Workspace inherits Rectangle {
         LayoutState.tuning-hidden = false;
     }
 
-    // A new analysis shows its card again.
-    property <bool> run-active: PipelineRunningState.active;
-    changed run-active => {
-        if self.run-active {
-            LayoutState.analysis-card-hidden = false;
-        }
-    }
 
     // Split with the image: the panes on the ground.
     background: root.split ? Ink.ground : Ink.viewport;
@@ -135,14 +97,16 @@ export component Workspace inherits Rectangle {
         width: root.split ? root.pane-w : root.width;
         height: root.split ? root.pane-h - root.strip-h : root.height;
         // Also with a dialog open - only the analysis' waiting one blocks it.
-        enabled: (root.on-image || root.split) && GlobalAppState.active_dialog != DialogType.pipeline-running;
+        enabled: root.on-image || root.split;
         split-mode: root.split;
         border-top-left-radius: root.split ? 10px : 0px;
         border-top-right-radius: root.split ? 10px : 0px;
         border-bottom-left-radius: root.split && root.strip-h == 0 ? 10px : 0px;
         border-bottom-right-radius: root.split && root.strip-h == 0 ? 10px : 0px;
-        inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
-        inset-right: LayoutState.mode == WorkspaceMode.results ? 0px : Float.right-w + 2 * Float.gap;
+        inset-left: root.left-shown ? Float.left-w + (LayoutState.mode == WorkspaceMode.images ? 20px : 0px) + 2 * Float.gap : 0px;
+        inset-right: root.right-shown ? Float.right-w + 2 * Float.gap : 0px;
+        // The bar (objects, Z, T) and the navigator sit on the dock / table.
+        inset-bottom: root.bottom-room;
     }
 
     // Several series and none chosen for the project: asked once (until
@@ -170,7 +134,7 @@ export component Workspace inherits Rectangle {
     }
 
     // -- Left --
-    if LayoutState.mode == WorkspaceMode.pipelines: InkPanel {
+    if root.left-shown && LayoutState.mode == WorkspaceMode.pipelines: InkPanel {
         x: Float.gap;
         y: Float.gap;
         width: Float.left-w;
@@ -180,7 +144,7 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    if LayoutState.mode == WorkspaceMode.images: InkPanel {
+    if root.left-shown && LayoutState.mode == WorkspaceMode.images: InkPanel {
         x: Float.gap;
         y: Float.gap;
         width: Float.left-w + 20px;
@@ -259,19 +223,14 @@ export component Workspace inherits Rectangle {
     // image's right side (its head's "Image"), above the navigator - the
     // same panel, not a second one.
     property <bool> split-image-panel: root.split && ResultsState.split-image-panel;
-    if root.on-image || root.split-image-panel: VerticalLayout {
+    if root.right-shown || root.split-image-panel: VerticalLayout {
         x: root.split-image-panel ? root.pane-x + root.pane-w - Float.right-w - 10px : parent.width - Float.right-w - Float.gap;
         y: root.split-image-panel ? 12px + 56px : Float.gap;
         width: Float.right-w;
         height: root.split-image-panel ? max(160px, root.pane-h - root.strip-h - 56px - 150px) : parent.height - 2 * Float.gap;
         spacing: 8px;
 
-        if !root.split-image-panel: HorizontalLayout {
-            vertical-stretch: 0;
-            alignment: end;
-            PanelSwitches { }
-        }
-
+        // A folded panel keeps its head; Objects (open) takes the rest.
         if LayoutState.classes-open && !root.split-image-panel: InkPanel {
             vertical-stretch: 0;
             max-height: 340px;
@@ -289,24 +248,91 @@ export component Workspace inherits Rectangle {
             }
         }
 
-        if LayoutState.objects-open && !LayoutState.objects-as-table && !root.split-image-panel: InkPanel {
-            vertical-stretch: 1;
+        if root.objects-in-column && !root.split-image-panel: InkPanel {
+            vertical-stretch: LayoutState.objects-folded ? 0 : 1;
             ObjectListPanel {
-                vertical-stretch: 1;
+                vertical-stretch: LayoutState.objects-folded ? 0 : 1;
             }
         }
 
         // Nothing to fill the column: the panels keep their size, at the top.
-        if !(LayoutState.objects-open && !LayoutState.objects-as-table && !root.split-image-panel): Rectangle {
+        if !(root.objects-in-column && !LayoutState.objects-folded && !root.split-image-panel): Rectangle {
             vertical-stretch: 1;
         }
     }
 
+    // Tab hid the panels: how to get them back.
+    if root.on-image && LayoutState.panels-hidden: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: LayoutState.annotate ? Float.gap + 44px + 8px : Float.gap;
+        width: hidden-row.preferred-width;
+        height: 34px;
+        border-radius: 17px;
+        background: #1C1D22EB;
+        TouchArea { }
+        hidden-row := HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 5px;
+            spacing: 10px;
+            alignment: center;
+            Text {
+                text: "Panels hidden";
+                font-size: Ink.fs-body;
+                color: #F4F4F5;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: tab-key.preferred-width + 10px;
+                    height: 18px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: #44464E;
+                    background: #2A2B31;
+                    tab-key := Text {
+                        text: "Tab";
+                        font-family: Ink.font-mono;
+                        font-size: Ink.fs-caption;
+                        color: #E4E4E7;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: show-text.preferred-width + 20px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: show-ta.has-hover ? #E4E4E7 : #FFFFFF;
+                    accessible-role: button;
+                    accessible-label: "Show the panels";
+                    accessible-action-default => {
+                        LayoutState.panels-hidden = false;
+                    }
+                    show-text := Text {
+                        text: "Show";
+                        font-size: Ink.fs-secondary;
+                        font-weight: 600;
+                        color: #1A1A1E;
+                    }
+                    show-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            LayoutState.panels-hidden = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // -- The selected object's details: left of the Objects list, level
-    // with its line at the list's bottom --
-    if root.on-image && LayoutState.objects-open && !LayoutState.objects-as-table && ObjectListState.selected_object.id != 0: ObjectDetails {
+    // with its selected row (inside the window) --
+    if root.right-shown && root.objects-in-column && !LayoutState.objects-folded && !root.tuning-shown && ObjectListState.selected_object.id != 0: ObjectDetails {
         x: parent.width - Float.right-w - 2 * Float.gap - self.width;
-        y: parent.height - Float.gap - self.height;
+        // Above the bar at the bottom of the image (40 px).
+        y: clamp(ObjectDetailsPlace.row-y - root.absolute-position.y - 8px, Float.gap, max(Float.gap, parent.height - 2 * Float.gap - 40px - root.bottom-room - self.height));
         width: 260px;
     }
 
@@ -323,13 +349,12 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    // -- The pinned settings, next to the steps --
-    if LayoutState.mode == WorkspaceMode.pipelines && PipelinesPanelState.tuned-settings.length > 0 && !LayoutState.tuning-hidden: InkPanel {
-        x: Float.left-w + 2 * Float.gap;
-        width: min(420px, parent.width - Float.left-w - Float.right-w - 4 * Float.gap);
-        // As high as its settings (at most what the image leaves).
-        height: min(self.preferred-height, parent.height - 2 * Float.gap - root.table-room);
-        y: parent.height - self.height - Float.gap - root.table-room;
+    // -- The pinned settings: a dock at the bottom, between the panels --
+    if root.tuning-shown: InkPanel {
+        x: root.dock-x;
+        width: root.dock-w;
+        height: root.dock-h;
+        y: parent.height - self.height - Float.gap;
         TuningPanel {
             close => {
                 LayoutState.tuning-hidden = true;
@@ -337,12 +362,75 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    // -- A running analysis, while the window stays usable --
-    // Bottom right, beside the right-hand panels: the Tuning panel and the
-    // steps keep their place on the left.
-    if PipelineRunningState.active && !LayoutState.analysis-card-hidden && GlobalAppState.active_dialog != DialogType.pipeline-running: AnalysisCard {
-        x: parent.width - self.width - (root.on-image ? Float.right-w + 2 * Float.gap : Float.gap);
-        y: parent.height - self.height - Float.gap - root.table-room;
+    // -- An analysis ended: a note under the top bar - gone after a few
+    // seconds when it went well, kept until closed when it didn't --
+    if PipelineRunningState.active && PipelineRunningState.done: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: Float.gap + (LayoutState.annotate ? 52px : 0px) + (LayoutState.panels-hidden && root.on-image ? 42px : 0px);
+        width: toast-row.preferred-width;
+        height: 36px;
+        border-radius: Ink.radius-lg;
+        background: Ink.glass;
+        border-width: 1px;
+        border-color: PipelineRunningState.has-error ? Ink.err : Ink.border;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: Ink.shadow;
+        accessible-role: text;
+        accessible-label: toast-text.text;
+        TouchArea { }
+        Timer {
+            interval: 6s;
+            running: !PipelineRunningState.has-error;
+            triggered => {
+                PipelineRunningState.close();
+            }
+        }
+        toast-row := HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 4px;
+            spacing: 10px;
+            Image {
+                width: 14px;
+                source: PipelineRunningState.has-error ? InkIcons.error : InkIcons.check;
+                colorize: PipelineRunningState.has-error ? Ink.err : Ink.ok;
+                image-fit: contain;
+            }
+            toast-text := Text {
+                text: PipelineRunningState.has-error ? "Analysis failed · " + PipelineRunningState.status-message
+                    : PipelineRunningState.images-total > 0 && PipelineRunningState.images-done == PipelineRunningState.images-total
+                        ? "Analysis finished · " + PipelineRunningState.images-total + (PipelineRunningState.images-total == 1 ? " image" : " images")
+                    : PipelineRunningState.status-message;
+                font-size: Ink.fs-body;
+                color: Ink.text;
+                vertical-alignment: center;
+                max-width: 560px;
+                overflow: elide;
+            }
+            if !PipelineRunningState.has-error: VerticalLayout {
+                alignment: center;
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.primary;
+                    text: "Open results";
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.results;
+                        PipelineRunningState.close();
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.close;
+                    label: "Close";
+                    clicked => {
+                        PipelineRunningState.close();
+                    }
+                }
+            }
+        }
     }
 
     // -- Top --

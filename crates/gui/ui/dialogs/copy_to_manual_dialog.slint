@@ -34,7 +34,7 @@ export component CopyToManualDialog inherits InkDialog {
             text: "No pipeline objects on this image - run the preview first.";
             wrap: word-wrap;
             color: Ink.text-mute;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
         }
         // (No rows for one object: its classes are shown below.)
         for row[i] in AnnotationState.copy-single < 0 ? AnnotationState.pipeline-classes : []: InkCheckbox {
@@ -56,7 +56,7 @@ export component CopyToManualDialog inherits InkDialog {
             if AnnotationState.pipeline-classes.length == 0: Text {
                 text: "No class";
                 color: Ink.text-mute;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
             }
             for row in AnnotationState.pipeline-classes: InkChip {
                 text: row.name;
@@ -101,6 +101,7 @@ export component CopyToManualDialog inherits InkDialog {
             text: "Copy";
             kind: InkButtonKind.primary;
             enabled: (AnnotationState.copy-single >= 0 || AnnotationState.pipeline-classes.length > 0) && (!root.one-class || root.target-class >= 0);
+            disabled-reason: "Nothing to copy - pick the objects and a class";
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
                 AnnotationState.copy-all-to-manual(root.one-class ? root.target-class : -1);

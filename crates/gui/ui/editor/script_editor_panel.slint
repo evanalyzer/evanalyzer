@@ -38,7 +38,7 @@ export component ScriptEditorPanel inherits InkDialog {
     property <color> c-string: Ink.dark ? #CE9178 : #A31515;
     property <color> c-number: Ink.dark ? #B5CEA8 : #098658;
     property <color> c-comment: Ink.dark ? #6A9955 : #008000;
-    property <length> code-font-size: 13px;
+    property <length> code-font-size: Ink.fs-body;
     property <length> pad: 6px;
     // Distance the cursor keeps from the visible edge while scrolling.
     property <length> margin: 2 * root.code-font-size;
@@ -83,7 +83,7 @@ export component ScriptEditorPanel inherits InkDialog {
 
                 Text {
                     text: "Tab indent · Ctrl+Shift+F format · Rhai";
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-mute;
                     vertical-alignment: center;
                 }
@@ -124,7 +124,7 @@ export component ScriptEditorPanel inherits InkDialog {
                             text: root.hl.line-numbers;
                             font-family: ScriptFont.family;
                             font-size: root.code-font-size;
-                            color: Ink.text-faint;
+                            color: Ink.text-mute;
                             horizontal-alignment: right;
                             vertical-alignment: top;
                             wrap: no-wrap;
@@ -263,7 +263,7 @@ export component ScriptEditorPanel inherits InkDialog {
 
                 search := LineEdit {
                     placeholder-text: "Search commands";
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                 }
 
                 Rectangle {
@@ -283,14 +283,14 @@ export component ScriptEditorPanel inherits InkDialog {
                                 alignment: center;
                                 Text {
                                     text: cmd.name;
-                                    font-size: 11px;
+                                    font-size: Ink.fs-secondary;
                                     color: Ink.text;
                                     overflow: elide;
                                 }
 
                                 Text {
                                     text: cmd.key;
-                                    font-size: 10px;
+                                    font-size: Ink.fs-caption;
                                     font-family: ScriptFont.family;
                                     color: Ink.text-mute;
                                     overflow: elide;
@@ -322,7 +322,7 @@ export component ScriptEditorPanel inherits InkDialog {
                             y: 8px;
                             width: parent.width - 16px;
                             text: root.selected-key == "" ? "Select a command to see its parameters. Double-click or Insert adds it at the cursor." : root.selected-doc;
-                            font-size: 10px;
+                            font-size: Ink.fs-caption;
                             color: Ink.text-dim;
                             wrap: word-wrap;
                             vertical-alignment: top;
@@ -333,6 +333,7 @@ export component ScriptEditorPanel inherits InkDialog {
                 InkButton {
                     text: "Insert at cursor";
                     enabled: root.selected-key != "";
+                    disabled-reason: "Pick an entry first";
                     clicked => {
                         root.insert-command(root.selected-key);
                     }
@@ -345,14 +346,14 @@ export component ScriptEditorPanel inherits InkDialog {
                 spacing: 6px;
                 Text {
                     text: root.diag.ok ? "✓" : "✕";
-                    font-size: 12px;
+                    font-size: Ink.fs-body;
                     color: root.diag.ok ? Ink.ok : Ink.err;
                     vertical-alignment: center;
                 }
 
                 Text {
                     text: root.diag.ok ? "No syntax errors" : (root.diag.line > 0 ? "Line \{root.diag.line}: \{root.diag.message}" : root.diag.message);
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                     color: root.diag.ok ? Ink.text-dim : Ink.err;
                     vertical-alignment: center;
                     horizontal-stretch: 1;

@@ -74,6 +74,7 @@ export component ClassSelectDialog inherits InkDialog {
         InkButton {
             text: "Add class";
             enabled: ClassSelectDialogState.selected_class_id >= 0;
+            disabled-reason: "Pick a class first";
             clicked => {
                 ObjectListState.object_add_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
                 root.done();
@@ -83,6 +84,7 @@ export component ClassSelectDialog inherits InkDialog {
             text: "Set class";
             kind: InkButtonKind.primary;
             enabled: ClassSelectDialogState.selected_class_id >= 0;
+            disabled-reason: "Pick a class first";
             clicked => {
                 ObjectListState.object_replace_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
                 root.done();

@@ -51,9 +51,9 @@ export global Ink {
     out property <color> border: root.pick(#E4E4E7, #2E2E33, #3E3E46);
     out property <color> border-soft: root.pick(#F0F0F2, #232327, #34343B);
     // -- Text --
-    out property <color> text: root.pick(#18181B, #F4F4F5, #E8E8EA);
-    out property <color> text-dim: root.pick(#52525B, #A1A1AA, #A8A8B0);
-    out property <color> text-mute: root.pick(#71717A, #71717A, #85858E);
+    out property <color> text: root.pick(#1A1A1E, #F4F4F5, #E8E8EA);
+    out property <color> text-dim: root.pick(#5A5E6A, #A1A1AA, #A8A8B0);
+    out property <color> text-mute: root.pick(#686C79, #71717A, #85858E);
     out property <color> text-faint: root.pick(#A1A1AA, #52525B, #62626B);
     // -- Actions --
     /// The primary button's fill, and the text on it.
@@ -61,16 +61,16 @@ export global Ink {
     out property <color> on-primary: root.pick(#FFFFFF, #18181B, #1E1E22);
     out property <color> primary-hover: root.pick(#27272A, #E4E4E7, #D4D4D8);
     /// Focus ring and the selected row's edge - the one accent.
-    out property <color> focus: root.pick(#5B5BD6, #8B8BF0, #9A9AF2);
-    out property <color> focus-ring: root.pick(#5B5BD62E, #8B8BF040, #9A9AF240);
+    out property <color> focus: root.pick(#2A6BDF, #8B8BF0, #9A9AF2);
+    out property <color> focus-ring: root.pick(#2A6BDF2E, #8B8BF040, #9A9AF240);
     // -- State --
     out property <color> err: root.pick(#DC2626, #F87171, #F28B8B);
     out property <color> err-tint: root.pick(#FDF2F2, #3A1D1F, #45282B);
     out property <color> warn: root.pick(#D97706, #FBBF24, #F2C14E);
     out property <color> warn-tint: root.pick(#FFF6E5, #3A2E14, #453A1E);
     out property <color> ok: root.pick(#16A34A, #4ADE80, #6BD69A);
-    out property <color> info: root.pick(#5B5BD6, #8B8BF0, #9A9AF2);
-    out property <color> info-tint: root.pick(#EEF0FF, #26264A, #34345A);
+    out property <color> info: root.pick(#2A6BDF, #8B8BF0, #9A9AF2);
+    out property <color> info-tint: root.pick(#EEF4FF, #26264A, #34345A);
     /// "NEW" tags.
     out property <color> new: root.pick(#D97706, #FBBF24, #F2C14E);
     out property <color> on-new: root.pick(#FFFFFF, #18181B, #1E1E22);
@@ -126,9 +126,23 @@ export global Ink {
     // -- Type --
     out property <string> font-sans: "IBM Plex Sans";
     out property <string> font-mono: "IBM Plex Mono";
-    out property <length> fs-xs: 10px;
-    out property <length> fs-sm: 11px;
-    out property <length> fs-md: 12px;
-    out property <length> fs-lg: 12.5px;
-    out property <length> fs-title: 15px;
+    // The type scale (logical px at 100 %): nothing a person reads is
+    // below 11 px - only glyphs (carets, badges) are.
+    /// Start and About headings (700).
+    out property <length> fs-display: 26px;
+    /// Start's action cards, a command's detail in Add step (600).
+    out property <length> fs-title: 16px;
+    /// Card titles, recent projects; big figures (600).
+    out property <length> fs-heading: 14px;
+    /// Dialog, step-settings and panel titles, the pipeline name (600).
+    out property <length> fs-dialog-title: 13.5px;
+    /// Inputs, list / step / class rows, menus, buttons (buttons 600).
+    out property <length> fs-body: 13px;
+    /// Setting labels, helper text, tooltips, the status bar, summaries.
+    out property <length> fs-secondary: 12px;
+    /// Uppercase section and column heads (600, +0.6 px tracking), the
+    /// smallest mono.
+    out property <length> fs-caption: 11px;
+    /// Big numbers (a well's value, About's figures).
+    out property <length> fs-figure: 20px;
 }

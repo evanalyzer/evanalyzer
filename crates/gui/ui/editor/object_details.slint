@@ -50,7 +50,7 @@ export component ObjectDetails inherits Rectangle {
 
         if root.sel.display_name != "": Text {
             text: root.sel.display_name;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             overflow: elide;
         }
@@ -96,7 +96,7 @@ export component ObjectDetails inherits Rectangle {
 
         if !root.sel.editable: Text {
             text: "From the pipeline · read-only";
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
             color: Ink.text-mute;
         }
     }

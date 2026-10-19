@@ -898,12 +898,54 @@ fn fill_connection_state(state: &ConnectionState<'_>, backend: &dyn Backend) {
 /// picks - through `ui_state`, so in remote mode it lives on the worker.
 fn apply_user_settings(ui: &AppWindow, ui_state: &Arc<UiState>) {
     apply_appearance(ui, ui_state);
+    apply_panels(ui, ui_state);
+    {
+        let ui_state = Arc::clone(ui_state);
+        let ui_weak = ui.as_weak();
+        ui.global::<LayoutState>().on_panels_changed(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let panels = panels_from_ui(&ui);
+                ui_state.update_app_settings(|settings| settings.panels = panels);
+            }
+        });
+    }
 
     let ui_state = Arc::clone(ui_state);
     ui.global::<Appearance>().on_scheme_changed(move |scheme| {
         ui_state
             .update_app_settings(|settings| settings.color_scheme = color_scheme_from_ui(scheme));
     });
+}
+
+/// The panels as the user left them: shown, folded, the image bar, the
+/// pipelines list.
+pub(crate) fn apply_panels(ui: &AppWindow, ui_state: &UiState) {
+    let panels = ui_state.load_app_settings().panels;
+    let layout = ui.global::<LayoutState>();
+    layout.set_steps_open(panels.steps_open);
+    layout.set_classes_open(panels.classes_open);
+    layout.set_image_open(panels.image_open);
+    layout.set_objects_open(panels.objects_open);
+    layout.set_classes_folded(panels.classes_folded);
+    layout.set_image_folded(panels.image_folded);
+    layout.set_objects_folded(panels.objects_folded);
+    layout.set_stack_bar_folded(panels.image_bar_folded);
+    layout.set_pipelines_list_open(panels.pipelines_list_open);
+}
+
+fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
+    let layout = ui.global::<LayoutState>();
+    evanalyzer_app::global::PanelSettings {
+        steps_open: layout.get_steps_open(),
+        classes_open: layout.get_classes_open(),
+        image_open: layout.get_image_open(),
+        objects_open: layout.get_objects_open(),
+        classes_folded: layout.get_classes_folded(),
+        image_folded: layout.get_image_folded(),
+        objects_folded: layout.get_objects_folded(),
+        image_bar_folded: layout.get_stack_bar_folded(),
+        pipelines_list_open: layout.get_pipelines_list_open(),
+    }
 }
 
 /// The remembered color scheme.
@@ -1377,6 +1419,32 @@ mod ui_state_tests {
 
         assert_eq!(ui.global::<Ink>().get_scheme(), InkScheme::Dim);
         assert_eq!(ui.global::<Ink>().get_scheme(), InkScheme::Dim);
+    }
+
+    /// Folded panels, the folded image bar, a hidden panel: kept per user
+    /// and back at the next start.
+    #[test]
+    fn the_panels_are_remembered_folded_and_shown_as_left() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
+        apply_user_settings(&ui, &ui_state);
+        let layout = ui.global::<LayoutState>();
+        assert!(layout.get_classes_open() && layout.get_image_open() && layout.get_objects_open());
+        assert!(!layout.get_image_folded());
+
+        layout.set_image_folded(true);
+        layout.set_stack_bar_folded(true);
+        layout.set_classes_open(false);
+        layout.invoke_panels_changed();
+        let saved = ui_state.load_app_settings().panels;
+        assert!(saved.image_folded && saved.image_bar_folded && !saved.classes_open);
+
+        let next = crate::editor::test_support::test_ui_window();
+        apply_panels(&next, &ui_state);
+        let layout = next.global::<LayoutState>();
+        assert!(layout.get_image_folded() && layout.get_stack_bar_folded());
+        assert!(!layout.get_classes_open() && layout.get_objects_open());
     }
 
     #[test]

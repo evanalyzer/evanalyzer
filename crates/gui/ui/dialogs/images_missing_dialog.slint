@@ -14,7 +14,7 @@ export component ImageMissingDialog inherits InkDialog {
         text: "The project's image files could not be found. They may have been moved or renamed, or the drive is disconnected.";
         wrap: word-wrap;
         color: Ink.text;
-        font-size: 13px;
+        font-size: Ink.fs-heading;
     }
 
     Rectangle {
@@ -26,7 +26,7 @@ export component ImageMissingDialog inherits InkDialog {
             width: parent.width - 16px;
             text: ImagesListState.act_image_root_dir;
             font-family: Ink.font-mono;
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
             wrap: word-wrap;
         }
@@ -36,7 +36,7 @@ export component ImageMissingDialog inherits InkDialog {
         text: "Search for them there, or select the folder they're in now?";
         wrap: word-wrap;
         color: Ink.text-dim;
-        font-size: 12px;
+        font-size: Ink.fs-body;
     }
 
     InkDialogFooter {

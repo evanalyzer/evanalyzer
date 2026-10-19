@@ -1,0 +1,130 @@
+// ink/info.slint — ⓘ next to a tricky setting: a click opens a small card
+// with its name, what it does, an optional sketch and a docs link.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+import { InkIconButton } from "button.slint";
+import { InkTipZone } from "tooltip.slint";
+
+export component InkInfoButton inherits Rectangle {
+    /// The setting's name (the card's title).
+    in property <string> title;
+    in property <string> text;
+    /// A sketch under the text (none: no sketch).
+    in property <image> diagram;
+    /// "Docs: …" link at the bottom ("" none).
+    in property <string> docs-url;
+    in property <string> docs-label: "Documentation";
+    in property <length> card-width: 300px;
+
+    // As high as its row; the button is centred in it.
+    width: 16px;
+    min-height: 16px;
+    accessible-role: button;
+    accessible-label: "About " + root.title;
+    accessible-action-default => {
+        card.show();
+    }
+
+    face := Rectangle {
+        y: (root.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: ta.has-hover ? Ink.info-tint : transparent;
+        Image {
+            source: InkIcons.info;
+            width: 14px;
+            height: 14px;
+            colorize: ta.has-hover ? Ink.focus : Ink.text-mute;
+        }
+    }
+
+    ta := TouchArea {
+        y: face.y;
+        height: face.height;
+        mouse-cursor: pointer;
+        clicked => {
+            card.show();
+        }
+    }
+
+    InkTipZone {
+        width: 100%;
+        height: 100%;
+        wanted: ta.has-hover && !ta.pressed;
+        text: "About " + root.title;
+    }
+
+    card := PopupWindow {
+        x: -12px;
+        y: face.y + face.height + 8px;
+        width: root.card-width;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: Ink.panel;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: Ink.radius-lg;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: Ink.shadow;
+
+            VerticalLayout {
+                padding-left: 14px;
+                padding-right: 6px;
+                padding-top: 6px;
+                padding-bottom: 12px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.title;
+                        font-size: Ink.fs-dialog-title;
+                        font-weight: 600;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    InkIconButton {
+                        size: 24px;
+                        icon: InkIcons.close;
+                        label: "Close";
+                        clicked => {
+                            card.close();
+                        }
+                    }
+                }
+                VerticalLayout {
+                    padding-right: 8px;
+                    spacing: 10px;
+                    Text {
+                        text: root.text;
+                        font-size: Ink.fs-body;
+                        color: Ink.text;
+                        wrap: word-wrap;
+                    }
+                    if root.diagram.width > 0: Image {
+                        source: root.diagram;
+                        image-fit: contain;
+                        height: min(120px, self.source.height * 1px);
+                    }
+                    if root.docs-url != "": Text {
+                        text: root.docs-label + " ↗";
+                        font-size: Ink.fs-secondary;
+                        color: Ink.focus;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                Platform.open-url(root.docs-url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
