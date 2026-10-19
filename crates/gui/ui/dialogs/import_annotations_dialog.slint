@@ -1,20 +1,22 @@
-// dialogs/import_annotations_dialog.slint — before picking the folder of
-// .geojson files: add them to the images' manual annotations, or replace
-// those of the images that have a file.
+// dialogs/import_annotations_dialog.slint — a .geojson file read for the
+// open image (from EVAnalyzer, QuPath or another tool): where each class
+// name found in it goes - a project class (the names needn't match), a new
+// one, no class, or not imported - and whether the shapes are added to the
+// image's manual annotations or replace them.
 
 import { Places } from "../api/layout.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { AnnotationState } from "../api/annotations.slint";
-import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkSegmented } from "../ink/ink.slint";
+import { Ink, InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkSegmented, InkSelect, InkSwatch } from "../ink/ink.slint";
 
 export component ImportAnnotationsDialog inherits InkDialog {
     // Left of the right-hand panels.
     from-right: true;
     anchor-x: Places.beside-right;
-    anchor-y: 200px;
+    anchor-y: 160px;
     title: "Import annotations";
-    subtitle: "GeoJSON - from EVAnalyzer or QuPath";
-    card-width: 380px;
+    subtitle: AnnotationState.geojson-image;
+    card-width: 420px;
     property <bool> replace: false;
     close => {
         GlobalAppState.active_dialog = DialogType.none;
@@ -23,11 +25,42 @@ export component ImportAnnotationsDialog inherits InkDialog {
     VerticalLayout {
         spacing: 10px;
         Text {
-            text: "Pick the folder with one .geojson file per image (named after the image).";
+            text: AnnotationState.import-file + " · " + AnnotationState.import-shapes + (AnnotationState.import-shapes == 1 ? " shape" : " shapes");
             wrap: word-wrap;
             color: Ink.text;
             font-size: Ink.fs-secondary;
         }
+
+        if AnnotationState.import-classes.length > 0: InkCaption {
+            text: "CLASSES IN THE FILE  →  HERE";
+        }
+        for row[i] in AnnotationState.import-classes: HorizontalLayout {
+            spacing: 8px;
+            InkSwatch {
+                y: (parent.height - self.height) / 2;
+                value: row.color;
+            }
+            Text {
+                horizontal-stretch: 1;
+                min-width: 80px;
+                text: (row.name == "" ? "(no class)" : row.name) + " · " + row.count;
+                font-size: Ink.fs-body;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            InkSelect {
+                width: 190px;
+                horizontal-stretch: 0;
+                label: "Import " + (row.name == "" ? "the shapes without a class" : row.name) + " as";
+                model: AnnotationState.import-targets;
+                selected: row.target;
+                picked(t) => {
+                    AnnotationState.import-classes[i].target = t;
+                }
+            }
+        }
+
         InkSegmented {
             model: ["Add to the annotations", "Replace them"];
             selected: root.replace ? 1 : 0;
@@ -36,7 +69,7 @@ export component ImportAnnotationsDialog inherits InkDialog {
             }
         }
         Text {
-            text: root.replace ? "The manual annotations of every image with a file are deleted first (Undo brings them back)." : "Annotations already there (the same pixels) are not added again.";
+            text: root.replace ? "This image's manual annotations are deleted first (Undo brings them back)." : "Annotations already there (the same pixels) are not added again.";
             wrap: word-wrap;
             color: Ink.text-mute;
             font-size: Ink.fs-caption;
@@ -52,11 +85,13 @@ export component ImportAnnotationsDialog inherits InkDialog {
             }
         }
         InkButton {
-            text: "Choose folder…";
+            text: "Import";
             kind: InkButtonKind.primary;
+            enabled: AnnotationState.import-shapes > 0;
+            disabled-reason: "No shapes in the file";
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
-                AnnotationState.import-geojson(root.replace);
+                AnnotationState.apply-import(root.replace);
             }
         }
     }

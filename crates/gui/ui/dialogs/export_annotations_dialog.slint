@@ -1,0 +1,58 @@
+// dialogs/export_annotations_dialog.slint — the open image's manual
+// annotations as GeoJSON (QuPath reads it): the classes to export, then
+// where to save it.
+
+import { Places } from "../api/layout.slint";
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { AnnotationState } from "../api/annotations.slint";
+import { Ink, InkButton, InkButtonKind, InkCheckbox, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+
+export component ExportAnnotationsDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 200px;
+    title: "Export annotations";
+    subtitle: AnnotationState.geojson-image;
+    card-width: 360px;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+
+    VerticalLayout {
+        spacing: 8px;
+        Text {
+            text: AnnotationState.export-classes.length == 0 ? "This image has no manual annotations." : "The manual annotations of these classes, as GeoJSON (QuPath reads it):";
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-secondary;
+        }
+        for row[i] in AnnotationState.export-classes: InkCheckbox {
+            text: row.name + " · " + row.count;
+            swatch: row.color;
+            checked: row.checked;
+            toggled(on) => {
+                AnnotationState.export-classes[i].checked = on;
+            }
+        }
+    }
+
+    InkDialogFooter {
+        InkButton {
+            text: "Cancel";
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+            }
+        }
+        InkButton {
+            kind: InkButtonKind.primary;
+            text: "Export…";
+            enabled: AnnotationState.export-classes.length > 0;
+            disabled-reason: "Nothing to export";
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                AnnotationState.export-geojson();
+            }
+        }
+    }
+}

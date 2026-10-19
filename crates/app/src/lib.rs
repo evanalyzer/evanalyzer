@@ -138,8 +138,8 @@ pub mod project {
     pub use crate::workspace::ProjectWithRuntime;
     pub use crate::workspace::annotation_measure::measure_on_source;
     pub use crate::workspace::annotations_geojson::{
-        ExportReport, ImportReport, PendingImport, apply_import, export_geojson, import_geojson,
-        measure_pending, read_geojson,
+        ClassTarget, FileClass, ImportReport, PendingImport, apply_import, default_class_target,
+        export_image_geojson, image_annotation_classes, measure_pending, read_image_geojson,
     };
     pub use crate::workspace::class_ids::{
         ClassIdChange, change_class_id, free_class_ids, next_class_id,

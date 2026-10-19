@@ -1,16 +1,17 @@
-//! Manual annotations as GeoJSON - read and written through the backend's
-//! [`FileSystem`] (this computer, or the server the project is on): one
-//! `<image>.geojson` per image (the
-//! image's path relative to the project, mirrored in the folder), a
-//! `FeatureCollection` of `Polygon`/`MultiPolygon` features in image pixel
-//! coordinates (y down) - the layout QuPath reads and writes, no schema of
-//! our own.
+//! Manual annotations as GeoJSON - one image at a time, read and written
+//! through the backend's [`FileSystem`] (this computer, or the server the
+//! project is on): a `FeatureCollection` of `Polygon`/`MultiPolygon`
+//! features in image pixel coordinates (y down) - the layout QuPath reads
+//! and writes, no schema of our own.
 //!
 //! Properties written: `objectType: "annotation"`, `classification`
 //! (`{name, color: [r, g, b]}`, the first class - QuPath's), `classes` (all
 //! class names, when there are several), `series`, `plane` (`{z, c, t}`),
-//! `excludeFromTraining` (only when set). Read: the same; without `classes`
-//! the `classification` name; unknown classes are created.
+//! `excludeFromTraining` (only when set). Export: the annotations of the
+//! chosen classes. Import: the same properties (without `classes` the
+//! `classification` name); each class name found goes where the user maps
+//! it - a project class, a new one, no class, or not imported - so files
+//! from other tools (QuPath) whose classes are named differently fit.
 //!
 //! Outlines run along the pixel edges, holes included: exporting and
 //! importing again gives back exactly the same pixels. Outlines from other
@@ -38,27 +39,18 @@ pub type Ring = Vec<[f64; 2]>;
 /// A polygon: its outline first, then its holes.
 pub type Polygon = Vec<Ring>;
 
-/// What an export wrote.
-#[derive(Debug, Default, PartialEq)]
-pub struct ExportReport {
-    pub files: usize,
-    pub objects: usize,
-}
-
 /// What an import read.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ImportReport {
-    /// Images that got annotations.
-    pub images: usize,
     pub objects: usize,
     /// Already there (same pixels): not added again.
     pub duplicates: usize,
     /// Classes that did not exist yet and were created.
     pub created_classes: Vec<String>,
-    /// `.geojson` files without a matching image in the project.
-    pub unmatched_files: Vec<PathBuf>,
     /// Features that are not (multi)polygons (points, lines) or are empty.
     pub skipped_features: usize,
+    /// Shapes left out: their classes were set to "don't import".
+    pub skipped_by_class: usize,
     /// Images whose file could not be read: their annotations have no
     /// intensities.
     pub unmeasured_images: Vec<PathBuf>,
@@ -326,98 +318,77 @@ fn feature(
     }))
 }
 
-/// Writes the manual annotations of every image that has any to
-/// `<folder>/<image path>.geojson`.
-pub fn export_geojson(
+/// The classes of image `rel_path`'s manual annotations (every series),
+/// each with how many annotations have it - `None`: those without a class.
+/// By class id, `None` last: the export dialog's list.
+pub fn image_annotation_classes(project: &ProjectWithRuntime, rel_path: &Path) -> Vec<(Option<u32>, usize)> {
+    let mut counts: HashMap<Option<u32>, usize> = HashMap::new();
+    if let Some(image) = project.settings.images.list.get(rel_path) {
+        for object in image.series.values().flat_map(|s| s.objects.iter()) {
+            for key in class_keys(object) {
+                *counts.entry(key).or_default() += 1;
+            }
+        }
+    }
+    let mut list: Vec<(Option<u32>, usize)> = counts.into_iter().collect();
+    list.sort_by_key(|(id, _)| (id.is_none(), *id));
+    list
+}
+
+/// An annotation's classes as the export dialog lists them (`None`: none).
+fn class_keys(object: &ObjectMetricSettings) -> Vec<Option<u32>> {
+    let ids: Vec<Option<u32>> = object
+        .object_class
+        .iter()
+        .filter_map(|c| match c {
+            ObjectClass::Global(id) => Some(Some(*id)),
+            _ => None,
+        })
+        .collect();
+    if ids.is_empty() { vec![None] } else { ids }
+}
+
+/// Writes the manual annotations of image `rel_path` (every series) that
+/// have one of `classes` (`None`: those without a class) to `file`, a
+/// `FeatureCollection` QuPath reads. How many were written.
+pub fn export_image_geojson(
     project: &ProjectWithRuntime,
     files: &dyn FileSystem,
-    folder: &Path,
-) -> Result<ExportReport, String> {
-    let mut report = ExportReport::default();
-    for (rel_path, image) in &project.settings.images.list {
-        let features: Vec<Value> = image
-            .series
-            .iter()
-            .flat_map(|(series, s)| {
-                s.objects
-                    .iter()
-                    .filter_map(move |o| feature(project, *series, o))
-            })
-            .collect();
-        if features.is_empty() {
-            continue;
-        }
-        let file = folder.join(geojson_name(rel_path));
-        if let Some(dir) = file.parent() {
-            files
-                .create_dir_all(dir)
-                .map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        report.objects += features.len();
-        let collection = json!({ "type": "FeatureCollection", "features": features });
-        let text = serde_json::to_string_pretty(&collection).map_err(|e| e.to_string())?;
-        files
-            .write_file(&file, text.as_bytes())
-            .map_err(|e| format!("{}: {e}", file.display()))?;
-        report.files += 1;
-    }
-    Ok(report)
-}
-
-/// `a/b.tif` -> `a/b.tif.geojson`.
-fn geojson_name(rel_path: &Path) -> PathBuf {
-    let mut name = rel_path.as_os_str().to_owned();
-    name.push(".geojson");
-    PathBuf::from(name)
-}
-
-// --- Import --------------------------------------------------------------
-
-/// Every `.geojson` file below `folder`.
-fn geojson_files(
-    files: &dyn FileSystem,
-    folder: &Path,
-    out: &mut Vec<PathBuf>,
-) -> Result<(), String> {
-    let entries = files
-        .list_dir(folder)
-        .map_err(|e| format!("{}: {e}", folder.display()))?;
-    for entry in entries {
-        if entry.is_dir {
-            geojson_files(files, &entry.path, out)?;
-        } else if entry
-            .path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("geojson"))
-        {
-            out.push(entry.path);
-        }
-    }
-    Ok(())
-}
-
-/// The project image a `.geojson` file belongs to: the same relative path
-/// (as exported), else the one image whose file name or stem is the file's
-/// stem (as QuPath names them).
-fn matching_image(project: &ProjectWithRuntime, folder: &Path, file: &Path) -> Option<PathBuf> {
-    let rel = file.strip_prefix(folder).ok()?;
-    let without_suffix = rel.with_extension("");
-    if project.settings.images.list.contains_key(&without_suffix) {
-        return Some(without_suffix);
-    }
-    let stem = file.file_stem()?.to_string_lossy().to_string();
-    let candidates: Vec<&PathBuf> = project
+    rel_path: &Path,
+    classes: &HashSet<Option<u32>>,
+    file: &Path,
+) -> Result<usize, String> {
+    let image = project
         .settings
         .images
         .list
-        .keys()
-        .filter(|p| {
-            p.file_name().is_some_and(|n| n.to_string_lossy() == stem)
-                || p.file_stem().is_some_and(|n| n.to_string_lossy() == stem)
+        .get(rel_path)
+        .ok_or_else(|| format!("{} is not an image of the project", rel_path.display()))?;
+    let features: Vec<Value> = image
+        .series
+        .iter()
+        .flat_map(|(series, s)| {
+            s.objects
+                .iter()
+                .filter(|o| class_keys(o).iter().any(|k| classes.contains(k)))
+                .filter_map(move |o| feature(project, *series, o))
         })
         .collect();
-    (candidates.len() == 1).then(|| candidates[0].clone())
+    if let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
+        files
+            .create_dir_all(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let count = features.len();
+    let collection = json!({ "type": "FeatureCollection", "features": features });
+    let text = serde_json::to_string_pretty(&collection).map_err(|e| e.to_string())?;
+    files
+        .write_file(file, text.as_bytes())
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(count)
 }
+
+// --- Import --------------------------------------------------------------
 
 fn parse_ring(value: &Value) -> Option<Ring> {
     value
@@ -475,29 +446,41 @@ fn feature_classes(properties: &Value) -> (Vec<String>, Option<u32>) {
     (names, color)
 }
 
-/// The project class named `name`, created when there is none.
-fn class_for_name(
-    project: &mut ProjectWithRuntime,
-    name: &str,
-    color: Option<u32>,
-    report: &mut ImportReport,
-) -> ObjectClass {
-    if let Some(class) = project
+/// Where the shapes of a class name found in a file go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassTarget {
+    /// Into this project class (its id).
+    Class(u32),
+    /// Into a new class of that name (its colour from the file).
+    New,
+    /// Without a class.
+    NoClass,
+    /// Not imported.
+    Skip,
+}
+
+/// A class name found in a file ("": shapes without one), how many shapes
+/// carry it, its colour there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileClass {
+    pub name: String,
+    pub count: usize,
+    pub color: Option<u32>,
+}
+
+/// What a name maps to unless the user picks otherwise: the project class
+/// of that name (case does not matter), else a new one; no name: no class.
+pub fn default_class_target(project: &ProjectWithRuntime, name: &str) -> ClassTarget {
+    if name.is_empty() {
+        return ClassTarget::NoClass;
+    }
+    project
         .settings
         .classification
         .classes()
         .iter()
-        .find(|c| c.name == name)
-    {
-        return ObjectClass::Global(class.id);
-    }
-    report.created_classes.push(name.to_string());
-    project.settings.classification.add_class(Class {
-        id: 0,
-        color: color.unwrap_or(0x808080),
-        name: name.to_string(),
-        notes: String::new(),
-    })
+        .find(|c| c.name.eq_ignore_ascii_case(name))
+        .map_or(ClassTarget::New, |c| ClassTarget::Class(c.id))
 }
 
 /// One annotation read from a file, not yet in the project.
@@ -521,130 +504,150 @@ struct PendingImage {
     objects: Vec<PendingObject>,
 }
 
-/// `.geojson` files read and turned into annotations ([`read_geojson`]),
-/// then measured on their images ([`measure_pending`]) and put into the
-/// project ([`apply_import`]) - in three steps, so the slow middle one
-/// needs no access to the project.
+/// A `.geojson` file read for one image ([`read_image_geojson`]), then
+/// measured on it ([`measure_pending`]) and put into the project
+/// ([`apply_import`]) - in steps, so the slow measuring needs no access to
+/// the project and the user can map the file's classes in between.
 #[derive(Debug, Default, Clone)]
 pub struct PendingImport {
     images: Vec<PendingImage>,
     report: ImportReport,
 }
 
-/// Step 1: reads the `.geojson` files below `folder` for the images of
-/// `project` (shapes, classes by name, planes); measures nothing yet.
-pub fn read_geojson(
+impl PendingImport {
+    /// The class names in the file, by first appearance; "" for shapes
+    /// without one.
+    pub fn file_classes(&self) -> Vec<FileClass> {
+        let mut list: Vec<FileClass> = Vec::new();
+        for object in self.images.iter().flat_map(|i| i.objects.iter()) {
+            let names: Vec<&str> = if object.class_names.is_empty() {
+                vec![""]
+            } else {
+                object.class_names.iter().map(String::as_str).collect()
+            };
+            for name in names {
+                match list.iter_mut().find(|c| c.name == name) {
+                    Some(class) => class.count += 1,
+                    None => list.push(FileClass {
+                        name: name.to_string(),
+                        count: 1,
+                        color: object.color,
+                    }),
+                }
+            }
+        }
+        list
+    }
+
+    /// Shapes read (points, lines and empty shapes not counted).
+    pub fn shapes(&self) -> usize {
+        self.images.iter().map(|i| i.objects.len()).sum()
+    }
+}
+
+/// Step 1: reads `file` (from EVAnalyzer, QuPath or another tool) as the
+/// annotations of image `rel_path`: shapes, class names, planes. A shape's
+/// series is the file's (EVAnalyzer writes it) when the image has it, else
+/// `series` - the one shown. Measures nothing yet.
+pub fn read_image_geojson(
     project: &ProjectWithRuntime,
     files: &dyn FileSystem,
-    folder: &Path,
+    file: &Path,
+    rel_path: &Path,
+    series: i32,
 ) -> Result<PendingImport, String> {
-    let mut found = Vec::new();
-    geojson_files(files, folder, &mut found)?;
-    found.sort();
-    let mut pending = PendingImport::default();
-    for file in found {
-        let Some(rel_path) = matching_image(project, folder, &file) else {
-            pending.report.unmatched_files.push(file);
-            continue;
-        };
-        let Some(image) = project.settings.images.list.get(&rel_path) else {
-            continue;
-        };
-        let bytes = files
-            .read_file(&file)
-            .map_err(|e| format!("{}: {e}", file.display()))?;
-        let text = String::from_utf8_lossy(&bytes);
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|e| format!("{}: not GeoJSON: {e}", file.display()))?;
-        // A FeatureCollection, a list of features (older QuPath), or one.
-        let features: Vec<Value> = match &value {
-            Value::Array(list) => list.clone(),
-            v if v.get("type").and_then(Value::as_str) == Some("FeatureCollection") => v
-                .get("features")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
-            v => vec![v.clone()],
-        };
+    let image = project
+        .settings
+        .images
+        .list
+        .get(rel_path)
+        .ok_or_else(|| format!("{} is not an image of the project", rel_path.display()))?;
+    let bytes = files
+        .read_file(file)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("{}: not GeoJSON: {e}", file.display()))?;
+    // A FeatureCollection, a list of features (older QuPath), or one.
+    let features: Vec<Value> = match &value {
+        Value::Array(list) => list.clone(),
+        v if v.get("type").and_then(Value::as_str) == Some("FeatureCollection") => v
+            .get("features")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        v => vec![v.clone()],
+    };
 
-        let first_series = image.series.keys().next().copied().unwrap_or(0);
-        let sizes: HashMap<i32, (u32, u32)> = image
-            .series
-            .iter()
-            .map(|(k, s)| (*k, (s.image_width as u32, s.image_height as u32)))
-            .collect();
-        let mut objects = Vec::new();
-        for feature in &features {
-            let Some(rings) = feature.get("geometry").and_then(geometry_rings) else {
-                pending.report.skipped_features += 1;
-                continue;
-            };
-            let properties = feature.get("properties").cloned().unwrap_or(Value::Null);
-            let series = properties
-                .get("series")
+    let sizes: HashMap<i32, (u32, u32)> = image
+        .series
+        .iter()
+        .map(|(k, s)| (*k, (s.image_width as u32, s.image_height as u32)))
+        .collect();
+    let mut pending = PendingImport::default();
+    let mut objects = Vec::new();
+    for feature in &features {
+        let Some(rings) = feature.get("geometry").and_then(geometry_rings) else {
+            pending.report.skipped_features += 1;
+            continue;
+        };
+        let properties = feature.get("properties").cloned().unwrap_or(Value::Null);
+        let series = properties
+            .get("series")
+            .and_then(Value::as_i64)
+            .map(|s| s as i32)
+            .filter(|s| sizes.contains_key(s))
+            .unwrap_or(series);
+        let (width, height) = sizes.get(&series).copied().unwrap_or((0, 0));
+        let Some((mask, bbox)) = rings_to_mask(&rings, width, height) else {
+            pending.report.skipped_features += 1;
+            continue;
+        };
+        let plane = properties.get("plane");
+        let plane_value = |key: &str| {
+            plane
+                .and_then(|p| p.get(key))
                 .and_then(Value::as_i64)
-                .map(|s| s as i32)
-                .filter(|s| sizes.contains_key(s))
-                .unwrap_or(first_series);
-            let (width, height) = sizes.get(&series).copied().unwrap_or((0, 0));
-            let Some((mask, bbox)) = rings_to_mask(&rings, width, height) else {
-                pending.report.skipped_features += 1;
-                continue;
-            };
-            let plane = properties.get("plane");
-            let plane_value = |key: &str| {
-                plane
-                    .and_then(|p| p.get(key))
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0) as i32
-            };
-            let (class_names, color) = feature_classes(&properties);
-            let size = ImageSize {
-                width: if width == 0 {
-                    usize::MAX
-                } else {
-                    width as usize
-                },
-                height: if height == 0 {
-                    usize::MAX
-                } else {
-                    height as usize
-                },
-            };
-            let mut object = Object::from_mask_geometry(
-                &size,
-                mask,
-                bbox,
-                ImagePlane {
-                    z: plane_value("z"),
-                    c: plane_value("c"),
-                    t: plane_value("t"),
-                },
-                HashSet::new(),
-            )
-            .to_object_settings();
-            object.exclude_from_training = properties
-                .get("excludeFromTraining")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            objects.push(PendingObject {
-                series,
-                class_names,
-                color,
-                object,
-            });
-        }
-        pending.images.push(PendingImage {
-            path: project
-                .settings
-                .images
-                .root
-                .as_ref()
-                .map(|root| root.join(&rel_path)),
-            rel_path,
-            objects,
+                .unwrap_or(0) as i32
+        };
+        let (class_names, color) = feature_classes(&properties);
+        let size = ImageSize {
+            width: if width == 0 { usize::MAX } else { width as usize },
+            height: if height == 0 { usize::MAX } else { height as usize },
+        };
+        let mut object = Object::from_mask_geometry(
+            &size,
+            mask,
+            bbox,
+            ImagePlane {
+                z: plane_value("z"),
+                c: plane_value("c"),
+                t: plane_value("t"),
+            },
+            HashSet::new(),
+        )
+        .to_object_settings();
+        object.exclude_from_training = properties
+            .get("excludeFromTraining")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        objects.push(PendingObject {
+            series,
+            class_names,
+            color,
+            object,
         });
     }
+    pending.images.push(PendingImage {
+        path: project
+            .settings
+            .images
+            .root
+            .as_ref()
+            .map(|root| root.join(rel_path)),
+        rel_path: rel_path.to_path_buf(),
+        objects,
+    });
     Ok(pending)
 }
 
@@ -693,23 +696,54 @@ pub fn measure_pending(
 }
 
 /// Step 3: puts the read annotations into the manual annotations of their
-/// images. `replace`: an image's manual annotations are deleted first
-/// (only images with a file); else added to them (pixels already annotated
-/// the same are skipped). Unknown classes are created.
+/// image, their class names mapped by `mapping` (a name not in it: its
+/// [`default_class_target`]). A shape whose names all map to
+/// [`ClassTarget::Skip`] is left out. `replace`: the image's manual
+/// annotations are deleted first; else added to them (pixels already
+/// annotated the same are skipped).
 pub fn apply_import(
     project: &mut ProjectWithRuntime,
     pending: PendingImport,
     replace: bool,
+    mapping: &HashMap<String, ClassTarget>,
 ) -> ImportReport {
     let mut report = pending.report;
+    // A new class per name, made once.
+    let mut created: HashMap<String, ObjectClass> = HashMap::new();
     for image in pending.images {
         let mut objects = Vec::new();
         for p in image.objects {
+            let names: Vec<String> = if p.class_names.is_empty() {
+                vec![String::new()]
+            } else {
+                p.class_names.clone()
+            };
+            let targets: Vec<(String, ClassTarget)> = names
+                .into_iter()
+                .map(|name| {
+                    let target = mapping
+                        .get(&name)
+                        .cloned()
+                        .unwrap_or_else(|| default_class_target(project, &name));
+                    (name, target)
+                })
+                .collect();
+            if targets.iter().all(|(_, t)| *t == ClassTarget::Skip) {
+                report.skipped_by_class += 1;
+                continue;
+            }
             let mut object = p.object;
-            object.object_class = p
-                .class_names
-                .iter()
-                .map(|name| class_for_name(project, name, p.color, &mut report))
+            object.object_class = targets
+                .into_iter()
+                .filter_map(|(name, target)| match target {
+                    ClassTarget::Class(id) => Some(ObjectClass::Global(id)),
+                    ClassTarget::New if !name.is_empty() => Some(
+                        *created
+                            .entry(name.clone())
+                            .or_insert_with(|| new_class(project, &name, p.color, &mut report)),
+                    ),
+                    _ => None,
+                })
                 .collect();
             objects.push((p.series, object));
         }
@@ -732,28 +766,24 @@ pub fn apply_import(
             added += 1;
         }
         report.objects += added;
-        report.images += usize::from(added > 0);
     }
     report
 }
 
-/// All three steps at once, files and images on this computer:
-/// reads the `.geojson` files below `folder`, measures them, puts them
-/// into the project (see [`apply_import`]).
-pub fn import_geojson(
+/// A new project class `name` (the file's colour, else grey).
+fn new_class(
     project: &mut ProjectWithRuntime,
-    folder: &Path,
-    replace: bool,
-) -> Result<ImportReport, String> {
-    let files = crate::backend::LocalFileSystem::default();
-    let mut pending = read_geojson(project, &files, folder)?;
-    measure_pending(&mut pending, |path, series, objects| {
-        let source = crate::backend::local::image_reader::ReaderPool::open(path)
-            .map_err(|e| e.to_string())?;
-        crate::workspace::annotation_measure::measure_on_source(&source, series, objects)
-            .map_err(|e| e.to_string())
-    });
-    Ok(apply_import(project, pending, replace))
+    name: &str,
+    color: Option<u32>,
+    report: &mut ImportReport,
+) -> ObjectClass {
+    report.created_classes.push(name.to_string());
+    project.settings.classification.add_class(Class {
+        id: 0,
+        color: color.unwrap_or(0x808080),
+        name: name.to_string(),
+        notes: String::new(),
+    })
 }
 
 #[cfg(test)]
@@ -949,8 +979,28 @@ mod tests {
         }
     }
 
+    /// Reads `file` for image `rel` (series 0), measures it on this
+    /// computer, puts it in with `mapping`.
+    fn import_file(
+        project: &mut ProjectWithRuntime,
+        file: &Path,
+        rel: &str,
+        replace: bool,
+        mapping: &HashMap<String, ClassTarget>,
+    ) -> ImportReport {
+        let files = crate::backend::LocalFileSystem::default();
+        let mut pending = read_image_geojson(project, &files, file, Path::new(rel), 0).unwrap();
+        measure_pending(&mut pending, |path, series, objects| {
+            let source = crate::backend::local::image_reader::ReaderPool::open(path)
+                .map_err(|e| e.to_string())?;
+            crate::workspace::annotation_measure::measure_on_source(&source, series, objects)
+                .map_err(|e| e.to_string())
+        });
+        apply_import(project, pending, replace, mapping)
+    }
+
     #[test]
-    fn annotations_go_out_and_come_back_into_another_project() {
+    fn the_chosen_classes_of_one_image_go_out_and_come_back_into_another_project() {
         let mut source = project();
         let nuclei = source
             .settings
@@ -975,41 +1025,48 @@ mod tests {
                 .push(annotation(1, &["##", "##"], 2, &[nuclei]));
             series.objects.push(excluded);
         }
+        assert_eq!(
+            image_annotation_classes(&source, Path::new("a.tif")),
+            vec![(Some(nuclei), 1), (None, 1)]
+        );
+        assert!(image_annotation_classes(&source, Path::new("sub/b.tif")).is_empty());
+
         let dir = tempfile::tempdir().unwrap();
-        let report = export_geojson(
+        let files = crate::backend::LocalFileSystem::default();
+        // Only the Nuclei: one.
+        let only = dir.path().join("only nuclei.geojson");
+        let written =
+            export_image_geojson(&source, &files, Path::new("a.tif"), &HashSet::from([Some(nuclei)]), &only)
+                .unwrap();
+        assert_eq!(written, 1);
+        // Both, under a name of the user's choosing.
+        let file = dir.path().join("out/my annotations.geojson");
+        let written = export_image_geojson(
             &source,
-            &crate::backend::LocalFileSystem::default(),
-            dir.path(),
+            &files,
+            Path::new("a.tif"),
+            &HashSet::from([Some(nuclei), None]),
+            &file,
         )
         .unwrap();
-        assert_eq!(
-            report,
-            ExportReport {
-                files: 1,
-                objects: 2
-            }
-        );
-        let file = dir.path().join("a.tif.geojson");
-        let text = std::fs::read_to_string(&file).unwrap();
-        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(written, 2);
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(value["type"], "FeatureCollection");
-        assert_eq!(
-            value["features"][0]["properties"]["classification"]["name"],
-            "Nuclei"
-        );
+        assert_eq!(value["features"][0]["properties"]["classification"]["name"], "Nuclei");
         assert_eq!(
             value["features"][0]["properties"]["classification"]["color"],
             json!([0x30, 0x80, 0xf0])
         );
 
-        // Into a project without classes: "Nuclei" is created.
+        // Into another image of a project without classes: "Nuclei" is
+        // created (the default for an unknown name).
         let mut target = project();
         target.settings.classification.classes_mut().clear();
-        let report = import_geojson(&mut target, dir.path(), false).unwrap();
-        assert_eq!(report.images, 1);
+        let mapping = HashMap::new();
+        let report = import_file(&mut target, &file, "sub/b.tif", false, &mapping);
         assert_eq!(report.objects, 2);
         assert_eq!(report.created_classes, vec!["Nuclei".to_string()]);
-        let objects = &target.settings.images.list[Path::new("a.tif")].series[&0].objects;
+        let objects = &target.settings.images.list[Path::new("sub/b.tif")].series[&0].objects;
         let source_objects = &source.settings.images.list[Path::new("a.tif")].series[&0].objects;
         for (back, original) in objects.iter().zip(source_objects) {
             assert!(same_shape(back, original), "same pixels and plane");
@@ -1019,16 +1076,12 @@ mod tests {
         assert_eq!(objects[0].area, 4, "measured from the shape");
 
         // Again: nothing new; replace: the same two.
-        let again = import_geojson(&mut target, dir.path(), false).unwrap();
+        let again = import_file(&mut target, &file, "sub/b.tif", false, &mapping);
         assert_eq!((again.objects, again.duplicates), (0, 2));
-        let replaced = import_geojson(&mut target, dir.path(), true).unwrap();
+        assert!(again.created_classes.is_empty(), "the class exists now");
+        let replaced = import_file(&mut target, &file, "sub/b.tif", true, &mapping);
         assert_eq!(replaced.objects, 2);
-        assert_eq!(
-            target.settings.images.list[Path::new("a.tif")].series[&0]
-                .objects
-                .len(),
-            2
-        );
+        assert_eq!(target.settings.images.list[Path::new("sub/b.tif")].series[&0].objects.len(), 2);
     }
 
     #[test]
@@ -1054,12 +1107,9 @@ mod tests {
             "geometry": { "type": "Polygon", "coordinates": [[[10, 10], [14, 10], [14, 13], [10, 13], [10, 10]]] },
             "properties": { "classification": { "name": "Cells" } }
         });
-        std::fs::write(
-            dir.path().join("slice_Z0_C0_T0.tif.geojson"),
-            json!({ "type": "FeatureCollection", "features": [square] }).to_string(),
-        )
-        .unwrap();
-        let report = import_geojson(&mut project, dir.path(), false).unwrap();
+        let file = dir.path().join("cells.geojson");
+        std::fs::write(&file, json!({ "type": "FeatureCollection", "features": [square] }).to_string()).unwrap();
+        let report = import_file(&mut project, &file, "slice_Z0_C0_T0.tif", false, &HashMap::new());
         assert_eq!(report.objects, 1);
         assert!(report.unmeasured_images.is_empty(), "{report:?}");
 
@@ -1076,48 +1126,61 @@ mod tests {
 
         // Without the image file: imported, not measured - and said so.
         project.settings.images.root = Some(PathBuf::from("/no/such/folder"));
-        let report = import_geojson(&mut project, dir.path(), true).unwrap();
+        let report = import_file(&mut project, &file, "slice_Z0_C0_T0.tif", true, &HashMap::new());
         assert_eq!(report.objects, 1);
-        assert_eq!(
-            report.unmeasured_images,
-            vec![PathBuf::from("slice_Z0_C0_T0.tif")]
-        );
+        assert_eq!(report.unmeasured_images, vec![PathBuf::from("slice_Z0_C0_T0.tif")]);
     }
 
+    /// A QuPath file: a JSON list, a point, classes named differently -
+    /// mapped onto the project's, one class left out.
     #[test]
-    fn qupath_files_are_matched_by_name_and_their_points_skipped() {
+    fn qupath_classes_are_mapped_onto_the_projects_and_points_skipped() {
         let mut project = project();
+        let nuclei = project.settings.classification.classes().iter().find(|c| c.name == "Nuclei").unwrap().id;
         let dir = tempfile::tempdir().unwrap();
-        // QuPath: an image name without folder, a JSON list, a point, a
-        // classification name only.
-        let text = json!([
-            {
+        let shape = |x: f64, class: &str| {
+            json!({
                 "type": "Feature",
-                "geometry": { "type": "Polygon", "coordinates": [[[1.0, 1.0], [4.0, 1.0], [4.0, 3.0], [1.0, 3.0], [1.0, 1.0]]] },
-                "properties": { "objectType": "annotation", "classification": { "name": "Tumor", "color": [200, 0, 0] } }
-            },
+                "geometry": { "type": "Polygon", "coordinates": [[[x, 1.0], [x + 3.0, 1.0], [x + 3.0, 3.0], [x, 3.0], [x, 1.0]]] },
+                "properties": { "objectType": "annotation", "classification": { "name": class, "color": [200, 0, 0] } }
+            })
+        };
+        let text = json!([
+            shape(1.0, "Nucleus"),
+            shape(6.0, "Nucleus"),
+            shape(11.0, "Stroma"),
+            shape(15.0, "Tumor"),
             { "type": "Feature", "geometry": { "type": "Point", "coordinates": [5.0, 5.0] }, "properties": {} }
         ]);
-        std::fs::write(dir.path().join("b.geojson"), text.to_string()).unwrap();
-        std::fs::write(dir.path().join("unknown.geojson"), "[]").unwrap();
-        let report = import_geojson(&mut project, dir.path(), false).unwrap();
-        assert_eq!(report.objects, 1);
-        assert_eq!(report.skipped_features, 1);
+        let file = dir.path().join("qupath export.geojson");
+        std::fs::write(&file, text.to_string()).unwrap();
+
+        // What the mapping dialog lists; the defaults: unknown names new.
+        let files = crate::backend::LocalFileSystem::default();
+        let pending = read_image_geojson(&project, &files, &file, Path::new("a.tif"), 0).unwrap();
+        let names: Vec<(String, usize)> = pending.file_classes().into_iter().map(|c| (c.name, c.count)).collect();
+        assert_eq!(names, vec![("Nucleus".into(), 2), ("Stroma".into(), 1), ("Tumor".into(), 1)]);
+        assert_eq!(pending.shapes(), 4);
+        assert_eq!(default_class_target(&project, "nuclei"), ClassTarget::Class(nuclei));
+        assert_eq!(default_class_target(&project, "Stroma"), ClassTarget::New);
+        assert_eq!(default_class_target(&project, ""), ClassTarget::NoClass);
+
+        let mapping = HashMap::from([
+            ("Nucleus".to_string(), ClassTarget::Class(nuclei)),
+            ("Stroma".to_string(), ClassTarget::Skip),
+            ("Tumor".to_string(), ClassTarget::New),
+        ]);
+        let report = import_file(&mut project, &file, "a.tif", false, &mapping);
+        assert_eq!(report.objects, 3);
+        assert_eq!(report.skipped_features, 1, "the point");
+        assert_eq!(report.skipped_by_class, 1, "Stroma");
         assert_eq!(report.created_classes, vec!["Tumor".to_string()]);
-        assert_eq!(
-            report.unmatched_files,
-            vec![dir.path().join("unknown.geojson")]
-        );
-        let object = &project.settings.images.list[Path::new("sub/b.tif")].series[&0].objects[0];
-        assert_eq!(object.bbox, [1, 1, 3, 2]);
-        assert_eq!(object.area, 6);
-        let tumor = project
-            .settings
-            .classification
-            .classes()
-            .iter()
-            .find(|c| c.name == "Tumor")
-            .unwrap();
+        let objects = &project.settings.images.list[Path::new("a.tif")].series[&0].objects;
+        assert_eq!(objects[0].object_class, HashSet::from([ObjectClass::Global(nuclei)]));
+        assert_eq!(objects[0].bbox, [1, 1, 3, 2]);
+        assert_eq!(objects[0].area, 6);
+        let tumor = project.settings.classification.classes().iter().find(|c| c.name == "Tumor").unwrap();
         assert_eq!(tumor.color, 0xc80000);
+        assert!(project.settings.images.list[Path::new("sub/b.tif")].series[&0].objects.is_empty(), "only the chosen image");
     }
 }

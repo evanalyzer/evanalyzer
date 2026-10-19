@@ -3,13 +3,33 @@
 // ⋯ (or a right-click) on a class edits, copies, moves or deletes it; the
 // head's ⋯ adds the classes found in the images.
 
+import { ScrollView } from "std-widgets.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ImagesListState } from "../api/images_list.slint";
-import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
+import {
+    ClassificationSettingsState,
+} from "../api/classification_class_edit.slint";
 import { ToolState, ViewportObjectState } from "../api/viewport.slint";
-import { ClassItemData, ClassificationState } from "../api/classification.slint";
+import {
+    ClassItemData,
+    ClassificationState,
+} from "../api/classification.slint";
 import { LayoutState } from "../api/layout.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkButton, InkButtonKind, InkIconButton } from "../ink/ink.slint";
+import {
+    Ink,
+    InkIcons,
+    InkPanelHead,
+    InkListRow,
+    InkBusy,
+    InkMenuFrame,
+    InkMenuItem,
+    InkMenuCaption,
+    InkMenuSeparator,
+    InkHint,
+    InkButton,
+    InkButtonKind,
+    InkIconButton,
+} from "../ink/ink.slint";
 import { FocusBanner } from "pipeline_focus.slint";
 
 export component ClassificationPanel inherits Rectangle {
@@ -64,7 +84,11 @@ export component ClassificationPanel inherits Rectangle {
             action-enabled: ImagesListState.images_list.length > 0;
             action-disabled-reason: "Open images first";
             action => {
-                ClassificationState.class_auto_add_and_merge();
+                if ClassificationState.classes_list.length > 1 {
+                    GlobalAppState.active_dialog = DialogType.classification_confirm_auto_add_dialog;
+                } else {
+                    ClassificationState.class_auto_add_and_replace();
+                }
             }
             add-label: "New class";
             has-more: true;
@@ -90,8 +114,8 @@ export component ClassificationPanel inherits Rectangle {
                 min-height: 60px;
                 preferred-height: rows.preferred-height;
 
-                Flickable {
-                    content-height: rows.preferred-height;
+                // With a scrollbar: there may be more classes than room.
+                ScrollView {
                     rows := VerticalLayout {
                         alignment: start;
                         spacing: 0px;
@@ -141,6 +165,7 @@ export component ClassificationPanel inherits Rectangle {
                                     }
                                 }
                             }
+
                             Text {
                                 text: ImagesListState.images_list.length > 0 ? "or + to create one yourself" : "Open images first, or + to create one yourself";
                                 font-size: Ink.fs-secondary;
@@ -155,6 +180,7 @@ export component ClassificationPanel inherits Rectangle {
                 if ClassificationState.is_scanning: Rectangle {
                     background: Ink.glass;
                     TouchArea { }
+
                     InkBusy {
                         size: 18px;
                     }
@@ -170,7 +196,10 @@ export component ClassificationPanel inherits Rectangle {
         InkMenuFrame {
             open-y: root.absolute-position.y + Ink.head-h;
             menu-width: 250px;
-            InkMenuCaption { text: "CLASSES"; }
+            InkMenuCaption {
+                text: "CLASSES";
+            }
+
             InkMenuItem {
                 icon: InkIcons.add;
                 text: "Add the classes found, merged";
@@ -179,6 +208,7 @@ export component ClassificationPanel inherits Rectangle {
                     ClassificationState.class_auto_add_and_merge();
                 }
             }
+
             InkMenuItem {
                 text: "…replacing the list";
                 enabled: ImagesListState.images_list.length > 0;
@@ -191,7 +221,9 @@ export component ClassificationPanel inherits Rectangle {
                     }
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.hidden;
                 text: "Hide unclassified objects";
@@ -210,7 +242,10 @@ export component ClassificationPanel inherits Rectangle {
         InkMenuFrame {
             open-y: root.absolute-position.y + root.menu-y;
             menu-width: 210px;
-            InkMenuCaption { text: root.menu-class-name; }
+            InkMenuCaption {
+                text: root.menu-class-name;
+            }
+
             InkMenuItem {
                 icon: InkIcons.edit;
                 text: "Edit name, color, id…";
@@ -220,6 +255,7 @@ export component ClassificationPanel inherits Rectangle {
                     GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.copy;
                 text: "Copy";
@@ -227,6 +263,7 @@ export component ClassificationPanel inherits Rectangle {
                     ClassificationState.class_copy(root.menu-class-id);
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.caret-up;
                 text: "Move up";
@@ -234,6 +271,7 @@ export component ClassificationPanel inherits Rectangle {
                     ClassificationState.class_move_up(root.menu-class-id);
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.caret-down;
                 text: "Move down";
@@ -241,7 +279,9 @@ export component ClassificationPanel inherits Rectangle {
                     ClassificationState.class_move_down(root.menu-class-id);
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.delete;
                 text: "Delete class…";

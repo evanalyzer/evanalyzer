@@ -10,7 +10,27 @@ import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkSearchField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
+import {
+    Ink,
+    InkIcons,
+    InkPanelHead,
+    InkListRow,
+    InkBusy,
+    InkButton,
+    InkButtonKind,
+    InkIconButton,
+    InkChip,
+    InkCaption,
+    InkDivider,
+    InkMenuFrame,
+    InkMenuItem,
+    InkMenuCaption,
+    InkMenuSeparator,
+    InkHint,
+    InkSearchField,
+    InkPickerRow,
+    InkSwatchName,
+} from "../ink/ink.slint";
 import { ClassificationState } from "../api/classification.slint";
 import { AnnotationState } from "../api/annotations.slint";
 
@@ -86,6 +106,7 @@ component ObjectActions inherits HorizontalLayout {
     Rectangle {
         horizontal-stretch: 1;
     }
+
     if root.editable: InkIconButton {
         size: 24px;
         icon: InkIcons.delete;
@@ -115,6 +136,7 @@ component ObjectFilter inherits HorizontalLayout {
             ObjectListState.filter-changed();
         }
     }
+
     InkSearchField {
         placeholder: "id, area > 50 …";
         text: ObjectListState.filter-text;
@@ -165,6 +187,7 @@ component ObjectRow inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
+
             HorizontalLayout {
                 width: TableCols.classes;
                 spacing: 5px;
@@ -177,6 +200,7 @@ component ObjectRow inherits Rectangle {
                         background: root.data.class_colors.length > 0 ? root.data.class_colors[0] : root.data.display_color;
                     }
                 }
+
                 Text {
                     horizontal-stretch: 1;
                     text: root.data.class_names.length > 0 ? root.data.class_names[0] : "Unclassified";
@@ -185,6 +209,7 @@ component ObjectRow inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+
                 Text {
                     text: root.data.class_names.length > 1 ? "+" + (root.data.class_names.length - 1) : "";
                     font-size: Ink.fs-caption;
@@ -192,14 +217,17 @@ component ObjectRow inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
+
             NumberCell {
                 width: TableCols.shown("area") ? TableCols.area : 0px;
                 text: root.data.area > 0 ? root.data.area : "–";
             }
+
             NumberCell {
                 width: TableCols.shown("circ") ? TableCols.circ : 0px;
                 text: root.data.circularity != "" ? root.data.circularity : "–";
             }
+
             for ch in ChannelState.channels: NumberCell {
                 horizontal-stretch: TableCols.shown("ch\{ch.idx}") ? 1 : 0;
                 min-width: TableCols.shown("ch\{ch.idx}") ? 40px : 0px;
@@ -298,20 +326,24 @@ export component ObjectListPanel inherits Rectangle {
                     width: TableCols.id;
                     text: "ID";
                 }
+
                 HeadCell {
                     width: TableCols.classes;
                     text: "CLASSES";
                 }
+
                 HeadCell {
                     width: TableCols.shown("area") ? TableCols.area : 0px;
                     text: "AREA PX²";
                     horizontal-alignment: right;
                 }
+
                 HeadCell {
                     width: TableCols.shown("circ") ? TableCols.circ : 0px;
                     text: "CIRCULARITY";
                     horizontal-alignment: right;
                 }
+
                 for ch in ChannelState.channels: HeadCell {
                     horizontal-stretch: TableCols.shown("ch\{ch.idx}") ? 1 : 0;
                     min-width: TableCols.shown("ch\{ch.idx}") ? 40px : 0px;
@@ -325,6 +357,7 @@ export component ObjectListPanel inherits Rectangle {
                     min-width: TableCols.more;
                 }
             }
+
             InkDivider { }
         }
 
@@ -384,6 +417,7 @@ export component ObjectListPanel inherits Rectangle {
             if ObjectListState.is_scanning: Rectangle {
                 background: Ink.glass;
                 TouchArea { }
+
                 InkBusy {
                     size: 18px;
                 }
@@ -393,6 +427,7 @@ export component ObjectListPanel inherits Rectangle {
         // -- The table: the selected object's line and buttons --
         if root.table && root.sel.id != 0: VerticalLayout {
             InkDivider { }
+
             HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 8px;
@@ -403,6 +438,7 @@ export component ObjectListPanel inherits Rectangle {
                 InkCaption {
                     text: "OBJECT " + root.sel.label_name + " · " + root.sel.display_name;
                 }
+
                 ObjectActions {
                     horizontal-stretch: 1;
                     editable: root.sel.editable;
@@ -414,6 +450,7 @@ export component ObjectListPanel inherits Rectangle {
         // card beside the panel --
         if !root.table && !root.folded && root.sel.id != 0: VerticalLayout {
             InkDivider { }
+
             HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 8px;
@@ -427,6 +464,7 @@ export component ObjectListPanel inherits Rectangle {
                     color: Ink.text;
                     vertical-alignment: center;
                 }
+
                 Text {
                     horizontal-stretch: 1;
                     text: root.sel.display_name
@@ -438,6 +476,7 @@ export component ObjectListPanel inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+
                 ObjectActions {
                     horizontal-stretch: 0;
                     editable: root.sel.editable;
@@ -486,36 +525,43 @@ export component ObjectListPanel inherits Rectangle {
                     LayoutState.objects-as-table = !root.table;
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.copy;
-                text: "Copy pipeline objects as annotations…";
+                text: "Copy all objects as annotations…";
                 clicked => {
                     AnnotationState.open-copy-dialog();
                 }
             }
+
             InkMenuItem {
-                text: "Export annotations (GeoJSON)…";
+                text: "Export this image's annotations (GeoJSON)…";
                 clicked => {
-                    AnnotationState.export-geojson();
+                    AnnotationState.open-export-dialog();
                 }
             }
+
             InkMenuItem {
-                text: "Import annotations (GeoJSON)…";
+                text: "Import annotations into this image (GeoJSON)…";
                 clicked => {
-                    GlobalAppState.active_dialog = DialogType.import-annotations;
+                    AnnotationState.pick-import-file();
                 }
             }
+
             InkMenuItem {
-                text: "Re-measure manual annotations";
+                text: "Re-measure annotations";
                 clicked => {
                     AnnotationState.remeasure();
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.delete;
-                text: "Delete manual annotations…";
+                text: "Delete annotations…";
                 danger: true;
                 clicked => {
                     AnnotationState.open-delete-dialog();
@@ -553,6 +599,7 @@ export component ObjectListPanel inherits Rectangle {
                     ObjectListState.filter-changed();
                 }
             }
+
             for cls in ClassificationState.classes_list: InkPickerRow {
                 label: cls.id < 10 ? "0" + cls.id : cls.id;
                 selected: cls.id == ObjectListState.filter-class;

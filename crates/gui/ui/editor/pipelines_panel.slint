@@ -6,11 +6,32 @@ import { PipelineRunningState } from "../api/pipeline_running.slint";
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
 // Category is a property of each step (colored stripe), not a hard bucket.
 import { DialogType, GlobalAppState } from "../api/state.slint";
-import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
-import { ClassItemData, ClassificationState } from "../api/classification.slint";
+import {
+    ClassificationSettingsState,
+} from "../api/classification_class_edit.slint";
+import {
+    ClassItemData,
+    ClassificationState,
+} from "../api/classification.slint";
 import { PipelineFocusState } from "../api/pipeline_focus.slint";
 import { ScriptEditorState, ScriptFont } from "../api/script_editor.slint";
-import { CardTable, Cat, ClassHelper, CommandParameter, ComponentClassesState, LeafParam, ParamType, Pipeline, PipelineCommand, PipelinesPanelState, ProblemItem, SectionView, Status, StepCategory, TunedSetting } from "../api/pipelines.slint";
+import {
+    CardTable,
+    Cat,
+    ClassHelper,
+    CommandParameter,
+    ComponentClassesState,
+    LeafParam,
+    ParamType,
+    Pipeline,
+    PipelineCommand,
+    PipelinesPanelState,
+    ProblemItem,
+    SectionView,
+    Status,
+    StepCategory,
+    TunedSetting,
+} from "../api/pipelines.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, ComboBox, CheckBox } from "../ink/std_compat.slint";
@@ -18,11 +39,44 @@ import {
     ImageAddressPicker,
     ChannelPicker,
 } from "channel_picker.slint";
-import { InkPickerField, InkPickerRow, InkSwatchName, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
+import {
+    InkPickerField,
+    InkPickerRow,
+    InkSwatchName,
+    InkDialogPlacement,
+    InkDivider,
+} from "../ink/ink.slint";
 
 import { FocusModeButton } from "pipeline_focus.slint";
 import { CommandPaletteState } from "../api/command_palette.slint";
-import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSectionHead, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog, InkDivider, InkSearchField, InkTab, InkTipSide, InkTipZone, InkInfoButton } from "../ink/ink.slint";
+import {
+    Ink,
+    InkIcons,
+    InkIconButton,
+    InkPanelHead,
+    InkKbd,
+    InkCaption,
+    InkSectionHead,
+    InkCheckbox,
+    InkButton,
+    InkButtonKind,
+    InkSwitch,
+    InkSelect,
+    InkHint,
+    InkTextField,
+    InkNumberField,
+    InkMenuFrame,
+    InkMenuItem,
+    InkMenuCaption,
+    InkMenuSeparator,
+    InkDialog,
+    InkDivider,
+    InkSearchField,
+    InkTab,
+    InkTipSide,
+    InkTipZone,
+    InkInfoButton,
+} from "../ink/ink.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -37,37 +91,37 @@ import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSect
 // short and elide, so this row never widens the card (and with it the list,
 // which would then show a horizontal scrollbar).
 component AdvancedRow inherits Rectangle {
-        in property <int> count;
-        in property <int> changed-count;
-        in property <bool> expanded;
-        in property <bool> always;
-        callback toggled;
-        callback always-toggled(bool);
+    in property <int> count;
+    in property <int> changed-count;
+    in property <bool> expanded;
+    in property <bool> always;
+    callback toggled;
+    callback always-toggled(bool);
 
-        height: 24px;
+    height: 24px;
 
-        HorizontalLayout {
-            spacing: 6px;
-            InkSectionHead {
-                horizontal-stretch: 1;
-                text: "ADVANCED";
-                count: root.changed-count > 0 ? root.count + " · " + root.changed-count + " changed" : root.count;
-                expanded: root.expanded;
-                toggled => {
-                    root.toggled();
-                }
+    HorizontalLayout {
+        spacing: 6px;
+        InkSectionHead {
+            horizontal-stretch: 1;
+            text: "ADVANCED";
+            count: root.changed-count > 0 ? root.count + " · " + root.changed-count + " changed" : root.count;
+            expanded: root.expanded;
+            toggled => {
+                root.toggled();
             }
+        }
             // Advanced settings open in every step.
             InkCheckbox {
-                y: (parent.height - self.height) / 2;
-                text: "Always";
-                checked: root.always;
-                toggled(on) => {
-                    root.always-toggled(on);
-                }
+            y: (parent.height - self.height) / 2;
+            text: "Always";
+            checked: root.always;
+            toggled(on) => {
+                root.always-toggled(on);
             }
         }
     }
+}
 
 // A pipeline in the switcher: included in Run (☑), its name, image
 // source and steps, focus and ⋯; click to edit its steps.
@@ -117,130 +171,136 @@ component PipelineTab inherits Rectangle {
         // The buttons inside: over one the line stays hovered (as
         // siblings they flickered).
         HorizontalLayout {
-            padding-left: 2px;
-            padding-right: 4px;
-            spacing: 6px;
+                padding-left: 2px;
+                padding-right: 4px;
+                spacing: 6px;
 
-            // ⋮⋮: drag up or down to reorder.
+                // ⋮⋮: drag up or down to reorder.
             Rectangle {
-                width: 14px;
-                Image {
-                    source: InkIcons.drag;
-                    width: 12px;
-                    colorize: drag-ta.has-hover || root.drag-dy != 0px ? Ink.text-dim : Ink.text-faint;
-                }
-                drag-ta := TouchArea {
-                    mouse-cursor: MouseCursor.grab;
-                    property <length> start-y;
-                    pointer-event(e) => {
-                        if e.kind == PointerEventKind.down {
-                            self.start-y = self.mouse-y;
-                        }
-                        if e.kind == PointerEventKind.up {
+                    width: 14px;
+                    Image {
+                        source: InkIcons.drag;
+                        width: 12px;
+                        colorize: drag-ta.has-hover || root.drag-dy != 0px ? Ink.text-dim : Ink.text-faint;
+                    }
+
+                    drag-ta := TouchArea {
+                        mouse-cursor: MouseCursor.grab;
+                        property <length> start-y;
+                        pointer-event(e) => {
+                            if e.kind == PointerEventKind.down {
+                                self.start-y = self.mouse-y;
+                            }
+                            if e.kind == PointerEventKind.up {
                             // By whole rows.
                             let rows = round(root.drag-dy / root.height);
-                            root.drag-dy = 0px;
-                            if rows != 0 {
-                                root.move-by(rows);
+                                root.drag-dy = 0px;
+                                if rows != 0 {
+                                    root.move-by(rows);
+                                }
+                            }
+                        }
+                        moved => {
+                            if self.pressed {
+                                root.drag-dy = self.mouse-y - self.start-y;
                             }
                         }
                     }
-                    moved => {
-                        if self.pressed {
-                            root.drag-dy = self.mouse-y - self.start-y;
+                }
+
+                InkCheckbox {
+                    y: (parent.height - self.height) / 2;
+                    checked: root.pipeline.enabled;
+                    toggled => {
+                        root.toggled();
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 1px;
+                    HorizontalLayout {
+                        spacing: 5px;
+                        Text {
+                            text: root.pipeline.name;
+                            font-size: Ink.fs-body;
+                            font-weight: root.active ? 600 : 500;
+                            color: root.pipeline.enabled ? Ink.text : Ink.text-mute;
+                            overflow: elide;
+                            vertical-alignment: center;
                         }
-                    }
-                }
-            }
-
-            InkCheckbox {
-                y: (parent.height - self.height) / 2;
-                checked: root.pipeline.enabled;
-                toggled => {
-                    root.toggled();
-                }
-            }
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                spacing: 1px;
-                HorizontalLayout {
-                    spacing: 5px;
-                    Text {
-                        text: root.pipeline.name;
-                        font-size: Ink.fs-body;
-                        font-weight: root.active ? 600 : 500;
-                        color: root.pipeline.enabled ? Ink.text : Ink.text-mute;
-                        overflow: elide;
-                        vertical-alignment: center;
-                    }
                     // Unsaved changes.
                     Rectangle {
-                        width: root.pipeline.dirty ? 5px : 0px;
+                            width: root.pipeline.dirty ? 5px : 0px;
+                            Rectangle {
+                                visible: root.pipeline.dirty;
+                                width: 5px;
+                                height: 5px;
+                                border-radius: 2.5px;
+                                background: Ink.warn;
+                            }
+                        }
+
                         Rectangle {
-                            visible: root.pipeline.dirty;
-                            width: 5px;
-                            height: 5px;
-                            border-radius: 2.5px;
-                            background: Ink.warn;
+                            horizontal-stretch: 1;
                         }
                     }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-                }
-                Text {
-                    text: root.pipeline.image-source + " · " + root.pipeline.total-step-count + " steps · " + root.pipeline.enabled-step-count + " on";
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    overflow: elide;
-                }
-            }
 
-            HorizontalLayout {
-                spacing: 0px;
-                InkIconButton {
-                    y: (parent.height - self.height) / 2;
-                    size: 22px;
-                    visible: ta.has-hover || root.active;
-                    icon: InkIcons.caret-up;
-                    label: "Move up";
-                    clicked => {
-                        root.move-up();
+                    Text {
+                        text: root.pipeline.image-source + " · " + root.pipeline.total-step-count + " steps · " + root.pipeline.enabled-step-count + " on";
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-mute;
+                        overflow: elide;
                     }
                 }
-                InkIconButton {
-                    y: (parent.height - self.height) / 2;
-                    size: 22px;
-                    visible: ta.has-hover || root.active;
-                    icon: InkIcons.caret-down;
-                    label: "Move down";
-                    clicked => {
-                        root.move-down();
+
+                HorizontalLayout {
+                    spacing: 0px;
+                    InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        visible: ta.has-hover || root.active;
+                        icon: InkIcons.caret-up;
+                        label: "Move up";
+                        clicked => {
+                            root.move-up();
+                        }
                     }
-                }
-                InkIconButton {
-                    y: (parent.height - self.height) / 2;
-                    size: 22px;
-                    icon: InkIcons.focus;
-                    label: "Focus on this pipeline";
-                    clicked => {
-                        root.focus-clicked();
+
+                    InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        visible: ta.has-hover || root.active;
+                        icon: InkIcons.caret-down;
+                        label: "Move down";
+                        clicked => {
+                            root.move-down();
+                        }
                     }
-                }
-                InkIconButton {
-                    y: (parent.height - self.height) / 2;
-                    size: 22px;
-                    icon: InkIcons.more;
-                    label: "Pipeline actions";
-                    clicked => {
-                        root.more-clicked();
+
+                    InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        icon: InkIcons.focus;
+                        label: "Focus on this pipeline";
+                        clicked => {
+                            root.focus-clicked();
+                        }
+                    }
+
+                    InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        icon: InkIcons.more;
+                        label: "Pipeline actions";
+                        clicked => {
+                            root.more-clicked();
+                        }
                     }
                 }
             }
-        }
         }
     }
 }
@@ -251,161 +311,161 @@ component PipelineTab inherits Rectangle {
 // Special items at top: Manual annotation (4294967295) and Background (0),
 // followed by named classes from ClassificationState.
 component ClassDropdown inherits Rectangle {
-        in property <bool> is-seg: false;
-        in-out property <string> value: "0";
+    in property <bool> is-seg: false;
+    in-out property <string> value: "0";
         /// Also offer the opened component's classes (`ComponentClassesState`).
         in property <bool> component-classes: false;
         // A narrow field (a table cell): a numbered class by its number alone.
         in property <bool> compact: false;
-        callback changed(string);
+    callback changed(string);
 
-        property <string> prefix: root.is-seg ? "Seg." : "Obj.";
+    property <string> prefix: root.is-seg ? "Seg." : "Obj.";
         // "Unset", "Background", ... aren't numbered entries.
         property <bool> numbered: root.value.is-float() && root.value != "-1" && root.value != "0" && root.value != "4294967295";
         // "+ New class…" was chosen here: the class it makes is picked.
         property <bool> waiting-for-class: false;
-        property <int> created: ClassificationSettingsState.created-count;
-        changed created => {
-            if root.waiting-for-class {
-                root.waiting-for-class = false;
-                root.value = ClassificationSettingsState.last-created-id;
-                root.changed(root.value);
-            }
+    property <int> created: ClassificationSettingsState.created-count;
+    changed created => {
+        if root.waiting-for-class {
+            root.waiting-for-class = false;
+            root.value = ClassificationSettingsState.last-created-id;
+            root.changed(root.value);
         }
+    }
 
-        height: Ink.control-h;
+    height: Ink.control-h;
 
-        function pick(value: string) {
-            root.value = value;
-            root.changed(value);
-            popup.close();
+    function pick(value: string) {
+        root.value = value;
+        root.changed(value);
+        popup.close();
+    }
+
+    InkPickerField {
+        label: root.compact && root.numbered ? ClassHelper.zeropad2(round(root.value.to-float())) : ClassHelper.label(root.value, root.prefix);
+        mono: root.numbered || !root.value.is-float();
+        clicked => {
+            popup.show();
         }
-
-        InkPickerField {
-            label: root.compact && root.numbered ? ClassHelper.zeropad2(round(root.value.to-float())) : ClassHelper.label(root.value, root.prefix);
-            mono: root.numbered || !root.value.is-float();
-            clicked => {
-                popup.show();
-            }
-            for cls in ClassificationState.classes_list: InkSwatchName {
-                visible: root.numbered && cls.id == round(root.value.to-float());
-                color: cls.color;
-                name: cls.name;
-            }
-            for cls in ComponentClassesState.classes: InkSwatchName {
-                visible: root.value == "L\{cls.id}";
-                color: cls.color;
-                name: cls.name;
-            }
+        for cls in ClassificationState.classes_list: InkSwatchName {
+            visible: root.numbered && cls.id == round(root.value.to-float());
+            color: cls.color;
+            name: cls.name;
         }
+        for cls in ComponentClassesState.classes: InkSwatchName {
+            visible: root.value == "L\{cls.id}";
+            color: cls.color;
+            name: cls.name;
+        }
+    }
 
-        popup := PopupWindow {
-            x: 0px;
-            y: root.height + 2px;
-            width: max(root.width, 220px);
-            height: 300px;
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 220px);
+        height: 300px;
 
-            Rectangle {
-                background: Ink.panel;
-                border-width: 1px;
-                border-color: Ink.border;
-                border-radius: Ink.radius-md;
-                drop-shadow-blur: 12px;
-                drop-shadow-color: Ink.shadow;
-                clip: true;
+        Rectangle {
+            background: Ink.panel;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: Ink.shadow;
+            clip: true;
 
-                ScrollView {
-                    x: 4px;
-                    y: 4px;
-                    width: parent.width - 8px;
-                    height: parent.height - 8px;
+            ScrollView {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
 
-                    VerticalLayout {
-                        spacing: 0px;
+                VerticalLayout {
+                    spacing: 0px;
 
-                        InkPickerRow {
-                            label: "Unset";
-                            mono: false;
-                            label-color: Ink.text-mute;
-                            selected: root.value == "-1";
-                            clicked => {
-                                root.pick("-1");
-                            }
+                    InkPickerRow {
+                        label: "Unset";
+                        mono: false;
+                        label-color: Ink.text-mute;
+                        selected: root.value == "-1";
+                        clicked => {
+                            root.pick("-1");
                         }
+                    }
 
-                        InkPickerRow {
-                            label: "Manual annotation";
-                            mono: false;
-                            selected: root.value == "4294967295";
-                            clicked => {
-                                root.pick("4294967295");
-                            }
+                    InkPickerRow {
+                        label: "Manual annotation";
+                        mono: false;
+                        selected: root.value == "4294967295";
+                        clicked => {
+                            root.pick("4294967295");
                         }
+                    }
 
-                        InkPickerRow {
-                            label: "Background";
-                            mono: false;
-                            selected: root.value == "0";
-                            clicked => {
-                                root.pick("0");
-                            }
+                    InkPickerRow {
+                        label: "Background";
+                        mono: false;
+                        selected: root.value == "0";
+                        clicked => {
+                            root.pick("0");
                         }
+                    }
 
-                        // A class of its own: named, colored, picked at once.
+                    // A class of its own: named, colored, picked at once.
                         if !root.is-seg: InkPickerRow {
-                            label: "+ New class…";
-                            mono: false;
-                            label-color: Ink.focus;
-                            clicked => {
-                                root.waiting-for-class = true;
-                                popup.close();
-                                ClassificationSettingsState.reset_to_zero();
-                                GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
-                            }
+                        label: "+ New class…";
+                        mono: false;
+                        label-color: Ink.focus;
+                        clicked => {
+                            root.waiting-for-class = true;
+                            popup.close();
+                            ClassificationSettingsState.reset_to_zero();
+                            GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
                         }
+                    }
 
-                        InkDivider { }
+                    InkDivider { }
 
-                        // The opened component's own classes.
+                    // The opened component's own classes.
                         for cls in ComponentClassesState.classes: InkPickerRow {
-                            height: root.component-classes && !root.is-seg ? 26px : 0px;
-                            visible: root.component-classes && !root.is-seg;
-                            label: "◆ L\{cls.id}";
-                            label-color: Ink.cat-component;
-                            selected: root.value == "L\{cls.id}";
-                            clicked => {
-                                root.pick("L\{cls.id}");
-                            }
-                            InkSwatchName {
-                                color: cls.color;
-                                name: cls.name;
-                            }
+                        height: root.component-classes && !root.is-seg ? 26px : 0px;
+                        visible: root.component-classes && !root.is-seg;
+                        label: "◆ L\{cls.id}";
+                        label-color: Ink.cat-component;
+                        selected: root.value == "L\{cls.id}";
+                        clicked => {
+                            root.pick("L\{cls.id}");
                         }
-
-                        if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
-                            height: 1px;
-                            background: Ink.border-soft;
+                        InkSwatchName {
+                            color: cls.color;
+                            name: cls.name;
                         }
+                    }
 
-                        // Fixed 32 numbered entries; color and name for a class the
+                    if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
+                        height: 1px;
+                        background: Ink.border-soft;
+                    }
+
+                    // Fixed 32 numbered entries; color and name for a class the
                         // project defines.
                         for i in 32: InkPickerRow {
-                            label: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
-                            selected: root.numbered && round(root.value.to-float()) == i + 1;
-                            clicked => {
-                                root.pick("\{i + 1}");
-                            }
-                            for cls in ClassificationState.classes-list: InkSwatchName {
-                                visible: cls.id == i + 1;
-                                color: cls.color;
-                                name: cls.name;
-                            }
+                        label: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
+                        selected: root.numbered && round(root.value.to-float()) == i + 1;
+                        clicked => {
+                            root.pick("\{i + 1}");
+                        }
+                        for cls in ClassificationState.classes-list: InkSwatchName {
+                            visible: cls.id == i + 1;
+                            color: cls.color;
+                            name: cls.name;
                         }
                     }
                 }
             }
         }
     }
+}
 
 // ----------------------------------------------------------
 // Multi-select class dropdown - fires changed("toggle:N") on each row click.
@@ -414,37 +474,37 @@ component ClassDropdown inherits Rectangle {
 // Exported so other dialogs (e.g. project_settings_dialog.slint's tile-merge
 // class exclusion list) can reuse the same picker instead of a bespoke one.
 export component MultiClassDropdown inherits Rectangle {
-        in property <bool> is-seg: false;
-        in-out property <string> value: "";
+    in property <bool> is-seg: false;
+    in-out property <string> value: "";
         /// flags[0..33] the project's classes; with `component-classes`,
         /// flags[33 + k] the opened component's class k (`ComponentClassesState`).
         in property <[string]> selection-flags: [];
         /// Also offer the opened component's classes.
         in property <bool> component-classes: false;
-        callback changed(string);
+    callback changed(string);
 
-        property <string> prefix: root.is-seg ? "Seg." : "Obj.";
+    property <string> prefix: root.is-seg ? "Seg." : "Obj.";
 
-        height: 26px;
-        border-radius: 4px;
+    height: 26px;
+    border-radius: 4px;
 
-        trigger-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                popup.show();
-            }
+    trigger-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            popup.show();
+        }
 
-            Rectangle {
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Ink.border-soft;
-                background: trigger-ta.has-hover ? Ink.raised : Ink.ground;
+        Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Ink.border-soft;
+            background: trigger-ta.has-hover ? Ink.raised : Ink.ground;
 
-                HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 6px;
-                    padding-top: 4px;
-                    padding-bottom: 4px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                padding-top: 4px;
+                padding-bottom: 4px;
                 // spacing: 0px - gap between chips is baked into each slot's 46px width
                 spacing: 0px;
                     // Not `alignment: start`: that packs every item at its
@@ -453,140 +513,99 @@ export component MultiClassDropdown inherits Rectangle {
 
                     // Placeholder when nothing is selected
                 if root.value == "": Text {
-                        text: "None selected";
-                        font-size: Ink.fs-secondary;
-                        color: Ink.text-mute;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
+                    text: "None selected";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
 
-                    // The selected classes, as many as fit; a "+N" badge counts the
+                // The selected classes, as many as fit; a "+N" badge counts the
                     // rest. The area takes the width the step gives it - the chips
                     // must not widen the field (and with it the step card and popup).
                     chip-area := Rectangle {
-                        horizontal-stretch: 1;
-                        min-width: 0px;
-                        preferred-width: 0px;
-                        height: 18px;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    height: 18px;
 
-                        // Every selected chip takes a 46px slot (see below).
+                    // Every selected chip takes a 46px slot (see below).
                         property <int> selected: round(chips.preferred-width / 46px);
-                        property <int> fitting: floor(self.width / 46px);
-                        property <int> shown: self.selected <= self.fitting
-                            ? self.selected
-                            : max(0, floor((self.width - 28px) / 46px));
+                    property <int> fitting: floor(self.width / 46px);
+                    property <int> shown: self.selected <= self.fitting
+                        ? self.selected
+                        : max(0, floor((self.width - 28px) / 46px));
 
-                        Rectangle {
-                            x: 0px;
-                            width: chip-area.shown * 46px;
-                            clip: true;
+                    Rectangle {
+                        x: 0px;
+                        width: chip-area.shown * 46px;
+                        clip: true;
 
-                            // i=0 → BG (flags[0]), i=1..32 → class i (flags[i]).
+                        // i=0 → BG (flags[0]), i=1..32 → class i (flags[i]).
                             // width:0px collapses unselected slots; clip:true prevents overflow.
                             // Each selected slot is 46px: 43px chip + 3px trailing gap.
                             chips := HorizontalLayout {
-                                x: 0px;
-                                width: self.preferred-width;
-                                spacing: 0px;
-                                for i in 33: Rectangle {
-                                    width: root.selection-flags[i] == "1" ? 46px : 0px;
+                            x: 0px;
+                            width: self.preferred-width;
+                            spacing: 0px;
+                            for i in 33: Rectangle {
+                                width: root.selection-flags[i] == "1" ? 46px : 0px;
+                                height: 18px;
+                                clip: true;
+
+                                Rectangle {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: 43px;
                                     height: 18px;
-                                    clip: true;
+                                    border-radius: 3px;
+                                    background: Ink.focus.with-alpha(0.12);
+                                    border-width: 1px;
+                                    border-color: Ink.focus.with-alpha(0.35);
 
-                                    Rectangle {
-                                        x: 0px;
-                                        y: 0px;
-                                        width: 43px;
-                                        height: 18px;
-                                        border-radius: 3px;
-                                        background: Ink.focus.with-alpha(0.12);
-                                        border-width: 1px;
-                                        border-color: Ink.focus.with-alpha(0.35);
+                                    property <bool> has-custom-name: false;
 
-                                        property <bool> has-custom-name: false;
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 3px;
+                                        padding-left: 4px;
+                                        padding-right: 4px;
 
-                                        HorizontalLayout {
-                                            alignment: center;
-                                            spacing: 3px;
-                                            padding-left: 4px;
-                                            padding-right: 4px;
-
-                                            if i == 0: Text {
-                                                text: "BG";
-                                                font-size: Ink.fs-caption;
-                                                font-family: Ink.font-mono;
-                                                color: Ink.text;
-                                                vertical-alignment: center;
-                                            }
-
-                                            if i != 0 && !parent.has-custom-name: Text {
-                                                text: ClassHelper.zeropad2(i);
-                                                font-size: Ink.fs-caption;
-                                                color: Ink.text;
-                                                vertical-alignment: center;
-                                            }
+                                        if i == 0: Text {
+                                            text: "BG";
+                                            font-size: Ink.fs-caption;
+                                            font-family: Ink.font-mono;
+                                            color: Ink.text;
+                                            vertical-alignment: center;
                                         }
 
-                                        for cls in ClassificationState.classes-list: Rectangle {
-                                            visible: cls.id == i && cls.name != "";
-
-                                            init => {
-                                                if (cls.id == i && cls.name != "") {
-                                                    has-custom-name = true;
-                                                }
-                                            }
-
-                                            width: parent.width;
-                                            height: parent.height;
-                                            background: Ink.focus.with-alpha(0.12);
-
-                                            HorizontalLayout {
-                                                alignment: center;
-                                                spacing: 3px;
-                                                padding-left: 4px;
-                                                padding-right: 4px;
-
-                                                VerticalLayout {
-                                                    alignment: center;
-                                                    Rectangle {
-                                                        width: 6px;
-                                                        height: 6px;
-                                                        border-radius: 2px;
-                                                        background: cls.color;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    text: cls.name;
-                                                    font-size: Ink.fs-caption;
-                                                    color: Ink.text;
-                                                    vertical-alignment: center;
-                                                    overflow: elide;
-                                                }
-                                            }
+                                        if i != 0 && !parent.has-custom-name: Text {
+                                            text: ClassHelper.zeropad2(i);
+                                            font-size: Ink.fs-caption;
+                                            color: Ink.text;
+                                            vertical-alignment: center;
                                         }
                                     }
-                                }
 
-                                // The opened component's classes selected.
-                            for cls[k] in ComponentClassesState.classes: Rectangle {
-                                    width: root.component-classes && root.selection-flags[33 + k] == "1" ? 46px : 0px;
-                                    height: 18px;
-                                    clip: true;
-                                    Rectangle {
-                                        x: 0px;
-                                        y: 0px;
-                                        width: 43px;
-                                        height: 18px;
-                                        border-radius: 3px;
-                                        background: Ink.cat-component.with-alpha(0.12);
-                                        border-width: 1px;
-                                        border-color: Ink.cat-component.with-alpha(0.35);
+                                    for cls in ClassificationState.classes-list: Rectangle {
+                                        visible: cls.id == i && cls.name != "";
+
+                                        init => {
+                                            if (cls.id == i && cls.name != "") {
+                                                has-custom-name = true;
+                                            }
+                                        }
+
+                                        width: parent.width;
+                                        height: parent.height;
+                                        background: Ink.focus.with-alpha(0.12);
+
                                         HorizontalLayout {
                                             alignment: center;
                                             spacing: 3px;
                                             padding-left: 4px;
                                             padding-right: 4px;
+
                                             VerticalLayout {
                                                 alignment: center;
                                                 Rectangle {
@@ -598,7 +617,7 @@ export component MultiClassDropdown inherits Rectangle {
                                             }
 
                                             Text {
-                                                text: cls.name != "" ? cls.name : "L\{cls.id}";
+                                                text: cls.name;
                                                 font-size: Ink.fs-caption;
                                                 color: Ink.text;
                                                 vertical-alignment: center;
@@ -608,209 +627,42 @@ export component MultiClassDropdown inherits Rectangle {
                                     }
                                 }
                             }
-                        }
 
-                        if chip-area.selected > chip-area.shown: Text {
-                            x: chip-area.shown * 46px;
-                            height: 18px;
-                            text: "+\{chip-area.selected - chip-area.shown}";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    Text {
-                        text: "▾";
-                        font-size: 9px;
-                        color: Ink.text-mute;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-
-        popup := PopupWindow {
-            x: 0px;
-            y: root.height + 2px;
-            width: max(root.width, 220px);
-            height: 300px;
-            close-policy: no-auto-close;
-
-            Rectangle {
-                background: Ink.panel;
-                border-width: 1px;
-                border-color: Ink.border;
-                border-radius: 6px;
-                drop-shadow-blur: 12px;
-                drop-shadow-color: #000000.with-alpha(0.4);
-                clip: true;
-
-                VerticalLayout {
-                    ScrollView {
-                        vertical-stretch: 1;
-
-                        VerticalLayout {
-                            padding: 4px;
-                            spacing: 1px;
-
-                            // Background class (id = 0) - flags[0]
-                        bg-ta := TouchArea {
-                                height: 26px;
-                                clicked => {
-                                    root.changed("toggle:0");
-                                }
+                            // The opened component's classes selected.
+                            for cls[k] in ComponentClassesState.classes: Rectangle {
+                                width: root.component-classes && root.selection-flags[33 + k] == "1" ? 46px : 0px;
+                                height: 18px;
+                                clip: true;
                                 Rectangle {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: 43px;
+                                    height: 18px;
                                     border-radius: 3px;
-                                    background: bg-ta.has-hover ? Ink.raised : transparent;
+                                    background: Ink.cat-component.with-alpha(0.12);
+                                    border-width: 1px;
+                                    border-color: Ink.cat-component.with-alpha(0.35);
                                     HorizontalLayout {
-                                        padding-left: 8px;
-                                        padding-right: 8px;
-                                        spacing: 6px;
-                                        alignment: start;
+                                        alignment: center;
+                                        spacing: 3px;
+                                        padding-left: 4px;
+                                        padding-right: 4px;
                                         VerticalLayout {
                                             alignment: center;
                                             Rectangle {
-                                                width: 12px;
-                                                height: 12px;
-                                                border-radius: 3px;
-                                                background: root.selection-flags[0] == "1" ? Ink.focus : transparent;
-                                                border-width: root.selection-flags[0] == "1" ? 0px : 1.5px;
-                                                border-color: Ink.border;
-                                            }
-                                        }
-
-                                        Text {
-                                            text: "Background";
-                                            font-size: Ink.fs-secondary;
-                                            color: Ink.text;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-                            }
-
-                            InkDivider { }
-
-                            // The opened component's classes - flags[33 + k].
-                        for cls[k] in ComponentClassesState.classes: local-ta := TouchArea {
-                                height: root.component-classes && !root.is-seg ? 26px : 0px;
-                                visible: root.component-classes && !root.is-seg;
-                                clicked => {
-                                    root.changed("toggle:L\{cls.id}");
-                                }
-                                Rectangle {
-                                    border-radius: 3px;
-                                    background: local-ta.has-hover ? Ink.raised : transparent;
-                                    HorizontalLayout {
-                                        padding-left: 8px;
-                                        padding-right: 8px;
-                                        spacing: 6px;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            Rectangle {
-                                                width: 12px;
-                                                height: 12px;
-                                                border-radius: 3px;
-                                                background: root.selection-flags[33 + k] == "1" ? Ink.focus : transparent;
-                                                border-width: root.selection-flags[33 + k] == "1" ? 0px : 1.5px;
-                                                border-color: Ink.border;
-                                            }
-                                        }
-
-                                        Text {
-                                            width: 96px;
-                                            text: "◆ L\{cls.id}";
-                                            font-size: Ink.fs-secondary;
-                                            color: Ink.cat-component;
-                                            vertical-alignment: center;
-                                        }
-
-                                        VerticalLayout {
-                                            alignment: center;
-                                            Rectangle {
-                                                width: 8px;
-                                                height: 8px;
+                                                width: 6px;
+                                                height: 6px;
                                                 border-radius: 2px;
                                                 background: cls.color;
                                             }
                                         }
 
                                         Text {
-                                            text: "(" + cls.name + ")";
-                                            font-size: Ink.fs-secondary;
-                                            color: Ink.text-dim;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
-                                height: 1px;
-                                background: Ink.border-soft;
-                            }
-
-                            // Classes 1–32 - flags[i+1] (i is 0-based loop index)
-                        for i in 32: num-ta := TouchArea {
-                                height: 26px;
-                                clicked => {
-                                    root.changed("toggle:\{i + 1}");
-                                }
-                                Rectangle {
-                                    border-radius: 3px;
-                                    background: num-ta.has-hover ? Ink.raised : transparent;
-                                    HorizontalLayout {
-                                        padding-left: 8px;
-                                        padding-right: 8px;
-                                        spacing: 6px;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            Rectangle {
-                                                width: 12px;
-                                                height: 12px;
-                                                border-radius: 3px;
-                                                background: root.selection-flags[i + 1] == "1" ? Ink.focus : transparent;
-                                                border-width: root.selection-flags[i + 1] == "1" ? 0px : 1.5px;
-                                                border-color: Ink.border;
-                                            }
-                                        }
-
-                                        // A fixed column, so the colors and names line up
-                                        // at the same place however wide the popup is.
-                                        Text {
-                                            width: 96px;
-                                            text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
-                                            font-size: Ink.fs-secondary;
+                                            text: cls.name != "" ? cls.name : "L\{cls.id}";
+                                            font-size: Ink.fs-caption;
                                             color: Ink.text;
                                             vertical-alignment: center;
-                                        }
-
-                                        Rectangle {
-                                            horizontal-stretch: 1;
-                                            for cls in ClassificationState.classes-list: HorizontalLayout {
-                                                visible: cls.id == i + 1;
-                                                spacing: 4px;
-                                                VerticalLayout {
-                                                    alignment: center;
-                                                    Rectangle {
-                                                        width: 8px;
-                                                        height: 8px;
-                                                        border-radius: 2px;
-                                                        background: cls.color;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    text: "(" + cls.name + ")";
-                                                    font-size: Ink.fs-secondary;
-                                                    color: Ink.text-dim;
-                                                    vertical-alignment: center;
-                                                    overflow: elide;
-                                                }
-                                            }
+                                            overflow: elide;
                                         }
                                     }
                                 }
@@ -818,27 +670,234 @@ export component MultiClassDropdown inherits Rectangle {
                         }
                     }
 
-                    InkDivider { }
+                    if chip-area.selected > chip-area.shown: Text {
+                        x: chip-area.shown * 46px;
+                        height: 18px;
+                        text: "+\{chip-area.selected - chip-area.shown}";
+                        font-size: Ink.fs-caption;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                }
 
-                    done-ta := TouchArea {
-                        height: 28px;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            popup.close();
+                Text {
+                    text: "▾";
+                    font-size: 9px;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 220px);
+        height: 300px;
+        close-policy: no-auto-close;
+
+        Rectangle {
+            background: Ink.panel;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: 6px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #000000.with-alpha(0.4);
+            clip: true;
+
+            VerticalLayout {
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 1px;
+
+                        // Background class (id = 0) - flags[0]
+                        bg-ta := TouchArea {
+                            height: 26px;
+                            clicked => {
+                                root.changed("toggle:0");
+                            }
+                            Rectangle {
+                                border-radius: 3px;
+                                background: bg-ta.has-hover ? Ink.raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 3px;
+                                            background: root.selection-flags[0] == "1" ? Ink.focus : transparent;
+                                            border-width: root.selection-flags[0] == "1" ? 0px : 1.5px;
+                                            border-color: Ink.border;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Background";
+                                        font-size: Ink.fs-secondary;
+                                        color: Ink.text;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
                         }
 
-                        Rectangle {
-                            background: done-ta.has-hover ? Ink.raised : transparent;
+                        InkDivider { }
 
-                            HorizontalLayout {
-                                alignment: center;
-                                Text {
-                                    text: "Done";
-                                    font-size: Ink.fs-secondary;
-                                    color: Ink.focus;
-                                    font-weight: 500;
-                                    vertical-alignment: center;
+                        // The opened component's classes - flags[33 + k].
+                        for cls[k] in ComponentClassesState.classes: local-ta := TouchArea {
+                            height: root.component-classes && !root.is-seg ? 26px : 0px;
+                            visible: root.component-classes && !root.is-seg;
+                            clicked => {
+                                root.changed("toggle:L\{cls.id}");
+                            }
+                            Rectangle {
+                                border-radius: 3px;
+                                background: local-ta.has-hover ? Ink.raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 3px;
+                                            background: root.selection-flags[33 + k] == "1" ? Ink.focus : transparent;
+                                            border-width: root.selection-flags[33 + k] == "1" ? 0px : 1.5px;
+                                            border-color: Ink.border;
+                                        }
+                                    }
+
+                                    Text {
+                                        width: 96px;
+                                        text: "◆ L\{cls.id}";
+                                        font-size: Ink.fs-secondary;
+                                        color: Ink.cat-component;
+                                        vertical-alignment: center;
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 8px;
+                                            height: 8px;
+                                            border-radius: 2px;
+                                            background: cls.color;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "(" + cls.name + ")";
+                                        font-size: Ink.fs-secondary;
+                                        color: Ink.text-dim;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
                                 }
+                            }
+                        }
+
+                        if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
+                            height: 1px;
+                            background: Ink.border-soft;
+                        }
+
+                        // Classes 1–32 - flags[i+1] (i is 0-based loop index)
+                        for i in 32: num-ta := TouchArea {
+                            height: 26px;
+                            clicked => {
+                                root.changed("toggle:\{i + 1}");
+                            }
+                            Rectangle {
+                                border-radius: 3px;
+                                background: num-ta.has-hover ? Ink.raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 3px;
+                                            background: root.selection-flags[i + 1] == "1" ? Ink.focus : transparent;
+                                            border-width: root.selection-flags[i + 1] == "1" ? 0px : 1.5px;
+                                            border-color: Ink.border;
+                                        }
+                                    }
+
+                                    // A fixed column, so the colors and names line up
+                                        // at the same place however wide the popup is.
+                                        Text {
+                                        width: 96px;
+                                        text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
+                                        font-size: Ink.fs-secondary;
+                                        color: Ink.text;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        for cls in ClassificationState.classes-list: HorizontalLayout {
+                                            visible: cls.id == i + 1;
+                                            spacing: 4px;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 8px;
+                                                    height: 8px;
+                                                    border-radius: 2px;
+                                                    background: cls.color;
+                                                }
+                                            }
+
+                                            Text {
+                                                text: "(" + cls.name + ")";
+                                                font-size: Ink.fs-secondary;
+                                                color: Ink.text-dim;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                InkDivider { }
+
+                done-ta := TouchArea {
+                    height: 28px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        popup.close();
+                    }
+
+                    Rectangle {
+                        background: done-ta.has-hover ? Ink.raised : transparent;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Done";
+                                font-size: Ink.fs-secondary;
+                                color: Ink.focus;
+                                font-weight: 500;
+                                vertical-alignment: center;
                             }
                         }
                     }
@@ -846,289 +905,289 @@ export component MultiClassDropdown inherits Rectangle {
             }
         }
     }
+}
 
 // One setting's control (text field, spinner, dropdown, class, channel …)
 // - every type but a list. Locked while a component is only viewed.
 component ScalarControls inherits Rectangle {
-        in property <CommandParameter> p;
+    in property <CommandParameter> p;
         // A narrow field (a table cell): the controls that have it get their
         // compact form.
         in property <bool> compact: false;
-        callback changed(string);
-        callback show-model-info();
+    callback changed(string);
+    callback show-model-info();
         // This row's pending file-browser request (see `browse-file`).
         property <int> browse-token: -1;
         // This row's pending script-editor request (see `ScriptEditorState`).
         property <int> script-token: -1;
 
-        VerticalLayout {
-            spacing: 4px;
+    VerticalLayout {
+        spacing: 4px;
 
-            // Script: read-only preview, click opens the script editor.
+        // Script: read-only preview, click opens the script editor.
             if p.param-type == ParamType.script: Rectangle {
-                property <int> result-token: ScriptEditorState.result-token;
-                changed result-token => {
-                    if (self.result-token == root.script-token && root.script-token >= 0) {
-                        root.script-token = -1;
-                        root.changed(ScriptEditorState.result-text);
-                    }
-                }
-
-                height: 84px;
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: script-ta.has-hover ? Ink.focus.with-alpha(0.6) : Ink.border;
-                background: Ink.ground;
-                clip: true;
-
-                Text {
-                    x: 6px;
-                    y: 4px;
-                    width: parent.width - 12px;
-                    height: parent.height - 8px;
-                    text: p.value;
-                    font-family: ScriptFont.family;
-                    font-size: Ink.fs-caption;
-                    color: Ink.text-dim;
-                    wrap: no-wrap;
-                    overflow: clip;
-                    vertical-alignment: top;
-                }
-
-                Rectangle {
-                    x: parent.width - self.width - 4px;
-                    y: parent.height - self.height - 4px;
-                    width: edit-label.preferred-width + 12px;
-                    height: 18px;
-                    border-radius: 3px;
-                    background: script-ta.has-hover ? Ink.focus : Ink.raised;
-                    edit-label := Text {
-                        text: "Edit script";
-                        font-size: Ink.fs-caption;
-                        color: script-ta.has-hover ? #FFFFFF : Ink.text-dim;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                script-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ScriptEditorState.token-counter += 1;
-                        root.script-token = ScriptEditorState.token-counter;
-                        ScriptEditorState.open(p.display-name, p.value, root.script-token);
-                    }
+            property <int> result-token: ScriptEditorState.result-token;
+            changed result-token => {
+                if (self.result-token == root.script-token && root.script-token >= 0) {
+                    root.script-token = -1;
+                    root.changed(ScriptEditorState.result-text);
                 }
             }
 
-            if p.param-type == ParamType.text: InkTextField {
+            height: 84px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: script-ta.has-hover ? Ink.focus.with-alpha(0.6) : Ink.border;
+            background: Ink.ground;
+            clip: true;
+
+            Text {
+                x: 6px;
+                y: 4px;
+                width: parent.width - 12px;
+                height: parent.height - 8px;
+                text: p.value;
+                font-family: ScriptFont.family;
+                font-size: Ink.fs-caption;
+                color: Ink.text-dim;
+                wrap: no-wrap;
+                overflow: clip;
+                vertical-alignment: top;
+            }
+
+            Rectangle {
+                x: parent.width - self.width - 4px;
+                y: parent.height - self.height - 4px;
+                width: edit-label.preferred-width + 12px;
+                height: 18px;
+                border-radius: 3px;
+                background: script-ta.has-hover ? Ink.focus : Ink.raised;
+                edit-label := Text {
+                    text: "Edit script";
+                    font-size: Ink.fs-caption;
+                    color: script-ta.has-hover ? #FFFFFF : Ink.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            script-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    ScriptEditorState.token-counter += 1;
+                    root.script-token = ScriptEditorState.token-counter;
+                    ScriptEditorState.open(p.display-name, p.value, root.script-token);
+                }
+            }
+        }
+
+        if p.param-type == ParamType.text: InkTextField {
+            enabled: !PipelinesPanelState.steps-read-only;
+            label: p.display-name;
+            value: p.value;
+            edited(t) => {
+                root.changed(t);
+            }
+        }
+
+        // A number: drag sideways over it, Ctrl + wheel, or ↑↓ change it (no
+            // range when min = max).
+            if p.param-type == ParamType.number: InkNumberField {
+            enabled: !PipelinesPanelState.steps-read-only;
+            compact: true;
+            label: p.display-name;
+            value: p.value.to-float();
+            step: p.step > 0 ? p.step : 1;
+            min: p.min < p.max ? p.min : -1000000000;
+            max: p.min < p.max ? p.max : 1000000000;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.file-path: HorizontalLayout {
+                // Applies this row's file-browser result once it arrives.
+                property <int> result-token: PipelinesPanelState.browse-result-token;
+            changed result-token => {
+                if (self.result-token == root.browse-token && root.browse-token >= 0) {
+                    root.browse-token = -1;
+                    fp-input.text = PipelinesPanelState.browse-result-path;
+                    root.changed(PipelinesPanelState.browse-result-path);
+                }
+            }
+
+            spacing: 4px;
+            fp-input := InkTextField {
                 enabled: !PipelinesPanelState.steps-read-only;
                 label: p.display-name;
+                mono: true;
                 value: p.value;
                 edited(t) => {
                     root.changed(t);
                 }
             }
 
-            // A number: drag sideways over it, Ctrl + wheel, or ↑↓ change it (no
-            // range when min = max).
-            if p.param-type == ParamType.number: InkNumberField {
+            InkIconButton {
+                size: Ink.control-h;
+                icon: InkIcons.open;
+                label: "Browse…";
                 enabled: !PipelinesPanelState.steps-read-only;
-                compact: true;
-                label: p.display-name;
-                value: p.value.to-float();
-                step: p.step > 0 ? p.step : 1;
-                min: p.min < p.max ? p.min : -1000000000;
-                max: p.min < p.max ? p.max : 1000000000;
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.file-path: HorizontalLayout {
-                // Applies this row's file-browser result once it arrives.
-                property <int> result-token: PipelinesPanelState.browse-result-token;
-                changed result-token => {
-                    if (self.result-token == root.browse-token && root.browse-token >= 0) {
-                        root.browse-token = -1;
-                        fp-input.text = PipelinesPanelState.browse-result-path;
-                        root.changed(PipelinesPanelState.browse-result-path);
-                    }
-                }
-
-                spacing: 4px;
-                fp-input := InkTextField {
-                    enabled: !PipelinesPanelState.steps-read-only;
-                    label: p.display-name;
-                    mono: true;
-                    value: p.value;
-                    edited(t) => {
-                        root.changed(t);
-                    }
-                }
-
-                InkIconButton {
-                    size: Ink.control-h;
-                    icon: InkIcons.open;
-                    label: "Browse…";
-                    enabled: !PipelinesPanelState.steps-read-only;
-                    disabled-reason: "This component is read-only - open it to edit";
-                    clicked => {
-                        PipelinesPanelState.browse-token-counter += 1;
-                        root.browse-token = PipelinesPanelState.browse-token-counter;
-                        PipelinesPanelState.browse-file(
+                disabled-reason: "This component is read-only - open it to edit";
+                clicked => {
+                    PipelinesPanelState.browse-token-counter += 1;
+                    root.browse-token = PipelinesPanelState.browse-token-counter;
+                    PipelinesPanelState.browse-file(
                             p.options.length > 0 ? p.options[0] : "",
                             fp-input.text,
                             root.browse-token);
-                    }
-                }
-
-                if p.has-model-info: InkIconButton {
-                    size: Ink.control-h;
-                    icon: InkIcons.info;
-                    label: "About the model";
-                    clicked => {
-                        root.show-model-info();
-                    }
                 }
             }
 
-            if p.param-type == ParamType.label: Text {
-                text: p.value;
-                font-size: Ink.fs-secondary;
-                font-family: Ink.font-mono;
-                color: Ink.text-dim;
-                vertical-alignment: center;
-            }
-
-            if p.param-type == ParamType.spinner: InkNumberField {
-                enabled: !PipelinesPanelState.steps-read-only;
-                compact: root.compact;
-                label: p.display-name;
-                value: p.value.to-float();
-                step: p.step;
-                min: p.min;
-                max: p.max;
-                changed(v) => {
-                    root.changed(v);
+            if p.has-model-info: InkIconButton {
+                size: Ink.control-h;
+                icon: InkIcons.info;
+                label: "About the model";
+                clicked => {
+                    root.show-model-info();
                 }
             }
-
-            if p.param-type == ParamType.dropdown: InkSelect {
-                enabled: !PipelinesPanelState.steps-read-only;
-                label: p.display-name;
-                model: p.options;
-                value: p.value;
-                picked(i, v) => {
-                    root.changed(v);
-                }
-            }
-
-            // A value in a range: a spinner - a dedicated value is easier to
-            // set than with a slider.
-            if p.param-type == ParamType.slider: InkNumberField {
-                enabled: !PipelinesPanelState.steps-read-only;
-                compact: root.compact;
-                label: p.display-name;
-                value: p.value.to-float();
-                step: p.step > 0 ? p.step : (p.max - p.min) / 100;
-                min: p.min;
-                max: p.max;
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.toggle: HorizontalLayout {
-                InkCheckbox {
-                    enabled: !PipelinesPanelState.steps-read-only;
-                    checked: p.value == "true";
-                    toggled(on) => {
-                        root.changed(on ? "true" : "false");
-                    }
-                }
-            }
-
-            if p.param-type == ParamType.obj-class:
-        ClassDropdown {
-                is-seg: false;
-                compact: root.compact;
-                component-classes: true;
-                value: p.value;
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.seg-class:
-        ClassDropdown {
-                is-seg: true;
-                compact: root.compact;
-                value: p.value;
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.multi-obj-class:
-        MultiClassDropdown {
-                is-seg: false;
-                component-classes: true;
-                value: p.value;
-                selection-flags: p.options;
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.multi-seg-class:
-        MultiClassDropdown {
-                is-seg: true;
-                value: p.value;
-                selection-flags: p.options;
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units: InkSelect {
-                enabled: !PipelinesPanelState.steps-read-only;
-                label: p.display-name;
-                model: p.options;
-                value: p.value;
-                picked(i, v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.image-address:
-        ImageAddressPicker {
-                enabled: !PipelinesPanelState.steps-read-only;
-                kind: p.options[0];
-                number: p.options[1].to-float();
-                in-component: PipelinesPanelState.open-component-name != "";
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
-            if p.param-type == ParamType.image-channel:
-        ChannelPicker {
-                height: 24px;
-                font-size: Ink.fs-secondary;
-                compact: root.compact;
-                value: p.value.to-float();
-                changed(v) => {
-                    root.changed(v);
-                }
-            }
-
         }
 
-        // "View": the settings can be read, not changed - the names and
+        if p.param-type == ParamType.label: Text {
+            text: p.value;
+            font-size: Ink.fs-secondary;
+            font-family: Ink.font-mono;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+        }
+
+        if p.param-type == ParamType.spinner: InkNumberField {
+            enabled: !PipelinesPanelState.steps-read-only;
+            compact: root.compact;
+            label: p.display-name;
+            value: p.value.to-float();
+            step: p.step;
+            min: p.min;
+            max: p.max;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.dropdown: InkSelect {
+            enabled: !PipelinesPanelState.steps-read-only;
+            label: p.display-name;
+            model: p.options;
+            value: p.value;
+            picked(i, v) => {
+                root.changed(v);
+            }
+        }
+
+        // A value in a range: a spinner - a dedicated value is easier to
+            // set than with a slider.
+            if p.param-type == ParamType.slider: InkNumberField {
+            enabled: !PipelinesPanelState.steps-read-only;
+            compact: root.compact;
+            label: p.display-name;
+            value: p.value.to-float();
+            step: p.step > 0 ? p.step : (p.max - p.min) / 100;
+            min: p.min;
+            max: p.max;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.toggle: HorizontalLayout {
+            InkCheckbox {
+                enabled: !PipelinesPanelState.steps-read-only;
+                checked: p.value == "true";
+                toggled(on) => {
+                    root.changed(on ? "true" : "false");
+                }
+            }
+        }
+
+        if p.param-type == ParamType.obj-class:
+        ClassDropdown {
+            is-seg: false;
+            compact: root.compact;
+            component-classes: true;
+            value: p.value;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.seg-class:
+        ClassDropdown {
+            is-seg: true;
+            compact: root.compact;
+            value: p.value;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.multi-obj-class:
+        MultiClassDropdown {
+            is-seg: false;
+            component-classes: true;
+            value: p.value;
+            selection-flags: p.options;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.multi-seg-class:
+        MultiClassDropdown {
+            is-seg: true;
+            value: p.value;
+            selection-flags: p.options;
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units: InkSelect {
+            enabled: !PipelinesPanelState.steps-read-only;
+            label: p.display-name;
+            model: p.options;
+            value: p.value;
+            picked(i, v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-address:
+        ImageAddressPicker {
+            enabled: !PipelinesPanelState.steps-read-only;
+            kind: p.options[0];
+            number: p.options[1].to-float();
+            in-component: PipelinesPanelState.open-component-name != "";
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-channel:
+        ChannelPicker {
+            height: 24px;
+            font-size: Ink.fs-secondary;
+            compact: root.compact;
+            value: p.value.to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+    }
+
+    // "View": the settings can be read, not changed - the names and
         // their "?" around the controls still work.
         if PipelinesPanelState.steps-read-only: TouchArea { }
-    }
+}
 
 
 // ----------------------------------------------------------
@@ -1137,113 +1196,634 @@ component ScalarControls inherits Rectangle {
 // A setting of a list entry, on a line like the other settings: its name,
 // its control, a pin. Inside an opened component also ◇ / ✎ (expose it).
 component LeafParamRow inherits HorizontalLayout {
-        in property <LeafParam> p;
-        callback changed(string);
-        callback toggle-exposed();
-        callback edit-exposed();
-        callback toggle-pin();
+    in property <LeafParam> p;
+    callback changed(string);
+    callback toggle-exposed();
+    callback edit-exposed();
+    callback toggle-pin();
 
-        property <bool> in-component: PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && root.p.param-type != ParamType.label;
+    property <bool> in-component: PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && root.p.param-type != ParamType.label;
 
-        spacing: 6px;
+    spacing: 6px;
 
-        HorizontalLayout {
-            width: 104px;
-            spacing: 3px;
-            alignment: start;
+    HorizontalLayout {
+        width: 104px;
+        spacing: 3px;
+        alignment: start;
 
-            if root.in-component: Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 14px;
-                height: 14px;
-                border-radius: 3px;
-                background: leaf-expose-ta.has-hover ? Ink.hover : transparent;
-                accessible-role: button;
-                accessible-label: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
-                Text {
-                    text: root.p.exposed ? "◆" : "◇";
-                    font-size: Ink.fs-caption;
-                    color: root.p.exposed ? Ink.cat-component : Ink.text-mute;
-                }
-                leaf-expose-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.toggle-exposed();
-                    }
-                }
-                InkTipZone {
-                    width: 100%;
-                    height: 100%;
-                    wanted: leaf-expose-ta.has-hover && !leaf-expose-ta.pressed;
-                    text: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
-                }
-            }
-            if root.in-component && root.p.exposed: Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 14px;
-                height: 14px;
-                border-radius: 3px;
-                background: leaf-edit-ta.has-hover ? Ink.hover : transparent;
-                accessible-role: button;
-                accessible-label: "Edit \{root.p.display-name}";
-                Text {
-                    text: "✎";
-                    font-size: 9px;
-                    color: Ink.cat-component;
-                }
-                leaf-edit-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.edit-exposed();
-                    }
-                }
-                InkTipZone {
-                    width: 100%;
-                    height: 100%;
-                    wanted: leaf-edit-ta.has-hover && !leaf-edit-ta.pressed;
-                    text: "Edit \{root.p.display-name}";
-                }
-            }
+        if root.in-component: Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            background: leaf-expose-ta.has-hover ? Ink.hover : transparent;
+            accessible-role: button;
+            accessible-label: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
             Text {
-                text: root.p.display-name == "" ? root.p.name : root.p.display-name;
-                font-size: Ink.fs-secondary;
-                color: root.p.exposed ? Ink.cat-component : Ink.text-dim;
-                vertical-alignment: center;
-                overflow: elide;
+                text: root.p.exposed ? "◆" : "◇";
+                font-size: Ink.fs-caption;
+                color: root.p.exposed ? Ink.cat-component : Ink.text-mute;
             }
-            if root.p.description != "": InkInfoButton {
-                title: root.p.display-name == "" ? root.p.name : root.p.display-name;
-                text: root.p.description;
+
+            leaf-expose-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggle-exposed();
+                }
+            }
+
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: leaf-expose-ta.has-hover && !leaf-expose-ta.pressed;
+                text: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
+            }
+        }
+        if root.in-component && root.p.exposed: Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            background: leaf-edit-ta.has-hover ? Ink.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Edit \{root.p.display-name}";
+            Text {
+                text: "✎";
+                font-size: 9px;
+                color: Ink.cat-component;
+            }
+
+            leaf-edit-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.edit-exposed();
+                }
+            }
+
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: leaf-edit-ta.has-hover && !leaf-edit-ta.pressed;
+                text: "Edit \{root.p.display-name}";
+            }
+        }
+        Text {
+            text: root.p.display-name == "" ? root.p.name : root.p.display-name;
+            font-size: Ink.fs-secondary;
+            color: root.p.exposed ? Ink.cat-component : Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.p.description != "": InkInfoButton {
+            title: root.p.display-name == "" ? root.p.name : root.p.display-name;
+            text: root.p.description;
+        }
+    }
+
+    ScalarControls {
+        horizontal-stretch: 1;
+        p: {
+            name: root.p.name,
+            display-name: root.p.display-name,
+            description: root.p.description,
+            value: root.p.value,
+            param-type: root.p.param-type,
+            options: root.p.options,
+            min: root.p.min,
+            max: root.p.max,
+            step: root.p.step,
+            exposed: root.p.exposed,
+            pinned: root.p.pinned,
+        };
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    // Into the Tuning panel.
+        Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: 20px;
+        height: 20px;
+        border-radius: Ink.radius-sm;
+        background: leaf-pin-ta.has-hover ? Ink.hover : transparent;
+        accessible-role: button;
+        accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+        accessible-checked: root.p.pinned;
+        accessible-action-default => {
+            root.toggle-pin();
+        }
+        Image {
+            source: InkIcons.pin;
+            width: 12px;
+            colorize: root.p.pinned ? Ink.focus : leaf-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
+        }
+
+        leaf-pin-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.toggle-pin();
             }
         }
 
-        ScalarControls {
-            horizontal-stretch: 1;
-            p: {
-                name: root.p.name,
-                display-name: root.p.display-name,
-                description: root.p.description,
-                value: root.p.value,
-                param-type: root.p.param-type,
-                options: root.p.options,
-                min: root.p.min,
-                max: root.p.max,
-                step: root.p.step,
-                exposed: root.p.exposed,
-                pinned: root.p.pinned,
-            };
+        InkTipZone {
+            width: 100%;
+            height: 100%;
+            wanted: leaf-pin-ta.has-hover && !leaf-pin-ta.pressed;
+            text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Parameter row
+
+// Header above the first setting of a section.
+component SectionHeader inherits VerticalLayout {
+    in property <string> text;
+    padding-top: 4px;
+    spacing: 3px;
+    Text {
+        text: root.text;
+        font-size: Ink.fs-caption;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: Ink.text-dim;
+        overflow: elide;
+    }
+
+    InkDivider { }
+}
+
+// A setting's name line: ◇/✎ inside an opened component, the name, and "?"
+// for its help text.
+component ParamLabel inherits HorizontalLayout {
+    in property <CommandParameter> p;
+        // The settings dialog's layout: a larger name, and "?" shows the
+        // full help text below the short one (`help-open`) instead of a popup.
+        in property <bool> wide: false;
+    in-out property <bool> help-open: false;
+    callback toggle-exposed();
+    callback edit-exposed();
+
+    spacing: 4px;
+    alignment: start;
+        // Inside an opened component: ◆ exposes the setting as a component
+        // parameter (filled) or hides it again.
+        if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        background: expose-ta.has-hover ? Ink.raised : transparent;
+        Text {
+            text: p.exposed ? "◆" : "◇";
+            font-size: Ink.fs-caption;
+            color: p.exposed ? Ink.cat-component : Ink.text-mute;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        expose-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.toggle-exposed();
+            }
+        }
+    }
+    if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.exposed: Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        background: edit-exposed-ta.has-hover ? Ink.raised : transparent;
+        Text {
+            text: "✎";
+            font-size: 10px;
+            color: Ink.cat-component;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        edit-exposed-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.edit-exposed();
+            }
+        }
+    }
+    Text {
+        text: p.display-name == "" ? p.name : p.display-name;
+        font-size: root.wide ? Ink.fs-body : Ink.fs-secondary;
+        font-weight: root.wide ? 600 : 400;
+        color: p.exposed ? Ink.cat-component : (root.wide ? Ink.text : Ink.text-dim);
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // Wide (a section): its longer help unfolds in place; else the card.
+        if root.wide && p.more-help: Rectangle {
+        width: 16px;
+        height: 16px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 8px;
+        background: help-ta.has-hover || root.help-open ? Ink.info-tint : transparent;
+        accessible-role: button;
+        accessible-label: "About " + (p.display-name == "" ? p.name : p.display-name);
+        accessible-expanded: root.help-open;
+        accessible-action-default => {
+            root.help-open = !root.help-open;
+        }
+        Image {
+            source: InkIcons.info;
+            width: 14px;
+            height: 14px;
+            colorize: help-ta.has-hover || root.help-open ? Ink.focus : Ink.text-mute;
+        }
+
+        help-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.help-open = !root.help-open;
+            }
+        }
+
+        InkTipZone {
+            width: 100%;
+            height: 100%;
+            wanted: help-ta.has-hover && !help-ta.pressed;
+            text: root.help-open ? "Hide the help" : "About " + (p.display-name == "" ? p.name : p.display-name);
+        }
+    }
+    if !root.wide && p.description != "": InkInfoButton {
+        title: p.display-name == "" ? p.name : p.display-name;
+        text: p.description;
+    }
+}
+
+// A setting's control (text field, spinner, dropdown, list entries, …).
+// Locked while a component is only viewed.
+// A setting's control: `ScalarControls`, or a list's entries (each entry's
+// settings as rows) with "Add item".
+component ParamControls inherits Rectangle {
+    in property <CommandParameter> p;
+        // A narrow field (a table cell): the controls that have it get their
+        // compact form.
+        in property <bool> compact: false;
+    callback changed(string);
+    callback item-field-changed(int, string, string);
+    callback add-item();
+    callback remove-item(int);
+    callback show-model-info();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
+    callback edit-item-exposed(int, string);
+    callback toggle-item-pin(int, string);
+
+    VerticalLayout {
+        if p.param-type != ParamType.group: ScalarControls {
+            p: root.p;
+            compact: root.compact;
             changed(v) => {
                 root.changed(v);
             }
+            show-model-info => {
+                root.show-model-info();
+            }
         }
 
-        // Into the Tuning panel.
+        if p.param-type == ParamType.group: VerticalLayout {
+            spacing: 4px;
+            for item[i] in p.group-items: Rectangle {
+                border-radius: Ink.radius-md;
+                border-width: 1px;
+                border-color: Ink.border-soft;
+                background: Ink.field;
+                VerticalLayout {
+                    padding-left: 8px;
+                    padding-right: 4px;
+                    padding-top: 4px;
+                    padding-bottom: 6px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        InkCaption {
+                            horizontal-stretch: 1;
+                            text: "#" + (i + 1);
+                        }
+
+                        InkIconButton {
+                            size: 22px;
+                            icon: InkIcons.delete;
+                            label: "Remove entry " + (i + 1);
+                            clicked => {
+                                root.remove-item(i);
+                            }
+                        }
+                    }
+
+                    for field in item.fields: LeafParamRow {
+                        p: field;
+                        changed(v) => {
+                            root.item-field-changed(i, field.name, v);
+                        }
+                        toggle-exposed => {
+                            root.toggle-item-exposed(i, field.name);
+                        }
+                        edit-exposed => {
+                            root.edit-item-exposed(i, field.name);
+                        }
+                        toggle-pin => {
+                            root.toggle-item-pin(i, field.name);
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.quiet;
+                    icon: InkIcons.add;
+                    text: "Add item";
+                    clicked => {
+                        root.add-item();
+                    }
+                }
+            }
+        }
+    }
+
+    // "View": the settings can be read, not changed.
+        if PipelinesPanelState.steps-read-only: TouchArea { }
+}
+
+// Below a setting: what it's wired to, and what a check found about it.
+component ParamNotes inherits VerticalLayout {
+    in property <CommandParameter> p;
+    spacing: 2px;
+    if p.wiring != "": Text {
+        text: p.wiring;
+        font-size: Ink.fs-caption;
+        color: Ink.cat-component.with-alpha(0.85);
+        wrap: word-wrap;
+        height: self.preferred-height;
+    }
+    if p.problem != "": Text {
+        text: "⚠ \{p.problem}";
+        font-size: Ink.fs-caption;
+        color: p.problem-error ? Ink.err : Ink.warn;
+        wrap: word-wrap;
+        height: self.preferred-height;
+    }
+}
+
+// One problem: what it is, where (`show-where`), and its fix. Clicking the
+// text shows the step it's about.
+component ProblemRow inherits HorizontalLayout {
+    in property <ProblemItem> item;
+    in property <bool> show-where: true;
+    spacing: 6px;
+
+    VerticalLayout {
+        alignment: start;
+        padding-top: 4px;
         Rectangle {
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: item.error ? Ink.err : Ink.warn;
+        }
+    }
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 1px;
+        if root.show-where && item.where != "": Text {
+            text: item.where;
+            font-size: Ink.fs-caption;
+            font-weight: 600;
+            color: Ink.text-mute;
+            overflow: elide;
+        }
+        problem-text := Text {
+            text: item.text;
+            font-size: Ink.fs-caption;
+            color: problem-ta.has-hover && root.show-where ? Ink.text : Ink.text-dim;
+            wrap: word-wrap;
+            height: self.preferred-height;
+            problem-ta := TouchArea {
+                mouse-cursor: root.show-where ? pointer : default;
+                clicked => {
+                    if root.show-where {
+                        PipelinesPanelState.show-problem(item.index);
+                    }
+                }
+            }
+        }
+    }
+
+    if item.fix-label != "": VerticalLayout {
+        alignment: start;
+        Rectangle {
+            height: 20px;
+            width: fix-text.preferred-width + 14px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Ink.border;
+            background: fix-ta.has-hover ? Ink.raised : transparent;
+            accessible-role: button;
+            accessible-label: item.fix-label;
+            fix-text := Text {
+                text: item.fix-label;
+                font-size: Ink.fs-caption;
+                color: Ink.text;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            fix-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    PipelinesPanelState.fix-problem(item.index);
+                }
+            }
+        }
+    }
+}
+
+component ParamRow inherits VerticalLayout {
+    in property <CommandParameter> p;
+        // Show `p.section-header` (the settings dialog has its own).
+        in property <bool> show-section: true;
+    callback changed(string);
+    callback item-field-changed(int, string, string);
+    callback add-item();
+    callback remove-item(int);
+    callback show-model-info();
+    callback toggle-exposed();
+    callback edit-exposed();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
+    callback edit-item-exposed(int, string);
+    callback toggle-item-pin(int, string);
+
+    spacing: 4px;
+
+    if root.show-section && p.section-header != "": SectionHeader {
+        text: p.section-header;
+    }
+
+    ParamLabel {
+        p: root.p;
+        toggle-exposed => {
+            root.toggle-exposed();
+        }
+        edit-exposed => {
+            root.edit-exposed();
+        }
+    }
+
+    ParamControls {
+        p: root.p;
+        changed(v) => {
+            root.changed(v);
+        }
+        item-field-changed(i, n, v) => {
+            root.item-field-changed(i, n, v);
+        }
+        add-item => {
+            root.add-item();
+        }
+        remove-item(i) => {
+            root.remove-item(i);
+        }
+        show-model-info => {
+            root.show-model-info();
+        }
+        toggle-item-exposed(i, n) => {
+            root.toggle-item-exposed(i, n);
+        }
+        toggle-item-pin(i, n) => {
+            root.toggle-item-pin(i, n);
+        }
+        edit-item-exposed(i, n) => {
+            root.edit-item-exposed(i, n);
+        }
+    }
+
+    ParamNotes {
+        p: root.p;
+    }
+}
+
+// A setting on one line: its name left, its control right - lists,
+// scripts and file paths need the width, so they're stacked (`ParamRow`).
+component InlineParamRow inherits VerticalLayout {
+    in property <CommandParameter> p;
+    callback changed(string);
+    callback item-field-changed(int, string, string);
+    callback add-item();
+    callback remove-item(int);
+    callback show-model-info();
+    callback toggle-exposed();
+    callback edit-exposed();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
+    callback edit-item-exposed(int, string);
+    callback toggle-item-pin(int, string);
+        // Pins / unpins it into the Tuning panel.
+        callback toggle-pin();
+
+    property <bool> stacked: p.param-type == ParamType.group || p.param-type == ParamType.script || p.param-type == ParamType.file-path || p.param-type == ParamType.multi-obj-class || p.param-type == ParamType.multi-seg-class || p.param-type == ParamType.image-address || p.param-type == ParamType.slider;
+
+    spacing: 2px;
+
+    if root.stacked: ParamRow {
+        p: root.p;
+        show-section: false;
+        changed(v) => {
+            root.changed(v);
+        }
+        item-field-changed(i, n, v) => {
+            root.item-field-changed(i, n, v);
+        }
+        add-item => {
+            root.add-item();
+        }
+        remove-item(i) => {
+            root.remove-item(i);
+        }
+        show-model-info => {
+            root.show-model-info();
+        }
+        toggle-exposed => {
+            root.toggle-exposed();
+        }
+        edit-exposed => {
+            root.edit-exposed();
+        }
+        toggle-item-exposed(i, n) => {
+            root.toggle-item-exposed(i, n);
+        }
+        toggle-item-pin(i, n) => {
+            root.toggle-item-pin(i, n);
+        }
+        edit-item-exposed(i, n) => {
+            root.edit-item-exposed(i, n);
+        }
+    }
+
+    if !root.stacked: HorizontalLayout {
+        spacing: 6px;
+        HorizontalLayout {
+            width: 112px;
+            alignment: start;
+            ParamLabel {
+                p: root.p;
+                toggle-exposed => {
+                    root.toggle-exposed();
+                }
+                edit-exposed => {
+                    root.edit-exposed();
+                }
+            }
+        }
+
+        ParamControls {
+            horizontal-stretch: 1;
+            p: root.p;
+            changed(v) => {
+                root.changed(v);
+            }
+            item-field-changed(i, n, v) => {
+                root.item-field-changed(i, n, v);
+            }
+            add-item => {
+                root.add-item();
+            }
+            remove-item(i) => {
+                root.remove-item(i);
+            }
+            show-model-info => {
+                root.show-model-info();
+            }
+            toggle-item-exposed(i, n) => {
+                root.toggle-item-exposed(i, n);
+            }
+            toggle-item-pin(i, n) => {
+                root.toggle-item-pin(i, n);
+            }
+            edit-item-exposed(i, n) => {
+                root.edit-item-exposed(i, n);
+            }
+        }
+
+        // Into the Tuning panel - with the settings of other steps.
+            pin := Rectangle {
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
             border-radius: Ink.radius-sm;
-            background: leaf-pin-ta.has-hover ? Ink.hover : transparent;
+            background: pin-ta.has-hover ? Ink.hover : transparent;
             accessible-role: button;
             accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
             accessible-checked: root.p.pinned;
@@ -1253,770 +1833,263 @@ component LeafParamRow inherits HorizontalLayout {
             Image {
                 source: InkIcons.pin;
                 width: 12px;
-                colorize: root.p.pinned ? Ink.focus : leaf-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
+                colorize: root.p.pinned ? Ink.focus : pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
             }
-            leaf-pin-ta := TouchArea {
+
+            pin-ta := TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
                     root.toggle-pin();
                 }
             }
+
             InkTipZone {
                 width: 100%;
                 height: 100%;
-                wanted: leaf-pin-ta.has-hover && !leaf-pin-ta.pressed;
+                wanted: pin-ta.has-hover && !pin-ta.pressed;
                 text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
             }
         }
     }
 
-// ----------------------------------------------------------
-// Parameter row
-
-// Header above the first setting of a section.
-component SectionHeader inherits VerticalLayout {
-        in property <string> text;
-        padding-top: 4px;
-        spacing: 3px;
-        Text {
-            text: root.text;
-            font-size: Ink.fs-caption;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            color: Ink.text-dim;
-            overflow: elide;
-        }
-
-        InkDivider { }
+    if !root.stacked: ParamNotes {
+        p: root.p;
     }
-
-// A setting's name line: ◇/✎ inside an opened component, the name, and "?"
-// for its help text.
-component ParamLabel inherits HorizontalLayout {
-        in property <CommandParameter> p;
-        // The settings dialog's layout: a larger name, and "?" shows the
-        // full help text below the short one (`help-open`) instead of a popup.
-        in property <bool> wide: false;
-        in-out property <bool> help-open: false;
-        callback toggle-exposed();
-        callback edit-exposed();
-
-        spacing: 4px;
-        alignment: start;
-        // Inside an opened component: ◆ exposes the setting as a component
-        // parameter (filled) or hides it again.
-        if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
-            width: 16px;
-            height: 16px;
-            border-radius: 3px;
-            background: expose-ta.has-hover ? Ink.raised : transparent;
-            Text {
-                text: p.exposed ? "◆" : "◇";
-                font-size: Ink.fs-caption;
-                color: p.exposed ? Ink.cat-component : Ink.text-mute;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            expose-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.toggle-exposed();
-                }
-            }
-        }
-        if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.exposed: Rectangle {
-            width: 16px;
-            height: 16px;
-            border-radius: 3px;
-            background: edit-exposed-ta.has-hover ? Ink.raised : transparent;
-            Text {
-                text: "✎";
-                font-size: 10px;
-                color: Ink.cat-component;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            edit-exposed-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.edit-exposed();
-                }
-            }
-        }
-        Text {
-            text: p.display-name == "" ? p.name : p.display-name;
-            font-size: root.wide ? Ink.fs-body : Ink.fs-secondary;
-            font-weight: root.wide ? 600 : 400;
-            color: p.exposed ? Ink.cat-component : (root.wide ? Ink.text : Ink.text-dim);
-            vertical-alignment: center;
-            overflow: elide;
-        }
-
-        // Wide (a section): its longer help unfolds in place; else the card.
-        if root.wide && p.more-help: Rectangle {
-            width: 16px;
-            height: 16px;
-            y: (parent.height - self.height) / 2;
-            border-radius: 8px;
-            background: help-ta.has-hover || root.help-open ? Ink.info-tint : transparent;
-            accessible-role: button;
-            accessible-label: "About " + (p.display-name == "" ? p.name : p.display-name);
-            accessible-expanded: root.help-open;
-            accessible-action-default => {
-                root.help-open = !root.help-open;
-            }
-            Image {
-                source: InkIcons.info;
-                width: 14px;
-                height: 14px;
-                colorize: help-ta.has-hover || root.help-open ? Ink.focus : Ink.text-mute;
-            }
-            help-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.help-open = !root.help-open;
-                }
-            }
-            InkTipZone {
-                width: 100%;
-                height: 100%;
-                wanted: help-ta.has-hover && !help-ta.pressed;
-                text: root.help-open ? "Hide the help" : "About " + (p.display-name == "" ? p.name : p.display-name);
-            }
-        }
-        if !root.wide && p.description != "": InkInfoButton {
-            title: p.display-name == "" ? p.name : p.display-name;
-            text: p.description;
-        }
-    }
-
-// A setting's control (text field, spinner, dropdown, list entries, …).
-// Locked while a component is only viewed.
-// A setting's control: `ScalarControls`, or a list's entries (each entry's
-// settings as rows) with "Add item".
-component ParamControls inherits Rectangle {
-        in property <CommandParameter> p;
-        // A narrow field (a table cell): the controls that have it get their
-        // compact form.
-        in property <bool> compact: false;
-        callback changed(string);
-        callback item-field-changed(int, string, string);
-        callback add-item();
-        callback remove-item(int);
-        callback show-model-info();
-        // A list entry's setting: entry index, setting name.
-        callback toggle-item-exposed(int, string);
-        callback edit-item-exposed(int, string);
-        callback toggle-item-pin(int, string);
-
-        VerticalLayout {
-            if p.param-type != ParamType.group: ScalarControls {
-                p: root.p;
-                compact: root.compact;
-                changed(v) => {
-                    root.changed(v);
-                }
-                show-model-info => {
-                    root.show-model-info();
-                }
-            }
-
-            if p.param-type == ParamType.group: VerticalLayout {
-                spacing: 4px;
-                for item[i] in p.group-items: Rectangle {
-                    border-radius: Ink.radius-md;
-                    border-width: 1px;
-                    border-color: Ink.border-soft;
-                    background: Ink.field;
-                    VerticalLayout {
-                        padding-left: 8px;
-                        padding-right: 4px;
-                        padding-top: 4px;
-                        padding-bottom: 6px;
-                        spacing: 4px;
-                        HorizontalLayout {
-                            InkCaption {
-                                horizontal-stretch: 1;
-                                text: "#" + (i + 1);
-                            }
-                            InkIconButton {
-                                size: 22px;
-                                icon: InkIcons.delete;
-                                label: "Remove entry " + (i + 1);
-                                clicked => {
-                                    root.remove-item(i);
-                                }
-                            }
-                        }
-
-                        for field in item.fields: LeafParamRow {
-                            p: field;
-                            changed(v) => {
-                                root.item-field-changed(i, field.name, v);
-                            }
-                            toggle-exposed => {
-                                root.toggle-item-exposed(i, field.name);
-                            }
-                            edit-exposed => {
-                                root.edit-item-exposed(i, field.name);
-                            }
-                            toggle-pin => {
-                                root.toggle-item-pin(i, field.name);
-                            }
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    alignment: start;
-                    InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        icon: InkIcons.add;
-                        text: "Add item";
-                        clicked => {
-                            root.add-item();
-                        }
-                    }
-                }
-            }
-        }
-
-        // "View": the settings can be read, not changed.
-        if PipelinesPanelState.steps-read-only: TouchArea { }
-    }
-
-// Below a setting: what it's wired to, and what a check found about it.
-component ParamNotes inherits VerticalLayout {
-        in property <CommandParameter> p;
-        spacing: 2px;
-        if p.wiring != "": Text {
-            text: p.wiring;
-            font-size: Ink.fs-caption;
-            color: Ink.cat-component.with-alpha(0.85);
-            wrap: word-wrap;
-            height: self.preferred-height;
-        }
-        if p.problem != "": Text {
-            text: "⚠ \{p.problem}";
-            font-size: Ink.fs-caption;
-            color: p.problem-error ? Ink.err : Ink.warn;
-            wrap: word-wrap;
-            height: self.preferred-height;
-        }
-    }
-
-// One problem: what it is, where (`show-where`), and its fix. Clicking the
-// text shows the step it's about.
-component ProblemRow inherits HorizontalLayout {
-        in property <ProblemItem> item;
-        in property <bool> show-where: true;
-        spacing: 6px;
-
-        VerticalLayout {
-            alignment: start;
-            padding-top: 4px;
-            Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: item.error ? Ink.err : Ink.warn;
-            }
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 1px;
-            if root.show-where && item.where != "": Text {
-                text: item.where;
-                font-size: Ink.fs-caption;
-                font-weight: 600;
-                color: Ink.text-mute;
-                overflow: elide;
-            }
-            problem-text := Text {
-                text: item.text;
-                font-size: Ink.fs-caption;
-                color: problem-ta.has-hover && root.show-where ? Ink.text : Ink.text-dim;
-                wrap: word-wrap;
-                height: self.preferred-height;
-                problem-ta := TouchArea {
-                    mouse-cursor: root.show-where ? pointer : default;
-                    clicked => {
-                        if root.show-where {
-                            PipelinesPanelState.show-problem(item.index);
-                        }
-                    }
-                }
-            }
-        }
-
-        if item.fix-label != "": VerticalLayout {
-            alignment: start;
-            Rectangle {
-                height: 20px;
-                width: fix-text.preferred-width + 14px;
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Ink.border;
-                background: fix-ta.has-hover ? Ink.raised : transparent;
-                accessible-role: button;
-                accessible-label: item.fix-label;
-                fix-text := Text {
-                    text: item.fix-label;
-                    font-size: Ink.fs-caption;
-                    color: Ink.text;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                fix-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        PipelinesPanelState.fix-problem(item.index);
-                    }
-                }
-            }
-        }
-    }
-
-component ParamRow inherits VerticalLayout {
-        in property <CommandParameter> p;
-        // Show `p.section-header` (the settings dialog has its own).
-        in property <bool> show-section: true;
-        callback changed(string);
-        callback item-field-changed(int, string, string);
-        callback add-item();
-        callback remove-item(int);
-        callback show-model-info();
-        callback toggle-exposed();
-        callback edit-exposed();
-        // A list entry's setting: entry index, setting name.
-        callback toggle-item-exposed(int, string);
-        callback edit-item-exposed(int, string);
-        callback toggle-item-pin(int, string);
-
-        spacing: 4px;
-
-        if root.show-section && p.section-header != "": SectionHeader {
-            text: p.section-header;
-        }
-
-        ParamLabel {
-            p: root.p;
-            toggle-exposed => {
-                root.toggle-exposed();
-            }
-            edit-exposed => {
-                root.edit-exposed();
-            }
-        }
-
-        ParamControls {
-            p: root.p;
-            changed(v) => {
-                root.changed(v);
-            }
-            item-field-changed(i, n, v) => {
-                root.item-field-changed(i, n, v);
-            }
-            add-item => {
-                root.add-item();
-            }
-            remove-item(i) => {
-                root.remove-item(i);
-            }
-            show-model-info => {
-                root.show-model-info();
-            }
-            toggle-item-exposed(i, n) => {
-                root.toggle-item-exposed(i, n);
-            }
-            toggle-item-pin(i, n) => {
-                root.toggle-item-pin(i, n);
-            }
-            edit-item-exposed(i, n) => {
-                root.edit-item-exposed(i, n);
-            }
-        }
-
-        ParamNotes {
-            p: root.p;
-        }
-    }
-
-// A setting on one line: its name left, its control right - lists,
-// scripts and file paths need the width, so they're stacked (`ParamRow`).
-component InlineParamRow inherits VerticalLayout {
-        in property <CommandParameter> p;
-        callback changed(string);
-        callback item-field-changed(int, string, string);
-        callback add-item();
-        callback remove-item(int);
-        callback show-model-info();
-        callback toggle-exposed();
-        callback edit-exposed();
-        // A list entry's setting: entry index, setting name.
-        callback toggle-item-exposed(int, string);
-        callback edit-item-exposed(int, string);
-        callback toggle-item-pin(int, string);
-        // Pins / unpins it into the Tuning panel.
-        callback toggle-pin();
-
-        property <bool> stacked: p.param-type == ParamType.group || p.param-type == ParamType.script || p.param-type == ParamType.file-path || p.param-type == ParamType.multi-obj-class || p.param-type == ParamType.multi-seg-class || p.param-type == ParamType.image-address || p.param-type == ParamType.slider;
-
-        spacing: 2px;
-
-        if root.stacked: ParamRow {
-            p: root.p;
-            show-section: false;
-            changed(v) => {
-                root.changed(v);
-            }
-            item-field-changed(i, n, v) => {
-                root.item-field-changed(i, n, v);
-            }
-            add-item => {
-                root.add-item();
-            }
-            remove-item(i) => {
-                root.remove-item(i);
-            }
-            show-model-info => {
-                root.show-model-info();
-            }
-            toggle-exposed => {
-                root.toggle-exposed();
-            }
-            edit-exposed => {
-                root.edit-exposed();
-            }
-            toggle-item-exposed(i, n) => {
-                root.toggle-item-exposed(i, n);
-            }
-            toggle-item-pin(i, n) => {
-                root.toggle-item-pin(i, n);
-            }
-            edit-item-exposed(i, n) => {
-                root.edit-item-exposed(i, n);
-            }
-        }
-
-        if !root.stacked: HorizontalLayout {
-            spacing: 6px;
-            HorizontalLayout {
-                width: 112px;
-                alignment: start;
-                ParamLabel {
-                    p: root.p;
-                    toggle-exposed => {
-                        root.toggle-exposed();
-                    }
-                    edit-exposed => {
-                        root.edit-exposed();
-                    }
-                }
-            }
-
-            ParamControls {
-                horizontal-stretch: 1;
-                p: root.p;
-                changed(v) => {
-                    root.changed(v);
-                }
-                item-field-changed(i, n, v) => {
-                    root.item-field-changed(i, n, v);
-                }
-                add-item => {
-                    root.add-item();
-                }
-                remove-item(i) => {
-                    root.remove-item(i);
-                }
-                show-model-info => {
-                    root.show-model-info();
-                }
-                toggle-item-exposed(i, n) => {
-                    root.toggle-item-exposed(i, n);
-                }
-                toggle-item-pin(i, n) => {
-                    root.toggle-item-pin(i, n);
-                }
-                edit-item-exposed(i, n) => {
-                    root.edit-item-exposed(i, n);
-                }
-            }
-
-            // Into the Tuning panel - with the settings of other steps.
-            pin := Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                border-radius: Ink.radius-sm;
-                background: pin-ta.has-hover ? Ink.hover : transparent;
-                accessible-role: button;
-                accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
-                accessible-checked: root.p.pinned;
-                accessible-action-default => {
-                    root.toggle-pin();
-                }
-                Image {
-                    source: InkIcons.pin;
-                    width: 12px;
-                    colorize: root.p.pinned ? Ink.focus : pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
-                }
-                pin-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.toggle-pin();
-                    }
-                }
-                InkTipZone {
-                    width: 100%;
-                    height: 100%;
-                    wanted: pin-ta.has-hover && !pin-ta.pressed;
-                    text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
-                }
-            }
-        }
-
-        if !root.stacked: ParamNotes {
-            p: root.p;
-        }
-    }
+}
 
 // A collapsible section's head: ▸ name, and its settings' values while closed.
 component SectionHead inherits Rectangle {
-        in property <SectionView> section;
-        callback clicked;
+    in property <SectionView> section;
+    callback clicked;
 
-        height: 30px;
-        border-radius: 4px;
-        background: head-ta.has-hover ? Ink.raised : transparent;
-        accessible-role: button;
-        accessible-label: root.section.name;
+    height: 30px;
+    border-radius: 4px;
+    background: head-ta.has-hover ? Ink.raised : transparent;
+    accessible-role: button;
+    accessible-label: root.section.name;
 
-        head-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.clicked();
-            }
-        }
-
-        HorizontalLayout {
-            padding-left: 2px;
-            padding-right: 6px;
-            spacing: 6px;
-            Text {
-                width: 10px;
-                text: root.section.open ? "▾" : "▸";
-                font-size: 9px;
-                color: Ink.text-mute;
-                vertical-alignment: center;
-            }
-
-            Text {
-                text: root.section.name;
-                font-size: Ink.fs-secondary;
-                font-weight: 600;
-                color: Ink.text;
-                vertical-alignment: center;
-            }
-
-            if root.section.problem > 0: Text {
-                text: "⚠";
-                font-size: Ink.fs-caption;
-                color: root.section.problem == 2 ? Ink.err : Ink.warn;
-                vertical-alignment: center;
-            }
-
-            Text {
-                horizontal-stretch: 1;
-                text: root.section.open ? "" : root.section.summary;
-                font-size: Ink.fs-caption;
-                color: Ink.text-dim;
-                overflow: elide;
-                vertical-alignment: center;
-            }
+    head-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
         }
     }
+
+    HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 6px;
+        spacing: 6px;
+        Text {
+            width: 10px;
+            text: root.section.open ? "▾" : "▸";
+            font-size: 9px;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.section.name;
+            font-size: Ink.fs-secondary;
+            font-weight: 600;
+            color: Ink.text;
+            vertical-alignment: center;
+        }
+
+        if root.section.problem > 0: Text {
+            text: "⚠";
+            font-size: Ink.fs-caption;
+            color: root.section.problem == 2 ? Ink.err : Ink.warn;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.section.open ? "" : root.section.summary;
+            font-size: Ink.fs-caption;
+            color: Ink.text-dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
 
 // Sections with the same settings as a table: a row per section, a
 // column per setting, compact controls in the cells.
 component CardTableView inherits VerticalLayout {
-        in property <CardTable> table;
+    in property <CardTable> table;
         // A cell's setting changed: its name, the value.
         callback changed(string, string);
         // The pin of a row: its section's settings into the Tuning panel.
         callback toggle-pin-row(string);
 
+    spacing: 4px;
+
+    HorizontalLayout {
         spacing: 4px;
+        Rectangle {
+            width: 64px;
+        }
 
-        HorizontalLayout {
-            spacing: 4px;
-            Rectangle {
-                width: 64px;
-            }
-
-            for column in root.table.columns: Text {
-                horizontal-stretch: 1;
-                preferred-width: 1px;
-                min-width: 0px;
-                text: column;
-                font-size: Ink.fs-caption;
-                font-weight: 600;
-                color: Ink.text-mute;
-                overflow: elide;
-            }
+        for column in root.table.columns: Text {
+            horizontal-stretch: 1;
+            preferred-width: 1px;
+            min-width: 0px;
+            text: column;
+            font-size: Ink.fs-caption;
+            font-weight: 600;
+            color: Ink.text-mute;
+            overflow: elide;
+        }
             // Over the pins.
             Rectangle {
-                width: 20px;
-            }
-        }
-
-        for row in root.table.rows: HorizontalLayout {
-            spacing: 4px;
-            height: 26px;
-            Text {
-                width: 64px;
-                text: row.name;
-                font-size: Ink.fs-secondary;
-                font-weight: 600;
-                color: row.problem == 2 ? Ink.err : row.problem == 1 ? Ink.warn : Ink.text;
-                overflow: elide;
-                vertical-alignment: center;
-            }
-
-            for cell in row.cells: Rectangle {
-                horizontal-stretch: 1;
-                preferred-width: 1px;
-                min-width: 0px;
-                border-radius: 5px;
-                border-width: cell.problem != "" ? 1px : 0px;
-                border-color: cell.problem-error ? Ink.err : Ink.warn;
-                ParamControls {
-                    x: 1px;
-                    y: (parent.height - self.height) / 2;
-                    width: parent.width - 2px;
-                    p: cell;
-                    compact: true;
-                    changed(v) => {
-                        root.changed(cell.name, v);
-                    }
-                }
-            }
-
-            // The row's settings into the Tuning panel.
-            row-pin := Rectangle {
-                property <bool> pinned: row.cells.length > 0 && row.cells[0].pinned;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                border-radius: Ink.radius-sm;
-                background: row-pin-ta.has-hover ? Ink.hover : transparent;
-                accessible-role: button;
-                accessible-label: row-pin.pinned ? "Unpin \{row.name}" : "Pin \{row.name} to the Tuning panel";
-                accessible-checked: row-pin.pinned;
-                accessible-action-default => {
-                    root.toggle-pin-row(row.name);
-                }
-                Image {
-                    source: InkIcons.pin;
-                    width: 12px;
-                    colorize: row-pin.pinned ? Ink.focus : row-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
-                }
-                row-pin-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.toggle-pin-row(row.name);
-                    }
-                }
-                InkTipZone {
-                    width: 100%;
-                    height: 100%;
-                    wanted: row-pin-ta.has-hover && !row-pin-ta.pressed;
-                    text: row-pin.pinned ? "Unpin \{row.name}" : "Pin \{row.name} to the Tuning panel";
-                }
-            }
-        }
-
-        for problem in root.table.problems: Text {
-            text: "⚠ \{problem}";
-            font-size: Ink.fs-caption;
-            color: root.table.problem-error ? Ink.err : Ink.warn;
-            wrap: word-wrap;
-            height: self.preferred-height;
+            width: 20px;
         }
     }
 
-component StepRow inherits Rectangle {
-        in property <PipelineCommand> step;
-        in property <int> idx;
-        in property <int> pipeline-id;
-        callback toggle-enabled;
-        callback toggle-expanded;
-        callback remove;
-        callback duplicate;
-        callback create-component;
-        callback open-component;
-        callback view-component;
-        callback expand-component;
-        callback save-to-library;
-        callback update-component;
-        callback param-changed(string, string);
-        callback toggle-breakpoint;
-        callback open-settings;
+    for row in root.table.rows: HorizontalLayout {
+        spacing: 4px;
+        height: 26px;
+        Text {
+            width: 64px;
+            text: row.name;
+            font-size: Ink.fs-secondary;
+            font-weight: 600;
+            color: row.problem == 2 ? Ink.err : row.problem == 1 ? Ink.warn : Ink.text;
+            overflow: elide;
+            vertical-alignment: center;
+        }
 
-        // Collapsed: a line. Expanded: a card around the settings.
+        for cell in row.cells: Rectangle {
+            horizontal-stretch: 1;
+            preferred-width: 1px;
+            min-width: 0px;
+            border-radius: 5px;
+            border-width: cell.problem != "" ? 1px : 0px;
+            border-color: cell.problem-error ? Ink.err : Ink.warn;
+            ParamControls {
+                x: 1px;
+                y: (parent.height - self.height) / 2;
+                width: parent.width - 2px;
+                p: cell;
+                compact: true;
+                changed(v) => {
+                    root.changed(cell.name, v);
+                }
+            }
+        }
+
+        // The row's settings into the Tuning panel.
+            row-pin := Rectangle {
+            property <bool> pinned: row.cells.length > 0 && row.cells[0].pinned;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            border-radius: Ink.radius-sm;
+            background: row-pin-ta.has-hover ? Ink.hover : transparent;
+            accessible-role: button;
+            accessible-label: row-pin.pinned ? "Unpin \{row.name}" : "Pin \{row.name} to the Tuning panel";
+            accessible-checked: row-pin.pinned;
+            accessible-action-default => {
+                root.toggle-pin-row(row.name);
+            }
+            Image {
+                source: InkIcons.pin;
+                width: 12px;
+                colorize: row-pin.pinned ? Ink.focus : row-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
+            }
+
+            row-pin-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggle-pin-row(row.name);
+                }
+            }
+
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: row-pin-ta.has-hover && !row-pin-ta.pressed;
+                text: row-pin.pinned ? "Unpin \{row.name}" : "Pin \{row.name} to the Tuning panel";
+            }
+        }
+    }
+
+    for problem in root.table.problems: Text {
+        text: "⚠ \{problem}";
+        font-size: Ink.fs-caption;
+        color: root.table.problem-error ? Ink.err : Ink.warn;
+        wrap: word-wrap;
+        height: self.preferred-height;
+    }
+}
+
+component StepRow inherits Rectangle {
+    in property <PipelineCommand> step;
+    in property <int> idx;
+    in property <int> pipeline-id;
+    callback toggle-enabled;
+    callback toggle-expanded;
+    callback remove;
+    callback duplicate;
+    callback create-component;
+    callback open-component;
+    callback view-component;
+    callback expand-component;
+    callback save-to-library;
+    callback update-component;
+    callback param-changed(string, string);
+    callback toggle-breakpoint;
+    callback open-settings;
+
+    // Collapsed: a line. Expanded: a card around the settings.
         property <bool> hovered: head-ta.has-hover;
-        property <bool> editable: !PipelinesPanelState.steps-read-only;
+    property <bool> editable: !PipelinesPanelState.steps-read-only;
         // 0 = off, 1 = stop, 2 = snapshot - for this step.
         property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
 
-        property <bool> selected: PipelinesPanelState.selected-step-id == root.idx;
-        background: step.expanded ? Ink.panel : root.selected ? Ink.selection : head-ta.has-hover ? Ink.hover : transparent;
-        border-width: step.expanded ? 1px : 0px;
-        border-color: root.selected ? Ink.text-faint : Ink.border;
-        border-radius: Ink.radius-md;
-        clip: true;
+    property <bool> selected: PipelinesPanelState.selected-step-id == root.idx;
+    background: step.expanded ? Ink.panel : root.selected ? Ink.selection : head-ta.has-hover ? Ink.hover : transparent;
+    border-width: step.expanded ? 1px : 0px;
+    border-color: root.selected ? Ink.text-faint : Ink.border;
+    border-radius: Ink.radius-md;
+    clip: true;
 
-        VerticalLayout {
-            spacing: 0px;
+    VerticalLayout {
+        spacing: 0px;
 
-            // -- The line --
+        // -- The line --
             Rectangle {
-                height: 34px;
-                opacity: step.enabled ? 1.0 : 0.5;
+            height: 34px;
+            opacity: step.enabled ? 1.0 : 0.5;
                 // The keyboard's ring (a click doesn't focus it).
                 border-radius: Ink.radius-md;
-                border-width: line-keys.has-focus ? 2px : 0px;
-                border-color: Ink.focus;
+            border-width: line-keys.has-focus ? 2px : 0px;
+            border-color: Ink.focus;
                 // Tab reaches it: focused, it's the selected step (the step
                 // shortcuts act on it); Space / Enter opens or closes it.
                 line-keys := FocusScope {
-                    focus-on-click: false;
-                    changed has-focus => {
-                        if self.has-focus {
-                            PipelinesPanelState.selected-step-id = root.idx;
-                        }
-                    }
-                    key-pressed(e) => {
-                        if e.text == " " || e.text == Key.Return {
-                            root.toggle-expanded();
-                            return accept;
-                        }
-                        return reject;
+                focus-on-click: false;
+                changed has-focus => {
+                    if self.has-focus {
+                        PipelinesPanelState.selected-step-id = root.idx;
                     }
                 }
+                key-pressed(e) => {
+                    if e.text == " " || e.text == Key.Return {
+                        root.toggle-expanded();
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
                 // The line's buttons inside it: over a button the line
                 // stays hovered (as siblings they flickered - hiding the
                 // button hovered the line, which showed it again).
                 head-ta := TouchArea {
-                    clicked => {
-                        PipelinesPanelState.selected-step-id = root.idx;
-                        root.toggle-expanded();
-                    }
+                clicked => {
+                    PipelinesPanelState.selected-step-id = root.idx;
+                    root.toggle-expanded();
+                }
 
                 HorizontalLayout {
                     spacing: 0px;
@@ -2050,6 +2123,7 @@ component StepRow inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
+
                         gutter-ta := TouchArea {
                             enabled: gutter.can-break;
                             mouse-cursor: pointer;
@@ -2057,6 +2131,7 @@ component StepRow inherits Rectangle {
                                 root.toggle-breakpoint();
                             }
                         }
+
                         InkTipZone {
                             width: 100%;
                             height: 100%;
@@ -2212,37 +2287,37 @@ component StepRow inherits Rectangle {
                         }
                     }
                 }
-                }
             }
+        }
 
-            // -- Expanded body --
+        // -- Expanded body --
         if step.expanded: Rectangle {
 
-                // Top hairline separator inside the card
+            // Top hairline separator inside the card
             Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    width: 100%;
-                    height: 1px;
-                    background: Ink.border-soft;
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 1px;
+                background: Ink.border-soft;
+            }
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 10px;
+
+                if step.problems.length > 0: VerticalLayout {
+                    spacing: 6px;
+                    for item in step.problems: ProblemRow {
+                        item: item;
+                        show-where: false;
+                    }
                 }
 
-                VerticalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    padding-top: 12px;
-                    padding-bottom: 12px;
-                    spacing: 10px;
-
-                    if step.problems.length > 0: VerticalLayout {
-                        spacing: 6px;
-                        for item in step.problems: ProblemRow {
-                            item: item;
-                            show-where: false;
-                        }
-                    }
-
-                    // A component card with sections: collapsed to their
+                // A component card with sections: collapsed to their
                     // values, a table where sections have the same settings.
                     // The settings as rows (name left, control right): those
                     // without a section first, then each section - collapsed
@@ -2310,10 +2385,10 @@ component StepRow inherits Rectangle {
                             }
                         }
                     }
-                    }
+                }
 
-                    if step.section-views.length == 0: VerticalLayout {
-                        spacing: 10px;
+                if step.section-views.length == 0: VerticalLayout {
+                    spacing: 10px;
                     for p in step.parameters: ParamRow {
                         p: p;
                         changed(v) => {
@@ -2347,101 +2422,104 @@ component StepRow inherits Rectangle {
                             PipelinesPanelState.edit-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
                         }
                     }
-                    }
+                }
 
-                    if step.advanced-count > 0: AdvancedRow {
-                        count: step.advanced-count;
-                        changed-count: step.advanced-changed;
-                        expanded: step.show-advanced || PipelinesPanelState.always-show-advanced;
-                        always: PipelinesPanelState.always-show-advanced;
-                        toggled => {
-                            PipelinesPanelState.toggle-advanced(step.id);
-                        }
-                        always-toggled(on) => {
-                            PipelinesPanelState.always-show-advanced-toggled(on);
-                        }
+                if step.advanced-count > 0: AdvancedRow {
+                    count: step.advanced-count;
+                    changed-count: step.advanced-changed;
+                    expanded: step.show-advanced || PipelinesPanelState.always-show-advanced;
+                    always: PipelinesPanelState.always-show-advanced;
+                    toggled => {
+                        PipelinesPanelState.toggle-advanced(step.id);
                     }
-
-                    for p in step.advanced-parameters: InlineParamRow {
-                        toggle-pin => {
-                            PipelinesPanelState.toggle-pin(step.id, p.name);
-                        }
-                        p: p;
-                        changed(v) => {
-                            root.param-changed(p.name, v);
-                        }
-                        item-field-changed(item_idx, field_name, v) => {
-                            root.param-changed("\{p.name}.\{item_idx}.\{field_name}", v);
-                        }
-                        add-item => {
-                            PipelinesPanelState.add-group-item(step.id, p.name);
-                        }
-                        remove-item(idx) => {
-                            PipelinesPanelState.remove-group-item(step.id, p.name, idx);
-                        }
-                        show-model-info => {
-                            PipelinesPanelState.show-model-info(step.id);
-                        }
-                        toggle-exposed => {
-                            PipelinesPanelState.toggle-exposed(step.id, p.name);
-                        }
-                        toggle-item-exposed(item_idx, field_name) => {
-                            PipelinesPanelState.toggle-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
-                        }
-                        toggle-item-pin(item_idx, field_name) => {
-                            PipelinesPanelState.toggle-pin(step.id, "\{p.name}.\{item_idx}.\{field_name}");
-                        }
-                        edit-exposed => {
-                            PipelinesPanelState.edit-exposed(step.id, p.name);
-                        }
-                        edit-item-exposed(item_idx, field_name) => {
-                            PipelinesPanelState.edit-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
-                        }
+                    always-toggled(on) => {
+                        PipelinesPanelState.always-show-advanced-toggled(on);
                     }
+                }
 
-                    // A component's own actions; the step's actions are in ⋯.
+                for p in step.advanced-parameters: InlineParamRow {
+                    toggle-pin => {
+                        PipelinesPanelState.toggle-pin(step.id, p.name);
+                    }
+                    p: p;
+                    changed(v) => {
+                        root.param-changed(p.name, v);
+                    }
+                    item-field-changed(item_idx, field_name, v) => {
+                        root.param-changed("\{p.name}.\{item_idx}.\{field_name}", v);
+                    }
+                    add-item => {
+                        PipelinesPanelState.add-group-item(step.id, p.name);
+                    }
+                    remove-item(idx) => {
+                        PipelinesPanelState.remove-group-item(step.id, p.name, idx);
+                    }
+                    show-model-info => {
+                        PipelinesPanelState.show-model-info(step.id);
+                    }
+                    toggle-exposed => {
+                        PipelinesPanelState.toggle-exposed(step.id, p.name);
+                    }
+                    toggle-item-exposed(item_idx, field_name) => {
+                        PipelinesPanelState.toggle-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
+                    }
+                    toggle-item-pin(item_idx, field_name) => {
+                        PipelinesPanelState.toggle-pin(step.id, "\{p.name}.\{item_idx}.\{field_name}");
+                    }
+                    edit-exposed => {
+                        PipelinesPanelState.edit-exposed(step.id, p.name);
+                    }
+                    edit-item-exposed(item_idx, field_name) => {
+                        PipelinesPanelState.edit-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
+                    }
+                }
+
+                // A component's own actions; the step's actions are in ⋯.
                     if root.step.category == StepCategory.component || root.step.update-version != "": HorizontalLayout {
-                        spacing: 6px;
-                        padding-top: 2px;
-                        alignment: start;
-                        if root.step.category == StepCategory.component: InkButton {
-                            small: true;
-                            text: "View";
-                            clicked => {
-                                root.view-component();
-                            }
-                        }
-                        if root.step.category == StepCategory.component && root.editable: InkButton {
-                            small: true;
-                            text: "Edit";
-                            clicked => {
-                                root.open-component();
-                            }
-                        }
-                        if root.step.update-version != "": InkButton {
-                            small: true;
-                            kind: InkButtonKind.primary;
-                            text: "Update to v\{root.step.update-version}";
-                            clicked => {
-                                root.update-component();
-                            }
+                    spacing: 6px;
+                    padding-top: 2px;
+                    alignment: start;
+                    if root.step.category == StepCategory.component: InkButton {
+                        small: true;
+                        text: "View";
+                        clicked => {
+                            root.view-component();
                         }
                     }
+                    if root.step.category == StepCategory.component && root.editable: InkButton {
+                        small: true;
+                        text: "Edit";
+                        clicked => {
+                            root.open-component();
+                        }
+                    }
+                    if root.step.update-version != "": InkButton {
+                        small: true;
+                        kind: InkButtonKind.primary;
+                        text: "Update to v\{root.step.update-version}";
+                        clicked => {
+                            root.update-component();
+                        }
+                    }
+                }
                     // YODA
                 Rectangle {
-                        vertical-stretch: 1;
-                    }
+                    vertical-stretch: 1;
                 }
             }
         }
-    
+    }
+
     step-menu := PopupWindow {
         x: root.width - 220px;
         y: 32px;
         InkMenuFrame {
             open-y: root.absolute-position.y + 32px;
             menu-width: 220px;
-            InkMenuCaption { text: root.step.name; }
+            InkMenuCaption {
+                text: root.step.name;
+            }
+
             InkMenuItem {
                 icon: InkIcons.settings;
                 text: "Settings…";
@@ -2450,6 +2528,7 @@ component StepRow inherits Rectangle {
                     root.open-settings();
                 }
             }
+
             InkMenuItem {
                 text: root.step.enabled ? "Disable" : "Enable";
                 shortcut: "Ctrl /";
@@ -2458,6 +2537,7 @@ component StepRow inherits Rectangle {
                     root.toggle-enabled();
                 }
             }
+
             InkMenuItem {
                 text: root.bp-state == 0 ? "Breakpoint" : root.bp-state == 1 ? "Breakpoint: snapshot" : "No breakpoint";
                 shortcut: "F9";
@@ -2465,6 +2545,7 @@ component StepRow inherits Rectangle {
                     root.toggle-breakpoint();
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.copy;
                 text: "Duplicate";
@@ -2474,6 +2555,7 @@ component StepRow inherits Rectangle {
                     root.duplicate();
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.caret-up;
                 text: "Move up";
@@ -2484,6 +2566,7 @@ component StepRow inherits Rectangle {
                     PipelinesPanelState.selected-step-id = root.idx - 1;
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.caret-down;
                 text: "Move down";
@@ -2494,6 +2577,7 @@ component StepRow inherits Rectangle {
                     PipelinesPanelState.selected-step-id = root.idx + 1;
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.component;
                 text: "Bundle into a component…";
@@ -2502,6 +2586,7 @@ component StepRow inherits Rectangle {
                     root.create-component();
                 }
             }
+
             if root.step.category == StepCategory.component && root.editable: InkMenuItem {
                 text: "Expand into its steps";
                 clicked => {
@@ -2516,6 +2601,7 @@ component StepRow inherits Rectangle {
                 }
             }
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.delete;
                 text: "Remove step";
@@ -2552,6 +2638,7 @@ component InsertPoint inherits Rectangle {
         height: 1px;
         background: Ink.focus;
     }
+
     Rectangle {
         visible: ta.has-hover;
         x: (parent.width - 16px) / 2;
@@ -2573,6 +2660,7 @@ component InsertPoint inherits Rectangle {
             root.insert();
         }
     }
+
     InkTipZone {
         width: 100%;
         height: 100%;
@@ -2643,11 +2731,13 @@ export component PipelinesPanel inherits Rectangle {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
+
                             Image {
                                 source: root.list-shown ? InkIcons.caret-up : InkIcons.caret-down;
                                 width: 10px;
                                 colorize: Ink.text-mute;
                             }
+
                             Text {
                                 horizontal-stretch: 1;
                                 text: PipelinesPanelState.active-pipeline-image-source;
@@ -2666,6 +2756,7 @@ export component PipelinesPanel inherits Rectangle {
                             root.toggle-list();
                         }
                     }
+
                     InkTipZone {
                         width: 100%;
                         height: 100%;
@@ -2688,6 +2779,7 @@ export component PipelinesPanel inherits Rectangle {
                         kbd := InkKbd {
                             text: "Ctrl K";
                         }
+
                         TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
@@ -2743,6 +2835,7 @@ export component PipelinesPanel inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+
                 VerticalLayout {
                     alignment: center;
                     InkIconButton {
@@ -2756,9 +2849,9 @@ export component PipelinesPanel inherits Rectangle {
                 }
             }
 
-            Flickable {
+            // At most four rows; more scroll (with a scrollbar).
+            ScrollView {
                 height: min(PipelinesPanelState.pipelines.length, 4) * root.pipeline-row-h;
-                content-height: PipelinesPanelState.pipelines.length * root.pipeline-row-h;
                 VerticalLayout {
                     for p in PipelinesPanelState.pipelines: PipelineTab {
                         height: root.pipeline-row-h;
@@ -2820,6 +2913,7 @@ export component PipelinesPanel inherits Rectangle {
                     colorize: PipelinesPanelState.run-locked ? Ink.focus : Ink.warn;
                     image-fit: contain;
                 }
+
                 Text {
                     horizontal-stretch: 1;
                     text: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs."
@@ -2829,6 +2923,7 @@ export component PipelinesPanel inherits Rectangle {
                     wrap: word-wrap;
                     vertical-alignment: center;
                 }
+
                 VerticalLayout {
                     alignment: center;
                     InkButton {
@@ -2867,6 +2962,7 @@ export component PipelinesPanel inherits Rectangle {
                         width: 10px;
                         colorize: Ink.text-mute;
                     }
+
                     Text {
                         text: PipelinesPanelState.project-problem-errors > 0
                             ? "\{PipelinesPanelState.project-problems.length} problems - \{PipelinesPanelState.project-problem-errors} make a run fail"
@@ -2943,12 +3039,14 @@ export component PipelinesPanel inherits Rectangle {
                             color: Ink.text;
                             wrap: word-wrap;
                         }
+
                         Text {
                             text: PipelinesPanelState.open-component-read-only ? "Viewing · read only" : "Changes apply to every use of this component · ◇ exposes a setting";
                             font-size: Ink.fs-caption;
                             color: Ink.text-mute;
                             wrap: word-wrap;
                         }
+
                         if PipelinesPanelState.open-component-values != "": Text {
                             text: PipelinesPanelState.open-component-values;
                             font-size: Ink.fs-caption;
@@ -3006,6 +3104,7 @@ export component PipelinesPanel inherits Rectangle {
                         x: 6px;
                         text: "PICK A PIPELINE";
                     }
+
                     for p in PipelinesPanelState.pipelines: PipelineTab {
                         pipeline: p;
                         active: false;
@@ -3063,10 +3162,12 @@ export component PipelinesPanel inherits Rectangle {
                         color: Ink.text;
                         horizontal-alignment: center;
                     }
+
                     InkHint {
                         text: root.has-pipeline ? "Add a step below - it runs on every image." : "A pipeline is a list of steps run on every image.";
                         horizontal-alignment: center;
                     }
+
                     if !root.has-pipeline: HorizontalLayout {
                         alignment: center;
                         padding-top: 4px;
@@ -3169,6 +3270,7 @@ export component PipelinesPanel inherits Rectangle {
                                 width: 12px;
                                 colorize: Ink.text-dim;
                             }
+
                             Text {
                                 text: "Add step";
                                 color: Ink.text-dim;
@@ -3178,6 +3280,7 @@ export component PipelinesPanel inherits Rectangle {
                             }
                         }
                     }
+
                     add-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
@@ -3207,6 +3310,7 @@ export component PipelinesPanel inherits Rectangle {
                     color: Ink.text-dim;
                     vertical-alignment: center;
                 }
+
                 InkSelect {
                     width: 140px;
                     label: "Breakpoint shows";
@@ -3230,6 +3334,7 @@ export component PipelinesPanel inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+
                 if PipelinesPanelState.run-changes > 0: Text {
                     text: PipelinesPanelState.run-changes + (PipelinesPanelState.run-changes == 1 ? " change" : " changes") + " for the next run";
                     color: Ink.warn;
@@ -3255,14 +3360,18 @@ export component PipelinesPanel inherits Rectangle {
         InkMenuFrame {
             open-y: root.absolute-position.y + Ink.head-h - 4px;
             menu-width: 250px;
-            InkMenuCaption { text: PipelinesPanelState.active-pipeline-name; }
+            InkMenuCaption {
+                text: PipelinesPanelState.active-pipeline-name;
+            }
+
             InkMenuItem {
                 icon: InkIcons.edit;
-                text: "Edit name and image source…";
+                text: "Edit pipeline …";
                 clicked => {
                     PipelinesPanelState.pipeline-more(PipelinesPanelState.active-pipeline-id);
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.copy;
                 text: "Duplicate";
@@ -3270,6 +3379,7 @@ export component PipelinesPanel inherits Rectangle {
                     PipelinesPanelState.duplicate-pipeline(PipelinesPanelState.active-pipeline-id);
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.component;
                 text: "Save as component…";
@@ -3277,7 +3387,9 @@ export component PipelinesPanel inherits Rectangle {
                     PipelinesPanelState.save-as-component();
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.add;
                 text: "New pipeline";
@@ -3285,6 +3397,7 @@ export component PipelinesPanel inherits Rectangle {
                     PipelinesPanelState.new-pipeline();
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.delete;
                 text: "Delete pipeline…";
@@ -3532,6 +3645,7 @@ component TuneChip inherits Rectangle {
         font-weight: root.active ? 600 : 400;
         color: root.active ? Ink.focus : Ink.text-dim;
     }
+
     chip-ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
@@ -3563,9 +3677,11 @@ export component TuningPanel inherits Rectangle {
                     color: Ink.text;
                     vertical-alignment: center;
                 }
+
                 Rectangle {
                     width: 8px;
                 }
+
                 TuneChip {
                     text: "All pinned · \{root.tuned.length}";
                     active: root.tab < 0;
@@ -3573,6 +3689,7 @@ export component TuningPanel inherits Rectangle {
                         root.tab = -1;
                     }
                 }
+
                 for t[i] in root.tuned: TuneChip {
                     visible: i == 0 || root.tuned[i - 1].step != t.step;
                     width: self.visible ? self.preferred-width : 0px;
@@ -3585,6 +3702,7 @@ export component TuningPanel inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                 }
+
                 VerticalLayout {
                     alignment: center;
                     InkSearchField {
@@ -3597,6 +3715,7 @@ export component TuningPanel inherits Rectangle {
                         }
                     }
                 }
+
                 VerticalLayout {
                     alignment: center;
                     InkIconButton {
@@ -3609,6 +3728,7 @@ export component TuningPanel inherits Rectangle {
                     }
                 }
             }
+
             Rectangle {
                 y: parent.height - 1px;
                 height: 1px;
@@ -3654,6 +3774,7 @@ export component TuningPanel inherits Rectangle {
                                     background: Cat.color(t.category);
                                 }
                             }
+
                             Text {
                                 text: t.step-id;
                                 font-size: Ink.fs-secondary;
@@ -3661,6 +3782,7 @@ export component TuningPanel inherits Rectangle {
                                 color: Ink.text-mute;
                                 vertical-alignment: center;
                             }
+
                             Text {
                                 horizontal-stretch: 1;
                                 text: t.step-name;
@@ -3685,6 +3807,7 @@ export component TuningPanel inherits Rectangle {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
+
                             ParamControls {
                                 width: 150px;
                                 p: u.param;
@@ -3692,6 +3815,7 @@ export component TuningPanel inherits Rectangle {
                                     PipelinesPanelState.param-changed(u.step, u.param.name, v);
                                 }
                             }
+
                             InkIconButton {
                                 y: (parent.height - self.height) / 2;
                                 size: 20px;
