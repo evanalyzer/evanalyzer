@@ -2479,18 +2479,24 @@ component StepRow inherits Rectangle {
                     spacing: 6px;
                     padding-top: 2px;
                     alignment: start;
-                    if root.step.category == StepCategory.component: InkButton {
+                    // This step's own values (what most mean by "edit"),
+                    // its steps with them, or the component itself - the
+                    // defaults of every step that uses it.
+                    if root.step.category == StepCategory.component && root.editable && root.step.parameters.length > 0: InkButton {
                         small: true;
-                        text: "View";
+                        kind: InkButtonKind.primary;
+                        text: "This step's values…";
+                        tip: "Change the values this step uses - only this step";
                         clicked => {
-                            root.view-component();
+                            root.open-settings();
                         }
                     }
-                    if root.step.category == StepCategory.component && root.editable: InkButton {
+                    if root.step.category == StepCategory.component: InkButton {
                         small: true;
-                        text: "Edit";
+                        text: "View steps";
+                        tip: "Its steps with this step's values - read only";
                         clicked => {
-                            root.open-component();
+                            root.view-component();
                         }
                     }
                     if root.step.update-version != "": InkButton {
@@ -2502,6 +2508,19 @@ component StepRow inherits Rectangle {
                         }
                     }
                 }
+                    // The component itself, on a line of its own (the card is narrow).
+                    if root.step.category == StepCategory.component && root.editable: HorizontalLayout {
+                        alignment: start;
+                        InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Edit component (all uses)…";
+                            tip: "Change the component itself: its steps and the defaults of every step that uses it. This step's own values are kept.";
+                            clicked => {
+                                root.open-component();
+                            }
+                        }
+                    }
                     // YODA
                 Rectangle {
                     vertical-stretch: 1;
@@ -2587,6 +2606,26 @@ component StepRow inherits Rectangle {
                 }
             }
 
+            if root.step.category == StepCategory.component && root.editable && root.step.parameters.length > 0: InkMenuItem {
+                icon: InkIcons.expand;
+                text: "Change this step's values…";
+                clicked => {
+                    root.open-settings();
+                }
+            }
+            if root.step.category == StepCategory.component: InkMenuItem {
+                text: "View its steps (this step's values)";
+                clicked => {
+                    root.view-component();
+                }
+            }
+            if root.step.category == StepCategory.component && root.editable: InkMenuItem {
+                icon: InkIcons.component;
+                text: "Edit the component (all uses)…";
+                clicked => {
+                    root.open-component();
+                }
+            }
             if root.step.category == StepCategory.component && root.editable: InkMenuItem {
                 text: "Expand into its steps";
                 clicked => {
@@ -3041,7 +3080,8 @@ export component PipelinesPanel inherits Rectangle {
                         }
 
                         Text {
-                            text: PipelinesPanelState.open-component-read-only ? "Viewing · read only" : "Changes apply to every use of this component · ◇ exposes a setting";
+                            text: PipelinesPanelState.open-component-read-only ? "Viewing · read only"
+                                : "Editing the component: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting";
                             font-size: Ink.fs-caption;
                             color: Ink.text-mute;
                             wrap: word-wrap;

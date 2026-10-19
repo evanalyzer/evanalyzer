@@ -20,9 +20,11 @@ export component InkMenuFrame inherits Rectangle {
     /// `absolute-position.y` plus the popup's `y` (not read from the popup
     /// itself: Slint moves popups to fit, which would tie this to the height).
     in property <length> open-y: 0px;
-    /// At most this high; taller content scrolls. By default the room the
-    /// window leaves below `open-y`.
-    in property <length> max-menu-height: max(120px, Ink.window-height - root.open-y - 12px);
+    /// At most this high; taller content scrolls. By default the window's
+    /// height: a menu with too little room below where it opens isn't
+    /// shrunk - Slint moves the popup up into the window. Only a menu taller
+    /// than the window scrolls (with a scrollbar).
+    in property <length> max-menu-height: max(120px, Ink.window-height - 24px);
 
     property <length> menu-height: min(items.preferred-height, root.max-menu-height);
     // Constraints, not a fixed geometry: the popup sizes itself from them,
@@ -40,14 +42,39 @@ export component InkMenuFrame inherits Rectangle {
     drop-shadow-color: Ink.shadow;
     clip: true;
 
-    Flickable {
+    property <bool> scrolls: items.preferred-height > root.max-menu-height + 0.5px;
+
+    list := Flickable {
         content-height: items.preferred-height;
-        interactive: items.preferred-height > root.max-menu-height;
+        interactive: root.scrolls;
         items := VerticalLayout {
             padding: 4px;
             spacing: 0px;
             @children
         }
+    }
+
+    // Too tall for the window: a soft edge where more items are, and a
+    // thin scrollbar.
+    if root.scrolls && list.content-y < -1px: Rectangle {
+        y: 0px;
+        height: 18px;
+        background: @linear-gradient(180deg, Ink.panel 0%, Ink.panel.transparentize(100%) 100%);
+    }
+    if root.scrolls && list.content-y > list.height - list.content-height + 1px: Rectangle {
+        y: parent.height - self.height;
+        height: 18px;
+        background: @linear-gradient(0deg, Ink.panel 0%, Ink.panel.transparentize(100%) 100%);
+    }
+    if root.scrolls: Rectangle {
+        property <float> shown: list.height / max(1px, list.content-height);
+        property <float> at: -list.content-y / max(1px, list.content-height - list.height);
+        x: parent.width - 6px;
+        width: 3px;
+        height: max(24px, (parent.height - 8px) * self.shown);
+        y: 4px + (parent.height - 8px - self.height) * clamp(self.at, 0, 1);
+        border-radius: 1.5px;
+        background: Ink.text-faint;
     }
 }
 
