@@ -8,12 +8,13 @@
 
 use std::path::PathBuf;
 
+use evanalyzer_ai_engine::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
-use tch::{CModule, Device, Kind, Tensor};
 
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::run_with_model},
+    ai_devices,
+    algos::{ExecutionScope, ImageAlgorithm},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -114,90 +115,29 @@ impl ImageAlgorithm for UNet {
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        // All tensor work happens on a device slot of the AI scheduler
-        // (see `run_with_model`); the tensors are dropped with it, before the
-        // CPU-only pixel classification below.
-        let (probabilities, boundary) = run_with_model(
-            &self.model_path,
-            |e| {
-                InternalErrors::Generic(format!(
-                    "Failed to load U-Net model from {}: {e}",
-                    self.model_path.display()
-                ))
+        let request = Request {
+            model: self.model_path.clone(),
+            task: Task::UNet {
+                foreground_channel: self.foreground_channel,
+                softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
+                boundary_channel: self.boundary_channel,
             },
-            |model, device| {
-                Ok({
-                    let input = Tensor::from_slice(input_image.as_slice())
-                        .to_device(device)
-                        .to_kind(Kind::Float)
-                        .reshape([1, 1, height as i64, width as i64]);
-                    let (top, bottom) = Self::padding(height as i64);
-                    let (left, right) = Self::padding(width as i64);
-                    // Mirroring needs every pad to be smaller than the side it mirrors;
-                    // a tiny tile repeats its edge pixels instead.
-                    let mode = if top < height as i64
-                        && bottom < height as i64
-                        && left < width as i64
-                        && right < width as i64
-                    {
-                        "reflect"
-                    } else {
-                        "replicate"
-                    };
-                    let padded = input.pad([left, right, top, bottom], mode, None);
-
-                    // Without `no_grad`, the model's own weights (loaded with
-                    // `requires_grad = true`, the default for `nn.Parameter`) make this
-                    // forward pass record a full autograd graph even though `.eval()`
-                    // was called - wasting memory that's never needed for inference.
-                    let output = tch::no_grad(|| model.forward_ts(&[padded])).map_err(|e| {
-                        InternalErrors::Generic(format!("U-Net inference failed: {e}"))
-                    })?;
-                    let out_size = output.size();
-                    if out_size.len() != 4
-                        || out_size[2] < top + height as i64
-                        || out_size[3] < left + width as i64
-                    {
-                        return Err(InternalErrors::Generic(format!(
-                            "U-Net output has shape {out_size:?}; expected [1, C, H, W] the size of the \
-                 (padded) input"
-                        )));
-                    }
-                    let output = output
-                        .narrow(2, top, height as i64)
-                        .narrow(3, left, width as i64);
-
-                    let channels = *output.size().get(1).unwrap_or(&1);
-                    let foreground = if channels > 1 {
-                        let idx = (self.foreground_channel as i64).clamp(0, channels - 1);
-                        match self.output_mode {
-                            UNetOutputMode::SoftmaxClasses => {
-                                output.softmax(1, Kind::Float).narrow(1, idx, 1)
-                            }
-                            UNetOutputMode::IndependentChannels => output.narrow(1, idx, 1),
-                        }
-                    } else {
-                        output.shallow_clone()
-                    };
-
-                    let probabilities = Self::channel_to_vec(&foreground, width, height)?;
-
-                    // Optional boundary channel: boundary-aware models (e.g. affable-shark)
-                    // predict an independent boundary map. Subtracting it from the foreground
-                    // opens thin gaps between touching objects so they separate downstream.
-                    let boundary: Option<Vec<f32>> = if self.boundary_channel >= 0
-                        && channels > 1
-                        && (self.boundary_channel as i64) < channels
-                    {
-                        let b = output.narrow(1, self.boundary_channel as i64, 1);
-                        Some(Self::channel_to_vec(&b, width, height)?)
-                    } else {
-                        None
-                    };
-                    (probabilities, boundary)
-                })
-            },
-        )?;
+        };
+        let image = Image {
+            width,
+            height,
+            channels: 1,
+            data: input_image.as_slice(),
+        };
+        let Response::UNet {
+            probabilities,
+            boundary,
+        } = ai_devices::infer(&request, image)?
+        else {
+            return Err(InternalErrors::Generic(
+                "U-Net: the AI engine gave another kind of answer".into(),
+            ));
+        };
 
         let foreground_class = self.segmentation_class.as_u32();
         let output_slice = segmentation_map.as_slice_mut();
@@ -235,41 +175,6 @@ impl ImageAlgorithm for UNet {
 }
 
 impl UNet {
-    /// Side lengths the model is run at must be a multiple of this: a
-    /// standard U-Net halves the image 4 times (2^4), and odd intermediate
-    /// sizes make its skip connections mismatch.
-    const SIZE_MULTIPLE: i64 = 16;
-
-    /// Mirrored context added around the tile, at least the halo bioimage.io
-    /// U-Nets declare (e.g. 16 px for romantic-shark, 8 px for joyful-pig).
-    const MARGIN: i64 = 16;
-
-    /// Padding `(before, after)` for one side of `len` pixels: `MARGIN`
-    /// before, and after whatever brings the total up to a multiple of
-    /// `SIZE_MULTIPLE` with at least `MARGIN` of context.
-    fn padding(len: i64) -> (i64, i64) {
-        let needed = len + 2 * Self::MARGIN;
-        let total = (needed + Self::SIZE_MULTIPLE - 1) / Self::SIZE_MULTIPLE * Self::SIZE_MULTIPLE;
-        (Self::MARGIN, total - len - Self::MARGIN)
-    }
-
-    /// Moves a single-channel `[1, 1, H, W]` tensor to the CPU and flattens it
-    /// into a `width * height` vector.
-    fn channel_to_vec(
-        tensor: &Tensor,
-        width: usize,
-        height: usize,
-    ) -> Result<Vec<f32>, InternalErrors> {
-        tensor
-            .f_to_device(Device::Cpu)
-            .and_then(|out| out.f_reshape([(width * height) as i64]))
-            .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
-            .and_then(|out| {
-                Vec::try_from(&out)
-                    .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
-            })
-    }
-
     /// Classifies each pixel as foreground/background from its probability
     /// and, for boundary-aware models, its boundary probability: foreground
     /// when the probability reaches `probability_threshold` and - if a
@@ -304,7 +209,8 @@ impl UNet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    #[cfg(feature = "libtorch-in-process")]
+    use evanalyzer_ai_engine::torch::test_support::{tch::Tensor, trace_and_save_model};
     use kornia_image::{Image, ImageSize};
 
     const FG: u32 = 7;
@@ -329,24 +235,7 @@ mod tests {
         }
     }
 
-    // ---- padding to a model-friendly size ----
-
-    #[test]
-    fn padding_reaches_a_multiple_of_16_with_at_least_16_px_of_context() {
-        for len in [1, 15, 16, 31, 250, 256, 1040, 1388] {
-            let (before, after) = UNet::padding(len);
-            assert_eq!(before, 16, "len {len}");
-            assert!(after >= 16, "len {len}: only {after} px after");
-            assert_eq!((before + len + after) % 16, 0, "len {len}");
-            assert!(
-                after < 32,
-                "len {len}: {after} px is more padding than needed"
-            );
-        }
-        assert_eq!(UNet::padding(250), (16, 22));
-        assert_eq!(UNet::padding(256), (16, 16));
-    }
-
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_crops_the_prediction_back_onto_an_odd_sized_tile() {
         // An identity model on a 37x23 tile: the padded run must be cropped
@@ -378,6 +267,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_handles_tiles_smaller_than_the_padding() {
         // Too small to mirror 16 px: the edge pixels are repeated instead.
@@ -405,13 +295,14 @@ mod tests {
             .collect()
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     /// The bioimage.io `joyful-pig` boundary U-Net (LiveCellSegmentationBoundaryModel)
     /// on its own 512x512 test input, compared with its reference output -
     /// at the full size and on an odd 250x250 cutout, which crashed in the
     /// model before tiles were padded to a multiple of 16. Not checked into
     /// git (~116 MB): download it from bioimage.io into `tests/joyful-pig/`.
     /// Run with:
-    ///   cargo test -p evanalyzer_core --features ai --lib real_joyful_pig -- --ignored
+    ///   cargo test -p evanalyzer_core --features libtorch-in-process --lib real_joyful_pig -- --ignored
     #[test]
     #[ignore]
     fn real_joyful_pig_matches_its_reference_at_any_tile_size() {
@@ -492,6 +383,7 @@ mod tests {
         assert!(matches!(err, InternalErrors::Generic(_)));
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_single_channel_output_is_used_directly_as_the_foreground_probability() {
         // A single-channel model output is documented as already-activated
@@ -512,6 +404,7 @@ mod tests {
         assert_eq!(seg.as_slice(), &[bg(), FG]);
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_softmax_classes_selects_the_foreground_channel_after_softmax() {
         // Two-channel logits built from the single input channel: a large
@@ -537,6 +430,7 @@ mod tests {
         assert_eq!(seg.as_slice(), &[bg(), FG]);
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_independent_channels_uses_the_selected_channel_without_softmax() {
         // Channel 0 carries the raw input value directly (no softmax), so an
@@ -560,6 +454,7 @@ mod tests {
         assert_eq!(seg.as_slice(), &[bg(), FG]);
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_boundary_channel_carves_out_pixels_whose_boundary_probability_is_high() {
         // Channel 0 (foreground) saturates to 1.0 for any x >= 1 via clamp,
@@ -595,6 +490,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "libtorch-in-process")]
     #[test]
     fn execute_foreground_channel_out_of_range_is_clamped_to_the_last_channel() {
         // 2-channel output, but foreground_channel points past the end - must

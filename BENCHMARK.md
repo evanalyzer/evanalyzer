@@ -6,7 +6,8 @@ build. The analysis itself (running pipelines, writing results) is in
 
 ## How to run them
 
-All in release mode, with libtorch on the library path:
+All in release mode. Only tests that run AI models need libtorch on the
+library path:
 
 ```sh
 export LD_LIBRARY_PATH=$PWD/libs/libtorch/lib
@@ -118,25 +119,44 @@ Settings › Viewport › Reduce motion.
 
 Measured on the release binary under a virtual X server (Xvfb, no
 graphics card - frames are drawn by Mesa's software OpenGL/Vulkan, as on
-a computer without a working graphics driver). Script: start, wait for
-the window (`xdotool`), read `/proc/<pid>/status`.
+a computer without a working graphics driver). Script: start, poll for
+the window every 10 ms (`xdotool search`), read `/proc/<pid>/status`
+4 s later. (`xdotool search --sync` polls only every 0.5 s - the
+"window ~1.0 s" first noted here was that, not the app.)
 
-| | Warm (files in the OS cache) | Cold (after dropping the cache) |
+### libtorch as a plugin (2026-10-19)
+
+libtorch is now loaded on the first AI step (`ai/cpu`, `ai/cuda` next
+to the program) instead of being linked in. Same machine, same day, 5
+warm and 3 cold runs each (cold: page cache dropped before every run):
+
+| | Before (libtorch linked) | After (plugin) |
+|---|---|---|
+| Window on screen, warm | 347-369 ms | 154-174 ms |
+| Window on screen, cold | 1064-1094 ms | 483-491 ms |
+| RAM after startup, idle | 517 MB | 207 MB |
+
+The first AI step pays the loading instead: a whole CLI run of a
+one-image StarDist pipeline (start, load the plugin, set it up, run) is
+~390 ms warm.
+
+Before the split (2026-10-18 breakdown, release binary):
+
+| | Warm | Cold |
 |---|---|---|
 | Before `main` (loading libtorch, its start-up code) | 530 ms | 1600 ms |
 | `main` → controllers ready (logged, `--log-level debug`) | 25 ms | - |
-| Window on screen | ~1.0 s | ~2.0 s |
 
 An empty program starts in 3 ms; the dynamic loader itself needs ~7 ms.
-The half second before `main` is libtorch registering its operators and
+The half second before `main` was libtorch registering its operators and
 CUDA kernels - in every session, AI used or not.
 
-RAM after startup, idle: ~510 MB.
+RAM after startup, idle, before the split: ~510 MB.
 
 | Part | RSS |
 |---|---|
-| libtorch / CUDA libraries (cublasLt 60, torch_cpu 52, torch_cuda 23, …) | ~137 MB mapped |
-| libtorch's registrations on the heap | ~50 MB |
+| libtorch / CUDA libraries (cublasLt 60, torch_cpu 52, torch_cuda 23, …) | ~137 MB mapped - now only once AI runs |
+| libtorch's registrations on the heap | ~50 MB - now only once AI runs |
 | The program's code | 53 MB |
 | Software OpenGL/Vulkan of the test machine (LLVM, lavapipe) | ~150 MB (a real GPU driver instead) |
 | The app's own heap | a few MB |
@@ -148,7 +168,7 @@ Viewport › Reduce motion stops them.
 
 Renderer (Settings › Viewport › Draw in software, read at startup): with
 Slint's own software renderer the idle app takes ~135 MB less (500 → 365
-MB release, 582 → 444 MB debug) - no OpenGL/Vulkan stack is loaded.
+MB release, 582 → 444 MB debug, measured before the libtorch split) - no OpenGL/Vulkan stack is loaded.
 
 ### Leak checks (soak tests)
 
@@ -165,6 +185,58 @@ MB release, 582 → 444 MB debug) - no OpenGL/Vulkan stack is loaded.
   (1-8 GB); beyond that it spills to a temporary file. Same speed with
   and without the cap.
   `EVADB=… cargo test --release -p evanalyzer_gui --lib bench_soak_results -- --ignored --nocapture`
+
+## AI models: Cellpose through the plugin (2026-10-19)
+
+Is Cellpose slower now that libtorch runs in a plugin? No. Stand-in
+models (`cargo run --release -p evanalyzer_ai_engine --features test-support
+--example make_bench_models -- <dir>`: "light" = next to no compute, the
+cost around the model; "heavy" = 6 convolution layers) and the real
+Cellpose-SAM (`tests/cpsam_v2.pt`, 1.2 GB), CPU only, 22 shared cores
+(other load on the host: expect ±10 %).
+
+**The plugin boundary** - one Cellpose request on libtorch linked in vs.
+through the plugin, same process (~16 s):
+
+```sh
+cargo test --release -p evanalyzer_ai_engine --features torch-plugin,test-support \
+  --lib bench_plugin_against_in_process -- --ignored --nocapture
+# + BENCH_CELLPOSE_MODEL=$PWD/tests/cpsam_v2.pt for the real model (~1 min more)
+```
+
+| Model, image | Linked in | Plugin | Difference |
+|---|---|---|---|
+| light, 512² / 1024² / 2048² | 4 / 14 / 77 ms | 5 / 18 / 106-121 ms | +1 / +4 / +30-44 ms |
+| heavy, 512² / 1024² / 2048² | 0.19 / 0.6 / 2.3 s | same within ±6 % | noise |
+| real Cellpose-SAM, 512² / 1024² | 25 / 63 s | 23 / 67 s | noise |
+
+The only cost is handing the three result planes back (48 MB at 2048²).
+They cross as raw bytes (`api::floats`); with postcard's float-by-float
+encoding it was +65 ms at 2048². Next to a real model's seconds per tile
+it does not show.
+
+**End to end** - a Cellpose pipeline (`bench_cellpose` example) with the
+real model, one 1024² image, old build vs. new, alternated:
+
+```sh
+cargo run --release -p evanalyzer_core --features libtorch --example bench_cellpose -- \
+  <workdir> --model tests/cpsam_v2.pt --channels 3 --images 1 --size 1024 --repeat 2
+# with EVANALYZER_AI_PLUGIN=target/release/libevanalyzer_ai_engine.so and libtorch on LD_LIBRARY_PATH
+```
+
+| Build | Time per image | Peak RAM |
+|---|---|---|
+| Before (HEAD, libtorch linked into the program) | 123-137 s | ~1.7 GB |
+| New code, libtorch linked in (`libtorch-in-process`) | 137-152 s | ~1.7 GB |
+| New code, plugin (what ships) | 65-67 s | ~1.9 GB |
+
+The same Cellpose code runs **twice as fast** with libtorch as a plugin
+than linked into the program - in both old and new code, so it is how
+libtorch is loaded, not the code. Not explained yet (likely threads or
+libraries libtorch shares with the program when linked in, e.g. its
+OpenMP runtime). The stand-in models show no such gap, so it may be
+specific to the ViT model. The plugin's ~0.2 GB more peak RAM is not
+explained yet either.
 
 ## Not covered
 

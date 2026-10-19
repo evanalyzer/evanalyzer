@@ -68,7 +68,7 @@ pub enum Classifier {
 /// overlapping descriptions of the same model (`FeatureRecipe` here duplicated
 /// what `AiLearningSettings::classifier` already covers); this replaces that
 /// duplication with the one `evanalyzer_cfg` type, which is also the only one
-/// of the two schema-able (`JsonSchema`) and reusable outside the `ai` feature.
+/// of the two schema-able (`JsonSchema`) and reusable on their own.
 ///
 /// SERIALIZATION-CRITICAL: `version` is the escape hatch for future format
 /// changes — never change the meaning of an existing field for a given

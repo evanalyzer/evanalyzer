@@ -1,4 +1,4 @@
-//! # model_cache
+//! # scheduler
 //!
 //! **Author:** Joachim Danmayr
 //!
@@ -6,20 +6,19 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::ai_devices::{AiDeviceSelection, ai_device_options};
-use evanalyzer_cfg::core_types::InternalErrors;
+use super::Result;
+#[cfg(test)]
+use crate::api::EngineInfo;
+use crate::api::{DeviceInfo, DeviceSelection, EngineConfig};
 use log::{info, warn};
 use std::{
-    cell::RefCell,
     collections::HashMap,
     path::Path,
     path::PathBuf,
-    sync::{Arc, Condvar, LazyLock, Mutex, PoisonError},
+    sync::{Arc, Condvar, Mutex, PoisonError},
     time::SystemTime,
 };
 use tch::{CModule, Device, TchError};
-
-use crate::ai_learning::model::SavedClassifier;
 
 /// Looks up `path` in `cache`, inserting the result of `load` on a miss.
 /// A hit additionally requires `path`'s current mtime to match the mtime
@@ -31,13 +30,13 @@ use crate::ai_learning::model::SavedClassifier;
 /// so it degrades to the old always-reuse behavior rather than refusing to
 /// cache at all.
 ///
-/// Kept generic (and free of any `tch`/thread-local dependency) so the cache
-/// semantics can be unit tested directly.
+/// Kept generic so the cache semantics can be unit tested directly (the
+/// analysis has the same one for its classifiers).
 fn get_or_insert<V, E>(
     cache: &mut HashMap<PathBuf, (Option<SystemTime>, Arc<V>)>,
     path: &Path,
-    load: impl FnOnce() -> Result<V, E>,
-) -> Result<Arc<V>, E> {
+    load: impl FnOnce() -> std::result::Result<V, E>,
+) -> std::result::Result<Arc<V>, E> {
     let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     if let Some((cached_mtime, cached)) = cache.get(path)
         && *cached_mtime == mtime
@@ -80,26 +79,13 @@ struct SlotState {
 /// Instead each device holds one copy of each model and runs at most its
 /// slot count of inferences at once; a worker takes the least busy device or
 /// waits. The CPU gets one slot (Torch already uses every core there), a GPU
-/// [`AiDeviceOptions::gpu_slots`](crate::ai_devices::AiDeviceOptions). Torch's
-/// CPU threads are split between all slots. Configured once per process with
-/// [`configure_ai_devices`](crate::ai_devices::configure_ai_devices).
+/// [`EngineConfig::gpu_slots`]. Torch's CPU threads are split between all
+/// slots. Set up once per process (`--ai-devices`, `--gpu-slots`).
 pub(crate) struct TorchScheduler {
     devices: Vec<TorchDevice>,
     slots: Mutex<Vec<SlotState>>,
     freed: Condvar,
     cores: usize,
-}
-
-static SCHEDULER: LazyLock<TorchScheduler> = LazyLock::new(TorchScheduler::from_system);
-
-/// Runs `work` with the model at `path` on a free device of the process-wide
-/// [`TorchScheduler`]; see [`TorchScheduler::run`].
-pub(crate) fn run_with_model<T>(
-    path: &Path,
-    load_error: impl Fn(TchError) -> InternalErrors,
-    work: impl Fn(&CModule, Device) -> Result<T, InternalErrors>,
-) -> Result<T, InternalErrors> {
-    SCHEDULER.run(path, load_error, work)
 }
 
 impl TorchScheduler {
@@ -126,20 +112,21 @@ impl TorchScheduler {
         }
     }
 
-    fn from_system() -> Self {
-        let options = ai_device_options();
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    /// The devices `config` selects out of the GPUs libtorch finds (the CPU
+    /// when none).
+    pub(crate) fn from_config(config: &EngineConfig) -> Self {
+        let cores = config.cores.max(1);
         let gpu_count = if tch::Cuda::is_available() {
             tch::Cuda::device_count().max(0) as usize
         } else {
             0
         };
-        let gpus = selected_gpus(&options.devices, gpu_count);
+        let gpus = selected_gpus(&config.devices, gpu_count);
         let devices: Vec<(Device, usize)> = if gpus.is_empty() {
             vec![(Device::Cpu, 1)]
         } else {
             gpus.into_iter()
-                .map(|g| (Device::Cuda(g), options.gpu_slots))
+                .map(|g| (Device::Cuda(g), config.gpu_slots))
                 .collect()
         };
         info!(
@@ -162,9 +149,9 @@ impl TorchScheduler {
     pub(crate) fn run<T>(
         &self,
         path: &Path,
-        load_error: impl Fn(TchError) -> InternalErrors,
-        work: impl Fn(&CModule, Device) -> Result<T, InternalErrors>,
-    ) -> Result<T, InternalErrors> {
+        load_error: impl Fn(TchError) -> String,
+        work: impl Fn(&CModule, Device) -> Result<T>,
+    ) -> Result<T> {
         loop {
             let lease = self.acquire();
             let index = lease.index;
@@ -184,14 +171,30 @@ impl TorchScheduler {
                         );
                         continue;
                     }
-                    return Err(InternalErrors::Generic(format!(
+                    return Err(format!(
                         "{device:?} ran out of memory even running one inference at a time - \
                          use smaller tiles or a smaller model: {e}"
-                    )));
+                    ));
                 }
                 result => return result,
             }
         }
+    }
+
+    /// The devices and their slots now (for [`EngineInfo`]).
+    pub(crate) fn devices(&self) -> Vec<DeviceInfo> {
+        let slots = self.lock_slots();
+        self.devices
+            .iter()
+            .zip(slots.iter())
+            .map(|(d, s)| DeviceInfo {
+                name: match d.device {
+                    Device::Cuda(i) => format!("CUDA:{i}"),
+                    _ => "CPU".to_string(),
+                },
+                slots: s.capacity,
+            })
+            .collect()
     }
 
     fn threads_per_slot(&self) -> i32 {
@@ -238,7 +241,7 @@ impl TorchScheduler {
     }
 
     /// The model at `path` on device `index`, loaded once per device.
-    fn model(&self, index: usize, path: &Path) -> Result<Arc<CModule>, TchError> {
+    fn model(&self, index: usize, path: &Path) -> std::result::Result<Arc<CModule>, TchError> {
         let TorchDevice { device, models } = &self.devices[index];
         let mut models = models.lock().unwrap_or_else(PoisonError::into_inner);
         get_or_insert(&mut models, path, || CModule::load_on_device(path, *device))
@@ -272,11 +275,11 @@ fn pick_slot(slots: &[SlotState]) -> Option<usize> {
 
 /// The GPU indexes to use out of `gpu_count`; selected ones that don't
 /// exist are ignored (with a warning).
-fn selected_gpus(selection: &AiDeviceSelection, gpu_count: usize) -> Vec<usize> {
+fn selected_gpus(selection: &DeviceSelection, gpu_count: usize) -> Vec<usize> {
     match selection {
-        AiDeviceSelection::Auto => (0..gpu_count).collect(),
-        AiDeviceSelection::Cpu => Vec::new(),
-        AiDeviceSelection::Gpus(gpus) => {
+        DeviceSelection::Auto => (0..gpu_count).collect(),
+        DeviceSelection::Cpu => Vec::new(),
+        DeviceSelection::Gpus(gpus) => {
             let (exist, missing): (Vec<usize>, Vec<usize>) =
                 gpus.iter().partition(|&&g| g < gpu_count);
             if !missing.is_empty() {
@@ -288,8 +291,8 @@ fn selected_gpus(selection: &AiDeviceSelection, gpu_count: usize) -> Vec<usize> 
 }
 
 /// CUDA ("CUDA out of memory") and CPU allocator out-of-memory errors.
-fn is_out_of_memory(err: &InternalErrors) -> bool {
-    let message = err.to_string().to_ascii_lowercase();
+fn is_out_of_memory(err: &str) -> bool {
+    let message = err.to_ascii_lowercase();
     message.contains("out of memory") || message.contains("can't allocate memory")
 }
 
@@ -309,25 +312,6 @@ fn disable_jit_fusers() {
     tch::jit::fuser_cuda_set_enabled(false);
 }
 
-thread_local! {
-    // Rayon reuses a fixed pool of worker threads, so this persists per
-    // worker thread for the process lifetime, not just one pipeline run, so a whole-slide
-    // image's many tiles don't each pay the JSON-deserialize + smartcore/burn
-    // reconstruction cost of loading the same `.evamodel` file again.
-    static CLASSIFIER_CACHE: RefCell<HashMap<PathBuf, (Option<SystemTime>, Arc<SavedClassifier>)>> =
-        RefCell::new(HashMap::new());
-}
-
-/// Returns the [`SavedClassifier`] loaded from `path`, reusing a previously
-/// loaded instance on this thread instead of re-reading and re-deserializing
-/// the model file. `load` is only invoked on a cache miss.
-pub fn load_cached_classifier<E>(
-    path: &Path,
-    load: impl FnOnce() -> Result<SavedClassifier, E>,
-) -> Result<Arc<SavedClassifier>, E> {
-    CLASSIFIER_CACHE.with(|cache| get_or_insert(&mut cache.borrow_mut(), path, load))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,15 +320,15 @@ mod tests {
 
     // -- TorchScheduler ------------------------------------------------------
 
-    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    use crate::torch::test_support::trace_and_save_model;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn test_model() -> (tempfile::TempDir, PathBuf) {
         trace_and_save_model(1, 1, 2, |x| x.shallow_clone())
     }
 
-    fn load_error(e: TchError) -> InternalErrors {
-        InternalErrors::Generic(format!("load failed: {e}"))
+    fn load_error(e: TchError) -> String {
+        format!("load failed: {e}")
     }
 
     /// CPU devices (stand-ins for GPUs) with these slot counts.
@@ -412,9 +396,7 @@ mod tests {
         let calls = AtomicUsize::new(0);
         let result = scheduler.run(&path, load_error, |_, _| {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(InternalErrors::Generic(
-                    "CUDA out of memory. Tried to allocate 2 GiB".into(),
-                ))
+                Err("CUDA out of memory. Tried to allocate 2 GiB".to_string())
             } else {
                 Ok(7)
             }
@@ -429,11 +411,10 @@ mod tests {
     fn out_of_memory_with_one_slot_left_is_an_error() {
         let (_dir, path) = test_model();
         let err = devices(&[1], 8)
-            .run(&path, load_error, |_, _| -> Result<(), _> {
-                Err(InternalErrors::Generic("CUDA out of memory".into()))
+            .run(&path, load_error, |_, _| -> Result<()> {
+                Err("CUDA out of memory".to_string())
             })
-            .unwrap_err()
-            .to_string();
+            .unwrap_err();
         assert!(err.contains("one inference at a time"), "{err}");
     }
 
@@ -442,9 +423,9 @@ mod tests {
         let (_dir, path) = test_model();
         let scheduler = devices(&[2], 8);
         let calls = AtomicUsize::new(0);
-        let result = scheduler.run(&path, load_error, |_, _| -> Result<(), _> {
+        let result = scheduler.run(&path, load_error, |_, _| -> Result<()> {
             calls.fetch_add(1, Ordering::SeqCst);
-            Err(InternalErrors::Generic("bad output shape".into()))
+            Err("bad output shape".to_string())
         });
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -456,8 +437,7 @@ mod tests {
         let scheduler = devices(&[1], 8);
         let err = scheduler
             .run(Path::new("/no/such/model.pt"), load_error, |_, _| Ok(()))
-            .unwrap_err()
-            .to_string();
+            .unwrap_err();
         assert!(err.contains("load failed"), "{err}");
         assert_eq!(scheduler.lock_slots()[0].in_use, 0);
     }
@@ -467,7 +447,7 @@ mod tests {
         let (_dir, path) = test_model();
         let scheduler = devices(&[1], 8);
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = scheduler.run(&path, load_error, |_, _| -> Result<(), _> {
+            let _ = scheduler.run(&path, load_error, |_, _| -> Result<()> {
                 panic!("model failed")
             });
         }));
@@ -495,112 +475,51 @@ mod tests {
 
     #[test]
     fn gpu_selection() {
-        assert_eq!(selected_gpus(&AiDeviceSelection::Auto, 3), vec![0, 1, 2]);
+        assert_eq!(selected_gpus(&DeviceSelection::Auto, 3), vec![0, 1, 2]);
+        assert_eq!(selected_gpus(&DeviceSelection::Cpu, 2), Vec::<usize>::new());
         assert_eq!(
-            selected_gpus(&AiDeviceSelection::Cpu, 2),
-            Vec::<usize>::new()
-        );
-        assert_eq!(
-            selected_gpus(&AiDeviceSelection::Gpus(vec![2, 0, 9]), 3),
+            selected_gpus(&DeviceSelection::Gpus(vec![2, 0, 9]), 3),
             vec![2, 0]
         );
         assert_eq!(
-            selected_gpus(&AiDeviceSelection::Auto, 0),
+            selected_gpus(&DeviceSelection::Auto, 0),
             Vec::<usize>::new()
         );
     }
 
     #[test]
     fn out_of_memory_detection() {
-        let e = |m: &str| InternalErrors::Generic(m.into());
-        assert!(is_out_of_memory(&e(
+        assert!(is_out_of_memory(
             "Cellpose: CUDA out of memory. Tried to allocate"
-        )));
-        assert!(is_out_of_memory(&e(
+        ));
+        assert!(is_out_of_memory(
             "DefaultCPUAllocator: can't allocate memory"
-        )));
-        assert!(!is_out_of_memory(&e("shape mismatch")));
+        ));
+        assert!(!is_out_of_memory("shape mismatch"));
     }
 
     #[test]
-    fn cache_hit_reuses_value_without_calling_loader_again() {
-        let mut cache: HashMap<PathBuf, (Option<SystemTime>, Arc<u32>)> = HashMap::new();
-        let path = PathBuf::from("/models/one.pt");
-        let load_calls = Cell::new(0);
-
-        let first = get_or_insert::<u32, ()>(&mut cache, &path, || {
-            load_calls.set(load_calls.get() + 1);
-            Ok(42)
-        })
-        .unwrap();
-        let second = get_or_insert::<u32, ()>(&mut cache, &path, || {
-            load_calls.set(load_calls.get() + 1);
-            Ok(0) // Would prove staleness if this ever won.
-        })
-        .unwrap();
-
+    fn the_engine_reports_its_devices_and_slots() {
+        let scheduler = devices(&[1], 4);
+        let info = EngineInfo {
+            name: "test".into(),
+            devices: scheduler.devices(),
+        };
         assert_eq!(
-            load_calls.get(),
-            1,
-            "loader must run exactly once for a repeated path"
+            info.devices,
+            vec![DeviceInfo {
+                name: "CPU".into(),
+                slots: 1
+            }]
         );
-        assert_eq!(*first, 42);
-        assert_eq!(*second, 42);
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "second call must return the same cached Arc"
-        );
-    }
-
-    #[test]
-    fn different_paths_are_cached_independently() {
-        let mut cache: HashMap<PathBuf, (Option<SystemTime>, Arc<u32>)> = HashMap::new();
-        let load_calls = Cell::new(0);
-
-        let a = get_or_insert::<u32, ()>(&mut cache, Path::new("/models/a.pt"), || {
-            load_calls.set(load_calls.get() + 1);
-            Ok(1)
-        })
-        .unwrap();
-        let b = get_or_insert::<u32, ()>(&mut cache, Path::new("/models/b.pt"), || {
-            load_calls.set(load_calls.get() + 1);
-            Ok(2)
-        })
-        .unwrap();
-
-        assert_eq!(
-            load_calls.get(),
-            2,
-            "a different path must trigger its own load"
-        );
-        assert_eq!(*a, 1);
-        assert_eq!(*b, 2);
-    }
-
-    #[test]
-    fn loader_error_is_not_cached() {
-        let mut cache: HashMap<PathBuf, (Option<SystemTime>, Arc<u32>)> = HashMap::new();
-        let path = PathBuf::from("/models/broken.pt");
-        let load_calls = Cell::new(0);
-
-        let first = get_or_insert::<u32, &'static str>(&mut cache, &path, || {
-            load_calls.set(load_calls.get() + 1);
-            Err("boom")
+        // The CPU only, on request.
+        let cpu = TorchScheduler::from_config(&EngineConfig {
+            devices: DeviceSelection::Cpu,
+            gpu_slots: 2,
+            cores: 4,
         });
-        assert!(first.is_err());
-
-        let second = get_or_insert::<u32, &'static str>(&mut cache, &path, || {
-            load_calls.set(load_calls.get() + 1);
-            Ok(7)
-        })
-        .unwrap();
-
-        assert_eq!(
-            load_calls.get(),
-            2,
-            "a failed load must not poison the cache entry"
-        );
-        assert_eq!(*second, 7);
+        assert_eq!(cpu.devices().len(), 1);
+        assert_eq!(cpu.devices()[0].name, "CPU");
     }
 
     #[test]
@@ -657,61 +576,5 @@ mod tests {
         );
         assert_eq!(*after_retrain, 2);
         assert!(!Arc::ptr_eq(&first, &after_retrain));
-    }
-
-    // -- load_cached_classifier (real end-to-end, unlike `TorchSession::model` -
-    // a `SavedClassifier` is a plain in-memory value, no TorchScript fixture
-    // file needed to exercise the real cache) ------------------------------
-
-    fn sample_classifier() -> SavedClassifier {
-        use crate::ai_learning::model::CURRENT_SAVED_CLASSIFIER_VERSION;
-        use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
-        use evanalyzer_cfg::settings::ai_learning_settings::{
-            AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
-            RandomForestSettings,
-        };
-        use evanalyzer_cfg::settings::meta_data::MetaData;
-
-        let rows = vec![vec![0.0], vec![1.0]];
-        let labels = [0usize, 1];
-        let classifier = crate::ai_learning::model::random_forest::fit_random_forest(
-            &rows,
-            &labels,
-            &RandomForestSettings::default(),
-        )
-        .unwrap();
-        SavedClassifier {
-            version: CURRENT_SAVED_CLASSIFIER_VERSION,
-            classifier,
-            settings: AiLearningSettings {
-                schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                meta: MetaData::default(),
-                backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
-                classifier: AiLearningClassifierSettings::Object {
-                    feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
-                    class_labels: vec![],
-                },
-            },
-        }
-    }
-
-    #[test]
-    fn load_cached_classifier_reuses_the_same_arc_on_a_repeated_path() {
-        let path = PathBuf::from("/models/does-not-need-to-exist.evamodel");
-        let load_calls = Cell::new(0);
-
-        let first = load_cached_classifier(&path, || {
-            load_calls.set(load_calls.get() + 1);
-            Ok::<_, InternalErrors>(sample_classifier())
-        })
-        .unwrap();
-        let second = load_cached_classifier(&path, || {
-            load_calls.set(load_calls.get() + 1);
-            Ok::<_, InternalErrors>(sample_classifier())
-        })
-        .unwrap();
-
-        assert_eq!(load_calls.get(), 1, "second call must hit the cache");
-        assert!(Arc::ptr_eq(&first, &second));
     }
 }

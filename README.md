@@ -49,13 +49,15 @@ EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/joda01/im
 | Category | Algorithms |
 |---|---|
 | **Filters** | Gaussian blur, rank filter (min/median/max), rolling-ball background subtraction, enhance contrast, colour filter, intensity transform, Canny/Sobel edge detection, Hessian, Laplacian, structure tensor, weighted deviation |
-| **Segmentation** | Manual & automatic thresholding, connected components, watershed, AI segmentation (Stardist, U-Net — requires the `ai` build feature) |
+| **Segmentation** | Manual & automatic thresholding, connected components, watershed, AI segmentation (Cellpose, StarDist, U-Net, YOLOv5 — through the libtorch plugin, see below) |
 | **Morphology** | Dilation, erosion, opening, closing |
 | **Classification** | Rule-based object classification with configurable measurements |
 
 ### AI Segmentation
 
-Two AI segmentation algorithms are available (built with the `ai` Cargo feature, via [tch-rs](https://github.com/LaurentMazare/tch-rs)/libtorch):
+AI models run on libtorch (via [tch-rs](https://github.com/LaurentMazare/tch-rs)), which lives in a separate **plugin library** loaded on the first AI step — the app starts without libtorch's ~280 MB and half second of start-up work, and works (without AI models) where the plugin is missing. Trained classifiers (random forest, MLP, … — `PixelClassifier`, `AiObjectClassifier`) need no plugin.
+
+Two of the AI segmentation algorithms:
 
 | Algorithm | What the model predicts | What you get |
 |---|---|---|
@@ -104,6 +106,7 @@ The workspace is organised into focused crates:
 | `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, object tools, classification panel |
 | `evanalyzer_cli` | Headless CLI: analyze projects, export/view results databases (see [Command-Line Interface](#command-line-interface-cli)) |
 | `evanalyzer_bin` | Binary entry point — launches GUI or CLI depending on arguments |
+| `evanalyzer_ai_engine` | Runs AI models: the engine-neutral interface (`api`), the engines (`torch`, …) and the plugin loader. Built as a cdylib with `torch`, it is the libtorch plugin (`ai/cpu`, `ai/cuda`) |
 
 ### Pipeline Flow
 
@@ -164,7 +167,7 @@ tuning required to stay within what the machine actually has available.
 
 ## Installing a release
 
-Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB) ship **inside the archive, next to the binary**, so there is nothing else to install.
+Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies ship **inside the archive**: DuckDB next to the binary, the AI plugin with its libtorch in `ai/cpu` (`ai/cuda` in the CUDA builds), so there is nothing else to install.
 
 ### Linux x86-64 — `evanalyzer-linux-x86_64.tar.gz`
 
@@ -175,7 +178,7 @@ tar xzf evanalyzer-linux-x86_64.tar.gz
 
 ### Windows x86-64 — `evanalyzer-windows-x86_64.zip`
 
-Unzip the archive and run `evanalyzer.exe` (keep the `.dll` files next to it).
+Unzip the archive and run `evanalyzer.exe` (keep the `.dll` files and the `ai` folder next to it).
 
 ### macOS, Apple Silicon — `evanalyzer-macos-arm64.tar.gz`
 
@@ -187,8 +190,8 @@ xattr -dr com.apple.quarantine evanalyzer
 ./evanalyzer
 ```
 
-> Keep every file from the archive in the same folder — the bundled `.dylib`
-> libraries are resolved relative to the `evanalyzer` binary.
+> Keep every file from the archive together — the bundled `.dylib` libraries
+> (and the AI plugin in `ai/cpu`) are resolved relative to the `evanalyzer` binary.
 
 ### GPU (CUDA) builds — Linux / Windows
 
@@ -202,7 +205,8 @@ per-file limit. Download **all** volumes into one folder and extract with
 ```
 
 Then run the `evanalyzer` binary as for the CPU build. A matching NVIDIA driver
-(CUDA 12.x) must be installed on the machine.
+(CUDA 12.x) is needed to run models on the GPU; without one (or with
+`--ai-devices cpu`) the CUDA plugin runs them on the CPU.
 
 ---
 
@@ -399,10 +403,26 @@ All `export` and `view` subcommands accept `--image <name>`, `--class <name>`
 
 ## Building
 
+The app and the AI plugin are built in separate commands — only the plugin
+links libtorch (`LIBTORCH`, see `.cargo/config.toml`). The plugin is the
+`evanalyzer_ai_engine` crate built as a cdylib with its `torch` feature:
+
+```sh
+cargo build                              # the app (and the plugin loader)
+cargo build-ai-plugin                    # the libtorch plugin (alias, see .cargo/config.toml)
+cargo build --no-default-features        # the app without AI model support
+```
+
+A plugin next to the binary (as in `target/debug`) is found first;
+`EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai_engine.so` points at another
+one. Packages put it in `ai/cpu` or `ai/cuda` with its libtorch (see
+`.github/workflows/release.yml`).
+
 ### Linux x86-64
 
 ```sh
 cargo build-linux
+cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
 ```
 
 ### Windows x86-64 (cross-compile from Linux)
@@ -590,8 +610,13 @@ Config is in `about.toml` at the repo root (accepted SPDX licenses); the workspa
 ## Testing
 
 ```sh
-cargo test
+export LD_LIBRARY_PATH=$PWD/libs/libtorch/lib
+cargo test --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
 ```
+
+`libtorch-in-process` links libtorch into the test process for the AI model
+steps' tests; `libtorch` adds the plugin loader, whose test builds and loads
+the real plugin. A plain `cargo test` runs everything else.
 
 ---
 

@@ -27,9 +27,9 @@ indexmap = { workspace = true, features = ["serde", "rayon"] }
 bitvec = { workspace = true, features = ["serde", "alloc", "atomic", "std"] }
 csv = { workspace = true }
 duckdb = { workspace = true, features = ["appender-arrow"] }
-tch = {   workspace = true,  optional = true }
-smartcore = {  workspace = true, features = ["serde"], optional = true }
-burn = { workspace = true , optional = true }
+smartcore = { workspace = true, features = ["serde"] }
+burn = { workspace = true }
+evanalyzer_ai_engine = { workspace = true }
 serde_json = { workspace = true }
 petname =  { workspace = true }
 chrono = { workspace = true }
@@ -41,7 +41,15 @@ clru = { workspace = true }
 rhai = { workspace = true }
 
 [features]
-ai = ["dep:tch", "dep:smartcore", "dep:burn"]
+# AI models (Cellpose, StarDist, U-Net, YOLOv5) through the libtorch plugin
+# library, loaded on the first model run (see `evanalyzer_ai_engine`). The
+# plugin is built on its own: `cargo build-ai-plugin`. Without it, model
+# steps report that the build has no AI model support; trained classifiers
+# (Burn, smartcore) work either way.
+libtorch = ["evanalyzer_ai_engine/torch-plugin"]
+# libtorch linked into the process instead of the plugin - for the model
+# steps' tests (`cargo test -p evanalyzer_core --features libtorch-in-process`).
+libtorch-in-process = ["evanalyzer_ai_engine/test-support"]
 bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]

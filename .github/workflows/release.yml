@@ -110,7 +110,12 @@ jobs:
         run: unzip -q "libs/libtorch-"*.zip -d libs
 
       - name: Build
-        run: cargo build-linux
+        # The app, then the libtorch plugin it loads on the first AI step
+        # (evanalyzer_ai_engine as a cdylib with its `torch` engine - in a
+        # separate command, so the app itself never links libtorch).
+        run: |
+          cargo build-linux
+          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -122,11 +127,13 @@ jobs:
         run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          # libtorch is dynamically linked; ship every shared object next to the
-          # binary so the $ORIGIN rpath (see .cargo/config.toml) finds them. The
-          # glob must be *.so* (not *.so) to include versioned deps like
+          # The AI plugin with its libtorch in ai/cpu: the plugin's $ORIGIN
+          # rpath (see .cargo/config.toml) finds them there. The glob must be
+          # *.so* (not *.so) to include versioned deps like
           # libgomp-<hash>.so.1 that libtorch_cpu.so requires.
-          cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
+          mkdir -p dist/ai/cpu
+          cp target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai_engine.so dist/ai/cpu/
+          cp libs/libtorch/lib/*.so*                               dist/ai/cpu/ 2>/dev/null || true
           tar -czf evanalyzer-linux-x86_64.tar.gz -C dist .
 
       - uses: actions/upload-artifact@v4
@@ -206,7 +213,10 @@ jobs:
           echo "$HOME/ccshim" >> "$GITHUB_PATH"
 
       - name: Build
-        run: cargo build-win
+        # The app, then the libtorch plugin it loads on the first AI step.
+        run: |
+          cargo build-win
+          cargo xwin rustc -p evanalyzer_ai_engine --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -219,7 +229,11 @@ jobs:
           mkdir -p dist
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
-          cp libs/libtorch/lib/*.dll                           dist/
+          # The AI plugin with its libtorch in ai\cpu - the app loads it with
+          # its own folder searched first (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR).
+          mkdir -p dist/ai/cpu
+          cp target/x86_64-pc-windows-msvc/release/evanalyzer_ai_engine.dll dist/ai/cpu/
+          cp libs/libtorch/lib/*.dll                           dist/ai/cpu/
           (cd dist && zip -r ../evanalyzer-windows-x86_64.zip .)
 
       - uses: actions/upload-artifact@v4
@@ -261,14 +275,19 @@ jobs:
         run: unzip -q "libs/libtorch-"*.zip -d libs
 
       - name: Build
-        run: cargo build-linux
+        # The app, then the libtorch plugin it loads on the first AI step
+        # (evanalyzer_ai_engine as a cdylib with its `torch` engine - in a
+        # separate command, so the app itself never links libtorch).
+        run: |
+          cargo build-linux
+          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
 
       - name: Check that libtorch_cuda is linked
-        # Without it the binary silently runs CPU-only - see relink_torch_cuda
-        # in crates/bin/build.rs.
+        # Without it the plugin silently runs CPU-only - see relink_torch_cuda
+        # in crates/ai_engine/build.rs.
         run: |
-          readelf -d target/x86_64-unknown-linux-gnu/release/evanalyzer | grep -q "libtorch_cuda.so" \
-            || { echo "::error::evanalyzer does not link libtorch_cuda.so - the CUDA build would run CPU-only"; exit 1; }
+          readelf -d target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai_engine.so | grep -q "libtorch_cuda.so" \
+            || { echo "::error::the AI plugin does not link libtorch_cuda.so - the CUDA build would run CPU-only"; exit 1; }
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -280,11 +299,15 @@ jobs:
         run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          # CUDA libtorch ships its runtime as versioned objects (libcudart.so.12,
-          # libcublas.so.12, libcudnn*.so.9, libnccl.so.2, libgomp-<hash>.so.1, …),
-          # so the glob must be *.so* to catch the .so.N files - a plain *.so would
-          # ship none of the CUDA libs and the binary would fail to start.
-          cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
+          # The AI plugin with its CUDA libtorch in ai/cuda (it runs on the CPU
+          # too where there is no GPU). CUDA libtorch ships its runtime as
+          # versioned objects (libcudart.so.12, libcublas.so.12, libcudnn*.so.9,
+          # libnccl.so.2, libgomp-<hash>.so.1, …), so the glob must be *.so* to
+          # catch the .so.N files - a plain *.so would ship none of the CUDA
+          # libs and the plugin would fail to load.
+          mkdir -p dist/ai/cuda
+          cp target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai_engine.so dist/ai/cuda/
+          cp libs/libtorch/lib/*.so*                               dist/ai/cuda/ 2>/dev/null || true
           # Drop LibTorch components this app never reaches regardless of
           # which model is loaded (Python bindings, distributed/profiling/
           # GPUDirect libs, PyTorch's own test fixtures, the Android
@@ -297,7 +320,7 @@ jobs:
           # trying to rm a literal, non-existent "*" filename.
           while IFS= read -r pattern; do
             case "$pattern" in ""|"#"*) continue ;; esac
-            for f in dist/$pattern; do
+            for f in dist/ai/cuda/$pattern; do
               [ -e "$f" ] && rm -f "$f"
             done
           done < .github/NOT_SHIP_LIST.txt
@@ -386,20 +409,23 @@ jobs:
           echo "$HOME/ccshim" >> "$GITHUB_PATH"
 
       - name: Build
-        run: cargo build-win
+        # The app, then the libtorch plugin it loads on the first AI step.
+        run: |
+          cargo build-win
+          cargo xwin rustc -p evanalyzer_ai_engine --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
       - name: Check that torch_cuda.dll is linked
-        # Without it the exe silently runs CPU-only - see relink_torch_cuda in
-        # crates/bin/build.rs. POSIX sh only (the container has no bash).
+        # Without it the plugin silently runs CPU-only - see relink_torch_cuda
+        # in crates/ai_engine/build.rs. POSIX sh only (the container has no bash).
         run: |
-          exe=target/x86_64-pc-windows-msvc/release/evanalyzer.exe
+          exe=target/x86_64-pc-windows-msvc/release/evanalyzer_ai_engine.dll
           dump=$(command -v llvm-objdump || ls /usr/bin/llvm-objdump-* 2>/dev/null | head -n 1)
           if [ -z "$dump" ]; then
             echo "::warning::llvm-objdump not found - cannot check that torch_cuda.dll is linked"
             exit 0
           fi
           "$dump" -p "$exe" | grep -qi "DLL Name: torch_cuda.dll" \
-            || { echo "::error::evanalyzer.exe does not import torch_cuda.dll - the CUDA build would run CPU-only"; exit 1; }
+            || { echo "::error::the AI plugin does not import torch_cuda.dll - the CUDA build would run CPU-only"; exit 1; }
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -412,7 +438,10 @@ jobs:
           mkdir -p dist
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
-          cp libs/libtorch/lib/*.dll                           dist/
+          # The AI plugin with its CUDA libtorch in ai\cuda.
+          mkdir -p dist/ai/cuda
+          cp target/x86_64-pc-windows-msvc/release/evanalyzer_ai_engine.dll dist/ai/cuda/
+          cp libs/libtorch/lib/*.dll                           dist/ai/cuda/
           # Drop LibTorch components this app never reaches regardless of
           # which model is loaded - see .github/NOT_SHIP_LIST.txt for why
           # each entry is safe (and what's deliberately kept: cuDNN's
@@ -422,7 +451,7 @@ jobs:
           # nothing instead of trying to rm a literal "*" filename.
           while IFS= read -r pattern; do
             case "$pattern" in ""|"#"*) continue ;; esac
-            for f in dist/$pattern; do
+            for f in dist/ai/cuda/$pattern; do
               [ -e "$f" ] && rm -f "$f"
             done
           done < .github/NOT_SHIP_LIST.txt
@@ -475,7 +504,9 @@ jobs:
           # DuckDB is not bundled on macOS; point libduckdb-sys at the prebuilt lib.
           DUCKDB_LIB_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
           DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
-        run: cargo build-mac
+        run: |
+          cargo build-mac
+          cargo build-ai-plugin --release --target aarch64-apple-darwin
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -488,38 +519,44 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp target/aarch64-apple-darwin/release/evanalyzer       dist/
-          # Ship the libtorch + DuckDB dylibs flat next to the binary.
-          cp libs/libtorch/lib/*.dylib                             dist/ 2>/dev/null || true
+          # DuckDB next to the binary; the AI plugin with its libtorch in
+          # ai/cpu (loaded on the first AI step).
           cp libs/libduckdb-osx-universal/*.dylib                  dist/ 2>/dev/null || true
+          mkdir -p dist/ai/cpu
+          cp target/aarch64-apple-darwin/release/libevanalyzer_ai_engine.dylib dist/ai/cpu/
+          cp libs/libtorch/lib/*.dylib                             dist/ai/cpu/ 2>/dev/null || true
 
           # ---- Make the bundle relocatable (adapted from the legacy mac packer) ----
           # libtorch's / DuckDB's dylibs and the binary reference each other by
           # their install names, which on a build machine are @rpath/... or
-          # absolute paths that don't exist on a user's Mac. Since everything is
-          # shipped flat in one folder, rewrite every non-system dependency to
-          # @executable_path (the binary) / @loader_path (the dylibs) so it
-          # resolves wherever the folder is unzipped - no install, just run.
-          relink() {                       # relink <macho-file> <path-prefix>
-            local file="$1" prefix="$2" dep base
+          # absolute paths that don't exist on a user's Mac. Each library
+          # finds its neighbours in its own folder: rewrite every non-system
+          # dependency to @executable_path (the binary) / @loader_path (the
+          # dylibs) so it resolves wherever the folder is unzipped - no
+          # install, just run.
+          relink() {                       # relink <macho-file> <path-prefix> <folder>
+            local file="$1" prefix="$2" dir="$3" dep base
             otool -L "$file" | tail -n +2 | awk '{print $1}' | while read -r dep; do
               case "$dep" in
                 /System/*|/usr/lib/*) continue ;;
               esac
               base="$(basename "$dep")"
-              if [ -f "dist/$base" ]; then
+              if [ -f "$dir/$base" ]; then
                 install_name_tool -change "$dep" "${prefix}/${base}" "$file" || true
               fi
             done
           }
-          for lib in dist/*.dylib; do
-            install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" || true
-            relink "$lib" "@loader_path"
+          for dir in dist dist/ai/cpu; do
+            for lib in "$dir"/*.dylib; do
+              install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" || true
+              relink "$lib" "@loader_path" "$dir"
+            done
           done
-          relink dist/evanalyzer "@executable_path"
+          relink dist/evanalyzer "@executable_path" dist
 
           # install_name_tool invalidates code signatures - re-sign ad-hoc so
           # macOS will load the rewritten binaries.
-          for f in dist/evanalyzer dist/*.dylib; do
+          for f in dist/evanalyzer dist/*.dylib dist/ai/cpu/*.dylib; do
             codesign --force --sign - "$f"
           done
 
@@ -538,7 +575,8 @@ jobs:
                  ./evanalyzer
 
           Keep every file in this folder together - the bundled libraries
-          (*.dylib) are resolved relative to the `evanalyzer` binary.
+          (*.dylib, and the AI plugin in ai/cpu) are resolved relative to the
+          `evanalyzer` binary.
           EOF
 
           tar -czf evanalyzer-macos-arm64.tar.gz -C dist .
@@ -587,6 +625,10 @@ jobs:
         run: |
           cargo cyclonedx --format json --manifest-path crates/bin/Cargo.toml
           mv crates/bin/evanalyzer_bin.cdx.json evanalyzer-${VERSION}-sbom.cdx.json
+          # The AI plugin (evanalyzer_ai_engine with libtorch/tch) is its own
+          # library, not linked into the app - its own SBOM.
+          cargo cyclonedx --format json --manifest-path crates/ai_engine/Cargo.toml --features torch
+          mv crates/ai_engine/evanalyzer_ai_engine.cdx.json evanalyzer-ai-plugin-${VERSION}-sbom.cdx.json
 
       - uses: actions/upload-artifact@v4
         with:

@@ -234,28 +234,16 @@ pub fn cpu_ram_diagnostics() -> (usize, u64) {
 /// Includes the CUDA probe (see [`cuda_is_available`]), which is slow - don't
 /// call this on a UI startup path; use [`cpu_ram_diagnostics`] plus a
 /// backgrounded [`cuda_is_available`] instead (see `evanalyzer_gui`).
+///
+/// [`cuda_is_available`]: crate::cuda_is_available
 pub fn system_diagnostics() -> SystemDiagnostics {
     let (cpu_cores, total_ram_bytes) = cpu_ram_diagnostics();
 
     SystemDiagnostics {
         cpu_cores,
         total_ram_bytes,
-        cuda_available: cuda_is_available(),
+        cuda_available: evanalyzer_ai_engine::cuda_is_available(),
     }
-}
-
-/// Probes CUDA driver/device availability. Loading the CUDA driver and
-/// creating a context on first use is slow (commonly hundreds of ms), so
-/// callers on a UI startup path should run this on a background thread
-/// rather than blocking on it - see its use in `evanalyzer_gui`.
-#[cfg(feature = "ai")]
-pub fn cuda_is_available() -> bool {
-    tch::Device::cuda_if_available().is_cuda()
-}
-
-#[cfg(not(feature = "ai"))]
-pub fn cuda_is_available() -> bool {
-    false
 }
 
 #[cfg(test)]

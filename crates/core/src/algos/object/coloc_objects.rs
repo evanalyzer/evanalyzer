@@ -610,7 +610,7 @@ mod tests {
     /// a full scan should show up here as scaling roughly quadratically again instead of
     /// near-linearly. Not asserted against a baseline (timing isn't deterministic across
     /// machines), so it must still be read manually. Run manually with:
-    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///   cargo test --release -p evanalyzer_core -- --ignored \
     ///     repro_many_to_many_coloc_object_count_scaling --nocapture
     #[test]
     #[ignore]

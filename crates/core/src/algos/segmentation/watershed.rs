@@ -393,7 +393,7 @@ mod tests {
     /// stalls for up to an hour on one image. Not a `#[test]`-asserted
     /// regression guard (there's no known-good baseline to assert against
     /// yet) - run manually with:
-    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///   cargo test --release -p evanalyzer_core -- --ignored \
     ///     repro_noisy_image_connected_components_and_watershed_timing --nocapture
     #[test]
     #[ignore]
@@ -476,7 +476,7 @@ mod tests {
     /// maxima packed into a few large connected regions) instead of
     /// isolated specks, which is the harder case for `Watershed`
     /// specifically. Run manually with:
-    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///   cargo test --release -p evanalyzer_core -- --ignored \
     ///     repro_clumped_noisy_image_watershed_timing --nocapture
     #[test]
     #[ignore]

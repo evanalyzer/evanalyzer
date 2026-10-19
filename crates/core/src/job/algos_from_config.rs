@@ -6,7 +6,6 @@ use evanalyzer_cfg::settings::pipeline_command_settings::*;
 
 // ============ ENUM FROM IMPLS ============
 
-#[cfg(feature = "ai")]
 impl From<ObjectAiObjectClassifierAiClassifyMatchHandlingSettings> for AiClassifyMatchHandling {
     fn from(_s: ObjectAiObjectClassifierAiClassifyMatchHandlingSettings) -> Self {
         match _s {
@@ -403,7 +402,6 @@ impl From<ObjectTransformObjectsTransformFunctionSettings> for TransformFunction
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
     fn from(_s: AiSegmentationUnetUNetOutputModeSettings) -> Self {
         match _s {
@@ -419,7 +417,6 @@ impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
 
 // ============ STRUCT FROM IMPLS ============
 
-#[cfg(feature = "ai")]
 impl From<AiObjectClassifierSettings> for AiObjectClassifier {
     fn from(_s: AiObjectClassifierSettings) -> Self {
         AiObjectClassifier {
@@ -448,7 +445,6 @@ impl From<BlurSettings> for Blur {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<CellposeSettings> for Cellpose {
     fn from(_s: CellposeSettings) -> Self {
         Cellpose {
@@ -466,7 +462,6 @@ impl From<CellposeSettings> for Cellpose {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<ClassificationMappingSettings> for ClassificationMapping {
     fn from(_s: ClassificationMappingSettings) -> Self {
         ClassificationMapping {
@@ -750,7 +745,6 @@ impl From<ObjectMathSettings> for ObjectMath {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<PixelClassifierSettings> for PixelClassifier {
     fn from(_s: PixelClassifierSettings) -> Self {
         PixelClassifier {
@@ -804,7 +798,6 @@ impl From<ScriptSettings> for Script {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<SegmentationMappingSettings> for SegmentationMapping {
     fn from(_s: SegmentationMappingSettings) -> Self {
         SegmentationMapping {
@@ -824,7 +817,6 @@ impl From<SimpleTrackerSettings> for SimpleTracker {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<StardistSettings> for Stardist {
     fn from(_s: StardistSettings) -> Self {
         Stardist {
@@ -877,7 +869,6 @@ impl From<TransformObjectsSettings> for TransformObjects {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<UNetSettings> for UNet {
     fn from(_s: UNetSettings) -> Self {
         UNet {
@@ -936,7 +927,6 @@ impl From<WeightedDeviationSettings> for WeightedDeviation {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<YoloClassMappingSettings> for YoloClassMapping {
     fn from(_s: YoloClassMappingSettings) -> Self {
         YoloClassMapping {
@@ -946,7 +936,6 @@ impl From<YoloClassMappingSettings> for YoloClassMapping {
     }
 }
 
-#[cfg(feature = "ai")]
 impl From<Yolov5Settings> for Yolov5 {
     fn from(_s: Yolov5Settings) -> Self {
         Yolov5 {
@@ -971,26 +960,15 @@ use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 /// The step `cmd` configures, ready to run.
 pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, InternalErrors> {
     match cmd {
-        #[cfg(feature = "ai")]
         PipelineCommand::AiObjectClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::AiObjectClassifier::from(settings),
         ))),
-        #[cfg(not(feature = "ai"))]
-        PipelineCommand::AiObjectClassifier(_settings) => Err(InternalErrors::Generic(
-            "This build was compiled without the ai feature; AiObjectClassifier is unavailable."
-                .into(),
-        )),
         PipelineCommand::Blur(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Blur::from(settings),
         ))),
-        #[cfg(feature = "ai")]
         PipelineCommand::Cellpose(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Cellpose::from(settings),
         ))),
-        #[cfg(not(feature = "ai"))]
-        PipelineCommand::Cellpose(_settings) => Err(InternalErrors::Generic(
-            "This build was compiled without the ai feature; Cellpose is unavailable.".into(),
-        )),
         PipelineCommand::ClassifyObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ClassifyObjects::from(settings),
         ))),
@@ -1060,15 +1038,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::ObjectMath(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ObjectMath::from(settings),
         ))),
-        #[cfg(feature = "ai")]
         PipelineCommand::PixelClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::PixelClassifier::from(settings),
         ))),
-        #[cfg(not(feature = "ai"))]
-        PipelineCommand::PixelClassifier(_settings) => Err(InternalErrors::Generic(
-            "This build was compiled without the ai feature; PixelClassifier is unavailable."
-                .into(),
-        )),
         PipelineCommand::RankFilter(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::RankFilter::from(settings),
         ))),
@@ -1084,14 +1056,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::SimpleTracker(settings) => Ok(PipelineStep::Dataset(Box::new(
             crate::dataset::SimpleTracker::from(settings),
         ))),
-        #[cfg(feature = "ai")]
         PipelineCommand::Stardist(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Stardist::from(settings),
         ))),
-        #[cfg(not(feature = "ai"))]
-        PipelineCommand::Stardist(_settings) => Err(InternalErrors::Generic(
-            "This build was compiled without the ai feature; Stardist is unavailable.".into(),
-        )),
         PipelineCommand::StructureTensor(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::StructureTensor::from(settings),
         ))),
@@ -1101,14 +1068,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::TransformObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::TransformObjects::from(settings),
         ))),
-        #[cfg(feature = "ai")]
         PipelineCommand::UNet(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::UNet::from(settings),
         ))),
-        #[cfg(not(feature = "ai"))]
-        PipelineCommand::UNet(_settings) => Err(InternalErrors::Generic(
-            "This build was compiled without the ai feature; UNet is unavailable.".into(),
-        )),
         PipelineCommand::Voronoi(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Voronoi::from(settings),
         ))),
@@ -1118,14 +1080,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::WeightedDeviation(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::WeightedDeviation::from(settings),
         ))),
-        #[cfg(feature = "ai")]
         PipelineCommand::Yolov5(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Yolov5::from(settings),
         ))),
-        #[cfg(not(feature = "ai"))]
-        PipelineCommand::Yolov5(_settings) => Err(InternalErrors::Generic(
-            "This build was compiled without the ai feature; Yolov5 is unavailable.".into(),
-        )),
     }
 }
 

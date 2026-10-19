@@ -8,9 +8,9 @@
 //! Ignored by default even once the file exists: loading a ~1.2GB ViT-L model
 //! and running a forward pass takes real time and isn't something every
 //! `cargo test` invocation should pay for. Run explicitly with:
-//!   cargo test -p evanalyzer_core --features ai --test cellpose_sam_real_model -- --ignored
+//!   cargo test -p evanalyzer_ai_engine --features torch --test cellpose_sam_real_model -- --ignored
 
-#![cfg(feature = "ai")]
+#![cfg(feature = "torch")]
 
 use tch::{CModule, Device, Kind, Tensor};
 
@@ -18,8 +18,15 @@ use tch::{CModule, Device, Kind, Tensor};
 #[ignore]
 fn real_cellpose_sam_export_loads_and_runs_at_the_traced_tile_size() {
     let device = Device::cuda_if_available();
-    let model = CModule::load_on_device("tests/models/cellpose_sam.pt", device).expect(
-        "tests/models/cellpose_sam.pt is missing or failed to load - see this file's \
+    let model = CModule::load_on_device(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../core/tests/models/cellpose_sam.pt"
+        ),
+        device,
+    )
+    .expect(
+        "crates/core/tests/models/cellpose_sam.pt is missing or failed to load - see this file's \
          module doc comment for how to generate it",
     );
 

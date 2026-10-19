@@ -13,7 +13,6 @@ use evanalyzer_cfg::core_types::{
 };
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::*;
-#[cfg(feature = "ai")]
 use std::path::PathBuf;
 
 // ---- Enum conversions --------------------------------------------
@@ -399,14 +398,12 @@ fn transform_function_shrink_setting_converts() {
     }
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn unet_output_mode_softmax_classes_setting_converts() {
     let result: UNetOutputMode = AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses.into();
     assert!(matches!(result, UNetOutputMode::SoftmaxClasses));
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn unet_output_mode_independent_channels_setting_converts() {
     let result: UNetOutputMode =
@@ -423,7 +420,6 @@ fn blur_settings_convert_kernel_size() {
     assert_eq!(result.kernel_size, 9);
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn cellpose_settings_convert_fields_and_clamp_probability_threshold() {
     let settings = CellposeSettings {
@@ -444,7 +440,6 @@ fn cellpose_settings_convert_fields_and_clamp_probability_threshold() {
     assert_eq!(result.min_object_size, 20);
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn cellpose_settings_clamp_negative_probability_threshold_to_zero() {
     let settings = CellposeSettings {
@@ -809,7 +804,6 @@ fn save_image_settings_convert_all_fields() {
     assert_eq!(result.opacity, 30);
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn stardist_settings_convert_and_clamp_thresholds() {
     let settings = StardistSettings {
@@ -902,7 +896,6 @@ fn transform_objects_settings_convert_all_fields() {
     assert_eq!(result.output_class, ObjectClass::Global(2));
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn unet_settings_convert_and_clamp_probability_threshold() {
     let settings = UNetSettings {
@@ -1019,7 +1012,6 @@ fn into_algorithm_threshold_dispatches_to_threshold_algorithm() {
     assert_eq!(result.name(), "Threshold");
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn into_algorithm_cellpose_dispatches_to_cellpose_algorithm_when_ai_enabled() {
     let result = into_algorithm(PipelineCommand::Cellpose(CellposeSettings::default()))
@@ -1027,7 +1019,6 @@ fn into_algorithm_cellpose_dispatches_to_cellpose_algorithm_when_ai_enabled() {
     assert_eq!(result.name(), "Cellpose");
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn into_algorithm_stardist_dispatches_to_stardist_algorithm_when_ai_enabled() {
     let result = into_algorithm(PipelineCommand::Stardist(StardistSettings::default()))
@@ -1035,7 +1026,6 @@ fn into_algorithm_stardist_dispatches_to_stardist_algorithm_when_ai_enabled() {
     assert_eq!(result.name(), "Stardist");
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn into_algorithm_unet_dispatches_to_unet_algorithm_when_ai_enabled() {
     let result = into_algorithm(PipelineCommand::UNet(UNetSettings::default()))
@@ -1161,27 +1151,6 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
     }
 }
 
-#[cfg(not(feature = "ai"))]
-#[test]
-fn into_algorithm_cellpose_errors_when_ai_feature_is_disabled() {
-    let result = into_algorithm(PipelineCommand::Cellpose(CellposeSettings::default()));
-    assert!(result.is_err());
-}
-
-#[cfg(not(feature = "ai"))]
-#[test]
-fn into_algorithm_stardist_errors_when_ai_feature_is_disabled() {
-    let result = into_algorithm(PipelineCommand::Stardist(StardistSettings::default()));
-    assert!(result.is_err());
-}
-
-#[cfg(not(feature = "ai"))]
-#[test]
-fn into_algorithm_unet_errors_when_ai_feature_is_disabled() {
-    let result = into_algorithm(PipelineCommand::UNet(UNetSettings::default()));
-    assert!(result.is_err());
-}
-
 // ---- Citations ---------------------------------------------------
 
 #[test]
@@ -1214,7 +1183,6 @@ fn every_command_cites_something() {
 
 // ---- Remaining enum variants -------------------------------------
 
-#[cfg(feature = "ai")]
 #[test]
 fn ai_classify_match_handling_settings_convert_both_variants() {
     let add: AiClassifyMatchHandling =
@@ -1517,7 +1485,6 @@ fn threshold_value_source_settings_convert_every_variant() {
 
 // ---- Remaining mapping structs (AI) ------------------------------
 
-#[cfg(feature = "ai")]
 #[test]
 fn classification_mapping_settings_convert_both_classes() {
     let mapping = ClassificationMapping::from(ClassificationMappingSettings {
@@ -1528,7 +1495,6 @@ fn classification_mapping_settings_convert_both_classes() {
     assert_eq!(mapping.output_class, ObjectClass::Local(2));
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn segmentation_mapping_settings_convert_both_classes() {
     let mapping = SegmentationMapping::from(SegmentationMappingSettings {
@@ -1539,7 +1505,6 @@ fn segmentation_mapping_settings_convert_both_classes() {
     assert_eq!(mapping.segmentation_class, SegmentationClass(7));
 }
 
-#[cfg(feature = "ai")]
 #[test]
 fn yolo_class_mapping_settings_convert_both_classes() {
     let mapping = YoloClassMapping::from(YoloClassMappingSettings {

@@ -7,6 +7,9 @@ LIBTORCH = { value = "libs/libtorch", relative = true }
 LIBTORCH_BYPASS_VERSION_CHECK = "1"
 
 [alias]
+# The libtorch plugin (`evanalyzer_ai_engine` as a cdylib with its `torch`
+# engine). Add `--release`, `--target …` as for the other builds.
+build-ai-plugin = ["rustc", "-p", "evanalyzer_ai_engine", "--features", "torch", "--crate-type", "cdylib"]
 build-win       = ["xwin", "build", "--target", "x86_64-pc-windows-msvc",   "--release"]
 build-win-arm   = ["xwin", "build", "--target", "aarch64-pc-windows-msvc",   "--release"]
 build-linux     = ["build", "--target", "x86_64-unknown-linux-gnu",          "--release"]

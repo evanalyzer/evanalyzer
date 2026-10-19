@@ -1,4 +1,3 @@
-#[cfg(feature = "ai")]
 pub mod ai_object_classifier;
 pub mod classify_objects;
 pub mod coloc_objects;

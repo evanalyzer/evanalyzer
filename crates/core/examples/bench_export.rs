@@ -10,7 +10,7 @@
 // class - roughly the shape of the real 5.6M-object reference file (6
 // channels, 1.4M objects with colocalization).
 //
-// Usage: cargo run --release -p evanalyzer_core --features ai --example bench_export -- \
+// Usage: cargo run --release -p evanalyzer_core --example bench_export -- \
 //     <out.evadb> [--images N] [--objects-per-image N]
 
 use bitvec::prelude::*;

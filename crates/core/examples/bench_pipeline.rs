@@ -2,7 +2,7 @@
 // with cell-like spots, pipeline Gaussian blur -> threshold -> extract
 // objects, run through the real job generator + JobExecutor.
 //
-// Usage: cargo run --release -p evanalyzer_core --features ai --example bench_pipeline -- \
+// Usage: cargo run --release -p evanalyzer_core --example bench_pipeline -- \
 //     <workdir> [--images N] [--size PX] [--threads N] [--spots N] [--classify N]
 //
 // `--classify N` adds N Classify Objects steps (class filtering by size).
