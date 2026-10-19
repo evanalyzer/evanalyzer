@@ -72,6 +72,7 @@ pub mod global {
     pub use crate::workspace::settings::ViewportMemorySettings;
     pub use crate::workspace::settings::ResultsSplitSettings;
     pub use crate::workspace::settings::PanelSettings;
+    pub use crate::workspace::settings::NavigatorMode;
 }
 
 pub mod results {

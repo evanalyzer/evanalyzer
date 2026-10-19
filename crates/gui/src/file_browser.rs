@@ -297,19 +297,31 @@ where
         });
         self.update_can_accept();
 
-        // Places and the start folder load in the background.
+        // Places and the start folder load in the background - the start
+        // folder right away: the places (every drive letter, Desktop,
+        // Documents) can take seconds on Windows (a disconnected network
+        // drive, OneDrive) and the listing doesn't wait for them.
         let this = Arc::clone(self);
         crate::helper::ui_thread::spawn(move || {
-            let places = this.backend().files().places();
             let start_dir = match start {
                 Some(dir) => this.resolve_start(dir),
                 None => None,
             };
+            if let Some(dir) = start_dir.clone() {
+                let ui_this = Arc::clone(&this);
+                let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    ui_this.navigate(dir);
+                });
+            }
+            let started = std::time::Instant::now();
+            let places = this.backend().files().places();
+            log_if_slow("reading the places (drives, home folders)", started);
             let fallback = places
                 .as_ref()
                 .ok()
                 .and_then(|p| p.first())
-                .map(|p| p.path.clone());
+                .map(|p| p.path.clone())
+                .filter(|_| start_dir.is_none());
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 match &places {
@@ -330,7 +342,7 @@ where
                     }
                     Err(e) => ui_this.with_state(|s| s.set_error(e.to_string().into())),
                 }
-                if let Some(dir) = start_dir.or(fallback) {
+                if let Some(dir) = fallback {
                     ui_this.navigate(dir);
                 }
             });
@@ -379,9 +391,14 @@ where
 
         let this = Arc::clone(self);
         crate::helper::ui_thread::spawn(move || {
+            let started = std::time::Instant::now();
             let result = this.backend().files().list_dir(&dir);
+            log_if_slow(&format!("listing {}", dir.display()), started);
+            let listed = std::time::Instant::now();
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                // The window was busy: the rows wait for it.
+                log_if_slow("handing the listing to the window", listed);
                 {
                     let mut s = ui_this.session.lock().unwrap();
                     if s.generation != generation || s.request.is_none() {
@@ -786,6 +803,17 @@ fn format_time(seconds: i64) -> String {
                 .to_string()
         })
         .unwrap_or_default()
+}
+
+/// What the file browser waited for, in the log when it took long (alpha
+/// testers on Windows saw folders appear late).
+fn log_if_slow(what: &str, started: std::time::Instant) {
+    let took = started.elapsed();
+    if took >= std::time::Duration::from_millis(300) {
+        log::info!("File browser: {what} took {} ms", took.as_millis());
+    } else {
+        log::debug!("File browser: {what} took {} ms", took.as_millis());
+    }
 }
 
 #[cfg(test)]

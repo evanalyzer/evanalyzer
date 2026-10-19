@@ -14,7 +14,7 @@ export component CopyToManualDialog inherits InkDialog {
     from-right: true;
     anchor-x: Places.beside-right;
     anchor-y: 180px;
-    title: AnnotationState.copy-single >= 0 ? "Copy object to manual" : "Copy pipeline objects to manual";
+    title: AnnotationState.copy-single >= 0 ? "Copy object as annotation" : "Copy pipeline objects as annotations";
     subtitle: AnnotationState.copy-single >= 0 ? "editable, used for training" : "on this image";
     card-width: 380px;
     // One class for all copies (-1: their own classes).

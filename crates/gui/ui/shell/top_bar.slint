@@ -656,6 +656,30 @@ export component TopBar inherits Rectangle {
                     LayoutState.panels-changed();
                 }
             }
+            // The navigator: by itself (only zoomed in), always, never.
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                spacing: 10px;
+                Text {
+                    text: "Navigator";
+                    font-size: Ink.fs-body;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                }
+                InkSegmented {
+                    horizontal-stretch: 1;
+                    label: "Navigator";
+                    model: ["Auto", "Always", "Never"];
+                    selected: LayoutState.navigator-mode;
+                    picked(i) => {
+                        LayoutState.navigator-mode = i;
+                        LayoutState.panels-changed();
+                    }
+                }
+            }
             InkMenuItem {
                 icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
                 text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
