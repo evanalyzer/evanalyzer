@@ -62,6 +62,55 @@ import { Ink } from "../ink/palette.slint";
 // ---------- Local visual constants ----------
 // ---------- Filter chip ----------
 
+// "Commands 36" / "Components 5" above the search: the count turns into
+// the hits (blue) while searching.
+component PickerTab inherits Rectangle {
+    in property <string> text;
+    in property <int> count;
+    in property <bool> active;
+    in property <bool> searching;
+    callback clicked;
+    width: row.preferred-width;
+    accessible-role: tab;
+    accessible-label: root.text + " " + root.count;
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+    row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+        Text {
+            text: root.text;
+            font-size: Ink.fs-body;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Ink.text : Ink.text-dim;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.count;
+            font-family: Ink.font-mono;
+            font-size: Ink.fs-secondary;
+            font-weight: root.searching ? 600 : 400;
+            color: root.searching ? Ink.focus : Ink.text-mute;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        visible: root.active;
+        y: parent.height - 2px;
+        height: 2px;
+        background: Ink.focus;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 component FilterChip inherits Rectangle {
     in property <string> label;
     in property <int> count;
@@ -98,7 +147,8 @@ component FilterChip inherits Rectangle {
             vertical-alignment: center;
         }
 
-        if count > 0: Text {
+        // Only the active chip says how many it shows (the row fits).
+        if active && count > 0: Text {
             text: "\{count}";
             color: Ink.text-mute;
             font-size: Ink.fs-caption;
@@ -523,10 +573,17 @@ export component CommandSelectionDialog inherits InkDialog {
     callback select(int);            // by id
     callback toggle-favorite(int);
     callback confirm(int);           // commit: insert this id
+    callback confirm-steps(int);     // a component, as its steps
+    /// The Commands tab's count: commands the search finds (all of them
+    /// without a search).
+    in property <int> commands-matching;
     callback remove-component(int);
     callback remove-unused-components();
     callback cancel();
     callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
+
+    // The selected entry is a component (the footer's two ways to add it).
+    property <bool> component-picked: root.has-detail && root.detail.is-component && root.selected-id != -1;
 
     title: "Add step";
     subtitle: insert-after-idx < 0 ? "Append to \"\{target-pipeline}\"" : "After step \{insert-after-idx + 1} of \"\{target-pipeline}\"";
@@ -540,8 +597,19 @@ export component CommandSelectionDialog inherits InkDialog {
     // -------- Keyboard -------- (Esc is the Dialog's: `close` above)
     kbd := FocusScope {
         key-pressed(e) => {
+            // A component: Enter adds it, Shift+Enter its steps.
+            if e.text == Key.Return && root.selected-id != -1 && e.modifiers.shift && root.component-picked {
+                root.confirm-steps(root.selected-id);
+                return accept;
+            }
             if e.text == Key.Return && root.selected-id != -1 {
                 root.confirm(root.selected-id);
+                return accept;
+            }
+            // The other tab.
+            if e.text == Key.Tab && e.modifiers.control {
+                root.filter-components = !root.filter-components;
+                root.query-changed(root.query);
                 return accept;
             }
             return reject;
@@ -550,13 +618,48 @@ export component CommandSelectionDialog inherits InkDialog {
         VerticalLayout {
             spacing: 0;
 
+            // Commands | Components: a search counts the hits of both.
+            Rectangle {
+                height: 36px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    spacing: 2px;
+                    alignment: start;
+                    PickerTab {
+                        text: "Commands";
+                        count: root.commands-matching;
+                        searching: root.query != "";
+                        active: !root.filter-components;
+                        clicked => {
+                            root.filter-components = false;
+                            root.query-changed(root.query);
+                        }
+                    }
+                    PickerTab {
+                        text: "Components";
+                        count: root.cat-count-grp;
+                        searching: root.query != "";
+                        active: root.filter-components;
+                        clicked => {
+                            root.filter-components = true;
+                            root.query-changed(root.query);
+                        }
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Ink.border-soft;
+                }
+            }
+
             HorizontalLayout {
                 padding-left: 14px;
                 padding-right: 14px;
                 padding-top: 10px;
                 padding-bottom: 4px;
                 InkSearchField {
-                    placeholder: "Search commands…";
+                    placeholder: root.filter-components ? "Search components…" : "Search commands…";
                     text <=> root.query;
                     edited(t) => {
                         root.query-changed(t);
@@ -564,7 +667,7 @@ export component CommandSelectionDialog inherits InkDialog {
                 }
             }
 
-            Rectangle {
+            if !root.filter-components: Rectangle {
                 height: 40px;
                 background: Ink.panel;
                 HorizontalLayout {
@@ -669,13 +772,6 @@ export component CommandSelectionDialog inherits InkDialog {
                         }
                     }
 
-                    Rectangle {
-                        width: 1px;
-                        height: 16px;
-                        y: (parent.height - 16px) / 2;
-                        background: Ink.border-soft;
-                    }
-
                     // FilterChip {
                    //     label: "Recents";
                    //     count: cat-count-rec;
@@ -688,23 +784,6 @@ export component CommandSelectionDialog inherits InkDialog {
                    //     }
                    // }
 
-                    FilterChip {
-                        label: "Components";
-                        count: cat-count-grp;
-                        tint: Ink.cat-component;
-                        active: filter-components;
-                        clicked => {
-                            root.filter-components = !filter-components;
-                            root.filter-recents = false;
-                            root.fcat-pre = false;
-                            root.fcat-seg = false;
-                            root.fcat-obj = false;
-                            root.fcat-mea = false;
-                            root.fcat-cls = false;
-                            root.fcat-dat = false;
-                            root.query-changed(query);
-                        }
-                    }
                 }
 
                 Rectangle {
@@ -743,17 +822,33 @@ export component CommandSelectionDialog inherits InkDialog {
                                     padding-top: 60px;
                                     spacing: 6px;
                                     Text {
-                                        text: "No commands match";
+                                        text: query != "" && cat-count-grp > 0
+                                            ? "No commands match “\{query}” - \{cat-count-grp} " + (cat-count-grp == 1 ? "component does." : "components do.")
+                                            : "No commands match";
                                         color: Ink.text-dim;
                                         font-size: Ink.fs-body;
                                         horizontal-alignment: center;
+                                        wrap: word-wrap;
                                     }
 
-                                    Text {
+                                    if !(query != "" && cat-count-grp > 0): Text {
                                         text: query == "" ? "Try another category." : "Try other words.";
                                         color: Ink.text-mute;
                                         font-size: Ink.fs-secondary;
                                         horizontal-alignment: center;
+                                    }
+                                    // Not switched behind the user's back: one click.
+                                    if query != "" && cat-count-grp > 0: HorizontalLayout {
+                                        alignment: center;
+                                        padding-top: 4px;
+                                        InkButton {
+                                            text: cat-count-grp == 1 ? "Show the component" : "Show the \{cat-count-grp} components";
+                                            keys: ["Ctrl", "Tab"];
+                                            clicked => {
+                                                root.filter-components = true;
+                                                root.query-changed(root.query);
+                                            }
+                                        }
                                     }
                                 }
 
@@ -916,9 +1011,8 @@ export component CommandSelectionDialog inherits InkDialog {
                                     }
                                 }
 
-                                // Components: the chip lists the project's components; without it,
-                                // a search lists the matching ones too.
-                            if (filter-components || query != ""): VerticalLayout {
+                                // Components: on their own tab.
+                            if filter-components: VerticalLayout {
                                     spacing: 0;
 
                                     if filter-components && unused-component-count > 0: Rectangle {
@@ -965,7 +1059,9 @@ export component CommandSelectionDialog inherits InkDialog {
                                         padding-top: 60px;
                                         spacing: 10px;
                                         Text {
-                                            text: query == "" ? "No components in this project" : "No component matches";
+                                            text: query == "" ? "No components in this project"
+                                                : commands-matching > 0 ? "No component matches “\{query}” - \{commands-matching} " + (commands-matching == 1 ? "command does." : "commands do.")
+                                                : "No component matches";
                                             color: Ink.text-dim;
                                             font-size: Ink.fs-body;
                                             horizontal-alignment: center;
@@ -1138,9 +1234,31 @@ export component CommandSelectionDialog inherits InkDialog {
                     }
                 }
 
-                InkButton {
+                // A component: one click for either - itself (linked to the
+                // library, gets updates) or a plain copy of its steps.
+                if root.component-picked: InkButton {
+                    text: "Add its steps";
+                    tip: "A plain copy of its steps - every setting editable, no link: library updates don't reach it";
+                    keys: ["Shift", "Enter"];
+                    clicked => {
+                        root.confirm-steps(root.selected-id);
+                    }
+                }
+                if root.component-picked: InkButton {
+                    kind: InkButtonKind.primary;
+                    text: "Add component";
+                    tip: "One step, linked to the library - gets updates, shows its exposed settings";
+                    keys: ["Enter"];
+                    clicked => {
+                        root.confirm(root.selected-id);
+                    }
+                }
+                if !root.component-picked: InkButton {
                     kind: InkButtonKind.primary;
                     text: "Add to pipeline";
+                    keys: ["Enter"];
+                    enabled: root.selected-id != -1;
+                    disabled-reason: "Pick a command first";
                     clicked => {
                         root.confirm(root.selected-id);
                     }

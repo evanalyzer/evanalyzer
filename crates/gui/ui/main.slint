@@ -306,6 +306,7 @@ export component AppWindow inherits Window {
                 cat-count-dat: CommandPickerState.cat-count-dat;
                 cat-count-mea: CommandPickerState.cat-count-mea;
                 cat-count-grp: CommandPickerState.cat-count-grp;
+                commands-matching: CommandPickerState.commands-matching;
                 unused-component-count: CommandPickerState.unused-component-count;
                 detail-removable: CommandPickerState.detail-removable;
                 query <=> CommandPickerState.query;
@@ -325,6 +326,9 @@ export component AppWindow inherits Window {
                 }
                 confirm(id) => {
                     CommandPickerState.confirm(id);
+                }
+                confirm-steps(id) => {
+                    CommandPickerState.confirm-steps(id);
                 }
                 remove-component(id) => {
                     CommandPickerState.remove-component(id);

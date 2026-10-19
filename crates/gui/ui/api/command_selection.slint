@@ -83,6 +83,11 @@ export global CommandPickerState {
     callback query-changed(string);
     callback select(int);
     callback confirm(int);
+    // A component added as its steps (expanded in its place).
+    callback confirm-steps(int);
+    // Commands matching the search, whatever chips are on (the Commands
+    // tab's count; without a search: all commands).
+    in property <int> commands-matching;
     callback remove-component(int);
     callback remove-unused-components();
     callback cancel();

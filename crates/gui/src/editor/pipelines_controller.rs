@@ -1052,175 +1052,10 @@ impl PipelinesController {
             // the next step, which goes in after this one.
             let manager = self.clone();
             ui.global::<CommandPickerState>()
-                .on_confirm(move |command_id| {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let picker = ui.global::<CommandPickerState>();
-                    let pipeline_id = picker.get_pipeline_id() as u32;
-                    let after_idx = picker.get_insert_after_idx();
-                    if manager.viewing(pipeline_id) {
-                        return;
-                    }
-
-                    let new_steps: Vec<PipelineStepSettings> =
-                        if command_id >= LIBRARY_COMPONENT_PICKER_ID_BASE {
-                            // A library component: copied into the project, then used.
-                            let idx = (command_id - LIBRARY_COMPONENT_PICKER_ID_BASE) as usize;
-                            let Some((path, template)) = manager
-                                .component_library
-                                .lock()
-                                .expect("Poisoned")
-                                .get(idx)
-                                .cloned()
-                            else {
-                                warn!(
-                                    "picker confirm: unknown library component id {}",
-                                    command_id
-                                );
-                                return;
-                            };
-                            let inserted = {
-                                let mut project = manager.app_state.get_project_write();
-                                evanalyzer_app::components::insert_component_template(
-                                    &mut project,
-                                    &template,
-                                    &evanalyzer_app::components::library_name(&path),
-                                )
-                            };
-                            let key = match inserted {
-                                Ok(key) => key,
-                                Err(e) => {
-                                    warn!("Could not insert the library component: {e}");
-                                    return;
-                                }
-                            };
-                            vec![PipelineStepSettings {
-                                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                                enabled: true,
-                                content: StepContent::Component(
-                                    evanalyzer_cfg::settings::components::ComponentInstance {
-                                        key,
-                                        values: Default::default(),
-                                    },
-                                ),
-                            }]
-                        } else if command_id >= COMPONENT_PICKER_ID_BASE {
-                            // A component: one step using it, at its defaults.
-                            let project = manager.app_state.get_project();
-                            let idx = (command_id - COMPONENT_PICKER_ID_BASE) as usize;
-                            let Some(definition) = project.components.get(idx) else {
-                                warn!("picker confirm: unknown component id {}", command_id);
-                                return;
-                            };
-                            vec![PipelineStepSettings {
-                                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                                enabled: true,
-                                content: StepContent::Component(
-                                    evanalyzer_cfg::settings::components::ComponentInstance {
-                                        key: definition.key.clone(),
-                                        values: Default::default(),
-                                    },
-                                ),
-                            }]
-                        } else {
-                            let Some(cmd) = default_command(command_id) else {
-                                warn!("picker confirm: unknown command id {}", command_id);
-                                return;
-                            };
-                            vec![PipelineStepSettings {
-                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                            enabled: true,
-                            content:
-                                evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
-                                    cmd,
-                                ),
-                        }]
-                        };
-
-                    // A component can't contain itself - also not through the
-                    // components it contains (e.g. a library component's).
-                    if let Some(open_key) = manager.open_component_key(pipeline_id) {
-                        let project = manager.app_state.get_project();
-                        let cycle = new_steps.iter().find_map(|s| match &s.content {
-                            StepContent::Component(instance)
-                                if evanalyzer_app::components::would_contain_itself(
-                                    &project,
-                                    &open_key,
-                                    &instance.key,
-                                ) =>
-                            {
-                                Some(step_label(&project, s))
-                            }
-                            _ => None,
-                        });
-                        drop(project);
-                        if let Some(name) = cycle {
-                            let warning = ui.global::<WarningState>();
-                            warning.set_info(false);
-                            warning.set_title("Cannot insert the component".into());
-                            warning.set_message(
-                                format!(
-                                    "\"{name}\" contains the component it would be inserted \
-                                     into - a component can't contain itself."
-                                )
-                                .into(),
-                            );
-                            ui.global::<GlobalAppState>()
-                                .set_active_dialog(DialogType::Warning);
-                            return;
-                        }
-                    }
-                    let added = {
-                        let project = manager.app_state.get_project();
-                        new_steps
-                            .first()
-                            .map(|s| step_label(&project, s))
-                            .unwrap_or_default()
-                    };
-                    let count = new_steps.len();
-                    // Each insert is an undo step of its own.
-                    manager.app_state.begin_undo_step();
-                    let placed = {
-                        let mut project = manager.app_state.get_project_write();
-                        manager
-                            .shown_steps_mut(&mut project, pipeline_id)
-                            .map(|steps| {
-                                let insert_at = if after_idx < 0 {
-                                    0
-                                } else {
-                                    ((after_idx as usize) + 1).min(steps.len())
-                                };
-                                steps.splice(insert_at..insert_at, new_steps);
-                                evanalyzer_app::utils::assign_step_ids(steps);
-                                (insert_at, steps.len())
-                            })
-                    };
-                    if let Some((insert_at, total)) = placed {
-                        let last = insert_at + count - 1;
-                        picker.set_insert_after_idx(last as i32);
-                        picker.set_total_steps(total as i32);
-                        picker.set_last_added(format!("{added} as step {}", last + 1).into());
-                        // The dialog stays open: what may follow the step
-                        // just added, as when it opens there.
-                        let (ctx_cat, suggested) = {
-                            let project = manager.app_state.get_project();
-                            manager
-                                .shown_steps(&project, pipeline_id)
-                                .map(|steps| picker_suggestion(steps, last as i32))
-                                .unwrap_or((-1, [false; 6]))
-                        };
-                        picker.set_query("".into());
-                        picker.set_selected_id(-1);
-                        set_picker_suggestion(&picker, ctx_cat, suggested);
-                        manager.apply_picker_filter(&ui, "");
-                        ui.global::<PipelinesPanelState>()
-                            .set_selected_step_id(last as i32);
-                    }
-                    manager.pipeline_settings_changed();
-                    manager
-                        .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
-                });
+                .on_confirm(move |command_id| manager.picker_confirm(command_id, false));
+            let manager = self.clone();
+            ui.global::<CommandPickerState>()
+                .on_confirm_steps(move |command_id| manager.picker_confirm(command_id, true));
 
             // "Open" on a component card: its steps in the panel - asking first
             // if other steps use the component too.
@@ -4714,6 +4549,8 @@ impl PipelinesController {
         );
         picker.set_shown_library_components(ModelRc::new(VecModel::from(library_components)));
         picker.set_cat_count_grp(cg);
+        // The Commands tab's count: what the search finds, whatever chips are on.
+        picker.set_commands_matching(metas.iter().filter(text_matches).count() as i32);
         picker.set_total_shown(total);
         picker.set_cat_count_pre(cp);
         picker.set_cat_count_seg(cs);
@@ -4721,6 +4558,209 @@ impl PipelinesController {
         picker.set_cat_count_mea(cm);
         picker.set_cat_count_cls(cc);
         picker.set_cat_count_dat(cd);
+    }
+
+    /// The picker's "Add": the command or component at `command_id` after
+    /// the picker's insert position - a component `as_steps`: its steps in
+    /// its place (expanded right away). The picker stays open for the next
+    /// step, which goes in after this one.
+    fn picker_confirm(self: &Arc<Self>, command_id: i32, as_steps: bool) {
+        let manager = self;
+
+        let Some(ui) = manager.ui.upgrade() else {
+            return;
+        };
+        let picker = ui.global::<CommandPickerState>();
+        let pipeline_id = picker.get_pipeline_id() as u32;
+        let after_idx = picker.get_insert_after_idx();
+        if manager.viewing(pipeline_id) {
+            return;
+        }
+
+        let new_steps: Vec<PipelineStepSettings> =
+            if command_id >= LIBRARY_COMPONENT_PICKER_ID_BASE {
+                // A library component: copied into the project, then used.
+                let idx = (command_id - LIBRARY_COMPONENT_PICKER_ID_BASE) as usize;
+                let Some((path, template)) = manager
+                    .component_library
+                    .lock()
+                    .expect("Poisoned")
+                    .get(idx)
+                    .cloned()
+                else {
+                    warn!(
+                        "picker confirm: unknown library component id {}",
+                        command_id
+                    );
+                    return;
+                };
+                let inserted = {
+                    let mut project = manager.app_state.get_project_write();
+                    evanalyzer_app::components::insert_component_template(
+                        &mut project,
+                        &template,
+                        &evanalyzer_app::components::library_name(&path),
+                    )
+                };
+                let key = match inserted {
+                    Ok(key) => key,
+                    Err(e) => {
+                        warn!("Could not insert the library component: {e}");
+                        return;
+                    }
+                };
+                vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                    enabled: true,
+                    content: StepContent::Component(
+                        evanalyzer_cfg::settings::components::ComponentInstance {
+                            key,
+                            values: Default::default(),
+                        },
+                    ),
+                }]
+            } else if command_id >= COMPONENT_PICKER_ID_BASE {
+                // A component: one step using it, at its defaults.
+                let project = manager.app_state.get_project();
+                let idx = (command_id - COMPONENT_PICKER_ID_BASE) as usize;
+                let Some(definition) = project.components.get(idx) else {
+                    warn!("picker confirm: unknown component id {}", command_id);
+                    return;
+                };
+                vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                    enabled: true,
+                    content: StepContent::Component(
+                        evanalyzer_cfg::settings::components::ComponentInstance {
+                            key: definition.key.clone(),
+                            values: Default::default(),
+                        },
+                    ),
+                }]
+            } else {
+                let Some(cmd) = default_command(command_id) else {
+                    warn!("picker confirm: unknown command id {}", command_id);
+                    return;
+                };
+                vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content:
+                    evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        cmd,
+                    ),
+            }]
+            };
+
+        // A component can't contain itself - also not through the
+        // components it contains (e.g. a library component's).
+        if let Some(open_key) = manager.open_component_key(pipeline_id) {
+            let project = manager.app_state.get_project();
+            let cycle = new_steps.iter().find_map(|s| match &s.content {
+                StepContent::Component(instance)
+                    if evanalyzer_app::components::would_contain_itself(
+                        &project,
+                        &open_key,
+                        &instance.key,
+                    ) =>
+                {
+                    Some(step_label(&project, s))
+                }
+                _ => None,
+            });
+            drop(project);
+            if let Some(name) = cycle {
+                let warning = ui.global::<WarningState>();
+                warning.set_info(false);
+                warning.set_title("Cannot insert the component".into());
+                warning.set_message(
+                    format!(
+                        "\"{name}\" contains the component it would be inserted \
+                         into - a component can't contain itself."
+                    )
+                    .into(),
+                );
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::Warning);
+                return;
+            }
+        }
+        let added = {
+            let project = manager.app_state.get_project();
+            new_steps
+                .first()
+                .map(|s| step_label(&project, s))
+                .unwrap_or_default()
+        };
+        let count = new_steps.len();
+        // Each insert is an undo step of its own.
+        manager.app_state.begin_undo_step();
+        let placed = {
+            let mut project = manager.app_state.get_project_write();
+            manager
+                .shown_steps_mut(&mut project, pipeline_id)
+                .map(|steps| {
+                    let insert_at = if after_idx < 0 {
+                        0
+                    } else {
+                        ((after_idx as usize) + 1).min(steps.len())
+                    };
+                    steps.splice(insert_at..insert_at, new_steps);
+                    evanalyzer_app::utils::assign_step_ids(steps);
+                    (insert_at, steps.len())
+                })
+        };
+        // A component added as its steps: expanded in its place, in the
+        // same undo step (the picker's "Add its steps").
+        let (placed, count) = match placed {
+            Some((insert_at, total)) if as_steps && count == 1 => {
+                let expanded = {
+                    let mut project = manager.app_state.get_project_write();
+                    evanalyzer_app::components::expand_component(
+                        &mut project,
+                        manager.shown_list(pipeline_id),
+                        insert_at,
+                    )
+                    .map(|_| {
+                        manager
+                            .shown_steps(&project, pipeline_id)
+                            .map_or(total, |steps| steps.len())
+                    })
+                };
+                match expanded {
+                    Ok(new_total) => (Some((insert_at, new_total)), 1 + new_total - total),
+                    Err(e) => {
+                        warn!("Could not add the component's steps: {e}");
+                        (Some((insert_at, total)), 1)
+                    }
+                }
+            }
+            other => (other, count),
+        };
+        if let Some((insert_at, total)) = placed {
+            let last = insert_at + count - 1;
+            picker.set_insert_after_idx(last as i32);
+            picker.set_total_steps(total as i32);
+            picker.set_last_added(format!("{added} as step {}", last + 1).into());
+            // The dialog stays open: what may follow the step
+            // just added, as when it opens there.
+            let (ctx_cat, suggested) = {
+                let project = manager.app_state.get_project();
+                manager
+                    .shown_steps(&project, pipeline_id)
+                    .map(|steps| picker_suggestion(steps, last as i32))
+                    .unwrap_or((-1, [false; 6]))
+            };
+            picker.set_query("".into());
+            picker.set_selected_id(-1);
+            set_picker_suggestion(&picker, ctx_cat, suggested);
+            manager.apply_picker_filter(&ui, "");
+            ui.global::<PipelinesPanelState>()
+                .set_selected_step_id(last as i32);
+        }
+        manager.pipeline_settings_changed();
+        manager
+            .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
     }
 
     /// Reloads the component library from the user and app templates folders in the
@@ -8623,6 +8663,33 @@ mod tests {
         );
     }
 
+    /// The picker's "Add its steps": the component's steps in its place -
+    /// plain steps, one undo step; the picker goes on after the last.
+    #[test]
+    fn a_component_added_as_its_steps_lands_as_plain_steps() {
+        let (ui, ui_state, _controller) = with_a_component();
+        // Threshold, ◆ Smooth (Blur, Blur): add Smooth again, as its steps.
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_pipeline_id(1);
+        picker.set_insert_after_idx(0);
+        picker.invoke_confirm_steps(COMPONENT_PICKER_ID_BASE);
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let steps = &project.pipelines[0].steps;
+        assert_eq!(steps.len(), 4, "Threshold, Blur, Blur, ◆ Smooth");
+        assert!(matches!(steps[1].content, StepContent::Command(_)));
+        assert!(matches!(steps[2].content, StepContent::Command(_)));
+        assert!(matches!(steps[3].content, StepContent::Component(_)), "the one there before");
+        drop(project);
+        assert_eq!(picker.get_insert_after_idx(), 2, "after the last added step");
+        assert_eq!(card_names(&ui)[1], card_names(&ui)[2], "the two Blur steps");
+
+        // One undo takes both away.
+        ui_state.undo();
+        assert_eq!(ui_state.get_project().pipelines[0].steps.len(), 2);
+    }
+
     #[test]
     fn create_component_turns_the_chosen_steps_into_a_component() {
         let (ui, ui_state, _controller) = selected(vec![
@@ -10059,13 +10126,13 @@ mod tests {
         };
         // Duplicate, Bundle, Expand, Save as and Remove are in the card's
         // ⋯ menu ("Step actions").
-        for label in ["View", "Edit", "Step actions", "About Threshold"] {
+        for label in ["View steps", "Edit component (all uses)…", "Step actions", "About Threshold"] {
             fits(label);
         }
 
         ui.global::<PipelinesPanelState>().invoke_open_component(1);
         drain_ui_queue();
-        fits("Changes apply to every use of this component · ◇ exposes a setting");
+        fits("Editing the component: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting");
         fits("Settings…");
 
         ui.global::<PipelinesPanelState>().invoke_close_component();
