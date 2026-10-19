@@ -188,9 +188,23 @@ fn compact(values: &[f32], bits: u16) -> Option<Samples> {
     }
 }
 
+/// The value in the image file of a sample the reader normalised to
+/// 0..1 (`raw / (2^bits - 1)`), for showing it.
+pub(crate) fn raw_value(normalized: f32, bits: u16) -> f64 {
+    normalized as f64 * evanalyzer_cfg::core_types::max_gray_value(bits).unwrap_or(1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shown_values_are_the_files_values() {
+        assert_eq!(raw_value(1.0, 8), 255.0);
+        assert_eq!(raw_value(1.0, 16), 65535.0);
+        assert_eq!(raw_value(0.0, 12), 0.0);
+        assert_eq!(raw_value(100.0 / 4095.0, 12).round(), 100.0);
+    }
     use evanalyzer_cfg::core_types::ImagePlane;
 
     /// What the reader makes of `raw` samples of `bits` bits.

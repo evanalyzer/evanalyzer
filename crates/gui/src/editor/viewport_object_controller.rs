@@ -4,6 +4,7 @@ use crate::PointSlint;
 use crate::ToolState;
 use crate::UiState;
 use crate::ViewportObjectState;
+use crate::editor::annotations_controller::AnnotationController;
 use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
@@ -12,10 +13,12 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
-use evanalyzer_app::images::{Erased, erase_mask, object_from_mask, stroke_mask, union_mask};
+use evanalyzer_app::images::{Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask};
 use evanalyzer_app::project::ObjectExt;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_app::project::ProjectWithRuntime;
+use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass, ObjectId};
+use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::warn;
 use slint::ComponentHandle;
 use slint::Model;
@@ -41,6 +44,8 @@ pub struct ViewPortObjectController {
     pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) object_list_controller: Arc<ObjectListController>,
     pub(crate) classification_controller: Arc<ClassificationController>,
+    /// Measures what was drawn, on the image file.
+    pub(crate) annotation_controller: Arc<AnnotationController>,
     /// The brush or eraser stroke being drawn, in viewport coordinates.
     stroke: std::sync::Mutex<Vec<(f32, f32)>>,
 }
@@ -54,6 +59,7 @@ impl ViewPortObjectController {
         image_list_controller: Arc<ImagesListController>,
         object_list_controller: Arc<ObjectListController>,
         classification_controller: Arc<ClassificationController>,
+        annotation_controller: Arc<AnnotationController>,
     ) -> Self {
         Self {
             ui,
@@ -63,6 +69,7 @@ impl ViewPortObjectController {
             image_list_controller,
             object_list_controller,
             classification_controller,
+            annotation_controller,
             stroke: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -258,7 +265,7 @@ impl ViewPortObjectController {
         for channel in image_data.iter() {
             if !channel.is_rgb {
                 if let Some(raw_val) = channel.value_at(idx) {
-                    let scaled = raw_val * 2.0_f32.powf(ctx.bit_depth as f32);
+                    let scaled = crate::editor::view_channel::raw_value(raw_val, ctx.bit_depth);
                     values.push(format!("{}: {:.0}", channel.name, scaled));
                 }
             }
@@ -567,7 +574,10 @@ impl ViewPortObjectController {
     /// Adds the stroke to the selected object, if it is a hand-drawn one
     /// (measured again, keeping its id and classes). Whether it was.
     fn paint_into_selected(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
-        let (data_tmp, read_context) = self.viewport_cache.get_image_references();
+        let (_, read_context) = self.viewport_cache.get_image_references();
+        if read_context.full_image_w == 0 {
+            return false; // no image shown
+        }
         let painted = {
             let project = self.app_state.get_project();
             let Some(selected) = project.get_selected_object() else {
@@ -581,10 +591,6 @@ impl ViewPortObjectController {
             else {
                 return false;
             };
-            let idx = project.get_selected_image_channel_idx();
-            let Some((_, channel)) = data_tmp.get(idx as usize) else {
-                return false;
-            };
             let object = &project.get_objects().unwrap_or(&[])[index];
             let (mask, bbox) = union_mask(&object.mask_data, object.bbox, stroke, stroke_bbox);
             let class = object
@@ -593,13 +599,13 @@ impl ViewPortObjectController {
                 .next()
                 .copied()
                 .unwrap_or(ObjectClass::Unset);
-            let mut painted = object_from_mask(
+            // On the plane it was drawn on; measured on the file (below).
+            let mut painted = annotation_from_mask(
                 read_context.full_image_w,
                 read_context.full_image_h,
                 mask,
                 bbox,
-                channel,
-                data_tmp.as_slice(),
+                plane_of(object),
                 class,
             );
             painted.id = object.id.clone();
@@ -608,12 +614,14 @@ impl ViewPortObjectController {
             painted.exclude_from_training = object.exclude_from_training;
             (index, painted)
         };
+        let id = painted.1.id.clone();
         let mut project = self.app_state.get_project_write();
         if let Some(series) = project.get_selected_image_series_mut() {
             series.objects[painted.0] = painted.1;
         }
         drop(project);
         self.app_state.mark_dirty();
+        self.annotation_controller.measure_in_background(vec![id]);
         true
     }
 
@@ -621,13 +629,12 @@ impl ViewPortObjectController {
     /// image: an object left empty is deleted, the others measured again
     /// (keeping their id and classes).
     fn erase(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
-        let (data_tmp, read_context) = self.viewport_cache.get_image_references();
+        let (_, read_context) = self.viewport_cache.get_image_references();
+        if read_context.full_image_w == 0 {
+            return false; // no image shown
+        }
         let changes: Vec<(usize, Option<_>)> = {
             let project = self.app_state.get_project();
-            let idx = project.get_selected_image_channel_idx();
-            let Some((_, channel)) = data_tmp.get(idx as usize) else {
-                return false;
-            };
             project
                 .get_objects()
                 .unwrap_or(&[])
@@ -644,13 +651,13 @@ impl ViewPortObjectController {
                                 .next()
                                 .copied()
                                 .unwrap_or(ObjectClass::Unset);
-                            let mut rest = object_from_mask(
+                            // Measured on the file (below).
+                            let mut rest = annotation_from_mask(
                                 read_context.full_image_w,
                                 read_context.full_image_h,
                                 mask,
                                 bbox,
-                                channel,
-                                data_tmp.as_slice(),
+                                plane_of(object),
                                 class,
                             );
                             rest.id = object.id.clone();
@@ -666,6 +673,10 @@ impl ViewPortObjectController {
         if changes.is_empty() {
             return false;
         }
+        let changed: Vec<ObjectId> = changes
+            .iter()
+            .filter_map(|(_, rest)| rest.as_ref().map(|r| r.id.clone()))
+            .collect();
         let mut project = self.app_state.get_project_write();
         if let Some(series) = project.get_selected_image_series_mut() {
             // Backwards, so the indices stay right while removing.
@@ -680,19 +691,20 @@ impl ViewPortObjectController {
         }
         drop(project);
         self.app_state.mark_dirty();
+        self.annotation_controller.measure_in_background(changed);
         true
     }
 
     fn add_to_object_list(&self, mask_data: BitVec<u64, Lsb0>, bbox: [u32; 4]) {
         // Each drawn object is an undo step of its own.
         self.app_state.begin_undo_step();
-        let (data_tmp, read_context) = self.viewport_cache.get_image_references();
-        let (idx, object_class) = {
+        let (_, read_context) = self.viewport_cache.get_image_references();
+        if read_context.full_image_w == 0 {
+            return; // no image shown
+        }
+        let (object_class, plane) = {
             let project = self.app_state.get_project();
-            (
-                project.get_selected_image_channel_idx(),
-                project.get_selected_object_class(),
-            )
+            (project.get_selected_object_class(), shown_plane(&project))
         };
 
         if object_class == ObjectClass::Unset {
@@ -700,19 +712,42 @@ impl ViewPortObjectController {
             return;
         }
 
-        if let Some((_, selected_channel)) = data_tmp.get(idx as usize) {
-            let object = object_from_mask(
-                read_context.full_image_w,
-                read_context.full_image_h,
-                mask_data,
-                bbox,
-                selected_channel,
-                data_tmp.as_slice(),
-                object_class,
-            );
-            self.app_state.get_project_write().add_object(&object);
-            self.app_state.mark_dirty();
-        }
+        // On the plane shown; measured on the image file (all channels,
+        // full resolution), not on the pixels shown at this zoom.
+        let object = annotation_from_mask(
+            read_context.full_image_w,
+            read_context.full_image_h,
+            mask_data,
+            bbox,
+            plane,
+            object_class,
+        );
+        self.app_state.get_project_write().add_object(&object);
+        self.app_state.mark_dirty();
+        self.annotation_controller
+            .measure_in_background(vec![object.id.clone()]);
+    }
+}
+
+/// The plane of an annotation (it is edited and measured on it).
+fn plane_of(object: &ObjectMetricSettings) -> ImagePlane {
+    ImagePlane {
+        z: object.z_stack,
+        c: object.c_stack,
+        t: object.t_stack,
+    }
+}
+
+/// The plane the viewer shows: the first slice of the z range, the frame,
+/// the selected channel.
+fn shown_plane(project: &ProjectWithRuntime) -> ImagePlane {
+    ImagePlane {
+        z: project
+            .get_z_stack()
+            .and_then(|z| z.z_range.as_ref().map(|r| *r.start()))
+            .unwrap_or(0),
+        c: project.get_selected_image_channel_idx(),
+        t: project.get_t_stack().map_or(0, |t| t.t_stack),
     }
 }
 
@@ -792,6 +827,13 @@ mod tests {
             object_list_controller.clone(),
             viewport_controller.clone(),
         ));
+        let annotation_controller = Arc::new(AnnotationController::new(
+            ui.clone(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            classification_controller.clone(),
+            viewport_controller.clone(),
+        ));
         let controller = Arc::new(ViewPortObjectController::new(
             ui,
             ui_state.clone(),
@@ -800,6 +842,7 @@ mod tests {
             image_list_controller,
             object_list_controller,
             classification_controller,
+            annotation_controller,
         ));
         (controller, viewport_cache)
     }
@@ -1306,6 +1349,14 @@ mod tests {
         assert_eq!(objects[0].object_class.contains(&new_class), true);
         assert_eq!(objects[0].object_class.len(), 1);
         assert!(objects[0].area > 0, "the triangle interior must be filled");
+        // Measured on the triangle's own pixels, not its whole bounding box.
+        assert_eq!(objects[0].area, objects[0].mask_data.count_ones());
+        assert!(objects[0].area < 9 * 9);
+        // On the plane shown (first slice, first frame, the selected channel).
+        assert_eq!(
+            (objects[0].z_stack, objects[0].c_stack, objects[0].t_stack),
+            (0, project.get_selected_image_channel_idx(), 0)
+        );
     }
 
     // -- attach_callbacks (live AppWindow) ------------------------------------------
@@ -1544,7 +1595,7 @@ mod tests {
         let markers = live.markers();
         assert_eq!(markers.len(), 1);
         assert_eq!((markers[0].image_x, markers[0].image_y), (3.0, 4.0));
-        // 0.5 of an 8-bit range.
+        // 0.5 of an 8-bit range (0..255): 127.5.
         assert_eq!(markers[0].label, "ch0: 128");
     }
 

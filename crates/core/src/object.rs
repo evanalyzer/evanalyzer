@@ -10,11 +10,13 @@ use std::collections::HashSet;
 
 use crate::ImagePlane;
 use crate::ImageTile;
-use crate::pipeline::pipeline_cache::{
-    GlobalPipelineCache, channel_pixel_slice, sample_channel_pixel,
-};
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::scope::Scope;
 use evanalyzer_cfg::core_types::InternalErrors;
+
+/// An object's (or annotation's) intensities over its mask - one
+/// implementation for the pipeline and stored annotations.
+pub mod intensities;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Intensity {
@@ -724,6 +726,50 @@ impl Object {
         }
     }
 
+    /// A manually annotated object from its shape alone (no pixels to
+    /// measure - e.g. an imported annotation): area, moments, edge flag and
+    /// outline from the set pixels of `mask` (relative to `bbox` = `[x1, y1,
+    /// x2, y2]`, inclusive), no intensities. On `plane` of an image of
+    /// `full_image_size`.
+    pub fn from_mask_geometry(
+        full_image_size: &ImageSize,
+        mask: BitVec<u64, Lsb0>,
+        bbox: [u32; 4],
+        plane: ImagePlane,
+        object_class: HashSet<ObjectClass>,
+    ) -> Self {
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId::next(),
+            segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
+            object_class,
+            intensities: IndexMap::new(),
+            bbox,
+            mask_data: mask,
+            ..Default::default()
+        });
+        object.plane = plane;
+        let width = (bbox[2] - bbox[0] + 1) as usize;
+        for (i, set) in object.mask_data.clone().iter().by_vals().enumerate() {
+            if !set {
+                continue;
+            }
+            let x = bbox[0] as usize + i % width;
+            let y = bbox[1] as usize + i / width;
+            object.area += 1;
+            object.sum_x += x as u64;
+            object.sum_y += y as u64;
+            object.sum_x2 += (x * x) as u64;
+            object.sum_y2 += (y * y) as u64;
+            object.sum_xy += (x * y) as u64;
+            if x == 0 || y == 0 || x + 1 >= full_image_size.width || y + 1 >= full_image_size.height
+            {
+                object.touches_edge = true;
+            }
+        }
+        object.finalize_geometry();
+        object
+    }
+
     pub fn from_object_settings(s: ObjectMetricSettings) -> Self {
         Object::new(ObjectInit {
             id: s.id,
@@ -893,86 +939,17 @@ impl Object {
         // object's mask - all `measure_intensities` ever samples - typically
         // only touches a handful of those tiles.
         let channel_views = cache.resolve_channel_views_for_bbox(self.bbox);
-
-        // Component the loaded tiles by channel, preserving first-seen channel order so the
-        // returned map's key order matches `resolve_channel_views_for_bbox`'s own order
-        // (existing callers/tests rely on `IndexMap` insertion order).
-        let mut by_channel: IndexMap<i32, Vec<(ImageTile, bool, &[f32])>> = IndexMap::new();
-        for ((channel_id, tile), is_rgb, container) in &channel_views {
-            let Some(slice) = channel_pixel_slice(container) else {
-                continue;
-            };
-            by_channel
-                .entry(*channel_id)
-                .or_default()
-                .push((*tile, *is_rgb, slice));
-        }
-
-        let [xmin, ymin, xmax, ymax] = self.bbox;
-        let rw = (xmax - xmin + 1) as usize;
-        let rh = (ymax - ymin + 1) as usize;
-
-        // Sum/min/max/count accumulated per channel - `count` (not the mask's total area)
-        // is the average's denominator, since a channel can legitimately have fewer covered
-        // pixels than the mask if part of it falls outside every loaded tile.
-        let mut acc: IndexMap<i32, (f64, f32, f32, usize)> = by_channel
-            .keys()
-            .map(|&channel_id| (channel_id, (0f64, f32::MAX, f32::MIN, 0usize)))
-            .collect();
-
-        for ry in 0..rh {
-            for rx in 0..rw {
-                if !self
-                    .mask_data
-                    .get(ry * rw + rx)
-                    .map(|b| *b)
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                let x_abs = xmin as usize + rx;
-                let y_abs = ymin as usize + ry;
-
-                for (channel_id, tiles) in &by_channel {
-                    let Some((tile, is_rgb, slice)) = tiles.iter().find(|(tile, _, _)| {
-                        x_abs >= tile.offset_x
-                            && y_abs >= tile.offset_y
-                            && x_abs < tile.offset_x + tile.width
-                            && y_abs < tile.offset_y + tile.height
-                    }) else {
-                        continue;
-                    };
-                    let tile_x = x_abs - tile.offset_x;
-                    let tile_y = y_abs - tile.offset_y;
-                    let sample = tile_y * tile.width + tile_x;
-                    let val = sample_channel_pixel(*is_rgb, slice, sample);
-
-                    let entry = acc
-                        .get_mut(channel_id)
-                        .expect("seeded from by_channel above");
-                    entry.0 += val as f64;
-                    entry.1 = entry.1.min(val);
-                    entry.2 = entry.2.max(val);
-                    entry.3 += 1;
-                }
-            }
-        }
-
-        acc.into_iter()
-            .map(|(channel_id, (sum, min, max, n))| {
-                let has_data = n > 0;
-                (
-                    channel_id,
-                    Intensity {
-                        sum_intensity: sum,
-                        min_intensity: if has_data { min as f64 } else { 0.0 },
-                        max_intensity: if has_data { max as f64 } else { 0.0 },
-                        avg_intensity: (sum / n.max(1) as f64),
-                        pixel_values: Vec::new(),
-                    },
-                )
+        // In `resolve_channel_views_for_bbox`'s order: the result's channel
+        // order follows it (existing callers/tests rely on `IndexMap` order).
+        let tiles: Vec<intensities::ChannelTile<'_>> = channel_views
+            .iter()
+            .filter_map(|((channel, tile), _, container)| {
+                intensities::ChannelTile::from_container(*channel, *tile, container)
             })
-            .collect()
+            .collect();
+        let mut acc = intensities::IntensityAccumulator::default();
+        intensities::MaskIntensities::add_intensities(self, &tiles, &mut acc);
+        acc.finish()
     }
 
     /// Builds the rasterized geometry of `self` scaled by `(scale_x, scale_y)` around its
@@ -1338,6 +1315,64 @@ fn convex_hull_area(points: &mut [(f64, f64)]) -> f64 {
 mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::ObjectId;
+
+    /// A drawn shape that doesn't fill its bounding box (an oval, a
+    /// polygon, a brush stroke): only its own pixels count.
+    #[test]
+    fn an_annotation_is_built_from_its_masks_pixels() {
+        // 3x3 box at (10, 20), a plus sign: 5 of 9 pixels.
+        let mask: BitVec<u64, Lsb0> = [false, true, false, true, true, true, false, true, false]
+            .into_iter()
+            .collect();
+        let object = Object::from_mask_geometry(
+            &ImageSize {
+                width: 100,
+                height: 100,
+            },
+            mask,
+            [10, 20, 12, 22],
+            ImagePlane { z: 2, c: 1, t: 3 },
+            HashSet::from([ObjectClass::Global(4)]),
+        );
+        assert_eq!(object.area, 5);
+        assert_eq!(object.get_centroid(), (11.0, 21.0));
+        // Moments: x 11,10,11,12,11 / y 20,21,21,21,22.
+        assert_eq!((object.sum_x, object.sum_y), (55, 105));
+        assert_eq!(
+            object.sum_xy,
+            11 * 20 + 10 * 21 + 11 * 21 + 12 * 21 + 11 * 22
+        );
+        assert!(!object.touches_edge);
+        assert!(
+            object.intensities.is_empty(),
+            "measured on the image file later"
+        );
+        assert_eq!(
+            object.segmentation_class,
+            SegmentationClass::MANUAL_ANNOTATED
+        );
+        let settings = object.to_object_settings();
+        assert_eq!(
+            (settings.z_stack, settings.c_stack, settings.t_stack),
+            (2, 1, 3)
+        );
+    }
+
+    #[test]
+    fn an_annotation_at_the_image_border_touches_its_edge() {
+        let object = Object::from_mask_geometry(
+            &ImageSize {
+                width: 4,
+                height: 4,
+            },
+            BitVec::<u64, Lsb0>::repeat(true, 2),
+            [2, 3, 3, 3],
+            ImagePlane { z: 0, c: 0, t: 0 },
+            HashSet::new(),
+        );
+        assert!(object.touches_edge);
+        assert!(object.get_perimeter() > 0.0);
+    }
 
     /// Build a finalized object from a rectangular `rows × cols` boolean pattern.
     fn object_from_pattern(pattern: &[&[bool]]) -> Object {

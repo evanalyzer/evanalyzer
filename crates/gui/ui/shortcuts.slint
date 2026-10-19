@@ -195,8 +195,11 @@ export component GlobalShortcuts inherits FocusScope {
         // the object list panel's footer toolbar (same guard: nothing
         // selected = no-op), which opens the same confirm dialog rather
         // than deleting immediately.
+        // A pipeline object is read-only: Delete does nothing to it.
         if (e.text == Key.Delete && ObjectListState.selected_object.id != 0) {
-            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+            if (ObjectListState.selected_object.editable) {
+                GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+            }
             return accept;
         }
 

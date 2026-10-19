@@ -3,6 +3,8 @@
 //! through `crate::api::Backend`, so it works the same against a server.
 
 pub mod ai_learning;
+pub mod annotation_measure;
+pub mod annotations_geojson;
 pub mod bioimageio;
 pub mod class_ids;
 pub mod component_checks;

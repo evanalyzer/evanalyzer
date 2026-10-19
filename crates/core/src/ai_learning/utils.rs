@@ -2,6 +2,7 @@ use crate::ZProjection;
 use crate::ai_learning::model::{Classifier, KnnModel, mlp::predict_mlp};
 use crate::image::ImageTile;
 use crate::object::Object;
+use bitvec::prelude::{BitVec, Lsb0};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use smartcore::linalg::basic::matrix::DenseMatrix;
@@ -105,7 +106,17 @@ pub fn bbox_overlaps_tile(bbox: [u32; 4], tile: &ImageTile) -> bool {
 /// (x, y) coordinates (in the image's full-resolution grid, `usize`) of every
 /// pixel in `object`'s mask that falls within `tile`'s bounds.
 pub fn masked_pixels_in_tile(object: &Object, tile: &ImageTile) -> Vec<(usize, usize)> {
-    let [x_min, y_min, x_max, y_max] = object.bbox;
+    mask_pixels_in_tile(&object.mask_data, object.bbox, tile)
+}
+
+/// [`masked_pixels_in_tile`] for a `mask` relative to `bbox` (`[x_min,
+/// y_min, x_max, y_max]`, inclusive) - e.g. of stored annotations.
+pub fn mask_pixels_in_tile(
+    mask: &BitVec<u64, Lsb0>,
+    bbox: [u32; 4],
+    tile: &ImageTile,
+) -> Vec<(usize, usize)> {
+    let [x_min, y_min, x_max, y_max] = bbox;
     let tile_x_min = tile.offset_x as u32;
     let tile_y_min = tile.offset_y as u32;
     let tile_x_max = tile.offset_x as u32 + tile.width as u32 - 1;
@@ -120,10 +131,12 @@ pub fn masked_pixels_in_tile(object: &Object, tile: &ImageTile) -> Vec<(usize, u
         return Vec::new();
     }
 
+    let width = (x_max - x_min + 1) as usize;
     let mut samples = Vec::new();
     for y in iy_min..=iy_max {
         for x in ix_min..=ix_max {
-            if object.is_part_of(x, y) {
+            let bit = (y - y_min) as usize * width + (x - x_min) as usize;
+            if mask.get(bit).is_some_and(|b| *b) {
                 samples.push((x as usize, y as usize));
             }
         }

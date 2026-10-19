@@ -11,6 +11,10 @@ export struct ObjectItemDataSlint {
     class_ids: [int],
     label_name: string,
     label_id: int,
+    // A manual annotation: its class can be changed, it can be deleted.
+    // Pipeline (preview) results are read-only - they can be copied into
+    // the manual annotations (AnnotationState.copy-to-manual).
+    editable: bool,
     // Metrics (empty string = not available). Every row: area, the mean
     // intensities, circularity - the objects table's columns. Only the
     // selected_object: area_nm2 and the sums.
@@ -51,10 +55,7 @@ export global ObjectListState {
     in-out property <string> hidden-columns: ",";
 
     callback object_selected(int);
-    callback object_copy(int);
-    callback object_edit(int);
     callback object_delete(int);
-    callback object_delete_all_manual_annotated();
     // Params: Adds the given class to the selected object (params are: object id, class id)
     callback object_add_class(int, int);
      // Params: Replaces all classed of the selected object by the given class (params are: object id, class id)

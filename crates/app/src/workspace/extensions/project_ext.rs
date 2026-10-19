@@ -95,7 +95,6 @@ pub trait ProjectExt {
     fn add_object(&mut self, object: &ObjectMetricSettings);
     fn get_objects(&self) -> Option<&[ObjectMetricSettings]>;
     fn delete_object(&mut self, id: ObjectId);
-    fn delete_all_manual_annoted_objects(&mut self);
     fn get_reference_object(&self) -> Option<Vec<ObjectMetricSettings>>;
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class>;
     fn get_current_relative_path(&self) -> Option<PathBuf>;
@@ -335,12 +334,6 @@ impl ProjectExt for ProjectWithRuntime {
     fn delete_object(&mut self, id: ObjectId) {
         if let Some(series) = self.get_selected_image_series_mut() {
             series.objects.retain(|object| object.id != id);
-        }
-    }
-
-    fn delete_all_manual_annoted_objects(&mut self) {
-        if let Some(series) = self.get_selected_image_series_mut() {
-            series.objects.clear();
         }
     }
 
@@ -706,9 +699,17 @@ impl ProjectExt for ProjectWithRuntime {
             .iter()
             .filter_map(|(id, nm)| project_nm(self, *id).or((*nm > 1.0).then_some(*nm)))
             .collect();
+        // A colour chosen for the project - white too (0) - is not missing.
+        let chosen = |p: &Self, id: i32| {
+            p.images
+                .settings
+                .channels
+                .get(&id)
+                .is_some_and(|c| c.emission_wave_length.is_some())
+        };
         let missing: Vec<i32> = channels
             .iter()
-            .filter(|(id, nm)| *nm <= 1.0 && project_nm(self, *id).is_none())
+            .filter(|(id, nm)| *nm <= 1.0 && !chosen(self, *id))
             .map(|(id, _)| *id)
             .collect();
         if missing.is_empty() {
@@ -3077,6 +3078,27 @@ mod tests {
         // A single channel stays white.
         let mut single = project_with_one_image();
         assert!(!single.assign_missing_wavelengths(&[(0, 0.0)]));
+    }
+
+    #[test]
+    fn a_channel_made_white_on_purpose_stays_white() {
+        let mut project = project_with_one_image();
+        // The user picked white (0) for channel 0.
+        project.set_global_emission_wavel_length(0, 0.0);
+        assert!(project.assign_missing_wavelengths(&[(0, 0.0), (1, 0.0)]));
+        let nm = |p: &ProjectWithRuntime, id: i32| {
+            p.images
+                .settings
+                .channels
+                .get(&id)
+                .and_then(|c| c.emission_wave_length)
+        };
+        assert_eq!(nm(&project, 0), Some(0.0), "kept white");
+        assert!(
+            nm(&project, 1).is_some_and(|nm| nm > 1.0),
+            "the other one gets a colour"
+        );
+        assert_eq!(project.get_emission_wave_length(0), 0.0);
     }
 
     #[test]

@@ -5493,11 +5493,7 @@ impl PipelinesController {
                             .map(|class| ClassItemData {
                                 id: class.id as i32,
                                 name: class.name.clone().into(),
-                                color: slint::Color::from_rgb_u8(
-                                    ((class.color >> 16) & 0xff) as u8,
-                                    ((class.color >> 8) & 0xff) as u8,
-                                    (class.color & 0xff) as u8,
-                                ),
+                                color: crate::helper::color_generators::color_from_hex(class.color),
                                 visible: true,
                                 count: 0,
                             })

@@ -1,0 +1,75 @@
+// dialogs/delete_manual_dialog.slint — deletes manual annotations in bulk:
+// on this image or all images, of the ticked classes (e.g. before
+// annotating anew for another training round).
+
+import { Places } from "../api/layout.slint";
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ObjectListState } from "../api/object_list.slint";
+import { AnnotationState } from "../api/annotations.slint";
+import { Ink, InkButton, InkButtonKind, InkCheckbox, InkDialog, InkDialogFooter, InkSegmented } from "../ink/ink.slint";
+
+export component DeleteManualAnnotationsDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 200px;
+    title: "Delete manual annotations";
+    card-width: 360px;
+    property <bool> all-images: false;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+
+    VerticalLayout {
+        spacing: 10px;
+
+        InkSegmented {
+            model: ["This image", "All images"];
+            selected: root.all-images ? 1 : 0;
+            picked(i) => {
+                root.all-images = i == 1;
+                AnnotationState.delete-selection-changed(root.all-images);
+            }
+        }
+
+        if AnnotationState.manual-classes.length == 0: Text {
+            text: root.all-images ? "There are no manual annotations." : "No manual annotations on this image.";
+            color: Ink.text-mute;
+            font-size: Ink.fs-sm;
+        }
+        for row[i] in AnnotationState.manual-classes: InkCheckbox {
+            text: row.name + " · " + row.count;
+            checked: row.checked;
+            toggled(on) => {
+                AnnotationState.manual-classes[i].checked = on;
+                AnnotationState.delete-selection-changed(root.all-images);
+            }
+        }
+
+        Text {
+            text: AnnotationState.delete-summary;
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-sm;
+        }
+    }
+
+    InkDialogFooter {
+        InkButton {
+            text: "Cancel";
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+            }
+        }
+        InkButton {
+            kind: InkButtonKind.danger;
+            text: "Delete";
+            enabled: AnnotationState.delete-count > 0;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                AnnotationState.delete-manual(root.all-images);
+                ObjectListState.selected_object = { };
+            }
+        }
+    }
+}

@@ -41,15 +41,15 @@ fn color_from_class(
     object_class: &ObjectClass,
 ) -> Color {
     let color = match project.get_class_from_id(object_class) {
-        Some(class) => class.color as u32,
-        None => 0xff0000 as u32, // Not found
+        Some(class) => class.color,
+        None => 0xff0000, // Not found
     };
-    Color::from_argb_u8(
-        transparency,
-        ((color >> 16) & 0xFF) as u8,
-        ((color >> 8) & 0xFF) as u8,
-        (color & 0xFF) as u8,
-    )
+    color_from_hex(color).with_alpha(transparency as f32 / 255.0)
+}
+
+/// A class colour (`0xRRGGBB`, as `Class::color` keeps it), opaque.
+pub fn color_from_hex(rgb: u32) -> Color {
+    Color::from_rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
 pub fn color_from_rgb(rgb: [f32; 3]) -> Color {

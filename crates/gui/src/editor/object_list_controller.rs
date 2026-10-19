@@ -1,9 +1,9 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
-use crate::helper::color_generators::get_colors_from_class;
+use crate::helper::color_generators::{color_from_hex, get_colors_from_class};
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectWithRuntime;
+use evanalyzer_app::project::{AnnotationsExt, ProjectExt};
 use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass, max_gray_value};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -162,14 +162,17 @@ impl ObjectListController {
                                 .map(|i| (manual_len + i) as i32)
                                 .unwrap_or(-1)
                         });
-                    class_state.set_selected_object(object_rust_to_object_slint(
-                        &object,
-                        &project,
-                        label_count,
-                        true,
-                        index,
-                        nr_of_bits,
-                    ));
+                    class_state.set_selected_object(ObjectItemDataSlint {
+                        editable: project.is_manual_object(object.id.clone()),
+                        ..object_rust_to_object_slint(
+                            &object,
+                            &project,
+                            label_count,
+                            true,
+                            index,
+                            nr_of_bits,
+                        )
+                    });
                     if scroll_to {
                         class_state.set_scroll_to_object_index(index);
                     }
@@ -206,14 +209,18 @@ impl Model for ObjectModalBridge {
                     .label_counts
                     .get(&object.segmentation_class)
                     .unwrap_or(&0);
-                object_rust_to_object_slint(
-                    object,
-                    &project,
-                    count,
-                    false,
-                    underlying_row as i32,
-                    self.nr_of_bits,
-                )
+                // A manual annotation; preview objects are read-only.
+                ObjectItemDataSlint {
+                    editable: true,
+                    ..object_rust_to_object_slint(
+                        object,
+                        &project,
+                        count,
+                        false,
+                        underlying_row as i32,
+                        self.nr_of_bits,
+                    )
+                }
             })
         } else {
             let preview_objects = project.get_preview_objects();
@@ -510,14 +517,9 @@ fn object_rust_to_object_slint(
     let mut display_name = String::new();
 
     for class in &object.object_class {
-        let (class_name, (r, g, b)) = match project.get_class_from_id(class) {
-            Some(class_data) => {
-                let r = ((class_data.color >> 16) & 0xff) as u8;
-                let g = ((class_data.color >> 8) & 0xff) as u8;
-                let b = (class_data.color & 0xff) as u8;
-                (class_data.name.clone(), (r, g, b))
-            }
-            _ => ("Unclassified".to_string(), (0xff, 0, 0)),
+        let (class_name, class_color) = match project.get_class_from_id(class) {
+            Some(class_data) => (class_data.name.clone(), color_from_hex(class_data.color)),
+            _ => ("Unclassified".to_string(), color_from_hex(0xff0000)),
         };
 
         if display_name.is_empty() {
@@ -528,7 +530,7 @@ fn object_rust_to_object_slint(
         }
 
         class_names_vec.push(class_name.into());
-        class_colors_vec.push(Color::from_rgb_u8(r, g, b));
+        class_colors_vec.push(class_color);
         class_ids_vec.push(class.to_i32());
     }
 
@@ -546,6 +548,8 @@ fn object_rust_to_object_slint(
         class_ids: ModelRc::new(slint::VecModel::from(class_ids_vec)).into(),
         label_id: object.segmentation_class.as_u32() as i32,
         label_name: object.segmentation_class.to_string().into(),
+        // Set by the caller, which knows the list the object is in.
+        editable: false,
         label_count,
         area: object.area as i32,
         area_nm2: if full_metrics && object.area > 0 {
