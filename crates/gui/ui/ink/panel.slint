@@ -9,6 +9,7 @@ import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 import { InkIconButton } from "button.slint";
 import { InkBadge } from "marker.slint";
+import { InkTipZone } from "tooltip.slint";
 
 /// A floating panel over the image: glass, a soft border, a shadow. Content
 /// usually starts with an `InkPanelHead`.
@@ -48,7 +49,19 @@ export component InkPanelHead inherits Rectangle {
     in property <bool> has-more: false;
     /// No line below it.
     in property <bool> borderless: false;
+    /// A click on the title folds the panel to its head (▾ open, ▸ folded).
+    in property <bool> foldable: false;
+    in property <bool> folded: false;
+    /// Folded: a short summary at the right ("CY5 · 3 on").
+    in property <string> summary;
+    /// An accent button before +, its icon and what it does ("" none).
+    in property <image> action-icon;
+    in property <string> action-label;
+    in property <bool> action-enabled: true;
+    in property <string> action-disabled-reason;
     callback close;
+    callback fold-toggled;
+    callback action;
     callback add;
     callback pin-toggled;
     /// ⋯ was clicked, at this point (in the head's coordinates).
@@ -59,18 +72,67 @@ export component InkPanelHead inherits Rectangle {
     accessible-label: root.title;
 
     HorizontalLayout {
-        padding-left: 14px;
+        padding-left: root.foldable ? 6px : 14px;
         padding-right: 6px;
         spacing: 8px;
 
-        title-text := Text {
+        if !root.foldable: title-text := Text {
             text: root.title;
-            font-size: Ink.fs-lg;
+            font-size: Ink.fs-dialog-title;
             font-weight: 600;
             color: Ink.text;
             vertical-alignment: center;
             overflow: elide;
             accessible-role: none;
+        }
+
+        // Foldable: chevron and title are one button.
+        if root.foldable: Rectangle {
+            y: (Ink.head-h - self.height) / 2;
+            height: 30px;
+            width: fold-row.preferred-width;
+            border-radius: Ink.radius-md;
+            background: fold-ta.has-hover ? Ink.hover : transparent;
+            accessible-role: button;
+            accessible-label: root.title;
+            accessible-expanded: !root.folded;
+            accessible-action-default => {
+                root.fold-toggled();
+            }
+            fold-row := HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 8px;
+                spacing: 6px;
+                Text {
+                    width: 10px;
+                    text: root.folded ? "▸" : "▾";
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-mute;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+                Text {
+                    text: root.title;
+                    font-size: Ink.fs-dialog-title;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+            fold-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.fold-toggled();
+                }
+            }
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: fold-ta.has-hover && !fold-ta.pressed;
+                text: root.folded ? "Unfold " + root.title : "Fold " + root.title;
+            }
         }
 
         Rectangle {
@@ -84,7 +146,16 @@ export component InkPanelHead inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.subtitle;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.folded && root.summary != "": Text {
+            text: root.summary;
+            font-family: Ink.font-mono;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             vertical-alignment: center;
             overflow: elide;
@@ -93,6 +164,25 @@ export component InkPanelHead inherits Rectangle {
         HorizontalLayout {
             spacing: 2px;
             alignment: end;
+            if root.action-label != "": Rectangle {
+                y: (Ink.head-h - self.height) / 2;
+                width: 26px;
+                height: 26px;
+                border-radius: Ink.radius-md;
+                background: Ink.info-tint;
+                opacity: root.action-enabled ? 1 : 0.45;
+                InkIconButton {
+                    size: 26px;
+                    icon: root.action-icon;
+                    tint: Ink.focus;
+                    label: root.action-label;
+                    enabled: root.action-enabled;
+                    disabled-reason: root.action-disabled-reason;
+                    clicked => {
+                        root.action();
+                    }
+                }
+            }
             if root.add-label != "": InkIconButton {
                 y: (Ink.head-h - self.height) / 2;
                 size: 24px;
@@ -134,7 +224,7 @@ export component InkPanelHead inherits Rectangle {
     }
 
     Rectangle {
-        visible: !root.borderless;
+        visible: !root.borderless && !root.folded;
         y: parent.height - 1px;
         height: 1px;
         background: Ink.border-soft;
@@ -305,7 +395,7 @@ export component InkDialogFooter inherits Rectangle {
 /// A form's label, in the label column (`Ink.label-w` wide).
 export component InkLabel inherits Text {
     width: Ink.label-w;
-    font-size: Ink.fs-sm;
+    font-size: Ink.fs-secondary;
     color: Ink.text-dim;
     vertical-alignment: center;
     overflow: elide;
@@ -313,7 +403,7 @@ export component InkLabel inherits Text {
 
 /// Small capitals over a group: "CHANNELS", "OUTPUT".
 export component InkCaption inherits Text {
-    font-size: Ink.fs-xs;
+    font-size: Ink.fs-caption;
     font-weight: 600;
     letter-spacing: 0.6px;
     color: Ink.text-mute;
@@ -322,7 +412,7 @@ export component InkCaption inherits Text {
 
 /// A dim hint under a field or in an empty place.
 export component InkHint inherits Text {
-    font-size: Ink.fs-sm;
+    font-size: Ink.fs-secondary;
     color: Ink.text-mute;
     wrap: word-wrap;
 }
@@ -357,9 +447,9 @@ export component InkSectionHead inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.count;
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
             font-family: Ink.font-mono;
-            color: Ink.text-faint;
+            color: Ink.text-mute;
             vertical-alignment: center;
         }
     }
@@ -402,7 +492,7 @@ export component InkFact inherits Rectangle {
         Text {
             width: root.label-width;
             text: root.label;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
             vertical-alignment: center;
             overflow: elide;
@@ -410,7 +500,7 @@ export component InkFact inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.value == "" ? "–" : root.value;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-family: Ink.font-mono;
             color: Ink.text;
             vertical-alignment: center;
@@ -418,7 +508,7 @@ export component InkFact inherits Rectangle {
         }
         Text {
             text: root.extra;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-family: Ink.font-mono;
             color: Ink.text-mute;
             vertical-alignment: center;

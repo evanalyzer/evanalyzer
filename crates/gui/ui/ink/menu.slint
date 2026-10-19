@@ -95,7 +95,7 @@ export component InkMenuItem inherits Rectangle {
             }
             Text {
                 text: root.text;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 color: root.danger ? Ink.err : Ink.text;
                 vertical-alignment: center;
                 overflow: elide;
@@ -112,9 +112,9 @@ export component InkMenuItem inherits Rectangle {
             }
             Text {
                 text: root.shortcut;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 font-family: Ink.font-mono;
-                color: Ink.text-faint;
+                color: Ink.text-mute;
                 vertical-alignment: center;
             }
             Image {
@@ -137,7 +137,7 @@ export component InkMenuItem inherits Rectangle {
 /// A group's caption inside a menu: "RECENT".
 export component InkMenuCaption inherits Text {
     height: 24px;
-    font-size: Ink.fs-xs;
+    font-size: Ink.fs-caption;
     font-weight: 600;
     letter-spacing: 0.6px;
     color: Ink.text-mute;

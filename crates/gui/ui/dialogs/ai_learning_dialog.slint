@@ -9,7 +9,7 @@ import { Ink } from "../ink/palette.slint";
 // A form row's label - plain (InkLabel's elide costs ~2 KB a use).
 component FormLabel inherits Text {
     width: 120px;
-    font-size: Ink.fs-sm;
+    font-size: Ink.fs-secondary;
     color: Ink.text-dim;
     vertical-alignment: center;
 }
@@ -133,7 +133,7 @@ component FeatureRow inherits Rectangle {
             Text {
                 text: "✕";
                 color: Ink.text-dim;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -177,14 +177,14 @@ component ClassSelectionRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.data.name;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text;
             vertical-alignment: center;
             overflow: elide;
         }
         Text {
             text: root.data.count;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-family: Ink.font-mono;
             color: Ink.text-mute;
             vertical-alignment: center;
@@ -240,7 +240,7 @@ component TrainingImageRow inherits Rectangle {
         Text {
             text: root.data.annotated_object_count + " objects";
             color: Ink.text-mute;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-family: Ink.font-mono;
             vertical-alignment: center;
         }
@@ -263,7 +263,7 @@ component TrainingObjectRow inherits Rectangle {
         Text {
             text: root.data.label;
             color: Ink.text;
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -476,7 +476,7 @@ export component AiLearningDialog inherits InkDialog {
                         if AiLearningState.settings.loaded_model_path != "": Text {
                             text: "Loaded: " + AiLearningState.settings.loaded_model_path;
                             color: Ink.text-mute;
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             font-family: Ink.font-mono;
                             overflow: elide;
                         }
@@ -494,7 +494,7 @@ export component AiLearningDialog inherits InkDialog {
                         alignment: start;
                         Text {
                             text: root.more ? "Fewer settings ‹" : "More settings ›";
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             color: more-ta.has-hover ? Ink.text : Ink.focus;
                             more-ta := TouchArea {
                                 mouse-cursor: pointer;
@@ -551,7 +551,7 @@ export component AiLearningDialog inherits InkDialog {
                                 Text {
                                     text: "0 = no limit";
                                     color: Ink.text-mute;
-                                    font-size: Ink.fs-sm;
+                                    font-size: Ink.fs-secondary;
                                     vertical-alignment: center;
                                 }
                             }
@@ -617,7 +617,7 @@ export component AiLearningDialog inherits InkDialog {
                                 Text {
                                     text: "0 = auto";
                                     color: Ink.text-mute;
-                                    font-size: Ink.fs-sm;
+                                    font-size: Ink.fs-secondary;
                                     vertical-alignment: center;
                                 }
                             }
@@ -920,7 +920,7 @@ export component AiLearningDialog inherits InkDialog {
                         Text {
                             text: "Assigned class and position are intentionally excluded to avoid label leakage and location-based overfitting.";
                             color: Ink.text-mute;
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             wrap: word-wrap;
                         }
 
@@ -990,7 +990,7 @@ export component AiLearningDialog inherits InkDialog {
                             Text {
                                 text: "fraction held out to report accuracy";
                                 color: Ink.text-mute;
-                                font-size: Ink.fs-sm;
+                                font-size: Ink.fs-secondary;
                                 vertical-alignment: center;
                             }
                         }
@@ -1041,7 +1041,7 @@ export component AiLearningDialog inherits InkDialog {
                         Text {
                             text: "Only manually-painted objects with a class assigned below are used for training.";
                             color: Ink.text-mute;
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             wrap: word-wrap;
                         }
 
@@ -1080,7 +1080,7 @@ export component AiLearningDialog inherits InkDialog {
                 Text {
                     text: AiLearningState.training_status;
                     color: AiLearningState.training_status_is_error ? Ink.err : AiLearningState.training_in_progress ? Ink.focus : Ink.ok;
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                     wrap: word-wrap;
                     horizontal-alignment: left;
                 }
@@ -1119,6 +1119,7 @@ export component AiLearningDialog inherits InkDialog {
                 kind: InkButtonKind.primary;
                 text: "Train";
                 enabled: !AiLearningState.training_in_progress;
+                disabled-reason: "Training is already running";
                 clicked => {
                     // Rust decides whether to close the dialog - a
                     // pre-flight validation failure keeps it open

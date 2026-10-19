@@ -47,7 +47,7 @@ export component InkNavItem inherits Rectangle {
         Text {
             text: root.text;
             vertical-alignment: center;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-weight: root.active ? 600 : 400;
             color: root.dimmed ? Ink.text-faint : (root.active ? Ink.text : Ink.text-dim);
             overflow: elide;
@@ -63,7 +63,7 @@ export component InkNavItem inherits Rectangle {
 }
 
 export component InkNavCaption inherits Text {
-    font-size: Ink.fs-xs;
+    font-size: Ink.fs-caption;
     font-weight: 600;
     letter-spacing: 0.6px;
     color: Ink.text-mute;
@@ -97,7 +97,7 @@ export component InkSettingsHead inherits VerticalLayout {
                 background: Ink.raised;
                 scope-text := Text {
                     text: root.scope;
-                    font-size: Ink.fs-xs;
+                    font-size: Ink.fs-caption;
                     color: Ink.text-dim;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -114,7 +114,7 @@ export component InkSettingsHead inherits VerticalLayout {
 
     Text {
         text: root.subtitle;
-        font-size: Ink.fs-sm;
+        font-size: Ink.fs-secondary;
         color: Ink.text-dim;
         wrap: word-wrap;
     }
@@ -164,7 +164,7 @@ export component InkSettingRow inherits VerticalLayout {
             // end before the last setting.
             Text {
                 text: root.label;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-weight: 600;
                 color: root.enabled ? Ink.text : Ink.text-mute;
                 wrap: word-wrap;
@@ -173,7 +173,7 @@ export component InkSettingRow inherits VerticalLayout {
 
             if root.description != "": Text {
                 text: root.description;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: root.enabled ? Ink.text-dim : Ink.text-mute;
                 wrap: word-wrap;
                 height: self.preferred-height;
@@ -208,14 +208,14 @@ export component InkSettingBlock inherits VerticalLayout {
             spacing: 3px;
             Text {
                 text: root.label;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-weight: 600;
                 color: Ink.text;
             }
 
             if root.description != "": Text {
                 text: root.description;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
                 wrap: word-wrap;
             }

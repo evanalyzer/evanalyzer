@@ -8,6 +8,7 @@ import { ImagesListState } from "../api/images_list.slint";
 import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
 import { ToolState, ViewportObjectState } from "../api/viewport.slint";
 import { ClassItemData, ClassificationState } from "../api/classification.slint";
+import { LayoutState } from "../api/layout.slint";
 import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkButton, InkButtonKind, InkIconButton } from "../ink/ink.slint";
 import { FocusBanner } from "pipeline_focus.slint";
 
@@ -50,6 +51,21 @@ export component ClassificationPanel inherits Rectangle {
             title: "Classes";
             count: ClassificationState.classes_list.length;
             closable: false;
+            foldable: true;
+            folded: LayoutState.classes-folded;
+            fold-toggled => {
+                LayoutState.classes-folded = !LayoutState.classes-folded;
+                LayoutState.panels-changed();
+            }
+            // The classes found in the images, merged in - the usual first
+            // step after opening an image.
+            action-icon: InkIcons.sparkle;
+            action-label: "Add the classes found in the images";
+            action-enabled: ImagesListState.images_list.length > 0;
+            action-disabled-reason: "Open images first";
+            action => {
+                ClassificationState.class_auto_add_and_merge();
+            }
             add-label: "New class";
             has-more: true;
             add => {
@@ -61,24 +77,9 @@ export component ClassificationPanel inherits Rectangle {
             more(x, y) => {
                 list-menu.show();
             }
-
-            // Left of + and ⋯ (each 24 px, 2 px apart, 6 px from the
-            // edge): the classes found in the images, merged in - the
-            // usual first step after opening an image.
-            InkIconButton {
-                x: parent.width - 6px - 3 * 24px - 2 * 2px;
-                y: (Ink.head-h - self.height) / 2;
-                size: 24px;
-                icon: InkIcons.sparkle;
-                label: "Add the classes found in the images";
-                enabled: ImagesListState.images_list.length > 0;
-                clicked => {
-                    ClassificationState.class_auto_add_and_merge();
-                }
-            }
         }
 
-        VerticalLayout {
+        if !LayoutState.classes-folded: VerticalLayout {
             padding: 4px;
             spacing: 4px;
 
@@ -134,6 +135,7 @@ export component ClassificationPanel inherits Rectangle {
                                     icon: InkIcons.sparkle;
                                     kind: InkButtonKind.primary;
                                     enabled: ImagesListState.images_list.length > 0;
+                                    disabled-reason: "Open images first";
                                     clicked => {
                                         ClassificationState.class_auto_add_and_merge();
                                     }
@@ -141,7 +143,7 @@ export component ClassificationPanel inherits Rectangle {
                             }
                             Text {
                                 text: ImagesListState.images_list.length > 0 ? "or + to create one yourself" : "Open images first, or + to create one yourself";
-                                font-size: Ink.fs-sm;
+                                font-size: Ink.fs-secondary;
                                 color: Ink.text-mute;
                                 horizontal-alignment: center;
                             }

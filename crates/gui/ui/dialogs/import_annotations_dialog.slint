@@ -26,7 +26,7 @@ export component ImportAnnotationsDialog inherits InkDialog {
             text: "Pick the folder with one .geojson file per image (named after the image).";
             wrap: word-wrap;
             color: Ink.text;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
         }
         InkSegmented {
             model: ["Add to the annotations", "Replace them"];
@@ -39,7 +39,7 @@ export component ImportAnnotationsDialog inherits InkDialog {
             text: root.replace ? "The manual annotations of every image with a file are deleted first (Undo brings them back)." : "Annotations already there (the same pixels) are not added again.";
             wrap: word-wrap;
             color: Ink.text-mute;
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
         }
     }
 

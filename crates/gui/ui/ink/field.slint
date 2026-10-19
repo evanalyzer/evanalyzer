@@ -4,6 +4,7 @@
 // border while typing. Height `Ink.control-h`.
 
 import { Ink } from "palette.slint";
+import { InkTipZone } from "tooltip.slint";
 import { InkIcons } from "icons.slint";
 
 /// One line of text. `edited` on every keystroke, `accepted` on Enter.
@@ -70,7 +71,7 @@ export component InkTextField inherits Rectangle {
             x: 8px;
             visible: input.text == "";
             text: root.placeholder;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text-faint;
             vertical-alignment: center;
             height: parent.height;
@@ -86,7 +87,7 @@ export component InkTextField inherits Rectangle {
             read-only: root.read-only;
             single-line: true;
             vertical-alignment: center;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-family: root.mono ? Ink.font-mono : Ink.font-sans;
             color: Ink.text;
             selection-background-color: Ink.focus-ring;
@@ -144,7 +145,7 @@ export component InkSearchField inherits Rectangle {
             x: 26px;
             visible: input.text == "";
             text: root.placeholder;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text-faint;
             height: parent.height;
             vertical-alignment: center;
@@ -158,7 +159,7 @@ export component InkSearchField inherits Rectangle {
             text <=> root.text;
             single-line: true;
             vertical-alignment: center;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text;
             selection-background-color: Ink.focus-ring;
             selection-foreground-color: Ink.text;
@@ -193,6 +194,12 @@ export component InkSearchField inherits Rectangle {
                     root.edited("");
                     input.focus();
                 }
+            }
+            InkTipZone {
+                width: 100%;
+                height: 100%;
+                wanted: clear-ta.has-hover && !clear-ta.pressed;
+                text: "Clear";
             }
         }
     }
@@ -318,7 +325,7 @@ export component InkNumberField inherits Rectangle {
                 input-type: decimal;
                 single-line: true;
                 vertical-alignment: center;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-family: Ink.font-mono;
                 color: Ink.text;
                 selection-background-color: Ink.focus-ring;
@@ -380,7 +387,7 @@ export component InkNumberField inherits Rectangle {
             x: parent.width - root.buttons-w - self.width - 6px;
             height: parent.height;
             text: root.unit;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             vertical-alignment: center;
         }
@@ -482,7 +489,7 @@ export component InkSelect inherits Rectangle {
             Text {
                 horizontal-stretch: 1;
                 text: root.current != "" ? root.current : root.placeholder;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-family: root.mono ? Ink.font-mono : Ink.font-sans;
                 color: root.current != "" ? Ink.text : Ink.text-faint;
                 vertical-alignment: center;
@@ -544,7 +551,7 @@ export component InkSelect inherits Rectangle {
                         Text {
                             horizontal-stretch: 1;
                             text: entry;
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                             font-family: root.mono ? Ink.font-mono : Ink.font-sans;
                             font-weight: entry == root.current ? 600 : 400;
                             color: Ink.text;

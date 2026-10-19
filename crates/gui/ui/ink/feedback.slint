@@ -2,6 +2,7 @@
 // busy, banners, tooltips, items of the status bar.
 
 import { Ink } from "palette.slint";
+import { InkTipZone } from "tooltip.slint";
 import { InkIcons } from "icons.slint";
 import { InkTone } from "marker.slint";
 
@@ -89,7 +90,7 @@ export component InkBanner inherits Rectangle {
             body := Text {
                 horizontal-stretch: 1;
                 text: root.text;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: Ink.text;
                 wrap: word-wrap;
                 vertical-alignment: center;
@@ -106,7 +107,7 @@ export component InkBanner inherits Rectangle {
                     accessible-label: root.action;
                     act-text := Text {
                         text: root.action;
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         font-weight: 600;
                         color: root.tone-color;
                     }
@@ -139,6 +140,12 @@ export component InkBanner inherits Rectangle {
                             root.dismissed();
                         }
                     }
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: x-ta.has-hover && !x-ta.pressed;
+                        text: "Dismiss";
+                    }
                 }
             }
         }
@@ -157,7 +164,7 @@ export component InkTooltip inherits Rectangle {
         background: Ink.dark ? Ink.raised : Ink.primary;
         label := Text {
             text: root.text;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.dark ? Ink.text : Ink.on-primary;
         }
     }
@@ -202,7 +209,7 @@ export component InkStatusItem inherits Rectangle {
             }
             Text {
                 text: root.text;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 font-family: root.mono ? Ink.font-mono : Ink.font-sans;
                 color: root.fg;
                 vertical-alignment: center;

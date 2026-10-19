@@ -68,7 +68,7 @@ export component ResultsListPanel inherits Rectangle {
                 alignment: start;
                 Text {
                     text: "No results yet";
-                    font-size: Ink.fs-lg;
+                    font-size: Ink.fs-dialog-title;
                     font-weight: 600;
                     color: Ink.text;
                     horizontal-alignment: center;
@@ -93,7 +93,7 @@ export component ResultsListPanel inherits Rectangle {
                     }
                     if ResultsListState.is_loading: Text {
                         text: "Opening…";
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         color: Ink.text-dim;
                         horizontal-alignment: center;
                     }

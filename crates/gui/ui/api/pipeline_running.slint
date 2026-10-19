@@ -19,6 +19,14 @@ export global PipelineRunningState {
     in-out property <bool> done: false;
     in-out property <bool> has-error: false;
     in-out property <string> status-message: "";
+    // Apart: images done of all, the tiles of the one image (a run of one
+    // image goes tile by tile), the image finished last, the time left.
+    in-out property <int> images-done: 0;
+    in-out property <int> images-total: 0;
+    in-out property <int> tiles-done: 0;
+    in-out property <int> tiles-total: 0;
+    in-out property <string> last-image;
+    in-out property <string> eta;
     callback cancel();
     callback close();
 }

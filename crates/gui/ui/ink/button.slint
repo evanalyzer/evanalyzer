@@ -8,6 +8,7 @@
 // Roots carry only sizes and accessibility - see README.md.
 
 import { Ink } from "palette.slint";
+import { InkTipSide, InkTipZone } from "tooltip.slint";
 
 export enum InkButtonKind { secondary, primary, quiet, danger }
 
@@ -19,6 +20,11 @@ export component InkButton inherits Rectangle {
     in property <bool> enabled: true;
     /// A smaller button, for rows and table cells.
     in property <bool> small: false;
+    /// The tip: what it does (when the text doesn't say it all), its
+    /// shortcut's keys, why it can't be used now (disabled).
+    in property <string> tip;
+    in property <[string]> keys;
+    in property <string> disabled-reason;
     callback clicked;
 
     property <bool> filled: root.kind == InkButtonKind.primary || root.kind == InkButtonKind.danger;
@@ -66,7 +72,7 @@ export component InkButton inherits Rectangle {
             label := Text {
                 accessible-role: none;
                 text: root.text;
-                font-size: root.small ? Ink.fs-sm : Ink.fs-md;
+                font-size: root.small ? Ink.fs-secondary : Ink.fs-body;
                 font-weight: 600;
                 color: root.fg;
                 vertical-alignment: center;
@@ -74,11 +80,13 @@ export component InkButton inherits Rectangle {
         }
     }
 
+    // Hovered also when disabled: the tip says why.
     ta := TouchArea {
-        enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.clicked();
+            if root.enabled {
+                root.clicked();
+            }
         }
     }
 
@@ -95,6 +103,14 @@ export component InkButton inherits Rectangle {
             return reject;
         }
     }
+
+    InkTipZone {
+        wanted: (ta.has-hover || keys.has-focus) && !ta.pressed;
+        text: root.tip != "" ? root.tip
+            : root.keys.length > 0 || (!root.enabled && root.disabled-reason != "") ? root.text : "";
+        keys: root.keys;
+        sub: root.enabled ? "" : root.disabled-reason;
+    }
 }
 
 /// An icon alone. `label` says what it does (screen readers, tooltips).
@@ -108,6 +124,10 @@ export component InkIconButton inherits Rectangle {
     in property <length> size: 28px;
     /// Drawn in this color instead of the dim text color (a warning, an error).
     in property <color> tint: transparent;
+    /// The tip shows `label`, these keys (one chip each) and, disabled, why.
+    in property <[string]> keys;
+    in property <string> disabled-reason;
+    in property <InkTipSide> tip-side: InkTipSide.below;
     callback clicked;
 
     width: root.size;
@@ -140,11 +160,13 @@ export component InkIconButton inherits Rectangle {
         }
     }
 
+    // Hovered also when disabled: the tip says why.
     ta := TouchArea {
-        enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.clicked();
+            if root.enabled {
+                root.clicked();
+            }
         }
     }
 
@@ -161,6 +183,14 @@ export component InkIconButton inherits Rectangle {
             return reject;
         }
     }
+
+    InkTipZone {
+        wanted: (ta.has-hover || keys.has-focus) && !ta.pressed;
+        text: root.label;
+        keys: root.keys;
+        sub: root.enabled ? "" : root.disabled-reason;
+        side: root.tip-side;
+    }
 }
 
 /// A tool of a tool bar (annotating): an icon, the active one marked, a
@@ -171,6 +201,9 @@ export component InkToolButton inherits Rectangle {
     in property <bool> active: false;
     in property <bool> enabled: true;
     in property <bool> is-new: false;
+    /// The tip shows `label`, these keys and, disabled, why.
+    in property <[string]> keys;
+    in property <string> disabled-reason;
     callback clicked;
 
     width: 32px;
@@ -208,17 +241,26 @@ export component InkToolButton inherits Rectangle {
         background: Ink.new;
         new-text := Text {
             text: "NEW";
-            font-size: 7.5px;
+            font-size: 8px;
             font-weight: 700;
             color: Ink.on-new;
         }
     }
 
+    // Hovered also when disabled: the tip says why.
     ta := TouchArea {
-        enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.clicked();
+            if root.enabled {
+                root.clicked();
+            }
         }
+    }
+
+    InkTipZone {
+        wanted: ta.has-hover && !ta.pressed;
+        text: root.label;
+        keys: root.keys;
+        sub: root.enabled ? "" : root.disabled-reason;
     }
 }

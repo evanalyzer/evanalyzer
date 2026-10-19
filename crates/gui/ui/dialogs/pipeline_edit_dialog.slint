@@ -56,14 +56,14 @@ component SourceOption inherits Rectangle {
             spacing: 2px;
             Text {
                 text: label;
-                font-size: 12px;
+                font-size: Ink.fs-body;
                 font-weight: selected ? 600 : 400;
                 color: selected ? Ink.text : Ink.text-dim;
             }
 
             Text {
                 text: description;
-                font-size: 10px;
+                font-size: Ink.fs-caption;
                 color: Ink.text-mute;
                 overflow: elide;
             }
@@ -89,7 +89,7 @@ component LabeledInput inherits VerticalLayout {
     spacing: 5px;
     Text {
         text: label;
-        font-size: 11px;
+        font-size: Ink.fs-secondary;
         color: Ink.text-dim;
     }
 
@@ -97,7 +97,7 @@ component LabeledInput inherits VerticalLayout {
         height: 30px;
         text: value;
         placeholder-text: placeholder;
-        font-size: 12px;
+        font-size: Ink.fs-body;
         edited(t) => {
             root.edited(t);
         }
@@ -131,7 +131,7 @@ export component PipelineEditDialog inherits InkDialog {
         spacing: 8px;
         Text {
             text: "Image source";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-dim;
         }
 
@@ -159,7 +159,7 @@ export component PipelineEditDialog inherits InkDialog {
                 alignment: start;
                 Text {
                     text: "Channel";
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-dim;
                     vertical-alignment: center;
                     width: 52px;
@@ -209,7 +209,7 @@ export component PipelineEditDialog inherits InkDialog {
                 alignment: start;
                 Text {
                     text: "Slot";
-                    font-size: 11px;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-dim;
                     vertical-alignment: center;
                     width: 30px;
@@ -258,7 +258,7 @@ export component PipelineDeleteConfirmDialog inherits InkDialog {
 
     Text {
         text: "\"" + PipelineDeleteConfirmState.pipeline-name + "\" and all its steps will be permanently removed.";
-        font-size: 13px;
+        font-size: Ink.fs-heading;
         color: Ink.text;
         wrap: word-wrap;
     }

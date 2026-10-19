@@ -2,6 +2,7 @@
 // color swatches, a key of the keyboard, a state dot.
 
 import { Ink } from "palette.slint";
+import { InkTipZone } from "tooltip.slint";
 import { InkIcons } from "icons.slint";
 
 export enum InkTone { neutral, info, ok, warn, err }
@@ -58,7 +59,7 @@ export component InkChip inherits Rectangle {
             }
             label := Text {
                 text: root.text;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 font-weight: 500;
                 font-family: root.mono ? Ink.font-mono : Ink.font-sans;
                 color: Ink.text;
@@ -87,6 +88,12 @@ export component InkChip inherits Rectangle {
                         clicked => {
                             root.remove();
                         }
+                    }
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: x-ta.has-hover && !x-ta.pressed;
+                        text: "Remove";
                     }
                 }
             }
@@ -121,7 +128,7 @@ export component InkBadge inherits Rectangle {
             : Ink.raised;
         label := Text {
             text: root.text;
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
             font-weight: 600;
             font-family: Ink.font-mono;
             color: root.strong ? Ink.panel : root.tone == InkTone.neutral ? Ink.text-dim : root.tone-color;
@@ -194,7 +201,7 @@ export component InkKbd inherits Rectangle {
         border-color: Ink.border;
         label := Text {
             text: root.text;
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
             font-family: Ink.font-mono;
             color: Ink.text-dim;
         }

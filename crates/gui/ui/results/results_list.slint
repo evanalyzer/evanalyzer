@@ -198,7 +198,7 @@ export component ResultsListView inherits Rectangle {
                             text: ResultsState.split ? "" : ResultsState.list-group-by-summary
                                 + (ResultsState.list-class-summary != "" ? " · " + ResultsState.list-class-summary : "")
                                 + (ResultsState.list-image-summary != "" ? " · " + ResultsState.list-image-summary : "");
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                             font-weight: 600;
                             color: Ink.text;
                             vertical-alignment: center;
@@ -213,17 +213,18 @@ export component ResultsListView inherits Rectangle {
                             icon: InkIcons.caret-left;
                             label: "Previous page";
                             enabled: ResultsState.list-page-number > 1;
+                            disabled-reason: "The first page";
                             clicked => { ResultsState.list-prev-page(); }
                         }
                         Text {
                             text: ResultsState.list-row-count + (ResultsState.list-row-count == 1 ? " row" : " rows");
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             color: Ink.text-mute;
                             vertical-alignment: center;
                         }
                         Text {
                             text: "Page " + ResultsState.list-page-number;
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             font-family: Ink.font-mono;
                             color: Ink.text-dim;
                             vertical-alignment: center;
@@ -234,6 +235,7 @@ export component ResultsListView inherits Rectangle {
                             icon: InkIcons.caret-right;
                             label: "Next page";
                             enabled: ResultsState.list-has-next-page;
+                            disabled-reason: "The last page";
                             clicked => { ResultsState.list-next-page(); }
                         }
                     }
@@ -277,7 +279,7 @@ export component ResultsListView inherits Rectangle {
                                     Text {
                                         text: header;
                                         width: ResultsState.list-column-widths[idx] * 1px;
-                                        font-size: Ink.fs-sm;
+                                        font-size: Ink.fs-secondary;
                                         font-weight: 600;
                                         color: Ink.text-dim;
                                         overflow: elide;
@@ -395,7 +397,7 @@ export component ResultsListView inherits Rectangle {
                                             x: c-index == row.class-column ? 14px : 0px;
                                             text: cell;
                                             width: ResultsState.list-column-widths[c-index] * 1px - self.x;
-                                            font-size: Ink.fs-md;
+                                            font-size: Ink.fs-body;
                                             font-family: Ink.font-mono;
                                             color: row.failed ? Ink.warn : Ink.text;
                                             overflow: elide;
@@ -436,7 +438,7 @@ export component ResultsListView inherits Rectangle {
                     if ResultsState.list-rows.length == 0: Rectangle {
                         Text {
                             text: "No objects match the current filters";
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                             color: Ink.text-mute;
                             horizontal-alignment: center;
                             vertical-alignment: center;

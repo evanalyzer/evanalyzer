@@ -34,7 +34,7 @@ global TableCols {
 
 // A cell of the objects table: a mono value, right aligned.
 component NumberCell inherits Text {
-    font-size: Ink.fs-sm;
+    font-size: Ink.fs-secondary;
     font-family: Ink.font-mono;
     color: Ink.text-dim;
     horizontal-alignment: right;
@@ -44,12 +44,18 @@ component NumberCell inherits Text {
 
 // The head of a column of the objects table.
 component HeadCell inherits Text {
-    font-size: Ink.fs-xs;
+    font-size: Ink.fs-caption;
     font-weight: 600;
     letter-spacing: 0.6px;
     color: Ink.text-mute;
     vertical-alignment: center;
     overflow: elide;
+}
+
+// Where the list's selected row is (its top, window coordinates): the
+// details card beside the panel goes level with it.
+export global ObjectDetailsPlace {
+    in-out property <length> row-y;
 }
 
 // What can be done to the selected object, in the list's and the table's
@@ -152,7 +158,7 @@ component ObjectRow inherits Rectangle {
             Text {
                 width: TableCols.id;
                 text: root.data.label_name;
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 font-family: Ink.font-mono;
                 color: Ink.text;
                 vertical-alignment: center;
@@ -173,14 +179,14 @@ component ObjectRow inherits Rectangle {
                 Text {
                     horizontal-stretch: 1;
                     text: root.data.class_names.length > 0 ? root.data.class_names[0] : "Unclassified";
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     color: root.data.class_names.length > 0 ? Ink.text : Ink.text-mute;
                     vertical-alignment: center;
                     overflow: elide;
                 }
                 Text {
                     text: root.data.class_names.length > 1 ? "+" + (root.data.class_names.length - 1) : "";
-                    font-size: Ink.fs-xs;
+                    font-size: Ink.fs-caption;
                     color: Ink.text-mute;
                     vertical-alignment: center;
                 }
@@ -212,6 +218,15 @@ export component ObjectListPanel inherits Rectangle {
 
     property <length> row-h: root.table ? 28px : Ink.row-h;
     property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
+    property <bool> folded: LayoutState.objects-folded && !root.table;
+    // The selected object's row in the list shown (filtered), and its top
+    // in the window - kept inside the list's view.
+    property <int> sel-row: -1;
+    property <length> sel-row-y: root.absolute-position.y + list-area.y
+        + clamp(root.sel-row * root.row-h + list.content-y, 0px, max(0px, list-area.height - root.row-h));
+    changed sel-row-y => {
+        ObjectDetailsPlace.row-y = self.sel-row-y;
+    }
     // The class filtered by, from the classes list.
     property <string> filter-class-name;
     property <color> filter-class-color;
@@ -250,6 +265,13 @@ export component ObjectListPanel inherits Rectangle {
             subtitle: root.table ? ImageMetaData.image_name : "";
             count: ObjectListState.object_list.length;
             closable: root.table;
+            // The list folds to its head (a click on the title).
+            foldable: !root.table;
+            folded: root.folded;
+            fold-toggled => {
+                LayoutState.objects-folded = !LayoutState.objects-folded;
+                LayoutState.panels-changed();
+            }
             has-more: true;
             close => {
                 LayoutState.objects-open = false;
@@ -260,7 +282,7 @@ export component ObjectListPanel inherits Rectangle {
         }
 
         // The list: room for the filter (below), a row of its own.
-        if !root.table: Rectangle {
+        if !root.table && !root.folded: Rectangle {
             height: root.filter-row-h;
         }
 
@@ -305,9 +327,11 @@ export component ObjectListPanel inherits Rectangle {
             InkDivider { }
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-            min-height: 90px;
+        list-area := Rectangle {
+            vertical-stretch: root.folded ? 0 : 1;
+            min-height: root.folded ? 0px : 90px;
+            max-height: root.folded ? 0px : 100000px;
+            visible: !root.folded;
 
             // Follow a selection made on the image.
             property <int> scroll-index: ObjectListState.scroll_to_object_index;
@@ -323,11 +347,23 @@ export component ObjectListPanel inherits Rectangle {
             list := ListView {
                 x: root.table ? 0px : 4px;
                 width: parent.width - (root.table ? 0px : 8px);
-                for data in ObjectListState.object_list: ObjectRow {
+                for data[i] in ObjectListState.object_list: ObjectRow {
                     height: root.row-h;
                     data: data;
                     table: root.table;
                     selected: root.sel.id == data.id;
+                    // Where the selected row is: the details card goes level
+                    // with it.
+                    init => {
+                        if self.selected {
+                            root.sel-row = i;
+                        }
+                    }
+                    changed selected => {
+                        if self.selected {
+                            root.sel-row = i;
+                        }
+                    }
                     clicked => {
                         if data.id == root.sel.id {
                             root.unselect();
@@ -375,7 +411,7 @@ export component ObjectListPanel inherits Rectangle {
 
         // -- The list: the selected object's line; its details are in the
         // card beside the panel --
-        if !root.table && root.sel.id != 0: VerticalLayout {
+        if !root.table && !root.folded && root.sel.id != 0: VerticalLayout {
             InkDivider { }
             HorizontalLayout {
                 padding-left: 12px;
@@ -385,7 +421,7 @@ export component ObjectListPanel inherits Rectangle {
                 spacing: 8px;
                 Text {
                     text: root.sel.label_name;
-                    font-size: Ink.fs-md;
+                    font-size: Ink.fs-body;
                     font-weight: 600;
                     color: Ink.text;
                     vertical-alignment: center;
@@ -396,7 +432,7 @@ export component ObjectListPanel inherits Rectangle {
                         + (root.sel.display_name != "" && root.sel.area > 0 ? " · " : "")
                         + (root.sel.area > 0 ? root.sel.area + " px²" : "");
                     font-family: Ink.font-mono;
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-mute;
                     vertical-alignment: center;
                     overflow: elide;
@@ -489,7 +525,7 @@ export component ObjectListPanel inherits Rectangle {
 
     // -- Filter: a class, a search - one, in the table's head (design K,
     // left of ⋯ ✕) or in the list's row below its head --
-    ObjectFilter {
+    if !root.folded: ObjectFilter {
         x: root.table ? root.width - self.width - root.head-buttons-w : Ink.pad-panel;
         y: root.table ? (Ink.head-h - self.height) / 2 : Ink.head-h;
         width: root.table ? root.table-filter-w : root.width - 2 * Ink.pad-panel;

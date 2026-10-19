@@ -16,7 +16,7 @@ import { InkMultiSelect } from "../ink/ink.slint";
 component ChartErrorOrEmpty inherits Text {
     text: ResultsState.chart-error;
     color: Ink.text-mute;
-    font-size: 12px;
+    font-size: Ink.fs-body;
     horizontal-alignment: center;
     vertical-alignment: center;
     wrap: word-wrap;
@@ -31,7 +31,7 @@ component HistogramChart inherits Rectangle {
 
         Text {
             text: ResultsState.chart-histogram-object-count + " objects";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
         }
 
@@ -54,7 +54,7 @@ component HistogramChart inherits Rectangle {
             if ResultsState.chart-histogram-bins.length == 0: Text {
                 text: "No data for the selected filters";
                 color: Ink.text-mute;
-                font-size: 12px;
+                font-size: Ink.fs-body;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -63,16 +63,16 @@ component HistogramChart inherits Rectangle {
         HorizontalLayout {
             Text {
                 text: ResultsState.chart-histogram-min-label;
-                font-size: 10px;
-                color: Ink.text-faint;
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
             }
             Rectangle {
                 horizontal-stretch: 1;
             }
             Text {
                 text: ResultsState.chart-histogram-max-label;
-                font-size: 10px;
-                color: Ink.text-faint;
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
             }
         }
     }
@@ -87,7 +87,7 @@ component ScatterChart inherits Rectangle {
 
         Text {
             text: ResultsState.chart-scatter-shown-count + " of " + ResultsState.chart-scatter-total-count + " objects plotted";
-            font-size: 11px;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
         }
 
@@ -121,7 +121,7 @@ component ScatterChart inherits Rectangle {
             if ResultsState.chart-scatter-points.length == 0: Text {
                 text: "No data for the selected filters";
                 color: Ink.text-mute;
-                font-size: 12px;
+                font-size: Ink.fs-body;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -130,31 +130,31 @@ component ScatterChart inherits Rectangle {
                 x: 4px;
                 y: 2px;
                 text: ResultsState.chart-scatter-y-max-label;
-                font-size: 9px;
-                color: Ink.text-faint;
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
             }
             Text {
                 x: 4px;
                 y: parent.height - self.height - 2px;
                 text: ResultsState.chart-scatter-y-min-label;
-                font-size: 9px;
-                color: Ink.text-faint;
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
             }
         }
 
         HorizontalLayout {
             Text {
                 text: ResultsState.chart-scatter-x-min-label;
-                font-size: 10px;
-                color: Ink.text-faint;
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
             }
             Rectangle {
                 horizontal-stretch: 1;
             }
             Text {
                 text: ResultsState.chart-scatter-x-max-label;
-                font-size: 10px;
-                color: Ink.text-faint;
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
             }
         }
     }
@@ -166,7 +166,7 @@ component BoxplotChart inherits Rectangle {
     if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length == 0: Text {
         text: "No data for the selected filters";
         color: Ink.text-mute;
-        font-size: 12px;
+        font-size: Ink.fs-body;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -240,15 +240,15 @@ component BoxplotChart inherits Rectangle {
 
                 Text {
                     text: box.label;
-                    font-size: 9.5px;
+                    font-size: Ink.fs-caption;
                     color: Ink.text-mute;
                     horizontal-alignment: center;
                     overflow: elide;
                 }
                 Text {
                     text: box.object-count + " objects";
-                    font-size: 8.5px;
-                    color: Ink.text-faint;
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-mute;
                     horizontal-alignment: center;
                 }
             }
@@ -279,13 +279,13 @@ component ChartTile inherits Rectangle {
         spacing: 2px;
         Text {
             text: root.glyph;
-            font-size: 15px;
+            font-size: Ink.fs-title;
             color: root.selected ? Ink.focus : Ink.text-dim;
             horizontal-alignment: center;
         }
         Text {
             text: root.text;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             font-weight: root.selected ? 600 : 400;
             color: Ink.text;
             horizontal-alignment: center;
@@ -390,7 +390,7 @@ export component ResultsChartsView inherits Rectangle {
                         spacing: 4px;
                         Text {
                             text: "A box per";
-                            font-size: Ink.fs-xs;
+                            font-size: Ink.fs-caption;
                             color: Ink.text-dim;
                         }
                         ComboBox {
@@ -423,7 +423,7 @@ export component ResultsChartsView inherits Rectangle {
                         Text {
                             horizontal-stretch: 1;
                             text: "Bins";
-                            font-size: Ink.fs-sm;
+                            font-size: Ink.fs-secondary;
                             color: Ink.text;
                             vertical-alignment: center;
                         }

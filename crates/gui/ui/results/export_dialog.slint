@@ -38,7 +38,7 @@ component RangeFields inherits HorizontalLayout {
         text: "to";
         vertical-alignment: center;
         color: Ink.text-mute;
-        font-size: Ink.fs-sm;
+        font-size: Ink.fs-secondary;
     }
 
     LineEdit {
@@ -164,7 +164,7 @@ export component ExportDialog inherits InkDialog {
                             text: ExportDialogState.output-dir == "" ? "Choose a folder…" : ExportDialogState.output-dir;
                             color: ExportDialogState.output-dir == "" ? Ink.text-faint : Ink.text;
                             vertical-alignment: center;
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                             overflow: elide;
                         }
                     }
@@ -173,6 +173,7 @@ export component ExportDialog inherits InkDialog {
                         icon: InkIcons.open;
                         label: "Choose the folder";
                         enabled: !ExportDialogState.is-exporting;
+                        disabled-reason: "Exporting…";
                         clicked => {
                             ExportDialogState.pick-output-dir();
                         }
@@ -185,7 +186,7 @@ export component ExportDialog inherits InkDialog {
                 alignment: start;
                 Text {
                     text: root.more ? "Fewer options ‹" : "More options ›";
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     color: more-ta.has-hover ? Ink.text : Ink.focus;
                     more-ta := TouchArea {
                         mouse-cursor: pointer;
@@ -390,7 +391,7 @@ export component ExportDialog inherits InkDialog {
                 Text {
                     text: ExportDialogState.has-error ? "Export failed: " + ExportDialogState.error-message : ExportDialogState.done ? "Export complete." : ExportDialogState.progress-message;
                     color: ExportDialogState.has-error ? Ink.err : (ExportDialogState.done ? Ink.ok : Ink.text);
-                    font-size: Ink.fs-md;
+                    font-size: Ink.fs-body;
                     wrap: word-wrap;
                 }
 
@@ -405,6 +406,7 @@ export component ExportDialog inherits InkDialog {
         InkButton {
             text: "Close";
             enabled: !ExportDialogState.is-exporting;
+            disabled-reason: "Wait for the export to finish";
             clicked => {
                 root.close();
             }
@@ -421,6 +423,7 @@ export component ExportDialog inherits InkDialog {
             kind: InkButtonKind.primary;
             text: ExportDialogState.is-exporting ? "Exporting…" : "Start export";
             enabled: !ExportDialogState.is-exporting && ExportDialogState.output-dir != "";
+            disabled-reason: ExportDialogState.is-exporting ? "Exporting…" : "Choose a folder first";
             clicked => {
                 ExportDialogState.start-clicked();
             }

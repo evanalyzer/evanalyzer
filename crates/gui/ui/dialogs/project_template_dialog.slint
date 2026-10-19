@@ -29,7 +29,7 @@ component MetaLine inherits HorizontalLayout {
     Text {
         horizontal-stretch: 1;
         text: root.value;
-        font-size: Ink.fs-sm;
+        font-size: Ink.fs-secondary;
         color: Ink.text-dim;
         vertical-alignment: center;
         overflow: elide;
@@ -75,7 +75,7 @@ component ProjectTemplateDetailPane inherits Rectangle {
         if root.tmpl.short-description != "": Text {
             text: root.tmpl.short-description;
             color: Ink.text-dim;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             wrap: word-wrap;
         }
 
@@ -86,7 +86,7 @@ component ProjectTemplateDetailPane inherits Rectangle {
                 Text {
                     text: root.tmpl.description;
                     color: Ink.text-dim;
-                    font-size: Ink.fs-md;
+                    font-size: Ink.fs-body;
                     wrap: word-wrap;
                 }
             }
@@ -222,7 +222,7 @@ export component ProjectTemplateDialog inherits InkDialog {
                             Text {
                                 text: ProjectTemplateState.filters-active ? "No template matches" : "No project templates yet";
                                 color: Ink.text-dim;
-                                font-size: Ink.fs-md;
+                                font-size: Ink.fs-body;
                                 horizontal-alignment: center;
                                 wrap: word-wrap;
                             }
@@ -286,6 +286,7 @@ export component ProjectTemplateDialog inherits InkDialog {
                         kind: InkButtonKind.primary;
                         text: "Use template";
                         enabled: ProjectTemplateState.selected-id != -1;
+                        disabled-reason: "Pick a template first";
                         clicked => {
                             if ProjectTemplateState.selected-id != -1 {
                                 ProjectTemplateState.confirm(ProjectTemplateState.selected-id);

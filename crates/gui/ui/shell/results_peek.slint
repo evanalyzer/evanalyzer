@@ -30,7 +30,7 @@ export component ResultsPeek inherits Rectangle {
 
         Text {
             text: "RESULTS";
-            font-size: Ink.fs-xs;
+            font-size: Ink.fs-caption;
             font-weight: 600;
             letter-spacing: 0.6px;
             color: Ink.text-mute;
@@ -38,7 +38,7 @@ export component ResultsPeek inherits Rectangle {
         }
         Text {
             text: ResultsState.peek-label;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-family: Ink.font-mono;
             color: Ink.text;
             vertical-alignment: center;
@@ -49,6 +49,7 @@ export component ResultsPeek inherits Rectangle {
             icon: InkIcons.caret-left;
             label: "The previous row's object";
             enabled: ResultsState.list-selected-row > 0;
+            disabled-reason: "The first row";
             clicked => {
                 ResultsState.list-row-clicked(ResultsState.list-selected-row - 1);
             }
@@ -59,6 +60,7 @@ export component ResultsPeek inherits Rectangle {
             icon: InkIcons.caret-right;
             label: "The next row's object";
             enabled: ResultsState.list-selected-row >= 0 && ResultsState.list-selected-row < ResultsState.list-rows.length - 1;
+            disabled-reason: "The last row";
             clicked => {
                 ResultsState.list-row-clicked(ResultsState.list-selected-row + 1);
             }

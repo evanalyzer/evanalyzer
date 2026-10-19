@@ -35,7 +35,7 @@ export component DeleteManualAnnotationsDialog inherits InkDialog {
         if AnnotationState.manual-classes.length == 0: Text {
             text: root.all-images ? "There are no manual annotations." : "No manual annotations on this image.";
             color: Ink.text-mute;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
         }
         for row[i] in AnnotationState.manual-classes: InkCheckbox {
             text: row.name + " · " + row.count;
@@ -51,7 +51,7 @@ export component DeleteManualAnnotationsDialog inherits InkDialog {
             text: AnnotationState.delete-summary;
             wrap: word-wrap;
             color: Ink.text;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
         }
     }
 
@@ -66,6 +66,7 @@ export component DeleteManualAnnotationsDialog inherits InkDialog {
             kind: InkButtonKind.danger;
             text: "Delete";
             enabled: AnnotationState.delete-count > 0;
+            disabled-reason: "No manual annotations match";
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
                 AnnotationState.delete-manual(root.all-images);

@@ -62,7 +62,7 @@ export component InkCheckbox inherits Rectangle {
             x: root.text-x;
             height: parent.height;
             text: root.text;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text;
             vertical-alignment: center;
             accessible-role: none;
@@ -125,7 +125,7 @@ export component InkSwitch inherits Rectangle {
             width: parent.width - 34px;
             height: parent.height;
             text: root.text;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: Ink.text;
             vertical-alignment: center;
             overflow: elide;
@@ -219,7 +219,7 @@ export component InkSegmented inherits Rectangle {
                 opacity: i == root.disabled-index ? 0.4 : 1.0;
                 seg-text := Text {
                     text: entry;
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     font-weight: i == root.selected ? 600 : 400;
                     color: i == root.selected ? Ink.text : Ink.text-dim;
                 }
@@ -285,7 +285,7 @@ export component InkModeTab inherits Rectangle {
             spacing: 6px;
             label := Text {
                 text: root.text;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 font-weight: root.active ? 600 : 500;
                 color: root.active ? Ink.text : Ink.text-dim;
                 vertical-alignment: center;
@@ -295,7 +295,7 @@ export component InkModeTab inherits Rectangle {
                 visible: root.count > 0;
                 width: root.count > 0 ? self.preferred-width : 0px;
                 text: root.count;
-                font-size: Ink.fs-xs;
+                font-size: Ink.fs-caption;
                 font-weight: 600;
                 font-family: Ink.font-mono;
                 color: root.warn ? Ink.warn : Ink.text-mute;
@@ -331,7 +331,7 @@ export component InkTab inherits Rectangle {
         Text {
             text: root.text;
             vertical-alignment: center;
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             font-weight: root.active ? 600 : 400;
             color: root.active ? Ink.text : ta.has-hover ? Ink.text : Ink.text-dim;
         }
@@ -339,7 +339,7 @@ export component InkTab inherits Rectangle {
         if root.note != "": Text {
             text: root.note;
             vertical-alignment: center;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.new;
         }
     }

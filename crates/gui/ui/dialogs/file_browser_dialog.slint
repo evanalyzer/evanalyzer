@@ -36,7 +36,7 @@ component PlaceRow inherits Rectangle {
         }
         Text {
             text: root.place.name;
-            font-size: 13px;
+            font-size: Ink.fs-heading;
             font-weight: root.current ? 600 : 400;
             color: root.current ? Ink.focus : Ink.text;
             vertical-alignment: center;
@@ -82,7 +82,7 @@ component EntryRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.entry.name;
-            font-size: 13px;
+            font-size: Ink.fs-heading;
             font-weight: root.entry.is-dir ? 500 : 400;
             color: Ink.text;
             vertical-alignment: center;
@@ -91,7 +91,7 @@ component EntryRow inherits Rectangle {
         Text {
             width: 90px;
             text: root.entry.size;
-            font-size: 12px;
+            font-size: Ink.fs-body;
             font-family: Ink.font-mono;
             color: Ink.text-dim;
             horizontal-alignment: right;
@@ -100,7 +100,7 @@ component EntryRow inherits Rectangle {
         Text {
             width: 140px;
             text: root.entry.modified;
-            font-size: 12px;
+            font-size: Ink.fs-body;
             color: Ink.text-dim;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -177,7 +177,7 @@ export component FileBrowserDialog inherits InkDialog {
                         spacing: 2px;
                         Text {
                             text: FileBrowserState.remote ? "SERVER LOCATIONS" : "PLACES";
-                            font-size: 10px;
+                            font-size: Ink.fs-caption;
                             font-weight: 700;
                             letter-spacing: 0.6px;
                             color: Ink.text-mute;
@@ -206,6 +206,7 @@ export component FileBrowserDialog inherits InkDialog {
                             label: "Up";
                             icon: @image-url("../icons/regular-white/arrow-up.svg");
                             enabled: FileBrowserState.crumbs.length > 1;
+                            disabled-reason: "Already at the top";
                             clicked => { FileBrowserState.go-up(); }
                         }
                         InkIconButton {
@@ -252,7 +253,7 @@ export component FileBrowserDialog inherits InkDialog {
                                                 padding-right: 6px;
                                                 Text {
                                                     text: crumb.name;
-                                                    font-size: 12.5px;
+                                                    font-size: Ink.fs-body;
                                                     font-weight: i == FileBrowserState.crumbs.length - 1 ? 600 : 400;
                                                     color: i == FileBrowserState.crumbs.length - 1 ? Ink.text : Ink.text-dim;
                                                     vertical-alignment: center;
@@ -329,9 +330,9 @@ export component FileBrowserDialog inherits InkDialog {
                                     padding-left: 42px;
                                     padding-right: 14px;
                                     spacing: 12px;
-                                    Text { horizontal-stretch: 1; text: "Name"; font-size: 11px; font-weight: 600; color: Ink.text-mute; vertical-alignment: center; }
-                                    Text { width: 90px; text: "Size"; font-size: 11px; font-weight: 600; color: Ink.text-mute; horizontal-alignment: right; vertical-alignment: center; }
-                                    Text { width: 140px; text: "Modified"; font-size: 11px; font-weight: 600; color: Ink.text-mute; horizontal-alignment: right; vertical-alignment: center; }
+                                    Text { horizontal-stretch: 1; text: "Name"; font-size: Ink.fs-secondary; font-weight: 600; color: Ink.text-mute; vertical-alignment: center; }
+                                    Text { width: 90px; text: "Size"; font-size: Ink.fs-secondary; font-weight: 600; color: Ink.text-mute; horizontal-alignment: right; vertical-alignment: center; }
+                                    Text { width: 140px; text: "Modified"; font-size: Ink.fs-secondary; font-weight: 600; color: Ink.text-mute; horizontal-alignment: right; vertical-alignment: center; }
                                 }
                             }
 
@@ -380,7 +381,7 @@ export component FileBrowserDialog inherits InkDialog {
                                     : FileBrowserState.error != "" ? FileBrowserState.error
                                     : FileBrowserState.search != "" ? "Nothing matches “" + FileBrowserState.search + "”"
                                     : "This folder is empty";
-                                font-size: 13px;
+                                font-size: Ink.fs-heading;
                                 color: FileBrowserState.error != "" ? Ink.err : Ink.text-mute;
                                 horizontal-alignment: center;
                                 wrap: word-wrap;
@@ -438,7 +439,7 @@ export component FileBrowserDialog inherits InkDialog {
                     Text {
                         horizontal-stretch: 1;
                         text: FileBrowserState.mode != FileBrowserMode.save-file ? FileBrowserState.status : "";
-                        font-size: Ink.fs-sm;
+                        font-size: Ink.fs-secondary;
                         color: Ink.text-dim;
                         vertical-alignment: center;
                         overflow: elide;
@@ -475,7 +476,7 @@ export component FileBrowserDialog inherits InkDialog {
                     Text {
                         horizontal-stretch: 1;
                         text: FileBrowserState.error != "" && FileBrowserState.entries.length > 0 ? FileBrowserState.error : "";
-                        font-size: 12px;
+                        font-size: Ink.fs-body;
                         color: Ink.err;
                         vertical-alignment: center;
                         horizontal-alignment: right;
@@ -490,6 +491,7 @@ export component FileBrowserDialog inherits InkDialog {
                         kind: InkButtonKind.primary;
                         text: FileBrowserState.accept-label;
                         enabled: FileBrowserState.can-accept;
+                        disabled-reason: "Pick a file or folder first";
                         clicked => { FileBrowserState.accept(); }
                     }
                 }
@@ -507,7 +509,7 @@ export component FileBrowserDialog inherits InkDialog {
 
             Text {
                 text: "“" + FileBrowserState.overwrite-name + "” already exists in this folder. Replacing it overwrites its contents.";
-                font-size: 13px;
+                font-size: Ink.fs-heading;
                 color: Ink.text;
                 wrap: word-wrap;
             }

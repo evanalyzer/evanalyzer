@@ -8,17 +8,28 @@ export global LayoutState {
     in-out property <WorkspaceMode> mode: WorkspaceMode.pipelines;
 
     // -- Panels over the image (Images and Pipelines) --
+    // Shown (EVA › View): the left panel (Steps, Images), and in the right
+    // column Classes, Image (channels, histogram), Objects.
+    in-out property <bool> steps-open: true;
     in-out property <bool> classes-open: true;
-    in-out property <bool> objects-open: false;
+    in-out property <bool> image-open: true;
+    in-out property <bool> objects-open: true;
+    /// Folded to their head (a click on the title): Objects then takes the
+    /// column's rest.
+    in-out property <bool> classes-folded: false;
+    in-out property <bool> image-folded: false;
+    in-out property <bool> objects-folded: false;
+    /// Tab: every panel away (the Z / T bar and Tuning stay).
+    in-out property <bool> panels-hidden: false;
     /// The objects as a wide table at the bottom (design K), not as a list
     /// on the right.
     in-out property <bool> objects-as-table: false;
-    /// The image panel: channels, overlay, histogram.
-    in-out property <bool> image-open: false;
-    /// Pinned: it stays open when another panel opens.
-    in-out property <bool> image-pinned: false;
+    /// A panel shown / hidden or folded, the bar folded, the pipelines list
+    /// opened: Rust keeps it (per user).
+    callback panels-changed();
 
-    /// The Z / T bar at the bottom of the image is folded to a pill.
+    /// The bar at the bottom of the image (objects, Z, T) is folded to a
+    /// pill.
     in-out property <bool> stack-bar-folded: false;
     /// The Pipelines panel shows the list of pipelines above the steps.
     in-out property <bool> pipelines-list-open: false;
@@ -29,9 +40,6 @@ export global LayoutState {
     /// The images as a plate of wells, not as a list.
     in-out property <bool> images-as-plate: false;
 
-    /// The running analysis' card is put away (the bottom bar still shows
-    /// its progress; a click there shows the card again).
-    in-out property <bool> analysis-card-hidden: false;
 
     /// Annotate mode: the tool bar for drawing objects is shown.
     in-out property <bool> annotate: false;

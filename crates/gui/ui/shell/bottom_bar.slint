@@ -2,7 +2,7 @@
 // Pipelines, Results) and the status - where the work runs, what the
 // viewport does, objects, zoom.
 
-import { Ink, InkIcons, InkTone, InkModeTab, InkStatusItem, InkBarSeparator } from "../ink/ink.slint";
+import { Ink, InkIcons, InkTone, InkModeTab, InkStatusItem, InkBarSeparator, InkKbd } from "../ink/ink.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ConnectionState, ImagePixelInfo } from "../api/state.slint";
 import { ViewportObjectState, ViewportState } from "../api/viewport.slint";
@@ -10,10 +10,16 @@ import { ClassificationState } from "../api/classification.slint";
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { StartState } from "../api/start.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
-import { AnalysisText } from "../dialogs/pipeline_running_dialog.slint";
+
+component HintText inherits Text {
+    font-size: Ink.fs-secondary;
+    color: Ink.text-dim;
+    vertical-alignment: center;
+}
 
 export component BottomBar inherits Rectangle {
     property <bool> secure: ConnectionState.encrypted && ConnectionState.verified;
+    property <bool> running: PipelineRunningState.active && !PipelineRunningState.done;
 
     height: Ink.status-h;
     background: Ink.panel;
@@ -72,15 +78,24 @@ export component BottomBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 2px;
-                // A running analysis: a click shows / puts away its card.
-                if PipelineRunningState.active: InkStatusItem {
-                    icon: PipelineRunningState.done ? (PipelineRunningState.has-error ? InkIcons.error : InkIcons.check) : InkIcons.busy;
-                    tone: AnalysisText.tone();
-                    text: PipelineRunningState.done ? "Analysis finished" : "Analysis " + AnalysisText.percent();
-                    clickable: true;
-                    clicked => {
-                        LayoutState.analysis-card-hidden = !LayoutState.analysis-card-hidden;
-                    }
+                // A running analysis: what it's at.
+                if root.running: InkStatusItem {
+                    icon: InkIcons.busy;
+                    mono: true;
+                    text: "Analyzing"
+                        + (PipelineRunningState.last-image != "" ? " · last " + PipelineRunningState.last-image : "")
+                        + (PipelineRunningState.images-total <= 1 && PipelineRunningState.tiles-total > 0 ? " · tile " + PipelineRunningState.tiles-done + " / " + PipelineRunningState.tiles-total : "")
+                        + (PipelineRunningState.images-total > 0 ? " · image " + PipelineRunningState.images-done + " / " + PipelineRunningState.images-total : "");
+                }
+                // Idle over the image: how the panels go away.
+                if !root.running && !StartState.active && LayoutState.mode != WorkspaceMode.results && ImagePixelInfo.mouse_pos == "": HorizontalLayout {
+                    spacing: 4px;
+                    padding-right: 6px;
+                    HintText { text: "Click a panel's title to fold it ·"; }
+                    VerticalLayout { alignment: center; InkKbd { text: "Tab"; } }
+                    HintText { text: "hides all panels ·"; }
+                    VerticalLayout { alignment: center; InkKbd { text: "O"; } }
+                    HintText { text: "objects on/off"; }
                 }
 
                 // The start page: nothing open.

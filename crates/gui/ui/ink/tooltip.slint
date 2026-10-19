@@ -1,0 +1,241 @@
+// ink/tooltip.slint — tooltips: one at a time, drawn by the window's
+// `InkTipLayer` above everything. A control asks with `InkTip.request` while
+// hovered or focused and lets go with `InkTip.release`.
+//
+// It appears after 450 ms; moving on to a neighbour within 300 ms shows the
+// next one at once. 120 ms fade.
+
+import { Ink } from "palette.slint";
+
+export enum InkTipSide { below, above, right }
+
+export global InkTip {
+    // The asked-for tip: its text, keys (each its own chip), a second line
+    // (why a control is disabled), where its control is (window
+    // coordinates), on which side.
+    out property <string> text;
+    out property <[string]> keys;
+    out property <string> sub;
+    out property <length> ax;
+    out property <length> ay;
+    out property <length> aw;
+    out property <length> ah;
+    out property <InkTipSide> side;
+    // Someone wants a tip shown; its number.
+    out property <bool> pending: false;
+    out property <int> serial: 0;
+
+    /// Asks for a tip at a control; the number to `release` it with.
+    public function request(text: string, keys: [string], sub: string, x: length, y: length, w: length, h: length, side: InkTipSide) -> int {
+        root.text = text;
+        root.keys = keys;
+        root.sub = sub;
+        root.ax = x;
+        root.ay = y;
+        root.aw = w;
+        root.ah = h;
+        root.side = side;
+        root.serial += 1;
+        root.pending = true;
+        root.serial
+    }
+
+    /// Lets go of tip `serial` (a newer one stays).
+    public function release(serial: int) {
+        if serial == root.serial {
+            root.pending = false;
+        }
+    }
+}
+
+// A key of the tip: "Ctrl", "Z".
+component TipKey inherits Rectangle {
+    in property <string> text;
+    width: key.preferred-width + 8px;
+    height: 16px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: #3A3C44;
+    key := Text {
+        text: root.text;
+        font-family: Ink.font-mono;
+        font-size: Ink.fs-caption;
+        color: #C9CBD2;
+        vertical-alignment: center;
+    }
+}
+
+/// The tip itself, over the whole window: put once, last, in the main
+/// window.
+export component InkTipLayer inherits Rectangle {
+    // Shown: the tip's own copy (it stays while it fades out).
+    property <bool> shown: false;
+    // A tip was shown a moment ago: the next comes at once.
+    property <bool> warm: false;
+    property <string> text;
+    property <[string]> keys;
+    property <string> sub;
+    property <length> ax;
+    property <length> ay;
+    property <length> aw;
+    property <length> ah;
+    property <InkTipSide> side;
+    property <length> gap: 7px;
+
+    function take() {
+        root.text = InkTip.text;
+        root.keys = InkTip.keys;
+        root.sub = InkTip.sub;
+        root.ax = InkTip.ax;
+        root.ay = InkTip.ay;
+        root.aw = InkTip.aw;
+        root.ah = InkTip.ah;
+        root.side = InkTip.side;
+        root.shown = true;
+        root.warm = true;
+    }
+
+    property <int> serial: InkTip.serial;
+    changed serial => {
+        if root.warm {
+            root.take();
+        } else {
+            delay.running = false;
+            delay.running = true;
+        }
+    }
+    property <bool> pending: InkTip.pending;
+    changed pending => {
+        if !self.pending {
+            delay.running = false;
+            root.shown = false;
+            cool.running = false;
+            cool.running = true;
+        }
+    }
+
+    // A control that went away while hovered never lets go: gone after a
+    // while anyway.
+    linger := Timer {
+        interval: 8s;
+        running: root.shown;
+        triggered => {
+            root.shown = false;
+        }
+    }
+
+    delay := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if InkTip.pending {
+                root.take();
+            }
+        }
+    }
+    cool := Timer {
+        interval: 300ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if !InkTip.pending {
+                root.warm = false;
+            }
+        }
+    }
+
+    // Below (above when there's no room), or right of it; inside the window.
+    property <bool> up: root.side == InkTipSide.above
+        || (root.side == InkTipSide.below && root.ay + root.ah + root.gap + bubble.height > root.height - 4px);
+    property <length> want-x: root.side == InkTipSide.right ? root.ax + root.aw + root.gap : root.ax + root.aw / 2 - bubble.width / 2;
+    property <length> want-y: root.side == InkTipSide.right ? root.ay + root.ah / 2 - bubble.height / 2
+        : root.up ? root.ay - root.gap - bubble.height : root.ay + root.ah + root.gap;
+
+    bubble := Rectangle {
+        x: clamp(root.want-x, 4px, max(4px, root.width - self.width - 4px));
+        y: clamp(root.want-y, 4px, max(4px, root.height - self.height - 4px));
+        width: body.preferred-width;
+        height: body.preferred-height;
+        border-radius: 6px;
+        background: #1C1D22;
+        drop-shadow-blur: 18px;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-color: #00000059;
+        opacity: root.shown ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: 120ms; }
+
+        body := VerticalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 5px;
+            padding-bottom: 5px;
+            spacing: 1px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.text;
+                    font-size: Ink.fs-secondary;
+                    font-weight: 500;
+                    color: #F4F4F5;
+                    vertical-alignment: center;
+                    max-width: 360px;
+                    wrap: word-wrap;
+                }
+                if root.keys.length > 0: HorizontalLayout {
+                    spacing: 3px;
+                    alignment: end;
+                    for k in root.keys: VerticalLayout {
+                        alignment: center;
+                        TipKey {
+                            text: k;
+                        }
+                    }
+                }
+            }
+            if root.sub != "": Text {
+                text: root.sub;
+                font-size: Ink.fs-secondary;
+                color: #B4B7C0;
+                max-width: 360px;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // The small arrow towards the control.
+    Path {
+        visible: bubble.visible;
+        opacity: bubble.opacity;
+        width: root.side == InkTipSide.right ? 5px : 10px;
+        height: root.side == InkTipSide.right ? 10px : 5px;
+        x: root.side == InkTipSide.right ? bubble.x - 5px : clamp(root.ax + root.aw / 2 - 5px, bubble.x + 6px, bubble.x + bubble.width - 16px);
+        y: root.side == InkTipSide.right ? clamp(root.ay + root.ah / 2 - 5px, bubble.y + 4px, bubble.y + bubble.height - 14px)
+            : root.up ? bubble.y + bubble.height : bubble.y - 5px;
+        fill: #1C1D22;
+        viewbox-width: root.side == InkTipSide.right ? 5 : 10;
+        viewbox-height: root.side == InkTipSide.right ? 10 : 5;
+        commands: root.side == InkTipSide.right ? "M 5 0 L 0 5 L 5 10 Z" : root.up ? "M 0 0 L 10 0 L 5 5 Z" : "M 0 5 L 5 0 L 10 5 Z";
+    }
+}
+
+/// Asks for a tip over its parent while `wanted` (hovered or focused): put
+/// it last in a control, sized like it. Nothing to show: no tip.
+export component InkTipZone inherits Rectangle {
+    in property <bool> wanted;
+    in property <string> text;
+    in property <[string]> keys;
+    in property <string> sub;
+    in property <InkTipSide> side: InkTipSide.below;
+
+    property <int> serial: -1;
+    property <bool> on: root.wanted && (root.text != "" || root.sub != "");
+    changed on => {
+        if self.on {
+            root.serial = InkTip.request(root.text, root.keys, root.sub, root.absolute-position.x, root.absolute-position.y, root.width, root.height, root.side);
+        } else {
+            InkTip.release(root.serial);
+        }
+    }
+}

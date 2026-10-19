@@ -31,7 +31,7 @@ export component FocusBanner inherits Rectangle {
             Text {
                 horizontal-stretch: 1;
                 text: "Focused on “" + PipelineFocusState.focused-pipeline-name + "”";
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: Ink.text;
                 vertical-alignment: center;
                 overflow: elide;
@@ -45,7 +45,7 @@ export component FocusBanner inherits Rectangle {
                 accessible-label: "Show all";
                 show-all-text := Text {
                     text: "Show all";
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     font-weight: 600;
                     color: Ink.focus;
                 }

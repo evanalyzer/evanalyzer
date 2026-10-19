@@ -25,7 +25,7 @@ export component RunAnalysisDialog inherits InkDialog {
             spacing: 5px;
             Text {
                 text: "Job name (optional)";
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
             }
 
@@ -42,7 +42,7 @@ export component RunAnalysisDialog inherits InkDialog {
                 text: "Leave blank to auto-generate a name.";
                 wrap: word-wrap;
                 color: Ink.text-dim;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
             }
         }
 
@@ -65,7 +65,7 @@ export component RunAnalysisDialog inherits InkDialog {
                     : "Analyses every image, then runs the dataset steps.";
                 wrap: word-wrap;
                 color: Ink.text-dim;
-                font-size: 11px;
+                font-size: Ink.fs-secondary;
             }
 
             if RunAnalysisState.dataset_only: ComboBox {

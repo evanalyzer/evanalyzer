@@ -44,6 +44,11 @@ pub struct AppSettings {
     #[serde(default)]
     pub results_split: ResultsSplitSettings,
 
+    /// Which panels over the image are shown and folded (see
+    /// [`PanelSettings`]).
+    #[serde(default)]
+    pub panels: PanelSettings,
+
     /// Servers connected to from the GUI, most recent first - see
     /// [`AppSettings::remember_server`]. Kept on this computer only.
     #[serde(default)]
@@ -67,6 +72,39 @@ pub struct AppSettings {
     /// settings even when connected to a server.
     #[serde(default)]
     pub viewport: ViewportMemorySettings,
+}
+
+/// The panels over the image as the user left them: shown (EVA › View) and
+/// folded to their head, the bar at the bottom of the image folded, the
+/// pipelines list above the steps open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PanelSettings {
+    pub steps_open: bool,
+    pub classes_open: bool,
+    pub image_open: bool,
+    pub objects_open: bool,
+    pub classes_folded: bool,
+    pub image_folded: bool,
+    pub objects_folded: bool,
+    pub image_bar_folded: bool,
+    pub pipelines_list_open: bool,
+}
+
+impl Default for PanelSettings {
+    fn default() -> Self {
+        Self {
+            steps_open: true,
+            classes_open: true,
+            image_open: true,
+            objects_open: true,
+            classes_folded: false,
+            image_folded: false,
+            objects_folded: false,
+            image_bar_folded: false,
+            pipelines_list_open: false,
+        }
+    }
 }
 
 /// The results' split view: on or off, how wide the results are, and
@@ -154,10 +192,10 @@ pub struct ViewportMemorySettings {
     /// gets that RAM; they fill up again as the viewport is used.
     pub free_caches_on_analysis: bool,
 
-    /// While an analysis runs, pipelines can still be edited and the image
-    /// viewed and previewed - its progress is a card over the image. Off: a
-    /// dialog blocks the window until the analysis is done (for a computer
-    /// whose RAM the analysis needs all of).
+    /// While an analysis runs, the steps can still be edited and previewed
+    /// (the run uses a copy; edits apply to the next run). Off: the steps
+    /// start locked and no preview runs (for a computer whose RAM the
+    /// analysis needs all of) - the Steps panel can switch it during a run.
     pub edit_during_analysis: bool,
 
     /// The objects open as a table at the bottom, not as a list in the
@@ -429,6 +467,17 @@ mod tests {
             pipelines: 0,
             opened_at: 0,
         }
+    }
+
+    #[test]
+    fn panel_settings_default_to_every_panel_shown_and_open_and_old_files_get_them() {
+        let panels = PanelSettings::default();
+        assert!(panels.steps_open && panels.classes_open && panels.image_open && panels.objects_open);
+        assert!(!panels.classes_folded && !panels.image_folded && !panels.objects_folded);
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.panels, PanelSettings::default());
+        let some: PanelSettings = serde_json::from_str(r#"{"imageFolded": true}"#).unwrap();
+        assert!(some.image_folded && some.classes_open);
     }
 
     #[test]

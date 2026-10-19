@@ -14,7 +14,7 @@ import { InkPickerField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
 // the open image doesn't define.
 component ChannelLabel inherits Rectangle {
     in property <int> idx;
-    in property <length> font-size: Ink.fs-md;
+    in property <length> font-size: Ink.fs-body;
 
     for ch in ChannelState.channels: InkSwatchName {
         visible: ch.idx == root.idx;
@@ -32,7 +32,7 @@ component ChannelLabel inherits Rectangle {
 // beyond 9), scrolling once there are more than fit.
 export component ChannelPicker inherits Rectangle {
     in-out property <int> value: 0;
-    in property <length> font-size: Ink.fs-md;
+    in property <length> font-size: Ink.fs-body;
     // A narrow field (a table cell): the number alone, then the name.
     in property <bool> compact: false;
     callback changed(int);
@@ -89,7 +89,7 @@ export component ChannelPicker inherits Rectangle {
                         }
                         ChannelLabel {
                             idx: index;
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                         }
                     }
                 }
@@ -144,7 +144,7 @@ export component ImageAddressPicker inherits HorizontalLayout {
     if root.kind == "channel": ChannelPicker {
         horizontal-stretch: 2;
         height: 24px;
-        font-size: Ink.fs-md;
+        font-size: Ink.fs-body;
         value: root.number;
         changed(v) => {
             root.changed("channel:" + v);

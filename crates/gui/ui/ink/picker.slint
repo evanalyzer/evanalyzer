@@ -12,7 +12,7 @@ import { InkIcons } from "icons.slint";
 export component InkSwatchName inherits HorizontalLayout {
     in property <color> color;
     in property <string> name;
-    in property <length> font-size: Ink.fs-md;
+    in property <length> font-size: Ink.fs-body;
 
     spacing: 6px;
     padding-left: 8px;
@@ -40,7 +40,7 @@ export component InkSwatchName inherits HorizontalLayout {
 // The closed field: `label`, the children (a `InkSwatchName`), the caret.
 export component InkPickerField inherits Rectangle {
     in property <string> label;
-    in property <length> font-size: Ink.fs-md;
+    in property <length> font-size: Ink.fs-body;
     // A label that isn't a numbered entry ("Unset", "Background"): not mono.
     in property <bool> mono: true;
     callback clicked;
@@ -88,7 +88,7 @@ export component InkPickerField inherits Rectangle {
 export component InkPickerRow inherits TouchArea {
     in property <string> label;
     in property <bool> selected;
-    in property <length> font-size: Ink.fs-md;
+    in property <length> font-size: Ink.fs-body;
     in property <bool> mono: true;
     in property <color> label-color: Ink.text;
 

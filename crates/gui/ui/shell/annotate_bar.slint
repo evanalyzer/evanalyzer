@@ -56,7 +56,8 @@ export component AnnotateBar inherits Rectangle {
                     spacing: 2px;
                     InkToolButton {
                         icon: InkIcons.move;
-                        label: "Move (M)";
+                        label: "Move";
+                        keys: ["M"];
                         active: root.tool == ToolState.Move;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.Move;
@@ -64,7 +65,8 @@ export component AnnotateBar inherits Rectangle {
                     }
                     InkToolButton {
                         icon: InkIcons.select;
-                        label: "Select (S)";
+                        label: "Select";
+                        keys: ["S"];
                         active: root.tool == ToolState.Select;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.Select;
@@ -73,7 +75,8 @@ export component AnnotateBar inherits Rectangle {
                     InkBarSeparator { }
                     InkToolButton {
                         icon: InkIcons.marker;
-                        label: "Marker (K)";
+                        label: "Marker";
+                        keys: ["K"];
                         active: root.tool == ToolState.PaintMarker;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.PaintMarker;
@@ -81,8 +84,10 @@ export component AnnotateBar inherits Rectangle {
                     }
                     InkToolButton {
                         icon: InkIcons.rectangle;
-                        label: "Rectangle (R)";
+                        label: "Rectangle";
+                        keys: ["R"];
                         enabled: root.has-class;
+                        disabled-reason: "Pick the class to paint as first";
                         active: root.tool == ToolState.PaintRectangle;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
@@ -90,8 +95,10 @@ export component AnnotateBar inherits Rectangle {
                     }
                     InkToolButton {
                         icon: InkIcons.ellipse;
-                        label: "Ellipse (O)";
+                        label: "Ellipse";
+                        keys: ["E"];
                         enabled: root.has-class;
+                        disabled-reason: "Pick the class to paint as first";
                         active: root.tool == ToolState.PaintOval;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.PaintOval;
@@ -99,8 +106,10 @@ export component AnnotateBar inherits Rectangle {
                     }
                     InkToolButton {
                         icon: InkIcons.polygon;
-                        label: "Polygon (P)";
+                        label: "Polygon";
+                        keys: ["P"];
                         enabled: root.has-class;
+                        disabled-reason: "Pick the class to paint as first";
                         active: root.tool == ToolState.PaintPolygon;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
@@ -111,6 +120,7 @@ export component AnnotateBar inherits Rectangle {
                         label: "Brush";
                         is-new: true;
                         enabled: root.has-class;
+                        disabled-reason: "Pick the class to paint as first";
                         active: root.tool == ToolState.Brush;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.Brush;
@@ -132,7 +142,7 @@ export component AnnotateBar inherits Rectangle {
             // The class painted into.
             Text {
                 text: "Paint as";
-                font-size: Ink.fs-sm;
+                font-size: Ink.fs-secondary;
                 color: Ink.text-mute;
                 vertical-alignment: center;
             }
@@ -154,7 +164,7 @@ export component AnnotateBar inherits Rectangle {
                         Text {
                             horizontal-stretch: 1;
                             text: root.has-class ? ClassificationState.selected_class_name : "Pick a class";
-                            font-size: Ink.fs-md;
+                            font-size: Ink.fs-body;
                             color: root.has-class ? Ink.text : Ink.text-faint;
                             vertical-alignment: center;
                             overflow: elide;
@@ -179,7 +189,7 @@ export component AnnotateBar inherits Rectangle {
                 padding-right: 6px;
                 Text {
                     text: "Size";
-                    font-size: Ink.fs-sm;
+                    font-size: Ink.fs-secondary;
                     color: Ink.text-mute;
                     vertical-alignment: center;
                 }

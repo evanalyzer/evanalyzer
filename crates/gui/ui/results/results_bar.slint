@@ -25,7 +25,7 @@ component AnalysisChip inherits Rectangle {
         spacing: 5px;
         Text {
             text: root.has-one ? ResultsListState.results_list[ResultsListState.selected_result_index].name : ResultsState.database-name != "" ? ResultsState.database-name : "Pick an analysis";
-            font-size: Ink.fs-md;
+            font-size: Ink.fs-body;
             color: root.has-one || ResultsState.database-name != "" ? Ink.text : Ink.text-dim;
             vertical-alignment: center;
             overflow: elide;
@@ -109,7 +109,7 @@ export component ResultsBarNav inherits HorizontalLayout {
             if i > 1: Text {
                 text: "›";
                 color: Ink.text-faint;
-                font-size: Ink.fs-md;
+                font-size: Ink.fs-body;
                 vertical-alignment: center;
             }
             if i > 0: crumb-ta := TouchArea {
@@ -123,7 +123,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                 crumb-text := Text {
                     width: 100%;
                     text: item.label;
-                    font-size: Ink.fs-md;
+                    font-size: Ink.fs-body;
                     font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
                     color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
                     vertical-alignment: center;
@@ -188,6 +188,7 @@ export component ResultsBarActions inherits HorizontalLayout {
             text: "Export…";
             icon: InkIcons.export;
             enabled: ResultsState.database-name != "";
+            disabled-reason: "Open an analysis first";
             clicked => {
                 ResultsState.export-dialog-open();
             }

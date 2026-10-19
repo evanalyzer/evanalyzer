@@ -1,12 +1,13 @@
-// editor/viewport_stack_bar.slint — the bar at the bottom of the image for
-// a z-stack or a time series: the Z projection or slice, the time frame and
-// its playback. Shown only when the image has more than one plane; ◂ folds
-// it to a pill that still shows the plane.
+// editor/viewport_stack_bar.slint — the bar at the bottom of the image: the
+// objects on / off (O) and their opacity; for a z-stack the projection or
+// slice, for a time series the frame and its playback. ◂ folds it to a pill
+// that still shows them; the objects toggle and the keys work folded too.
 
 import { ChannelState, IntensityProjection } from "../api/state.slint";
+import { ViewportObjectState } from "../api/viewport.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { LayoutState } from "../api/layout.slint";
-import { Ink, InkIcons, InkIconButton, InkSelect, InkCaption } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkSelect, InkCaption, InkTipZone } from "../ink/ink.slint";
 
 // One step through the slices or the frames: the bar's ◀ ▶ and the keys.
 export global StackSteps {
@@ -42,6 +43,8 @@ component StackTrack inherits Rectangle {
     in property <int> value;
     in property <int> count;
     in property <string> label;
+    /// Read out after the value ("80 %"); "" - "n of count".
+    in property <string> unit;
     callback picked(int);
 
     property <float> at: root.count > 1 ? root.value / (root.count - 1) : 0;
@@ -51,7 +54,7 @@ component StackTrack inherits Rectangle {
     horizontal-stretch: 1;
     accessible-role: slider;
     accessible-label: root.label;
-    accessible-value: "\{root.value + 1} of \{root.count}";
+    accessible-value: root.unit != "" ? root.value + root.unit : "\{root.value + 1} of \{root.count}";
     accessible-value-minimum: 1;
     accessible-value-maximum: root.count;
     accessible-action-increment => {
@@ -108,14 +111,43 @@ component StackTrack inherits Rectangle {
 // "12 / 40": the plane, mono, centered.
 component PlaneText inherits Text {
     font-family: Ink.font-mono;
-    font-size: Ink.fs-md;
+    font-size: Ink.fs-body;
     color: Ink.text;
     horizontal-alignment: center;
     vertical-alignment: center;
     min-width: 56px;
 }
 
-component BarSep inherits Rectangle {
+
+export global OverlaySet {
+    public function opacity(percent: int) {
+        ViewportObjectState.object_transparency = clamp(percent, 0, 100) / 100;
+        ViewportObjectState.object_transparency_changed(ViewportObjectState.object_transparency);
+    }
+    public function toggle() {
+        ViewportObjectState.show_objects = !ViewportObjectState.show_objects;
+    }
+}
+
+// The objects on / off: highlighted while on.
+component ObjectsToggle inherits Rectangle {
+    width: 26px;
+    height: 26px;
+    border-radius: Ink.radius-md;
+    background: ViewportObjectState.show_objects ? Ink.info-tint : transparent;
+    InkIconButton {
+        size: 26px;
+        icon: InkIcons.overlay;
+        tint: ViewportObjectState.show_objects ? Ink.focus : Ink.text-dim;
+        label: ViewportObjectState.show_objects ? "Hide the objects" : "Show the objects";
+        keys: ["O"];
+        clicked => {
+            OverlaySet.toggle();
+        }
+    }
+}
+
+component Sep inherits Rectangle {
     width: 1px;
     background: Ink.border;
 }
@@ -130,6 +162,8 @@ export component StackBar inherits Rectangle {
     property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
     property <string> z-text: root.slice ? "\{ChannelState.selected_z_stack + 1} / \{ImageMetaData.nr_z_stacks}" : "all \{ImageMetaData.nr_z_stacks}";
     property <string> t-text: "\{ChannelState.selected_t_stack + 1} / \{ImageMetaData.nr_t_stacks}";
+    property <int> percent: round(ViewportObjectState.object_transparency * 100);
+    property <bool> folded: LayoutState.stack-bar-folded;
 
     pure function fps-index(hz: int) -> int {
         hz >= 25 ? 5 : hz >= 20 ? 4 : hz >= 10 ? 3 : hz >= 5 ? 2 : hz >= 2 ? 1 : 0
@@ -140,9 +174,15 @@ export component StackBar inherits Rectangle {
         ChannelState.trigger_channel_state_changed();
     }
 
-    visible: root.has-z || root.has-t;
+    function fold(on: bool) {
+        LayoutState.stack-bar-folded = on;
+        LayoutState.panels-changed();
+    }
+
+    // With an image open - a 2D one shows only the objects' part.
+    visible: ImageMetaData.image_name != "";
     height: 40px;
-    width: LayoutState.stack-bar-folded ? pill.preferred-width : min(bar.preferred-width, root.room);
+    width: root.folded ? pill.preferred-width : min(bar.preferred-width, root.room);
     background: Ink.glass;
     border-radius: Ink.radius-lg;
     border-width: 1px;
@@ -151,55 +191,56 @@ export component StackBar inherits Rectangle {
     drop-shadow-offset-y: 8px;
     drop-shadow-color: Ink.shadow;
     clip: true;
+    accessible-role: groupbox;
+    accessible-label: "Objects, Z and T";
 
     // Clicks on the bar don't reach the image below.
     TouchArea { }
 
-    // Folded: the plane, a click opens the bar again.
-    if LayoutState.stack-bar-folded: TouchArea {
-        mouse-cursor: pointer;
-        accessible-role: button;
-        accessible-label: "Show the Z and T bar";
-        accessible-action-default => {
-            LayoutState.stack-bar-folded = false;
-        }
-        clicked => {
-            LayoutState.stack-bar-folded = false;
-        }
-    }
+    // -- Folded: the objects toggle, the opacity, the planes, ▸ --
     pill := HorizontalLayout {
-        visible: LayoutState.stack-bar-folded;
-        padding-left: 12px;
-        padding-right: 10px;
+        visible: root.folded;
+        padding-left: 6px;
+        padding-right: 4px;
+        padding-top: 7px;
+        padding-bottom: 7px;
         spacing: 8px;
+        ObjectsToggle { }
+        PlaneText {
+            text: root.percent + " %";
+            min-width: 0px;
+            color: ViewportObjectState.show_objects ? Ink.text : Ink.text-mute;
+        }
+        if root.has-z: Sep { }
         if root.has-z: InkCaption {
             text: "Z";
-            vertical-alignment: center;
         }
         if root.has-z: PlaneText {
             text: root.z-text;
             min-width: 0px;
         }
-        if root.has-z && root.has-t: BarSep { }
+        if root.has-t: Sep { }
         if root.has-t: InkCaption {
             text: "T";
-            vertical-alignment: center;
         }
         if root.has-t: PlaneText {
             text: root.t-text;
             min-width: 0px;
         }
-        Image {
-            width: 12px;
-            source: InkIcons.caret-right;
-            colorize: Ink.text-dim;
-            image-fit: contain;
+        InkIconButton {
+            size: 26px;
+            icon: InkIcons.caret-right;
+            label: "Unfold the bar";
+            clicked => {
+                root.fold(false);
+            }
         }
     }
 
+    // -- Open --
     bar := HorizontalLayout {
-        visible: !LayoutState.stack-bar-folded;
-        padding-left: 6px;
+        visible: !root.folded;
+        padding-left: 4px;
         padding-right: 8px;
         padding-top: 7px;
         padding-bottom: 7px;
@@ -208,16 +249,38 @@ export component StackBar inherits Rectangle {
         InkIconButton {
             size: 26px;
             icon: InkIcons.caret-left;
-            label: "Fold the Z and T bar";
+            label: "Fold the bar";
             clicked => {
-                LayoutState.stack-bar-folded = true;
+                root.fold(true);
             }
         }
 
+        // -- Objects: on / off, opacity (dimmed while off, still set) --
+        ObjectsToggle { }
+        StackTrack {
+            min-width: 48px;
+            preferred-width: 64px;
+            horizontal-stretch: 0;
+            opacity: ViewportObjectState.show_objects ? 1 : 0.4;
+            label: "Objects' opacity";
+            value: root.percent;
+            count: 101;
+            unit: " %";
+            picked(v) => {
+                OverlaySet.opacity(v);
+            }
+        }
+        PlaneText {
+            text: root.percent + " %";
+            min-width: 34px;
+            horizontal-alignment: left;
+            color: ViewportObjectState.show_objects ? Ink.text : Ink.text-mute;
+        }
+
         // -- Z --
+        if root.has-z: Sep { }
         if root.has-z: InkCaption {
             text: "Z";
-            vertical-alignment: center;
         }
         if root.has-z: InkSelect {
             width: 76px;
@@ -244,7 +307,7 @@ export component StackBar inherits Rectangle {
         if root.has-z && !root.slice: Text {
             text: "all \{ImageMetaData.nr_z_stacks} slices";
             font-family: Ink.font-mono;
-            font-size: Ink.fs-sm;
+            font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             vertical-alignment: center;
         }
@@ -252,7 +315,9 @@ export component StackBar inherits Rectangle {
             size: 26px;
             icon: InkIcons.caret-left;
             label: "Previous slice";
+            keys: ["Page Up"];
             enabled: ChannelState.selected_z_stack > 0;
+            disabled-reason: "The first slice";
             clicked => {
                 StackSteps.step-z(-1);
             }
@@ -264,7 +329,9 @@ export component StackBar inherits Rectangle {
             size: 26px;
             icon: InkIcons.caret-right;
             label: "Next slice";
+            keys: ["Page Down"];
             enabled: ChannelState.selected_z_stack < ImageMetaData.nr_z_stacks - 1;
+            disabled-reason: "The last slice";
             clicked => {
                 StackSteps.step-z(1);
             }
@@ -278,12 +345,10 @@ export component StackBar inherits Rectangle {
             }
         }
 
-        if root.has-z && root.has-t: BarSep { }
-
         // -- T --
+        if root.has-t: Sep { }
         if root.has-t: InkCaption {
             text: "T";
-            vertical-alignment: center;
         }
         if root.has-t: InkIconButton {
             size: 26px;
