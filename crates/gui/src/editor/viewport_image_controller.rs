@@ -94,7 +94,6 @@ impl ViewportImageController {
             state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
             state.set_edit_during_analysis(settings.edit_during_analysis);
             state.set_objects_as_table(settings.objects_as_table);
-            state.set_object_card(settings.object_card);
             state.set_reduce_motion(settings.reduce_motion);
             // Automatic: the numbers it gives here shown (and kept as the
             // starting point if switched off).
@@ -133,7 +132,6 @@ impl ViewportImageController {
             free_caches_on_analysis: state.get_free_caches_on_analysis(),
             edit_during_analysis: state.get_edit_during_analysis(),
             objects_as_table: state.get_objects_as_table(),
-            object_card: state.get_object_card(),
             reduce_motion: state.get_reduce_motion(),
             preview_tiles_auto: state.get_preview_tiles_auto(),
             // Automatic: the number shown is what auto gives - the own one
@@ -1291,7 +1289,6 @@ mod tests {
         state.set_free_caches_on_analysis(false);
         state.set_edit_during_analysis(false);
         state.set_objects_as_table(true);
-        state.set_object_card(true);
         state.set_reduce_motion(true);
         state.set_preview_tiles_auto(false);
         state.set_preview_tiles(100);
@@ -1314,7 +1311,6 @@ mod tests {
             free_caches_on_analysis: false,
             edit_during_analysis: false,
             objects_as_table: true,
-            object_card: true,
             auto_scale_new_images: false,
             color_channels_without_wavelength: true,
             reduce_motion: true,

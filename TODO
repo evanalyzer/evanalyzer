@@ -174,6 +174,24 @@ Known, not fixed:
 - [ ] **Measure the read cell size** for annotation measuring (`CELL = 1024` in crates/app/src/workspace/annotation_measure.rs; chosen by judgment): many annotations per image (e.g. a GeoJSON import or re-measure of 1000 nuclei, spread over a slide and clustered), cells of 512 / 1024 / 2048 / 4096, on this computer and through a server connection - time and peak RAM.
 - [x] `libs/llm` removed.
 
+## Panels redesign (2026-10-19, design canvas "EVAnalyzer panel proposals")
+
+Done (generated code 39.50 -> 39.55 MB):
+- Classes (1A): empty state "Add classes from the image" (merge); ✦ in the head; "…replacing the list" stays in ⋯.
+- Image panel (3A): the channel list scrolls (rows 24 px), toggles + histogram fixed below it. Z/T moved out.
+- Z / T stack bar (`editor/viewport_stack_bar.slint`): bottom left of the image, only for z/t images; projection, slice ◀ ▶ + track, play, frame track, speed; ◂ folds it to a pill. Keys: Page Up/Down = slice, `,` / `.` = frame. The scale bar moves above it. The bar's width gives way next to the navigator.
+- Objects (2B): the selected object is one line at the list's bottom (id, class · area, actions); its details in a card left of the panel (`editor/object_details.slint`). The on-image object card and its setting (Settings › Viewport › Object card) are gone. Objects fills the column when Classes/Image are hidden; Image is never taller than its channels need.
+- Pipelines (4C): the head's ⌄ unfolds the pipelines above the steps (☑ run, click = show, reorder), max 4 rows then scrolls; the popup is gone.
+- "Back to results" sits below the annotate bar when both are open; the Images panel's info section keeps the panel's rounded corners.
+
+Open:
+- [ ] Folded stack bar / pipelines list open are remembered for the session only (like the panel switches), not across restarts.
+- [ ] Click through in the real app: a z/t image (play, keys while a text field has focus), many pipelines, an object selected with Classes/Image hidden.
+- [ ] Maybe: Show objects + overlay opacity in one "Objects" line, Grayscale next to the channels (suggested, not decided).
+- [ ] **Results split: a click on the image / a list row doesn't select** (user report 2026-10-19, a 2-series VSI; "Show on image" works). Not reproduced (tests, a real VSI, hit tests of the window). Both mean the split got no objects for the image. Logs added in `results_state_controller/split.rs` ("Split view: … objects of …" at debug, "… is not the image in the viewer … dropped" as a warning) - needs the user's log or their `.evadb` + project.
+- [x] Split "Color by value" was ignored when the overlay was pushed from the database thread (the window can't be reached there) - the choice is kept in `SplitState`; test `split_color_by_value_holds_when_pushed_from_the_database_thread`.
+- [x] The split card's channel names come from the series the image is shown in (was: the file's first series).
+
 ## AI plugin
 
 Done 2026-10-19: libtorch is loaded only on the first AI step, from a plugin library next to the program (`ai/cpu`, `ai/cuda`). The app no longer links libtorch.

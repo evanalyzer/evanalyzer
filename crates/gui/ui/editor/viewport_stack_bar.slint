@@ -1,0 +1,323 @@
+// editor/viewport_stack_bar.slint — the bar at the bottom of the image for
+// a z-stack or a time series: the Z projection or slice, the time frame and
+// its playback. Shown only when the image has more than one plane; ◂ folds
+// it to a pill that still shows the plane.
+
+import { ChannelState, IntensityProjection } from "../api/state.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
+import { LayoutState } from "../api/layout.slint";
+import { Ink, InkIcons, InkIconButton, InkSelect, InkCaption } from "../ink/ink.slint";
+
+// One step through the slices or the frames: the bar's ◀ ▶ and the keys.
+export global StackSteps {
+    public function step-z(d: int) {
+        if ImageMetaData.nr_z_stacks > 1 && ChannelState.intensity_projection == IntensityProjection.single-stack {
+            StackSteps.set-z(ChannelState.selected_z_stack + d);
+        }
+    }
+    public function step-t(d: int) {
+        if ImageMetaData.nr_t_stacks > 1 {
+            StackSteps.set-t(ChannelState.selected_t_stack + d);
+        }
+    }
+    public function set-z(z: int) {
+        let v = clamp(z, 0, ImageMetaData.nr_z_stacks - 1);
+        if v != ChannelState.selected_z_stack {
+            ChannelState.selected_z_stack = v;
+            ChannelState.trigger_channel_state_changed();
+        }
+    }
+    public function set-t(t: int) {
+        let v = clamp(t, 0, ImageMetaData.nr_t_stacks - 1);
+        if v != ChannelState.selected_t_stack {
+            ChannelState.selected_t_stack = v;
+            ChannelState.trigger_channel_state_changed();
+        }
+    }
+}
+
+// Where in the stack: a track with a knob; a click or a drag picks the
+// plane.
+component StackTrack inherits Rectangle {
+    in property <int> value;
+    in property <int> count;
+    in property <string> label;
+    callback picked(int);
+
+    property <float> at: root.count > 1 ? root.value / (root.count - 1) : 0;
+
+    min-width: 48px;
+    preferred-width: 150px;
+    horizontal-stretch: 1;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: "\{root.value + 1} of \{root.count}";
+    accessible-value-minimum: 1;
+    accessible-value-maximum: root.count;
+    accessible-action-increment => {
+        root.picked(root.value + 1);
+    }
+    accessible-action-decrement => {
+        root.picked(root.value - 1);
+    }
+
+    function pick-at(x: length) {
+        root.picked(round(clamp(x / root.width, 0, 1) * (root.count - 1)));
+    }
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 4px;
+        border-radius: 2px;
+        background: Ink.border;
+    }
+    Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: root.at * root.width;
+        height: 4px;
+        border-radius: 2px;
+        background: Ink.focus;
+    }
+    Rectangle {
+        x: root.at * (root.width - self.width);
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Ink.glass;
+        border-width: 2px;
+        border-color: Ink.focus;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.pick-at(self.mouse-x);
+            }
+        }
+        moved => {
+            if self.pressed {
+                root.pick-at(self.mouse-x);
+            }
+        }
+    }
+}
+
+// "12 / 40": the plane, mono, centered.
+component PlaneText inherits Text {
+    font-family: Ink.font-mono;
+    font-size: Ink.fs-md;
+    color: Ink.text;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    min-width: 56px;
+}
+
+component BarSep inherits Rectangle {
+    width: 1px;
+    background: Ink.border;
+}
+
+export component StackBar inherits Rectangle {
+    // The width there is next to the navigator; the tracks give way.
+    in property <length> room: 10000px;
+    property <bool> has-z: ImageMetaData.nr_z_stacks > 1;
+    property <bool> has-t: ImageMetaData.nr_t_stacks > 1;
+    property <bool> slice: ChannelState.intensity_projection == IntensityProjection.single-stack;
+    property <[string]> fps-names: ["1 fps", "2 fps", "5 fps", "10 fps", "20 fps", "25 fps"];
+    property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
+    property <string> z-text: root.slice ? "\{ChannelState.selected_z_stack + 1} / \{ImageMetaData.nr_z_stacks}" : "all \{ImageMetaData.nr_z_stacks}";
+    property <string> t-text: "\{ChannelState.selected_t_stack + 1} / \{ImageMetaData.nr_t_stacks}";
+
+    pure function fps-index(hz: int) -> int {
+        hz >= 25 ? 5 : hz >= 20 ? 4 : hz >= 10 ? 3 : hz >= 5 ? 2 : hz >= 2 ? 1 : 0
+    }
+
+    function projection(p: IntensityProjection) {
+        ChannelState.intensity_projection = p;
+        ChannelState.trigger_channel_state_changed();
+    }
+
+    visible: root.has-z || root.has-t;
+    height: 40px;
+    width: LayoutState.stack-bar-folded ? pill.preferred-width : min(bar.preferred-width, root.room);
+    background: Ink.glass;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: Ink.shadow;
+    clip: true;
+
+    // Clicks on the bar don't reach the image below.
+    TouchArea { }
+
+    // Folded: the plane, a click opens the bar again.
+    if LayoutState.stack-bar-folded: TouchArea {
+        mouse-cursor: pointer;
+        accessible-role: button;
+        accessible-label: "Show the Z and T bar";
+        accessible-action-default => {
+            LayoutState.stack-bar-folded = false;
+        }
+        clicked => {
+            LayoutState.stack-bar-folded = false;
+        }
+    }
+    pill := HorizontalLayout {
+        visible: LayoutState.stack-bar-folded;
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+        if root.has-z: InkCaption {
+            text: "Z";
+            vertical-alignment: center;
+        }
+        if root.has-z: PlaneText {
+            text: root.z-text;
+            min-width: 0px;
+        }
+        if root.has-z && root.has-t: BarSep { }
+        if root.has-t: InkCaption {
+            text: "T";
+            vertical-alignment: center;
+        }
+        if root.has-t: PlaneText {
+            text: root.t-text;
+            min-width: 0px;
+        }
+        Image {
+            width: 12px;
+            source: InkIcons.caret-right;
+            colorize: Ink.text-dim;
+            image-fit: contain;
+        }
+    }
+
+    bar := HorizontalLayout {
+        visible: !LayoutState.stack-bar-folded;
+        padding-left: 6px;
+        padding-right: 8px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+        spacing: 8px;
+
+        InkIconButton {
+            size: 26px;
+            icon: InkIcons.caret-left;
+            label: "Fold the Z and T bar";
+            clicked => {
+                LayoutState.stack-bar-folded = true;
+            }
+        }
+
+        // -- Z --
+        if root.has-z: InkCaption {
+            text: "Z";
+            vertical-alignment: center;
+        }
+        if root.has-z: InkSelect {
+            width: 76px;
+            height: 26px;
+            horizontal-stretch: 0;
+            label: "Z projection";
+            model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid"];
+            selected: ChannelState.intensity_projection == IntensityProjection.max ? 1
+                : ChannelState.intensity_projection == IntensityProjection.min ? 2
+                : ChannelState.intensity_projection == IntensityProjection.avg ? 3
+                : ChannelState.intensity_projection == IntensityProjection.sum ? 4
+                : ChannelState.intensity_projection == IntensityProjection.middle ? 5
+                : 0;
+            picked(i) => {
+                root.projection(i == 1 ? IntensityProjection.max
+                    : i == 2 ? IntensityProjection.min
+                    : i == 3 ? IntensityProjection.avg
+                    : i == 4 ? IntensityProjection.sum
+                    : i == 5 ? IntensityProjection.middle
+                    : IntensityProjection.single-stack);
+            }
+        }
+        // A projection: every slice, nothing to step.
+        if root.has-z && !root.slice: Text {
+            text: "all \{ImageMetaData.nr_z_stacks} slices";
+            font-family: Ink.font-mono;
+            font-size: Ink.fs-sm;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+        if root.has-z && root.slice: InkIconButton {
+            size: 26px;
+            icon: InkIcons.caret-left;
+            label: "Previous slice";
+            enabled: ChannelState.selected_z_stack > 0;
+            clicked => {
+                StackSteps.step-z(-1);
+            }
+        }
+        if root.has-z && root.slice: PlaneText {
+            text: root.z-text;
+        }
+        if root.has-z && root.slice: InkIconButton {
+            size: 26px;
+            icon: InkIcons.caret-right;
+            label: "Next slice";
+            enabled: ChannelState.selected_z_stack < ImageMetaData.nr_z_stacks - 1;
+            clicked => {
+                StackSteps.step-z(1);
+            }
+        }
+        if root.has-z && root.slice: StackTrack {
+            label: "Z slice";
+            value: ChannelState.selected_z_stack;
+            count: ImageMetaData.nr_z_stacks;
+            picked(z) => {
+                StackSteps.set-z(z);
+            }
+        }
+
+        if root.has-z && root.has-t: BarSep { }
+
+        // -- T --
+        if root.has-t: InkCaption {
+            text: "T";
+            vertical-alignment: center;
+        }
+        if root.has-t: InkIconButton {
+            size: 26px;
+            icon: ChannelState.is_play_active ? InkIcons.pause : InkIcons.play;
+            label: ChannelState.is_play_active ? "Pause" : "Play";
+            active: ChannelState.is_play_active;
+            clicked => {
+                ChannelState.is_play_active = !ChannelState.is_play_active;
+                ChannelState.toggle_play(ChannelState.is_play_active);
+            }
+        }
+        if root.has-t: PlaneText {
+            text: root.t-text;
+        }
+        if root.has-t: StackTrack {
+            label: "Frame";
+            value: ChannelState.selected_t_stack;
+            count: ImageMetaData.nr_t_stacks;
+            picked(t) => {
+                StackSteps.set-t(t);
+            }
+        }
+        if root.has-t: InkSelect {
+            width: 76px;
+            height: 26px;
+            horizontal-stretch: 0;
+            label: "Playback speed";
+            model: root.fps-names;
+            selected: root.fps-index(ChannelState.play_back_speed_hz);
+            picked(i, name) => {
+                ChannelState.play_back_speed_hz = root.fps-values[i];
+                ChannelState.is_play_active = false;
+                ChannelState.toggle_play(false);
+            }
+        }
+    }
+}

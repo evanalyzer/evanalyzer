@@ -10,7 +10,7 @@ import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkSearchField, InkPickerRow, InkSwatchName, InkFact } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint, InkSearchField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
 import { ClassificationState } from "../api/classification.slint";
 import { AnnotationState } from "../api/annotations.slint";
 
@@ -52,10 +52,10 @@ component HeadCell inherits Text {
     overflow: elide;
 }
 
-// What can be done to the selected object, under the list's selected
-// object, in the table's footer: a manual annotation's class set, or it
-// deleted (its shape is edited with the brush and eraser); a pipeline object copied into the manual annotations (it is
-// read-only).
+// What can be done to the selected object, in the list's and the table's
+// line of it: a manual annotation's class set, or it deleted (its shape is
+// edited with the brush and eraser); a pipeline object (read-only) copied
+// into the manual annotations.
 component ObjectActions inherits HorizontalLayout {
     in property <bool> editable;
     spacing: 4px;
@@ -353,7 +353,6 @@ export component ObjectListPanel inherits Rectangle {
             }
         }
 
-        // -- The selected object --
         // -- The table: the selected object's line and buttons --
         if root.table && root.sel.id != 0: VerticalLayout {
             InkDivider { }
@@ -374,80 +373,36 @@ export component ObjectListPanel inherits Rectangle {
             }
         }
 
+        // -- The list: the selected object's line; its details are in the
+        // card beside the panel --
         if !root.table && root.sel.id != 0: VerticalLayout {
             InkDivider { }
-            VerticalLayout {
-                padding: Ink.pad-panel;
-                padding-top: 8px;
-                spacing: 6px;
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    InkCaption {
-                        horizontal-stretch: 1;
-                        text: "OBJECT " + root.sel.label_name;
-                        overflow: elide;
-                    }
-                    InkIconButton {
-                        size: 22px;
-                        icon: InkIcons.close;
-                        label: "Unselect";
-                        clicked => {
-                            root.unselect();
-                        }
-                    }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 8px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 8px;
+                Text {
+                    text: root.sel.label_name;
+                    font-size: Ink.fs-md;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
                 }
-
-                if root.sel.display_name != "": Text {
-                    text: root.sel.display_name;
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.sel.display_name
+                        + (root.sel.display_name != "" && root.sel.area > 0 ? " · " : "")
+                        + (root.sel.area > 0 ? root.sel.area + " px²" : "");
+                    font-family: Ink.font-mono;
                     font-size: Ink.fs-sm;
                     color: Ink.text-mute;
+                    vertical-alignment: center;
                     overflow: elide;
                 }
-
-                // Its classes, each removable.
-                if root.sel.class_names.length > 0: HorizontalLayout {
-                    spacing: 4px;
-                    alignment: start;
-                    for name[i] in root.sel.class_names: InkChip {
-                        text: name;
-                        swatch: root.sel.class_colors[i];
-                        removable: root.sel.editable;
-                        remove => {
-                            ObjectListState.object_remove_class(root.sel.id, root.sel.class_ids[i]);
-                        }
-                    }
-                }
-
-                InkFact {
-                    label: "Area";
-                    value: root.sel.area > 0 ? root.sel.area + " px²" : "–";
-                    extra: root.sel.area_nm2 != "" ? root.sel.area_nm2 + " nm²" : "";
-                }
-                InkFact {
-                    label: "Circularity";
-                    value: root.sel.circularity != "" ? root.sel.circularity : "–";
-                }
-                InkFact {
-                    label: "Shared by";
-                    value: root.sel.label_count + " objects";
-                }
-                // One line per channel of the image (not per measured value):
-                // the panel keeps its height while the full values arrive.
-                for ch in ChannelState.channels: InkFact {
-                    label: ch.name;
-                    value: "μ " + (root.sel.intensity_avgs.length > ch.idx && root.sel.intensity_avgs[ch.idx] != "" ? root.sel.intensity_avgs[ch.idx] : "–");
-                    extra: "Σ " + (root.sel.intensities.length > ch.idx && root.sel.intensities[ch.idx] != "" ? root.sel.intensities[ch.idx] : "–");
-                }
-
-                if !root.sel.editable: Text {
-                    text: "From the pipeline · read-only";
-                    font-size: Ink.fs-xs;
-                    color: Ink.text-mute;
-                }
-
                 ObjectActions {
-                    padding-top: 4px;
+                    horizontal-stretch: 0;
                     editable: root.sel.editable;
                 }
             }

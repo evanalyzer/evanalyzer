@@ -14,8 +14,7 @@ import { ImagesListPanel } from "../editor/images_list_panel.slint";
 import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
 import { ClassificationPanel } from "../editor/classification_panel.slint";
 import { ObjectListPanel } from "../editor/object_list_panel.slint";
-import { ObjectCard } from "../editor/object_card.slint";
-import { ViewportMemoryState } from "../api/project_settings.slint";
+import { ObjectDetails } from "../editor/object_details.slint";
 import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
@@ -157,26 +156,17 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    // A result's object on its image: the way back (top of the image).
+    // A result's object on its image: the way back (top of the image,
+    // below the annotate bar when that is open).
     if ResultsState.peek && root.on-image: ResultsPeek {
         x: (parent.width - self.width) / 2;
-        y: 12px;
+        y: LayoutState.annotate ? Float.gap + 44px + 8px : 12px;
     }
 
     // Covers only the image, never the bars.
     if PreviewRunState.shown: PreviewRendering {
         width: 100%;
         height: 100%;
-    }
-
-    // The selected object, next to it on the image (under the panels).
-    // Only when switched on (Settings › Viewport › Object card).
-    if ViewportMemoryState.object_card && root.on-image && ObjectListState.selected_object.id != 0 && ObjectListState.selected_object.bbox-w > 0: ObjectCard {
-        width: 100%;
-        height: 100%;
-        inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
-        inset-right: Float.right-w + 2 * Float.gap;
-        inset-bottom: root.table-room;
     }
 
     // -- Left --
@@ -275,21 +265,25 @@ export component Workspace inherits Rectangle {
         width: Float.right-w;
         height: root.split-image-panel ? max(160px, root.pane-h - root.strip-h - 56px - 150px) : parent.height - 2 * Float.gap;
         spacing: 8px;
-        alignment: start;
 
         if !root.split-image-panel: HorizontalLayout {
+            vertical-stretch: 0;
             alignment: end;
             PanelSwitches { }
         }
 
         if LayoutState.classes-open && !root.split-image-panel: InkPanel {
+            vertical-stretch: 0;
             max-height: 340px;
             ClassificationPanel { }
         }
 
         if LayoutState.image-open || root.split-image-panel: InkPanel {
             vertical-stretch: 1;
-            ImageControlPanel {
+            // No taller than its channels need: the Objects panel takes the
+            // rest.
+            max-height: image-control.preferred-height;
+            image-control := ImageControlPanel {
                 in-split: root.split-image-panel;
                 vertical-stretch: 1;
             }
@@ -301,6 +295,19 @@ export component Workspace inherits Rectangle {
                 vertical-stretch: 1;
             }
         }
+
+        // Nothing to fill the column: the panels keep their size, at the top.
+        if !(LayoutState.objects-open && !LayoutState.objects-as-table && !root.split-image-panel): Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+
+    // -- The selected object's details: left of the Objects list, level
+    // with its line at the list's bottom --
+    if root.on-image && LayoutState.objects-open && !LayoutState.objects-as-table && ObjectListState.selected_object.id != 0: ObjectDetails {
+        x: parent.width - Float.right-w - 2 * Float.gap - self.width;
+        y: parent.height - Float.gap - self.height;
+        width: 260px;
     }
 
     // -- The objects as a table: at the bottom, between the left and the

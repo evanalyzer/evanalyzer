@@ -9,6 +9,7 @@ import { ResultsState } from "../api/results.slint";
 
 import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
+import { StackBar } from "viewport_stack_bar.slint";
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
@@ -345,7 +346,8 @@ export component Viewport inherits Rectangle {
 
         ScaleBar {
             x: root.inset-left;
-            y: parent.height - self.height;
+            // Above the Z / T bar.
+            y: parent.height - self.height - (stack-bar.visible ? stack-bar.height + 12px : 0px);
             bar_width: ViewportState.scale_bar_width;
             unit_text: ViewportState.scale_bar_text;
         }
@@ -505,8 +507,16 @@ export component Viewport inherits Rectangle {
         }
     }
 
+    // Z / T, at the bottom left; the navigator keeps its corner.
+    stack-bar := StackBar {
+        x: root.inset-left + (root.split-mode ? 10px : 12px);
+        y: parent.height - self.height - (root.split-mode ? 10px : 12px);
+        room: root.width - root.inset-left - root.inset-right - 2 * (root.split-mode ? 10px : 12px)
+            - (navigator.visible ? navigator.width + 12px : 0px);
+    }
+
     // Above the image's touch area: clicks in it move the view.
-    Navigator {
+    navigator := Navigator {
         x: parent.width - self.width - (root.split-mode ? 10px : 12px) - root.inset-right;
         y: parent.height - self.height - (root.split-mode ? 10px : 12px);
         viewport-width: root.width;
