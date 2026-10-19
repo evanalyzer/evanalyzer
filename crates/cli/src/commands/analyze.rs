@@ -492,8 +492,12 @@ mod tests {
             .expect("csv header row")
             .split(',')
             .collect();
-        assert_eq!(csv_header[0], "Object ID", "header: {csv_header:?}");
-        let object_id_col = 0;
+        // The image first, as in the results list; then the object's id.
+        assert_eq!(csv_header[0], "Image", "header: {csv_header:?}");
+        let object_id_col = csv_header
+            .iter()
+            .position(|h| *h == "Object ID")
+            .unwrap_or_else(|| panic!("no Object ID column: {csv_header:?}"));
 
         let mut csv_row_count = 0;
         for line in csv_lines {
@@ -540,7 +544,12 @@ mod tests {
         let xlsx_header = rows.next().expect("xlsx header row");
         assert_eq!(
             xlsx_header.first().and_then(|c| c.get_string()),
-            Some("Object ID")
+            Some("Image")
+        );
+        assert_eq!(
+            xlsx_header.get(object_id_col).and_then(|c| c.get_string()),
+            Some("Object ID"),
+            "the same columns as the CSV"
         );
 
         let mut xlsx_row_count = 0;

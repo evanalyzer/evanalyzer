@@ -354,9 +354,6 @@ impl AnnotationController {
 
     /// Picks a folder, writes every image's manual annotations there.
     fn export_geojson(self: &Arc<Self>) {
-        if !self.local_only() {
-            return;
-        }
         let mut request = FileRequest::open_folder("Export annotations to");
         if let Some(dir) = self.project_folder() {
             request = request.start_in(dir);
@@ -364,15 +361,24 @@ impl AnnotationController {
         let m = self.clone();
         self.app_state.file_browser.open(request, move |folder| {
             let Some(folder) = folder else { return };
-            let result = export_geojson(&m.app_state.get_project(), &folder);
-            match result {
-                Ok(report) => m.show_message(
-                    "Annotations exported",
-                    export_message(&report, &folder),
-                    true,
-                ),
-                Err(e) => m.show_message("Export failed", e, false),
-            }
+            let m = m.clone();
+            // Written through the backend: on a server, over the network.
+            crate::helper::ui_thread::spawn(move || {
+                let backend = m.app_state.backend();
+                // A snapshot: the project isn't locked while files are written.
+                let project = ProjectWithRuntime {
+                    settings: m.app_state.get_project().settings.clone(),
+                    tmp_settings: Default::default(),
+                };
+                match export_geojson(&project, backend.files(), &folder) {
+                    Ok(report) => m.show_message(
+                        "Annotations exported",
+                        export_message(&report, &folder),
+                        true,
+                    ),
+                    Err(e) => m.show_message("Export failed", e, false),
+                }
+            });
         });
     }
 
@@ -380,9 +386,6 @@ impl AnnotationController {
     /// added, or replacing their manual annotations. Reads and measures on
     /// a worker thread (measuring reads the images), then puts them in.
     fn import_geojson(self: &Arc<Self>, replace: bool) {
-        if !self.local_only() {
-            return;
-        }
         let mut request = FileRequest::open_folder("Import annotations from");
         if let Some(dir) = self.project_folder() {
             request = request.start_in(dir);
@@ -392,12 +395,12 @@ impl AnnotationController {
             let Some(folder) = folder else { return };
             let m = m.clone();
             crate::helper::ui_thread::spawn(move || {
-                let read = read_geojson(&m.app_state.get_project(), &folder);
+                let backend = m.app_state.backend();
+                let read = read_geojson(&m.app_state.get_project(), backend.files(), &folder);
                 let mut pending = match read {
                     Ok(pending) => pending,
                     Err(e) => return m.show_message("Import failed", e, false),
                 };
-                let backend = m.app_state.backend();
                 measure_pending(&mut pending, |path, series, objects| {
                     backend
                         .open_image(path)
@@ -447,20 +450,6 @@ impl AnnotationController {
         let project = self.app_state.get_project();
         let file = project.tmp_settings.current_project.as_ref()?;
         file.parent().map(|p| p.to_path_buf())
-    }
-
-    /// GeoJSON files are read and written on this computer: not while the
-    /// project is on a server.
-    fn local_only(&self) -> bool {
-        if self.app_state.backend().is_remote() {
-            self.show_message(
-                "Not on a server",
-                "Annotations are exported and imported on this computer - not while working on a server.".into(),
-                false,
-            );
-            return false;
-        }
-        true
     }
 }
 

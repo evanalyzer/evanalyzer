@@ -282,13 +282,6 @@ jobs:
           cargo build-linux
           cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
 
-      - name: Check that libtorch_cuda is linked
-        # Without it the plugin silently runs CPU-only - see relink_torch_cuda
-        # in crates/ai_engine/build.rs.
-        run: |
-          readelf -d target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai_engine.so | grep -q "libtorch_cuda.so" \
-            || { echo "::error::the AI plugin does not link libtorch_cuda.so - the CUDA build would run CPU-only"; exit 1; }
-
       - name: Download templates
         uses: actions/download-artifact@v4
         with:
@@ -324,6 +317,10 @@ jobs:
               [ -e "$f" ] && rm -f "$f"
             done
           done < .github/NOT_SHIP_LIST.txt
+          # CUDA is libtorch_cuda, loaded by the app beside the plugin (it
+          # registers itself - nothing links it): without it the build runs
+          # CPU-only.
+          [ -f dist/ai/cuda/libtorch_cuda.so ] || { echo "::error::dist/ai/cuda/libtorch_cuda.so missing - the CUDA build would run CPU-only"; exit 1; }
           # The CUDA runtime is multiple GB even compressed, so pack with 7-Zip
           # at maximum compression (-mx=9) and split into <2 GiB volumes
           # (-v1900m) so no single asset exceeds GitHub's 2 GiB release limit.
@@ -414,19 +411,6 @@ jobs:
           cargo build-win
           cargo xwin rustc -p evanalyzer_ai_engine --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
-      - name: Check that torch_cuda.dll is linked
-        # Without it the plugin silently runs CPU-only - see relink_torch_cuda
-        # in crates/ai_engine/build.rs. POSIX sh only (the container has no bash).
-        run: |
-          exe=target/x86_64-pc-windows-msvc/release/evanalyzer_ai_engine.dll
-          dump=$(command -v llvm-objdump || ls /usr/bin/llvm-objdump-* 2>/dev/null | head -n 1)
-          if [ -z "$dump" ]; then
-            echo "::warning::llvm-objdump not found - cannot check that torch_cuda.dll is linked"
-            exit 0
-          fi
-          "$dump" -p "$exe" | grep -qi "DLL Name: torch_cuda.dll" \
-            || { echo "::error::the AI plugin does not import torch_cuda.dll - the CUDA build would run CPU-only"; exit 1; }
-
       - name: Download templates
         uses: actions/download-artifact@v4
         with:
@@ -455,6 +439,10 @@ jobs:
               [ -e "$f" ] && rm -f "$f"
             done
           done < .github/NOT_SHIP_LIST.txt
+          # CUDA is libtorch_cuda, loaded by the app beside the plugin (it
+          # registers itself - nothing links it): without it the build runs
+          # CPU-only.
+          [ -f dist/ai/cuda/torch_cuda.dll ] || { echo "::error::dist/ai/cuda/torch_cuda.dll missing - the CUDA build would run CPU-only"; exit 1; }
           # The CUDA runtime DLLs are multiple GB even compressed, so pack with
           # 7-Zip at maximum compression (-mx=9) and split into <2 GiB volumes
           # (-v1900m) so no single asset exceeds GitHub's 2 GiB release limit.

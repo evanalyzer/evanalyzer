@@ -1057,3 +1057,59 @@ fn logging_in_at_a_worker_or_a_closing_server_fails_clearly() {
         "{text}"
     );
 }
+
+/// Server mode: annotations exported as GeoJSON into a folder on the
+/// server, imported again from there and measured on the server's image -
+/// all through the connection.
+#[test]
+fn annotations_go_to_geojson_and_back_through_the_server() {
+    use evanalyzer_app::project::{
+        apply_import, export_geojson, measure_on_source, measure_pending, read_geojson,
+    };
+    let remote = connect();
+    let (_dir, settings) = project_with_fixture_image();
+    let mut project = ProjectWithRuntime {
+        settings,
+        tmp_settings: Default::default(),
+    };
+    let rel = project.images.list.keys().next().unwrap().clone();
+    let series = *project.images.list[&rel].series.keys().next().unwrap();
+    project
+        .images
+        .list
+        .get_mut(&rel)
+        .unwrap()
+        .series
+        .get_mut(&series)
+        .unwrap()
+        .objects
+        .push(ObjectMetricSettings {
+            bbox: [2, 3, 4, 4],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1, 1, 1, 0, 1, 0],
+            area: 4,
+            ..Default::default()
+        });
+
+    let out = tempfile::tempdir().unwrap();
+    let report = export_geojson(&project, remote.files(), out.path()).unwrap();
+    assert_eq!((report.files, report.objects), (1, 1));
+
+    // Into the same project, replacing: the shape back, measured.
+    let mut pending = read_geojson(&project, remote.files(), out.path()).unwrap();
+    measure_pending(&mut pending, |path, series, objects| {
+        remote
+            .open_image(path)
+            .and_then(|source| measure_on_source(source.as_ref(), series, objects))
+            .map_err(|e| e.to_string())
+    });
+    let report = apply_import(&mut project, pending, true);
+    assert_eq!(report.objects, 1);
+    assert!(report.unmeasured_images.is_empty(), "{report:?}");
+    let object = &project.images.list[&rel].series[&series].objects[0];
+    assert_eq!(object.bbox, [2, 3, 4, 4]);
+    assert_eq!(object.area, 4);
+    assert!(
+        !object.intensities.is_empty(),
+        "measured on the server's image"
+    );
+}

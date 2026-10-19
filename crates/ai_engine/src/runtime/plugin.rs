@@ -39,7 +39,9 @@ struct PluginEngine {
     infer: InferFn,
     free: FreeFn,
     /// Keeps the functions above valid; never unloaded (see the module).
-    _library: Library,
+    _library: Option<Library>,
+    /// libtorch's CUDA part (CUDA build), kept loaded.
+    _torch_cuda: Option<Library>,
 }
 
 /// Loads the plugin that fits this computer and sets it up with `config`.
@@ -58,9 +60,19 @@ pub(crate) fn load(config: &EngineConfig) -> Result<Box<dyn InferenceEngine>, St
         log::info!("Loading the AI plugin {}", path.display());
         match PluginEngine::load(path, config) {
             Ok(engine) => return Ok(Box::new(engine)),
-            Err(e) => {
+            // Not loaded: nothing of it stays in the process - the next one.
+            Err(PluginError::NotLoaded(e)) => {
                 log::warn!("AI plugin {}: {e}", path.display());
                 errors.push(format!("{}: {e}", path.display()));
+            }
+            // Loaded, its libtorch is in the process for good: another
+            // plugin would load a second libtorch beside it.
+            Err(PluginError::Failed(e)) => {
+                log::warn!("AI plugin {}: {e}", path.display());
+                return Err(format!(
+                    "The AI plugin could not be started: {}: {e}",
+                    path.display()
+                ));
             }
         }
     }
@@ -117,54 +129,144 @@ fn candidates(env: Option<PathBuf>, exe_dir: Option<&Path>, wants_gpu: bool) -> 
     paths
 }
 
+/// Why a plugin can't be used.
+#[derive(Debug)]
+enum PluginError {
+    /// It could not be loaded (or isn't one): nothing of it is in the
+    /// process, another one may be tried.
+    NotLoaded(String),
+    /// It loaded but could not be set up: its libtorch stays in the
+    /// process (it can't be unloaded) - no other plugin after it.
+    Failed(String),
+}
+
+/// The CUDA part of libtorch, in the plugin's folder in the CUDA build.
+#[cfg(not(windows))]
+const TORCH_CUDA: &str = "libtorch_cuda.so";
+#[cfg(windows)]
+const TORCH_CUDA: &str = "torch_cuda.dll";
+
 impl PluginEngine {
-    fn load(path: &Path, config: &EngineConfig) -> Result<Self, String> {
-        let path = std::path::absolute(path).map_err(|e| e.to_string())?;
+    fn load(path: &Path, config: &EngineConfig) -> Result<Self, PluginError> {
+        let path = std::path::absolute(path).map_err(|e| PluginError::NotLoaded(e.to_string()))?;
         // SAFETY: loading runs the library's initializers - libtorch's,
         // which are what this is for. Its functions are taken with the
         // types `crate::api::ffi` defines, after the API version
         // check below.
+        let library = unsafe { open(&path).map_err(PluginError::NotLoaded)? };
+        // From here on its libtorch is in the process: never unloaded (a
+        // failed plugin's library is leaked, not closed).
+        let result = unsafe { Self::set_up(&library, &path, config) };
+        match result {
+            Ok(mut engine) => {
+                engine._library = Some(library);
+                Ok(engine)
+            }
+            Err(e) => {
+                std::mem::forget(library);
+                Err(e)
+            }
+        }
+    }
+
+    /// The plugin's functions, CUDA registered, the engine set up - on the
+    /// CPU when the configured devices fail.
+    ///
+    /// # Safety
+    /// `library` must be the plugin library at `path`.
+    unsafe fn set_up(
+        library: &Library,
+        path: &Path,
+        config: &EngineConfig,
+    ) -> Result<Self, PluginError> {
         unsafe {
-            let library = open(&path)?;
             let symbol =
                 |name: &[u8]| String::from_utf8_lossy(&name[..name.len() - 1]).into_owned();
             let api_version = *library
                 .get::<ApiVersionFn>(SYMBOL_API_VERSION)
-                .map_err(|e| format!("not an AI plugin ({}): {e}", symbol(SYMBOL_API_VERSION)))?;
+                .map_err(|e| {
+                    PluginError::Failed(format!(
+                        "not an AI plugin ({}): {e}",
+                        symbol(SYMBOL_API_VERSION)
+                    ))
+                })?;
             let version = api_version();
             if version != API_VERSION {
-                return Err(format!(
+                return Err(PluginError::Failed(format!(
                     "built for interface version {version}, this program needs {API_VERSION} - \
                      install the plugin that came with this version"
-                ));
+                )));
             }
             let init = *library
                 .get::<InitFn>(SYMBOL_INIT)
-                .map_err(|e| format!("{}: {e}", symbol(SYMBOL_INIT)))?;
+                .map_err(|e| PluginError::Failed(format!("{}: {e}", symbol(SYMBOL_INIT))))?;
             let infer = *library
                 .get::<InferFn>(SYMBOL_INFER)
-                .map_err(|e| format!("{}: {e}", symbol(SYMBOL_INFER)))?;
+                .map_err(|e| PluginError::Failed(format!("{}: {e}", symbol(SYMBOL_INFER))))?;
             let free = *library
                 .get::<FreeFn>(SYMBOL_FREE)
-                .map_err(|e| format!("{}: {e}", symbol(SYMBOL_FREE)))?;
+                .map_err(|e| PluginError::Failed(format!("{}: {e}", symbol(SYMBOL_FREE))))?;
 
-            let config = encode(config)?;
-            let (mut out, mut err) = (Buf::EMPTY, Buf::EMPTY);
-            let code = init(
-                config.as_ptr(),
-                config.len(),
-                forward_log,
-                log::max_level() as u8,
-                &mut out,
-                &mut err,
-            );
-            let info = answer(free, code, out, err)?;
+            // libtorch's CUDA part registers itself when it is loaded -
+            // nothing in the plugin needs one of its symbols, so it is
+            // loaded here, from the plugin's folder, before the first
+            // libtorch call (the CPU build has none).
+            let cuda = load_torch_cuda(path);
+
+            let init_with = |config: &EngineConfig| -> Result<EngineInfo, String> {
+                let config = encode(config)?;
+                let (mut out, mut err) = (Buf::EMPTY, Buf::EMPTY);
+                let code = init(
+                    config.as_ptr(),
+                    config.len(),
+                    forward_log,
+                    log::max_level() as u8,
+                    &mut out,
+                    &mut err,
+                );
+                answer(free, code, out, err)
+            };
+            let info = match init_with(config) {
+                Ok(info) => info,
+                // The GPUs failed: the same libtorch runs on the CPU too.
+                Err(e) if config.devices != DeviceSelection::Cpu => {
+                    log::warn!("AI plugin {}: {e} - running on the CPU", path.display());
+                    let cpu = EngineConfig {
+                        devices: DeviceSelection::Cpu,
+                        ..config.clone()
+                    };
+                    init_with(&cpu).map_err(PluginError::Failed)?
+                }
+                Err(e) => return Err(PluginError::Failed(e)),
+            };
             Ok(Self {
                 info,
                 infer,
                 free,
-                _library: library,
+                _library: None,
+                _torch_cuda: cuda,
             })
+        }
+    }
+}
+
+/// Loads libtorch's CUDA library next to the plugin at `plugin`, if there
+/// is one; kept loaded for good.
+fn load_torch_cuda(plugin: &Path) -> Option<Library> {
+    let file = plugin.parent()?.join(TORCH_CUDA);
+    if !file.is_file() {
+        return None;
+    }
+    // SAFETY: libtorch's own CUDA library, beside the libtorch the plugin
+    // loaded; its initializers register CUDA with it.
+    match unsafe { open(&file) } {
+        Ok(library) => {
+            log::info!("Loaded {}", file.display());
+            Some(library)
+        }
+        Err(e) => {
+            log::warn!("{}: {e} - AI models run on the CPU", file.display());
+            None
         }
     }
 }
@@ -305,7 +407,37 @@ mod tests {
         let err = PluginEngine::load(&dir.path().join("nope.so"), &config())
             .err()
             .unwrap();
-        assert!(err.contains("could not be loaded"), "{err}");
+        // Not loaded: another plugin may be tried.
+        assert!(
+            matches!(&err, PluginError::NotLoaded(e) if e.contains("could not be loaded")),
+            "{err:?}"
+        );
+    }
+
+    /// The CUDA build: libtorch's CUDA library beside the plugin is loaded
+    /// with it (it registers CUDA - nothing links it). Only in a process
+    /// without libtorch of its own (no `torch` feature), as the app's:
+    /// otherwise CUDA would be registered twice.
+    #[cfg(all(target_os = "linux", not(feature = "torch")))]
+    #[test]
+    fn the_cuda_library_next_to_the_plugin_is_loaded_with_it() {
+        let libtorch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../libs/libtorch/lib");
+        let cuda = libtorch.join(TORCH_CUDA);
+        if !cuda.is_file() {
+            eprintln!("skipped: the libtorch here is the CPU build");
+            return;
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let plugin = folder.path().join(library_name());
+        std::fs::copy(build_plugin(), &plugin).unwrap();
+        std::os::unix::fs::symlink(&cuda, folder.path().join(TORCH_CUDA)).unwrap();
+
+        let engine = PluginEngine::load(&plugin, &config()).unwrap();
+        assert!(engine._torch_cuda.is_some());
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+        assert!(maps.contains(TORCH_CUDA), "libtorch_cuda in the process");
+        // No GPU needed: CUDA libtorch runs on the CPU.
+        assert_eq!(engine.info().devices[0].name, "CPU");
     }
 
     fn config() -> EngineConfig {
