@@ -31,6 +31,10 @@
 - [x] Settings › Viewport: "Preview tiles" and "Breakpoint tiles", each Auto (from the RAM) or a number. Preview: auto = the computer running it (a server caps a number asked for at what its RAM allows); breakpoint: this computer (the images are kept here). Remote protocol 18 → 19.
 - [ ] Start page: the bubbles more random - three proposals on the design canvas (board AC: Scattered / Depth / Sample), waiting for a pick.
 
+- [ ] Startup and RAM (measured 2026-10-18, BENCHMARK.md): libtorch is linked into the GUI and costs every start ~0.5 s warm / ~1.6 s cold before `main`, and ~190 MB RAM, AI used or not. Loading it only when an AI step runs (the "AI plugin" plan below) would roughly halve the startup and take ~190 MB off every session. The biggest remaining win for older computers.
+- [x] Older computers without a working graphics driver: Settings › Viewport › "Draw in software" (Slint's own renderer, read at startup; `SLINT_BACKEND` wins) - ~135 MB less RAM, no Mesa software OpenGL. No automatic detection (decided 2026-10-19: keep it simple; Reduce motion stops the start page's cells).
+- [ ] Linux packages: the app needs `libxkbcommon-x11` on X11 (winit panics without it) - list it as a dependency.
+
 ## Results
 
 - [ ] Results › List: "Rows 1–200 of N" - the total needs a COUNT over the whole filter on every change (a second query per page/filter). Not now: the list must stay fast, and the page's rows say enough (2026-10-17).

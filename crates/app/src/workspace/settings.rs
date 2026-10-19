@@ -193,6 +193,12 @@ pub struct ViewportMemorySettings {
     /// Kept in RAM while a breakpoint is set (~190 MB per 4096 x 4096 tile).
     pub breakpoint_tiles_auto: bool,
     pub breakpoint_tiles: u32,
+
+    /// The window is drawn by Slint's own software renderer instead of the
+    /// graphics card: ~135 MB less RAM, and smoother where there is no
+    /// working graphics driver (virtual machines, remote desktop, old
+    /// computers) - slower on very large screens. Read at startup.
+    pub software_renderer: bool,
 }
 
 impl ViewportMemorySettings {
@@ -282,6 +288,7 @@ impl Default for ViewportMemorySettings {
             preview_tiles: 4,
             breakpoint_tiles_auto: true,
             breakpoint_tiles: 1,
+            software_renderer: false,
         }
     }
 }

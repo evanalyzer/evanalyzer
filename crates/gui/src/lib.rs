@@ -598,6 +598,45 @@ pub fn create() -> GuiFrontend {
 // Internal startup
 // ----------------------------------------------------------------
 
+static PROCESS_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Settings › Viewport › Draw in software: Slint's own software renderer
+/// instead of the graphics card - chosen before the window exists (so it
+/// takes effect at the next start). `SLINT_BACKEND` set in the environment
+/// wins.
+fn choose_renderer() {
+    if std::env::var_os("SLINT_BACKEND").is_some() {
+        return;
+    }
+    let software = evanalyzer_app::backends::local::LocalBackend::default()
+        .load_app_settings()
+        .map(|settings| settings.viewport.software_renderer)
+        .unwrap_or(false);
+    if !software {
+        return;
+    }
+    match slint::BackendSelector::new()
+        .renderer_name("software".into())
+        .select()
+    {
+        Ok(()) => log::info!("Drawing in software (Settings › Viewport)"),
+        Err(e) => log::warn!("Could not draw in software, using the default renderer: {e}"),
+    }
+}
+
+
+/// Called first in `main`: the startup phases are logged (debug) from
+/// here on.
+pub fn mark_process_start() {
+    PROCESS_START.get_or_init(Instant::now);
+}
+
+/// A startup phase done: logged with the time since `main` began.
+fn startup_phase(phase: &str) {
+    let ms = PROCESS_START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
+    log::debug!("Startup: {phase} at {ms:.0} ms");
+}
+
 fn run(
     owner: ProjectOwner,
     project: Option<std::path::PathBuf>,
@@ -610,10 +649,13 @@ fn run(
         std::env::set_var("SLINT_SCALE_FACTOR", "1.0");
     }
 
+    startup_phase("GUI start");
+    choose_renderer();
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
-
+    startup_phase("window created");
     load_about_dialog_information(&ui);
+    startup_phase("about information");
 
     // Build AppHandle from owner - shares the same Arc<RwLock<ProjectSettings>>
     let app_handle = owner.handle();
@@ -631,8 +673,10 @@ fn run(
     // Using invoke_from_event_loop here caused the initial `changed width/height`
     // layout events to fire before the Rust callbacks were registered, so the
     // viewport size was never reported to Rust until the user manually resized.
+    startup_phase("settings");
     let editor = Arc::new(editor::Editor::new(ui_handle.clone(), ui_state.clone()));
     editor.attach_callbacks();
+    startup_phase("controllers ready");
     // `--project`: opened like "File > Open" - a file that can't be read
     // shows the usual warning in the window.
     match project {

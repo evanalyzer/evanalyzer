@@ -114,6 +114,58 @@ All well inside a 60 fps frame (16.7 ms). The start page's drifting cells
 repaint 10 times a second: about 2 % of one core while it shows, none with
 Settings › Viewport › Reduce motion.
 
+## The real app: startup, idle RAM and CPU (2026-10-18)
+
+Measured on the release binary under a virtual X server (Xvfb, no
+graphics card - frames are drawn by Mesa's software OpenGL/Vulkan, as on
+a computer without a working graphics driver). Script: start, wait for
+the window (`xdotool`), read `/proc/<pid>/status`.
+
+| | Warm (files in the OS cache) | Cold (after dropping the cache) |
+|---|---|---|
+| Before `main` (loading libtorch, its start-up code) | 530 ms | 1600 ms |
+| `main` → controllers ready (logged, `--log-level debug`) | 25 ms | - |
+| Window on screen | ~1.0 s | ~2.0 s |
+
+An empty program starts in 3 ms; the dynamic loader itself needs ~7 ms.
+The half second before `main` is libtorch registering its operators and
+CUDA kernels - in every session, AI used or not.
+
+RAM after startup, idle: ~510 MB.
+
+| Part | RSS |
+|---|---|
+| libtorch / CUDA libraries (cublasLt 60, torch_cpu 52, torch_cuda 23, …) | ~137 MB mapped |
+| libtorch's registrations on the heap | ~50 MB |
+| The program's code | 53 MB |
+| Software OpenGL/Vulkan of the test machine (LLVM, lavapipe) | ~150 MB (a real GPU driver instead) |
+| The app's own heap | a few MB |
+
+Idle CPU: 0 % with a project open. The start page's drifting cells cost
+~370 % CPU with software rendering (2.7 ms a frame with Slint's own
+software renderer, next to nothing with a graphics card) - Settings ›
+Viewport › Reduce motion stops them.
+
+Renderer (Settings › Viewport › Draw in software, read at startup): with
+Slint's own software renderer the idle app takes ~135 MB less (500 → 365
+MB release, 582 → 444 MB debug) - no OpenGL/Vulkan stack is loaded.
+
+### Leak checks (soak tests)
+
+- Viewer, 400 renders (zoom, pan, compare on/off with a breakpoint tile):
+  RAM rises while the tile cache fills (+296 → +346 MB in the first 150),
+  then stays flat. No leak.
+  `EVANALYZER_BENCH_SLIDE=… cargo test --release -p evanalyzer_gui --lib bench_soak_viewport -- --ignored --nocapture`
+- Results, the 1.7 GB analysis opened again and again with List, Plate,
+  Charts and 20 split selections each round: +0.2-0.4 MB a round, slowly
+  flattening (`BENCH_ROUNDS`, `BENCH_PART=open|views`). heaptrack (60 vs
+  10 rounds) puts the difference in DuckDB's buffer pool, not in our code.
+  DuckDB may keep 80 % of the RAM by default, per open results file (they
+  stay open for the session) - now capped at a quarter of the RAM
+  (1-8 GB); beyond that it spills to a temporary file. Same speed with
+  and without the cap.
+  `EVADB=… cargo test --release -p evanalyzer_gui --lib bench_soak_results -- --ignored --nocapture`
+
 ## Not covered
 
 - The RAM of the real app (window, fonts, GPU renderer): there is no
