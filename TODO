@@ -42,6 +42,7 @@
 
 ## Algorithms
 - [ ] Add measure distance command
+- [ ] **A classifier with empty input classes brings "removed" objects back** (user report 2026-10-20): "Object classifier (remove small objects) -> AI object classifier" has the small objects in the results again; the other order works. A removed object only loses its classes and stays in `object_cache`; empty input classes select every visible object, class-less ones too (`matches_input` in `ai_object_classifier.rs`, the same filter in `classify_objects.rs`), and "Reclassify on match" / "Add class" gives them a class again. Same with a second Object classifier. Workaround: set the input classes. Fix (decide - changes the documented "regardless of its current class"): (A, preferred) empty input classes = all objects that still have a class, in both classifiers; or (B) drop objects from the cache when their last class goes. Check first whether a step or export uses class-less objects on purpose.
 - [x] Allow to train pixel classifier
 - [x] Add fill holes command
 - [x] Add AI Object classifier command
@@ -203,7 +204,13 @@ Done (generated code 39.55 -> 40.48 MB). Open:
 - [ ] ⓘ cards have no docs links yet (no per-step docs URLs).
 - [x] O toggles the objects; the ellipse tool moved from O to E (agreed 2026-10-19).
 - [ ] Click through in the real app: tooltips (450 ms, neighbours, focus), fold + Tab + View menu, the run (lock/unlock, dots, toast), the Tuning dock, 125 % / 150 % on Windows.
-- [x] Step rows show that a click opens them (board AM, B without a hover hint): ▸ / ▾ before the number, hand cursor, the hover highlight (2026-10-20).
+- [x] Step rows show that a click opens them (board AM, without a hover hint): hand cursor and the hover highlight, no ▸ / ▾ (they took the values' room) (2026-10-20).
+- [x] Step rows' values (board AO, 2026-10-20): A - the buttons float over the row's end on hover, no room kept while hidden (only an off step's eye and a pinned ⌖ stay); B - EVA › View › "Step values on a second line" (per user, `panels.step_values_below`). The step's ⓘ moved to ⋯ › About; the parameters keep theirs.
+- [ ] Look at it in the real app: a long step name with values (the fade under the buttons), ⋯ › About on a step with help.
+- [x] Component card: its buttons (values, view, edit in place, edit for all uses) are only in ⋯; "Update to v…" stays on the card (2026-10-20).
+- [x] EVA menu (board AN, 2026-10-20): Open recent ▸, View ▸, Help ▸ - submenus drawn inside the menu's popup (a nested PopupWindow took the mouse away from the menu); Disconnect only while connected.
+- [x] Scale bar bottom right (board AP, 2026-10-20): on the Z/T bar's line, beside the right panels when Objects (open) reaches the bottom, else at the window's edge; on the Tuning dock when it's open. Split view unchanged.
+- [x] EVA menu: the ▸ row ("View") stays highlighted while its submenu is open (`InkMenuItem.active`, 2026-10-20).
 - [ ] Add step: the hover preview of what a component adds (board AL) isn't built - the buttons' tooltips say it.
 
 ## AI plugin
