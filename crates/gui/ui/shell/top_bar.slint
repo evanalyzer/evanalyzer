@@ -15,6 +15,28 @@ import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 import { StartState } from "../api/start.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
 
+// The EVA menu's open submenu: 0 none, 1 Open recent, 2 View, 3 Help.
+global EvaMenu {
+    in-out property <int> sub: 0;
+}
+
+// An entry of the EVA menu. Hovering it opens its submenu (`opens`, with a
+// ▸) or closes the one that is open - as in any desktop menu.
+component EvaMenuItem inherits InkMenuItem {
+    in property <int> opens: 0;
+    submenu: self.opens != 0;
+    changed has-hover => {
+        if self.has-hover {
+            EvaMenu.sub = self.enabled ? self.opens : 0;
+        }
+    }
+    clicked => {
+        if self.opens != 0 && self.enabled {
+            EvaMenu.sub = self.opens;
+        }
+    }
+}
+
 // "EVA ▾": opens the app's one menu.
 component EvaButton inherits Rectangle {
     callback clicked;
@@ -343,6 +365,7 @@ export component TopBar inherits Rectangle {
             alignment: center;
             EvaButton {
                 clicked => {
+                    EvaMenu.sub = 0;
                     eva-menu.show();
                 }
             }
@@ -527,353 +550,354 @@ export component TopBar inherits Rectangle {
 
     // The EVA menu. Rarely used groups one level down (▸, on hover or a
     // click): Open recent, View, Help - the menu stays shorter than a
-    // laptop screen.
+    // laptop screen. The submenus are panels inside this one popup, not
+    // popups of their own: Slint gives the mouse only to the topmost popup,
+    // so the menu under a nested one would stop reacting.
     eva-menu := PopupWindow {
         x: 6px;
         y: Ink.bar-h - 2px;
 
-        // One submenu open at a time: 1 Open recent, 2 View, 3 Help.
-        function open-sub(which: int) {
-            if which != 1 {
-                recent-menu.close();
-            }
-            if which != 2 {
-                view-menu.close();
-            }
-            if which != 3 {
-                help-menu.close();
-            }
-            if which == 1 {
-                recent-menu.show();
-            } else if which == 2 {
-                view-menu.show();
-            } else if which == 3 {
-                help-menu.show();
-            }
-        }
-
-        // An item of a submenu picked: both menus close.
-        function close-menus() {
-            recent-menu.close();
-            view-menu.close();
-            help-menu.close();
-            eva-menu.close();
-        }
-
-        InkMenuFrame {
-            open-y: root.absolute-position.y + Ink.bar-h - 2px;
-            menu-width: 290px;
-
-            InkMenuCaption { text: "PROJECT"; }
-            InkMenuItem {
-                icon: InkIcons.add;
-                text: "New";
-                clicked => {
-                    ToolbarState.new_file_clicked();
+        box := Rectangle {
+            // The menu, a gap, and room for the widest submenu beside it.
+            property <length> gap: 4px;
+            property <length> sub-x: main.width + box.gap;
+            property <length> sub-width: 280px;
+            property <length> recent-y: recent-item.y - 5px;
+            property <length> view-y: view-item.y - 5px;
+            property <length> help-y: help-item.y - 5px;
+            // Inside the menu or the open submenu: a click there isn't "outside".
+            pure function on-menu(x: length, y: length) -> bool {
+                if x < main.width && y < main.height {
+                    return true;
                 }
-            }
-            InkMenuItem {
-                icon: InkIcons.open;
-                text: "Open…";
-                shortcut: "Ctrl O";
-                clicked => {
-                    ToolbarState.open_file_clicked();
+                if x < box.sub-x || x >= box.sub-x + box.sub-width {
+                    return false;
                 }
+                if EvaMenu.sub == 1 {
+                    return y >= box.recent-y && y < box.recent-y + recent-menu.height;
+                }
+                if EvaMenu.sub == 2 {
+                    return y >= box.view-y && y < box.view-y + view-menu.height;
+                }
+                if EvaMenu.sub == 3 {
+                    return y >= box.help-y && y < box.help-y + help-menu.height;
+                }
+                false
             }
-            recent-item := InkMenuItem {
-                icon: InkIcons.project;
-                text: "Open recent";
-                submenu: true;
-                enabled: StartState.recent.length > 0;
-                changed has-hover => {
-                    if self.has-hover && self.enabled {
-                        eva-menu.open-sub(1);
+
+            min-width: box.sub-x + box.sub-width;
+            max-width: box.sub-x + box.sub-width;
+            min-height: max(main.height, box.recent-y + recent-menu.height, box.view-y + view-menu.height, box.help-y + help-menu.height);
+            max-height: self.min-height;
+
+            // The free room beside the menu: a click there closes it, as
+            // anywhere outside.
+            TouchArea {
+                clicked => {
+                    if !box.on-menu(self.mouse-x, self.mouse-y) {
+                        eva-menu.close();
                     }
                 }
-                clicked => {
-                    eva-menu.open-sub(1);
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.copy;
-                text: "New from template…";
-                clicked => {
-                    ToolbarState.new_from_project_template_clicked();
-                }
-            }
-            // The images: their folder (as in the images panel).
-            InkMenuItem {
-                icon: InkIcons.folder;
-                text: "Open images folder…";
-                shortcut: "Ctrl Shift O";
-                clicked => {
-                    ImagesListState.open_images_folder_clicked();
-                }
             }
 
-            InkMenuSeparator { }
-            InkMenuItem {
-                icon: InkIcons.save;
-                text: "Save";
-                shortcut: "Ctrl S";
-                clicked => {
-                    ToolbarState.save_file_clicked();
-                }
-            }
-            InkMenuItem {
-                text: "Save as…";
-                clicked => {
-                    ToolbarState.save_as_file_clicked();
-                }
-            }
-            InkMenuItem {
-                text: "Save as template…";
-                clicked => {
-                    ToolbarState.save_project_as_template_clicked();
-                }
-            }
+            main := InkMenuFrame {
+                x: 0px;
+                y: 0px;
+                width: self.menu-width;
+                height: self.min-height;
+                open-y: root.absolute-position.y + Ink.bar-h - 2px;
+                menu-width: 290px;
 
-            InkMenuSeparator { }
-            InkMenuItem {
-                icon: InkIcons.settings;
-                text: "Project settings…";
-                clicked => {
-                    GlobalAppState.active-dialog = DialogType.project-settings;
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.link;
-                text: "Cite project";
-                clicked => {
-                    ToolbarState.cite_project_clicked();
-                }
-            }
-
-            InkMenuSeparator { }
-            view-item := InkMenuItem {
-                icon: InkIcons.panels-hide;
-                text: "View";
-                submenu: true;
-                changed has-hover => {
-                    if self.has-hover {
-                        eva-menu.open-sub(2);
+                InkMenuCaption { text: "PROJECT"; }
+                EvaMenuItem {
+                    icon: InkIcons.add;
+                    text: "New";
+                    clicked => {
+                        ToolbarState.new_file_clicked();
                     }
                 }
-                clicked => {
-                    eva-menu.open-sub(2);
-                }
-            }
-
-            InkMenuSeparator { }
-            InkMenuCaption { text: "TOOLS"; }
-            InkMenuItem {
-                icon: InkIcons.ai;
-                text: "AI training…";
-                clicked => {
-                    AiLearningState.open_requested();
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.debug;
-                text: "Debug mode";
-                checked: PipelinesPanelState.debug-mode;
-                clicked => {
-                    PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.server;
-                text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
-                clicked => {
-                    ToolbarState.connect_clicked();
-                }
-            }
-            // Only while connected to a server.
-            if ConnectionState.remote: InkMenuItem {
-                icon: InkIcons.computer;
-                text: "Disconnect";
-                clicked => {
-                    ToolbarState.disconnect_clicked();
-                }
-            }
-
-            InkMenuSeparator { }
-            help-item := InkMenuItem {
-                icon: InkIcons.help;
-                text: "Help";
-                submenu: true;
-                changed has-hover => {
-                    if self.has-hover {
-                        eva-menu.open-sub(3);
+                EvaMenuItem {
+                    icon: InkIcons.open;
+                    text: "Open…";
+                    shortcut: "Ctrl O";
+                    clicked => {
+                        ToolbarState.open_file_clicked();
                     }
                 }
-                clicked => {
-                    eva-menu.open-sub(3);
+                recent-item := EvaMenuItem {
+                    icon: InkIcons.project;
+                    text: "Open recent";
+                    opens: 1;
+                    enabled: StartState.recent.length > 0;
+                }
+                EvaMenuItem {
+                    icon: InkIcons.copy;
+                    text: "New from template…";
+                    clicked => {
+                        ToolbarState.new_from_project_template_clicked();
+                    }
+                }
+                // The images: their folder (as in the images panel).
+                EvaMenuItem {
+                    icon: InkIcons.folder;
+                    text: "Open images folder…";
+                    shortcut: "Ctrl Shift O";
+                    clicked => {
+                        ImagesListState.open_images_folder_clicked();
+                    }
+                }
+
+                InkMenuSeparator { }
+                EvaMenuItem {
+                    icon: InkIcons.save;
+                    text: "Save";
+                    shortcut: "Ctrl S";
+                    clicked => {
+                        ToolbarState.save_file_clicked();
+                    }
+                }
+                EvaMenuItem {
+                    text: "Save as…";
+                    clicked => {
+                        ToolbarState.save_as_file_clicked();
+                    }
+                }
+                EvaMenuItem {
+                    text: "Save as template…";
+                    clicked => {
+                        ToolbarState.save_project_as_template_clicked();
+                    }
+                }
+
+                InkMenuSeparator { }
+                EvaMenuItem {
+                    icon: InkIcons.settings;
+                    text: "Project settings…";
+                    clicked => {
+                        GlobalAppState.active-dialog = DialogType.project-settings;
+                    }
+                }
+                EvaMenuItem {
+                    icon: InkIcons.link;
+                    text: "Cite project";
+                    clicked => {
+                        ToolbarState.cite_project_clicked();
+                    }
+                }
+
+                InkMenuSeparator { }
+                view-item := EvaMenuItem {
+                    icon: InkIcons.panels-hide;
+                    text: "View";
+                    opens: 2;
+                }
+
+                InkMenuSeparator { }
+                InkMenuCaption { text: "TOOLS"; }
+                EvaMenuItem {
+                    icon: InkIcons.ai;
+                    text: "AI training…";
+                    clicked => {
+                        AiLearningState.open_requested();
+                    }
+                }
+                EvaMenuItem {
+                    icon: InkIcons.debug;
+                    text: "Debug mode";
+                    checked: PipelinesPanelState.debug-mode;
+                    clicked => {
+                        PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
+                    }
+                }
+                EvaMenuItem {
+                    icon: InkIcons.server;
+                    text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
+                    clicked => {
+                        ToolbarState.connect_clicked();
+                    }
+                }
+                // Only while connected to a server.
+                if ConnectionState.remote: EvaMenuItem {
+                    icon: InkIcons.computer;
+                    text: "Disconnect";
+                    clicked => {
+                        ToolbarState.disconnect_clicked();
+                    }
+                }
+
+                InkMenuSeparator { }
+                help-item := EvaMenuItem {
+                    icon: InkIcons.help;
+                    text: "Help";
+                    opens: 3;
                 }
             }
 
             // -- The submenus, beside their row --
-            recent-menu := PopupWindow {
-                x: recent-item.x + recent-item.width + 4px;
-                y: recent-item.y - 5px;
-                InkMenuFrame {
-                    menu-width: 280px;
-                    for project[i] in StartState.recent: InkMenuItem {
-                        icon: project.missing ? InkIcons.warning : InkIcons.project;
-                        text: project.name;
-                        shortcut: project.when;
-                        enabled: !project.missing;
-                        clicked => {
-                            eva-menu.close-menus();
-                            StartState.open-recent(i);
+            recent-menu := InkMenuFrame {
+                x: box.sub-x;
+                y: box.recent-y;
+                width: self.menu-width;
+                height: self.min-height;
+                menu-width: box.sub-width;
+                visible: EvaMenu.sub == 1;
+                for project[i] in StartState.recent: InkMenuItem {
+                    icon: project.missing ? InkIcons.warning : InkIcons.project;
+                    text: project.name;
+                    shortcut: project.when;
+                    enabled: !project.missing;
+                    clicked => {
+                        eva-menu.close();
+                        StartState.open-recent(i);
+                    }
+                }
+                InkMenuSeparator { }
+                InkMenuItem {
+                    text: "Clear the list";
+                    clicked => {
+                        eva-menu.close();
+                        StartState.clear-recent();
+                    }
+                }
+            }
+
+            view-menu := InkMenuFrame {
+                x: box.sub-x;
+                y: box.view-y;
+                width: self.menu-width;
+                height: self.min-height;
+                menu-width: box.sub-width;
+                visible: EvaMenu.sub == 2;
+                InkMenuItem {
+                    text: LayoutState.mode == WorkspaceMode.images ? "Images" : "Steps";
+                    checked: LayoutState.steps-open;
+                    shortcut: "Alt 1";
+                    clicked => {
+                        LayoutState.steps-open = !LayoutState.steps-open;
+                        LayoutState.panels-hidden = false;
+                        LayoutState.panels-changed();
+                    }
+                }
+                InkMenuItem {
+                    text: "Classes";
+                    checked: LayoutState.classes-open;
+                    shortcut: "Alt 2";
+                    clicked => {
+                        LayoutState.classes-open = !LayoutState.classes-open;
+                        LayoutState.panels-hidden = false;
+                        LayoutState.panels-changed();
+                    }
+                }
+                InkMenuItem {
+                    text: "Image";
+                    checked: LayoutState.image-open;
+                    shortcut: "Alt 3";
+                    clicked => {
+                        LayoutState.image-open = !LayoutState.image-open;
+                        LayoutState.panels-hidden = false;
+                        LayoutState.panels-changed();
+                    }
+                }
+                InkMenuItem {
+                    text: "Objects";
+                    checked: LayoutState.objects-open;
+                    shortcut: "Alt 4";
+                    clicked => {
+                        LayoutState.objects-open = !LayoutState.objects-open;
+                        LayoutState.panels-hidden = false;
+                        LayoutState.panels-changed();
+                    }
+                }
+                InkMenuItem {
+                    icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
+                    text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
+                    shortcut: "Tab";
+                    clicked => {
+                        LayoutState.panels-hidden = !LayoutState.panels-hidden;
+                    }
+                }
+                InkMenuSeparator { }
+                // The navigator: by itself (only zoomed in), always, never.
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 10px;
+                    Text {
+                        width: 70px;
+                        text: "Navigator";
+                        font-size: Ink.fs-body;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                    }
+                    InkSegmented {
+                        horizontal-stretch: 1;
+                        label: "Navigator";
+                        model: ["Auto", "Always", "Never"];
+                        selected: LayoutState.navigator-mode;
+                        picked(i) => {
+                            LayoutState.navigator-mode = i;
+                            LayoutState.panels-changed();
                         }
                     }
-                    InkMenuSeparator { }
-                    InkMenuItem {
-                        text: "Clear the list";
-                        clicked => {
-                            eva-menu.close-menus();
-                            StartState.clear-recent();
+                }
+                // The colors: one row.
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 10px;
+                    Text {
+                        width: 70px;
+                        text: "Colors";
+                        font-size: Ink.fs-body;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                    }
+                    InkSegmented {
+                        horizontal-stretch: 1;
+                        label: "Colors";
+                        model: ["Light", "Dark", "Dim"];
+                        selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
+                        picked(i) => {
+                            Appearance.pick(i == 1 ? InkScheme.dark : i == 2 ? InkScheme.dim : InkScheme.light);
                         }
                     }
                 }
             }
 
-            view-menu := PopupWindow {
-                x: view-item.x + view-item.width + 4px;
-                y: view-item.y - 5px;
-                InkMenuFrame {
-                    menu-width: 280px;
-                    InkMenuItem {
-                        text: LayoutState.mode == WorkspaceMode.images ? "Images" : "Steps";
-                        checked: LayoutState.steps-open;
-                        shortcut: "Alt 1";
-                        clicked => {
-                            LayoutState.steps-open = !LayoutState.steps-open;
-                            LayoutState.panels-hidden = false;
-                            LayoutState.panels-changed();
-                        }
-                    }
-                    InkMenuItem {
-                        text: "Classes";
-                        checked: LayoutState.classes-open;
-                        shortcut: "Alt 2";
-                        clicked => {
-                            LayoutState.classes-open = !LayoutState.classes-open;
-                            LayoutState.panels-hidden = false;
-                            LayoutState.panels-changed();
-                        }
-                    }
-                    InkMenuItem {
-                        text: "Image";
-                        checked: LayoutState.image-open;
-                        shortcut: "Alt 3";
-                        clicked => {
-                            LayoutState.image-open = !LayoutState.image-open;
-                            LayoutState.panels-hidden = false;
-                            LayoutState.panels-changed();
-                        }
-                    }
-                    InkMenuItem {
-                        text: "Objects";
-                        checked: LayoutState.objects-open;
-                        shortcut: "Alt 4";
-                        clicked => {
-                            LayoutState.objects-open = !LayoutState.objects-open;
-                            LayoutState.panels-hidden = false;
-                            LayoutState.panels-changed();
-                        }
-                    }
-                    InkMenuItem {
-                        icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
-                        text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
-                        shortcut: "Tab";
-                        clicked => {
-                            LayoutState.panels-hidden = !LayoutState.panels-hidden;
-                        }
-                    }
-                    InkMenuSeparator { }
-                    // The navigator: by itself (only zoomed in), always, never.
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        padding-top: 4px;
-                        padding-bottom: 4px;
-                        spacing: 10px;
-                        Text {
-                            width: 70px;
-                            text: "Navigator";
-                            font-size: Ink.fs-body;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                        }
-                        InkSegmented {
-                            horizontal-stretch: 1;
-                            label: "Navigator";
-                            model: ["Auto", "Always", "Never"];
-                            selected: LayoutState.navigator-mode;
-                            picked(i) => {
-                                LayoutState.navigator-mode = i;
-                                LayoutState.panels-changed();
-                            }
-                        }
-                    }
-                    // The colors: one row.
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        padding-top: 4px;
-                        padding-bottom: 4px;
-                        spacing: 10px;
-                        Text {
-                            width: 70px;
-                            text: "Colors";
-                            font-size: Ink.fs-body;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                        }
-                        InkSegmented {
-                            horizontal-stretch: 1;
-                            label: "Colors";
-                            model: ["Light", "Dark", "Dim"];
-                            selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
-                            picked(i) => {
-                                Appearance.pick(i == 1 ? InkScheme.dark : i == 2 ? InkScheme.dim : InkScheme.light);
-                            }
-                        }
+            help-menu := InkMenuFrame {
+                x: box.sub-x;
+                y: box.help-y;
+                width: self.menu-width;
+                height: self.min-height;
+                menu-width: 240px;
+                visible: EvaMenu.sub == 3;
+                InkMenuItem {
+                    icon: InkIcons.keyboard;
+                    text: "Shortcuts";
+                    shortcut: "F1";
+                    clicked => {
+                        eva-menu.close();
+                        GlobalAppState.active-dialog = DialogType.shortcuts-help;
                     }
                 }
-            }
-
-            help-menu := PopupWindow {
-                x: help-item.x + help-item.width + 4px;
-                y: help-item.y - 5px;
-                InkMenuFrame {
-                    menu-width: 240px;
-                    InkMenuItem {
-                        icon: InkIcons.keyboard;
-                        text: "Shortcuts";
-                        shortcut: "F1";
-                        clicked => {
-                            eva-menu.close-menus();
-                            GlobalAppState.active-dialog = DialogType.shortcuts-help;
-                        }
+                InkMenuItem {
+                    icon: InkIcons.help;
+                    text: "evanalyzer.org";
+                    clicked => {
+                        eva-menu.close();
+                        ToolbarState.open_website();
                     }
-                    InkMenuItem {
-                        icon: InkIcons.help;
-                        text: "evanalyzer.org";
-                        clicked => {
-                            eva-menu.close-menus();
-                            ToolbarState.open_website();
-                        }
-                    }
-                    InkMenuItem {
-                        icon: InkIcons.info;
-                        text: "About";
-                        clicked => {
-                            eva-menu.close-menus();
-                            GlobalAppState.active-dialog = DialogType.about;
-                        }
+                }
+                InkMenuItem {
+                    icon: InkIcons.info;
+                    text: "About";
+                    clicked => {
+                        eva-menu.close();
+                        GlobalAppState.active-dialog = DialogType.about;
                     }
                 }
             }
