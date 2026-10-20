@@ -934,6 +934,7 @@ pub(crate) fn apply_panels(ui: &AppWindow, ui_state: &UiState) {
         evanalyzer_app::global::NavigatorMode::Always => 1,
         evanalyzer_app::global::NavigatorMode::Never => 2,
     });
+    layout.set_step_values_below(panels.step_values_below);
 }
 
 fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
@@ -953,6 +954,7 @@ fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
             2 => evanalyzer_app::global::NavigatorMode::Never,
             _ => evanalyzer_app::global::NavigatorMode::Auto,
         },
+        step_values_below: layout.get_step_values_below(),
     }
 }
 
@@ -1445,6 +1447,7 @@ mod ui_state_tests {
         layout.set_stack_bar_folded(true);
         layout.set_classes_open(false);
         layout.set_navigator_mode(2);
+        layout.set_step_values_below(true);
         layout.invoke_panels_changed();
         let saved = ui_state.load_app_settings().panels;
         assert!(saved.image_folded && saved.image_bar_folded && !saved.classes_open);
@@ -1455,6 +1458,7 @@ mod ui_state_tests {
         assert!(layout.get_image_folded() && layout.get_stack_bar_folded());
         assert!(!layout.get_classes_open() && layout.get_objects_open());
         assert_eq!(layout.get_navigator_mode(), 2);
+        assert!(layout.get_step_values_below());
     }
 
     #[test]

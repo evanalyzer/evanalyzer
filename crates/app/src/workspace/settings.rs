@@ -90,6 +90,8 @@ pub struct PanelSettings {
     pub image_bar_folded: bool,
     pub pipelines_list_open: bool,
     pub navigator: NavigatorMode,
+    /// The step rows' values on a second line under the name (EVA › View).
+    pub step_values_below: bool,
 }
 
 /// When the image's navigator (the mini-map) shows.
@@ -116,6 +118,7 @@ impl Default for PanelSettings {
             image_bar_folded: false,
             pipelines_list_open: false,
             navigator: NavigatorMode::Auto,
+            step_values_below: false,
         }
     }
 }
@@ -386,7 +389,8 @@ impl AppSettings {
     /// Puts `project` first in [`Self::recent_projects`], replacing an
     /// older entry for the same file.
     pub fn remember_project(&mut self, project: RecentProject) {
-        self.recent_projects.retain(|known| known.path != project.path);
+        self.recent_projects
+            .retain(|known| known.path != project.path);
         self.recent_projects.insert(0, project);
         self.recent_projects.truncate(MAX_RECENT_PROJECTS);
     }
@@ -485,7 +489,9 @@ mod tests {
     #[test]
     fn panel_settings_default_to_every_panel_shown_and_open_and_old_files_get_them() {
         let panels = PanelSettings::default();
-        assert!(panels.steps_open && panels.classes_open && panels.image_open && panels.objects_open);
+        assert!(
+            panels.steps_open && panels.classes_open && panels.image_open && panels.objects_open
+        );
         assert!(!panels.classes_folded && !panels.image_folded && !panels.objects_folded);
         let old: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(old.panels, PanelSettings::default());
@@ -499,7 +505,11 @@ mod tests {
     #[test]
     fn preview_and_breakpoint_tiles_follow_the_ram_unless_set() {
         let gb = |n: u64| n << 30;
-        assert_eq!(ViewportMemorySettings::auto_preview_tiles(gb(16)), 4, "as before");
+        assert_eq!(
+            ViewportMemorySettings::auto_preview_tiles(gb(16)),
+            4,
+            "as before"
+        );
         assert_eq!(ViewportMemorySettings::auto_preview_tiles(gb(2)), 1);
         assert_eq!(ViewportMemorySettings::auto_preview_tiles(gb(512)), 32);
         assert_eq!(ViewportMemorySettings::auto_breakpoint_tiles(gb(8)), 1);
@@ -507,14 +517,22 @@ mod tests {
         assert_eq!(ViewportMemorySettings::auto_breakpoint_tiles(gb(512)), 16);
 
         let mut settings = ViewportMemorySettings::default();
-        assert_eq!(settings.requested_preview_tiles(), None, "auto: the running computer decides");
+        assert_eq!(
+            settings.requested_preview_tiles(),
+            None,
+            "auto: the running computer decides"
+        );
         assert_eq!(settings.effective_breakpoint_tiles(gb(16)), 3);
         settings.preview_tiles_auto = false;
         settings.preview_tiles = 100;
         settings.breakpoint_tiles_auto = false;
         settings.breakpoint_tiles = 0;
         assert_eq!(settings.requested_preview_tiles(), Some(100));
-        assert_eq!(settings.effective_breakpoint_tiles(gb(16)), 1, "at least one");
+        assert_eq!(
+            settings.effective_breakpoint_tiles(gb(16)),
+            1,
+            "at least one"
+        );
     }
 
     #[test]
@@ -523,14 +541,24 @@ mod tests {
         settings.remember_project(project("/a.evaproj"));
         settings.remember_project(project("/b.evaproj"));
         settings.remember_project(project("/a.evaproj"));
-        let paths: Vec<_> = settings.recent_projects.iter().map(|p| p.path.clone()).collect();
-        assert_eq!(paths, [PathBuf::from("/a.evaproj"), PathBuf::from("/b.evaproj")]);
+        let paths: Vec<_> = settings
+            .recent_projects
+            .iter()
+            .map(|p| p.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            [PathBuf::from("/a.evaproj"), PathBuf::from("/b.evaproj")]
+        );
         for i in 0..20 {
             settings.remember_project(project(&format!("/{i}.evaproj")));
         }
         assert_eq!(settings.recent_projects.len(), MAX_RECENT_PROJECTS);
         settings.forget_project(std::path::Path::new("/19.evaproj"));
-        assert_eq!(settings.recent_projects[0].path, PathBuf::from("/18.evaproj"));
+        assert_eq!(
+            settings.recent_projects[0].path,
+            PathBuf::from("/18.evaproj")
+        );
     }
 
     #[test]
