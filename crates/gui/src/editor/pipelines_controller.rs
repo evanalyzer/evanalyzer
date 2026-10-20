@@ -223,8 +223,8 @@ impl PipelinesController {
             // Save pipeline as component
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
-                .on_save_as_component(move || {
-                    manager.save_pipeline_as_component();
+                .on_save_as_component(move |pipeline_id| {
+                    manager.save_pipeline_as_component(PipelineId(pipeline_id as u32));
                 });
 
             // Dry run pipeline
@@ -3203,19 +3203,18 @@ impl PipelinesController {
 
     /// "Save pipeline as component" for the active pipeline: the metadata
     /// dialog, then the file. A pipeline without steps has nothing to save.
-    fn save_pipeline_as_component(self: &Arc<Self>) {
+    fn save_pipeline_as_component(self: &Arc<Self>, pipeline_id: PipelineId) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
-        let panel = ui.global::<PipelinesPanelState>();
-        let pipeline_id = PipelineId(panel.get_active_pipeline_id() as u32);
-        let has_steps = self
+        let name = self
             .app_state
             .get_project()
             .pipelines
             .iter()
-            .any(|p| p.id == pipeline_id && !p.steps.is_empty());
-        if !has_steps {
+            .find(|p| p.id == pipeline_id && !p.steps.is_empty())
+            .map(|p| p.name.clone());
+        let Some(name) = name else {
             let warning = ui.global::<WarningState>();
             warning.set_info(true);
             warning.set_title("Nothing to save".into());
@@ -3223,8 +3222,7 @@ impl PipelinesController {
             ui.global::<GlobalAppState>()
                 .set_active_dialog(DialogType::Warning);
             return;
-        }
-        let name = panel.get_active_pipeline_name().to_string();
+        };
         self.template_controller
             .start_pipeline_component_save(pipeline_id, name);
     }
@@ -10988,7 +10986,7 @@ mod tests {
     fn saving_an_empty_pipeline_as_component_says_there_is_nothing_to_save() {
         let (ui, _ui_state, _controller) = selected(vec![]);
         ui.global::<PipelinesPanelState>()
-            .invoke_save_as_component();
+            .invoke_save_as_component(1);
         assert_eq!(
             ui.global::<GlobalAppState>().get_active_dialog(),
             DialogType::Warning
@@ -11000,7 +10998,7 @@ mod tests {
     fn saving_a_pipeline_as_component_opens_the_metadata_dialog() {
         let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
         ui.global::<PipelinesPanelState>()
-            .invoke_save_as_component();
+            .invoke_save_as_component(1);
         assert_eq!(
             ui.global::<GlobalAppState>().get_active_dialog(),
             DialogType::TemplateMeta

@@ -4,7 +4,7 @@ use crate::editor::viewport_controller::ViewportController;
 mod split;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell,
-    MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode,
+    MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsRailMode,
     ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
@@ -333,11 +333,6 @@ impl ResultsStateController {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             self.attach_split_callbacks(&ui);
-            ui.global::<ResultsListState>()
-                .on_refresh_clicked(move || {});
-
-            ui.global::<ResultsListState>()
-                .on_open_folder_clicked(move || {});
 
             // -------- ResultsState (api/results.slint) --------
             // Prototypes only for now - wire up the real behavior next.
