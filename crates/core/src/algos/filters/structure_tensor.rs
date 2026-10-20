@@ -50,17 +50,6 @@ pub enum TensorMode {
 /// eigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues
 /// near zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),
 /// and complex corners or intersections (two large eigenvalues).
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{StructureTensor, Mode};
-/// let settings = StructureTensor {
-///     mode: Mode::Coherence,
-///     kernel_size: 3,
-///     sigma: 1.5
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct StructureTensor {

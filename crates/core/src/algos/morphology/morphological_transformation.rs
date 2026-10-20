@@ -52,17 +52,6 @@ pub enum KernelShapes {
 ///
 /// Morphological operations use a structuring element (kernel) to probe
 /// and modify the shapes within an image.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};
-/// let clean_noise = MorphologicalCommand {
-///     op: MorphOps::Open,
-///     kernel_size: 3,
-///     kernel_shape: KernelShapes::Ellipse,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct MorphologicalCommand {

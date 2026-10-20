@@ -22,17 +22,6 @@ use std::sync::Arc;
 /// gradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,
 /// and applying a dual-threshold hysteresis loop to preserve weak edges connected
 /// to strong ones while completely rejecting isolated noise.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EdgeDetectionCanny;
-/// let edges = EdgeDetectionCanny {
-///     kernel_size: 3,
-///     threshold_min: 0.1,
-///     threshold_max: 0.3,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct EdgeDetectionCanny {

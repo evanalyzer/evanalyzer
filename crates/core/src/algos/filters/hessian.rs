@@ -44,15 +44,6 @@ pub enum HessianMode {
 /// and intensity topography. By evaluating the eigenvalues of this matrix, it differentiates
 /// between directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),
 /// and flat regions, making it highly effective for curvilinear feature extraction.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::{Hessian, HessianMode};
-/// let detector = Hessian {
-///     mode: HessianMode::Determinant,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct Hessian {

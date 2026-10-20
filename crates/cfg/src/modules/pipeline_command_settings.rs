@@ -879,17 +879,6 @@ pub struct DistanceTransformSettings {
 /// gradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,
 /// and applying a dual-threshold hysteresis loop to preserve weak edges connected
 /// to strong ones while completely rejecting isolated noise.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EdgeDetectionCanny;
-/// let edges = EdgeDetectionCanny {
-/// kernel_size: 3,
-/// threshold_min: 0.1,
-/// threshold_max: 0.3,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeDetectionCannySettings {
@@ -915,13 +904,6 @@ pub struct EdgeDetectionCannySettings {
 /// of pixel intensities across the horizontal and vertical axes. It highlights
 /// areas of sharp luminance changes, producing a continuous gradient map that
 /// emphasizes prominent structural edges and surface transitions.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EdgeDetectionSobel;
-/// let filter = EdgeDetectionSobel { kernel_size: 3 };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeDetectionSobelSettings {
@@ -962,17 +944,6 @@ pub struct EnhanceContrastSettings {
 /// high-frequency pixel variations (like camera noise, salt-and-pepper artifacts,
 /// or dust) while preserving structural features. It is commonly used as a
 /// preprocessing step to optimize thresholding and edge detection tasks.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::GaussianBlur;
-///
-/// let settings = GaussianBlur {
-/// kernel_size: 5,
-/// sigma: 2.0
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1005,15 +976,6 @@ impl Default for GaussianBlurSettings {
 /// and intensity topography. By evaluating the eigenvalues of this matrix, it differentiates
 /// between directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),
 /// and flat regions, making it highly effective for curvilinear feature extraction.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::{Hessian, HessianMode};
-/// let detector = Hessian {
-/// mode: HessianMode::Determinant,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HessianSettings {
@@ -1027,18 +989,6 @@ pub struct HessianSettings {
 /// Defines a range within the HSV (Hue, Saturation, Value) color space.
 ///
 /// This is commonly used for color-based filtering or "chroma keying."
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::HsvRange;
-///
-/// let green_filter = HsvRange {
-/// min_h: 100.0, max_h: 140.0,
-/// min_s: 0.2,   max_s: 1.0,
-/// min_v: 0.2,   max_v: 1.0,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1142,16 +1092,6 @@ impl Default for IlluminationCorrectionSettings {
 ///
 /// `ImageCache` allows the pipeline to branch or "undo" operations by saving
 /// states to a named address and reloading them as needed.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};
-/// let checkpoint = ImageCache {
-/// mode: ImageCacheMode::Store,
-/// address: ImageAddress::from("pre_processed_state"),
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageCacheSettings {
@@ -1165,17 +1105,6 @@ pub struct ImageCacheSettings {
 /// pipeline image and a secondary image stored in the cache.
 ///
 /// This command allows for complex image blending, masking, and comparison.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{ImageMath, Operand};
-/// let subtract_bg = ImageMath {
-/// operand: Operand::Subtract,
-/// second_image_address: ImageAddress::from("background"),
-/// swap_operands: false,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageMathSettings {
@@ -1217,13 +1146,6 @@ pub struct IntensityTransformationSettings {
 /// The Laplacian is a second-order derivative operator used to find regions of
 /// rapid intensity change. It is particularly effective for detecting edges
 /// and fine details, though it is highly sensitive to noise.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::Laplacian;
-/// let filter = Laplacian { kernel_size: 3 };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LaplacianSettings {
@@ -1251,13 +1173,6 @@ pub struct LoadChannelSettings {
 /// This algorithm is highly effective for removing large-scale background
 /// variations while preserving small, high-contrast features. It works by
 /// estimating the background as the median intensity within a local radius.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::MedianSubtract;
-/// let filter = MedianSubtract { radius: 10.0 };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MedianSubtractSettings {
@@ -1272,17 +1187,6 @@ pub struct MedianSubtractSettings {
 ///
 /// Morphological operations use a structuring element (kernel) to probe
 /// and modify the shapes within an image.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};
-/// let clean_noise = MorphologicalCommand {
-/// op: MorphOps::Open,
-/// kernel_size: 3,
-/// kernel_shape: KernelShapes::Ellipse,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MorphologicalCommandSettings {
@@ -1356,13 +1260,6 @@ impl Default for RollingBallSettings {
 /// This is a **transparent command**: it does not modify the image data in the
 /// pipeline context, nor does it perform a buffer swap. It acts as a tap
 /// to view the state of the image at a specific point in the pipeline.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::SaveImage;
-/// let saver = SaveImage {path:"output/processed_cell.png"};
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1448,17 +1345,6 @@ impl Default for ScriptSettings {
 /// eigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues
 /// near zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),
 /// and complex corners or intersections (two large eigenvalues).
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{StructureTensor, Mode};
-/// let settings = StructureTensor {
-/// mode: Mode::Coherence,
-/// kernel_size: 3,
-/// sigma: 1.5
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StructureTensorSettings {
@@ -1487,16 +1373,6 @@ pub struct StructureTensorSettings {
 /// weighted average of the squared intensities. By subtracting the squared mean from
 /// the mean of squares, it yields a localized, smooth statistical variance map that
 /// highlights micro-textures and subtle surface boundaries without producing blocky artifacts.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::WeightedDeviation;
-/// let settings = WeightedDeviation {
-/// kernel_size: 7,
-/// sigma: 2.0,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WeightedDeviationSettings {
@@ -1526,7 +1402,7 @@ fn _serde_default_cellpose_cellpose_postprocessing() -> bool {
 fn _serde_default_cellpose_replicate_gray_channel() -> bool {
     true
 }
-/// Instance segmentation using a Cellpose-SAM model exported as TorchScript
+/// Instance segmentation using a Cellpose-SAM model
 ///
 /// [AI Cellpose Segmentation] -> [Extract Objects]
 ///
@@ -1620,20 +1496,16 @@ impl Default for CellposeSettings {
     }
 }
 
-/// A pixel classifier trained via the app's AI training dialog
-/// (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),
-/// applied here as a pipeline segmentation step: every pixel is classified
-/// independently (reusing the same feature recipe used at training time),
-/// then remapped through `segmentation_mapping` into this project's own
-/// classes and written to the segmentation map - the same output shape
-/// `Threshold` produces, so downstream steps (extraction, classification)
-/// don't need to care which one ran.
+/// Segments the image with a pixel classifier trained in the AI training dialog.
 ///
-/// Predicted classes with no matching `segmentation_mapping` entry are
-/// written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`
-/// leaves pixels outside every configured range as background - mapping
-/// only the classes you care about is a deliberate simplification, not an
-/// oversight.
+/// [Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
+///
+/// Train a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.
+/// The classifier assigns every pixel of the image to a class, producing a segmented image.
+/// The segmentation mapping translates the model's classes into this project's segmentation classes.
+///
+/// Use a pixel classifier in place of a threshold step.
+/// Like a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelClassifierSettings {

@@ -33,16 +33,6 @@ use std::sync::Arc;
 /// weighted average of the squared intensities. By subtracting the squared mean from
 /// the mean of squares, it yields a localized, smooth statistical variance map that
 /// highlights micro-textures and subtle surface boundaries without producing blocky artifacts.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::WeightedDeviation;
-/// let settings = WeightedDeviation {
-///     kernel_size: 7,
-///     sigma: 2.0,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct WeightedDeviation {
