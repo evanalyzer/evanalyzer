@@ -201,16 +201,8 @@ export component ClassificationPanel inherits Rectangle {
             }
 
             InkMenuItem {
-                icon: InkIcons.add;
-                text: "Add the classes found, merged";
-                enabled: ImagesListState.images_list.length > 0;
-                clicked => {
-                    ClassificationState.class_auto_add_and_merge();
-                }
-            }
-
-            InkMenuItem {
-                text: "…replacing the list";
+                icon: InkIcons.sparkle;
+                text: "Add classes from image";
                 enabled: ImagesListState.images_list.length > 0;
                 clicked => {
                     // Background is always there: ask only when there are others.
@@ -219,6 +211,14 @@ export component ClassificationPanel inherits Rectangle {
                     } else {
                         ClassificationState.class_auto_add_and_replace();
                     }
+                }
+            }
+
+            InkMenuItem {
+                text: "Merge classes from image";
+                enabled: ImagesListState.images_list.length > 0;
+                clicked => {
+                    ClassificationState.class_auto_add_and_merge();
                 }
             }
 

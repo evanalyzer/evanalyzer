@@ -2306,6 +2306,7 @@ component StepRow inherits Rectangle {
                         width: 20px;
                         background: @linear-gradient(90deg, root.line-bg.transparentize(100%) 0%, root.line-bg 100%);
                     }
+
                     Rectangle {
                         background: root.line-bg;
                         HorizontalLayout {
@@ -2592,15 +2593,15 @@ component StepRow inherits Rectangle {
 
             if root.step.help != "": InkMenuItem {
                 icon: InkIcons.info;
-                text: "About \{root.step.name}";
+                text: "Help";
                 clicked => {
                     about-card.show();
                 }
             }
 
             InkMenuItem {
-                icon: InkIcons.settings;
-                text: "Settings…";
+                icon: InkIcons.expand;
+                text: "Settings";
                 shortcut: "Enter";
                 clicked => {
                     root.open-settings();
@@ -2658,48 +2659,41 @@ component StepRow inherits Rectangle {
 
             InkMenuItem {
                 icon: InkIcons.component;
-                text: "Bundle into a component…";
+                text: "Create component";
                 enabled: root.editable;
                 clicked => {
                     root.create-component();
                 }
             }
 
-            if root.step.category == StepCategory.component && root.editable && root.step.parameters.length > 0: InkMenuItem {
-                icon: InkIcons.expand;
-                text: "Change this step's values…";
-                clicked => {
-                    root.open-settings();
-                }
-            }
             if root.step.category == StepCategory.component: InkMenuItem {
-                text: "View its steps (this step's values)";
+                text: "View";
                 clicked => {
                     root.view-component();
                 }
             }
             if root.step.category == StepCategory.component && root.editable: InkMenuItem {
-                text: "Edit in place (this step only)…";
+                text: "Edit in place";
                 clicked => {
                     root.edit-in-place();
                 }
             }
             if root.step.category == StepCategory.component && root.editable: InkMenuItem {
                 icon: InkIcons.component;
-                text: "Edit the component (all uses)…";
+                text: "Edit component";
                 clicked => {
                     root.open-component();
                 }
             }
             if root.step.category == StepCategory.component && root.editable: InkMenuItem {
-                text: "Expand into its steps";
+                text: "Expand";
                 clicked => {
                     root.expand-component();
                 }
             }
             if root.step.category == StepCategory.component && PipelinesPanelState.open-component-name == "": InkMenuItem {
                 icon: InkIcons.save;
-                text: "Save to the library…";
+                text: "Save as";
                 clicked => {
                     root.save-to-library();
                 }
@@ -3170,7 +3164,7 @@ export component PipelinesPanel inherits Rectangle {
                         alignment: center;
                         if !PipelinesPanelState.open-component-read-only: InkButton {
                             small: true;
-                            text: "Settings…";
+                            text: "Settings";
                             clicked => {
                                 PipelinesPanelState.open-component-settings();
                             }

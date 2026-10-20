@@ -87,7 +87,7 @@ component ObjectActions inherits HorizontalLayout {
     spacing: 4px;
     if root.editable: InkButton {
         small: true;
-        text: "Set class…";
+        text: "Set class";
         kind: InkButtonKind.primary;
         clicked => {
             GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
@@ -96,7 +96,7 @@ component ObjectActions inherits HorizontalLayout {
     if !root.editable: InkButton {
         small: true;
         icon: InkIcons.copy;
-        text: "Copy as annotation";
+        text: "Copy to annotation";
         tip: "An editable copy among the manual annotations - to change it or train with it";
         kind: InkButtonKind.primary;
         clicked => {
@@ -530,21 +530,21 @@ export component ObjectListPanel inherits Rectangle {
 
             InkMenuItem {
                 icon: InkIcons.copy;
-                text: "Copy all objects as annotations…";
+                text: "Copy detection to annotations";
                 clicked => {
                     AnnotationState.open-copy-dialog();
                 }
             }
 
             InkMenuItem {
-                text: "Export this image's objects (GeoJSON)…";
+                text: "Export as GeoJSON";
                 clicked => {
                     AnnotationState.open-export-dialog();
                 }
             }
 
             InkMenuItem {
-                text: "Import annotations into this image (GeoJSON)…";
+                text: "Import from GeoJSON";
                 clicked => {
                     AnnotationState.pick-import-file();
                 }
