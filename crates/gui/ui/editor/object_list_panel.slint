@@ -125,14 +125,17 @@ component ObjectFilter inherits HorizontalLayout {
     callback class-clicked;
     spacing: 6px;
     InkChip {
-        text: ObjectListState.filter-class < 0 ? "All classes ▾" : root.class-name;
+        text: (ObjectListState.filter-class < 0 ? "All classes" : root.class-name)
+            + (ObjectListState.filter-source == 1 ? " · manual" : ObjectListState.filter-source == 2 ? " · detections" : "")
+            + (ObjectListState.filter-class < 0 ? " ▾" : "");
         swatch: ObjectListState.filter-class < 0 ? transparent : root.class-color;
-        removable: ObjectListState.filter-class >= 0;
+        removable: ObjectListState.filter-class >= 0 || ObjectListState.filter-source != 0;
         clicked => {
             root.class-clicked();
         }
         remove => {
             ObjectListState.filter-class = -1;
+            ObjectListState.filter-source = 0;
             ObjectListState.filter-changed();
         }
     }
@@ -158,7 +161,7 @@ component ObjectRow inherits Rectangle {
         title: root.data.label_name;
         swatch: root.data.class_colors.length > 0 ? root.data.class_colors[0] : root.data.display_color;
         tag: root.data.class_colors.length > 1 ? "+" + (root.data.class_colors.length - 1) : "";
-        trailing: root.data.label_count;
+        trailing: root.data.area > 0 ? root.data.area + " px²" : "";
         selected: root.selected;
         clicked => {
             root.clicked();
@@ -530,7 +533,7 @@ export component ObjectListPanel inherits Rectangle {
 
             InkMenuItem {
                 icon: InkIcons.copy;
-                text: "Copy detection to annotations";
+                text: "Copy all to annotations";
                 clicked => {
                     AnnotationState.open-copy-dialog();
                 }
@@ -584,13 +587,32 @@ export component ObjectListPanel inherits Rectangle {
         }
     }
 
-    // The class filter's choices.
+    // The filter's choices: where the objects come from, their class.
     class-menu := PopupWindow {
         x: root.table ? root.width - root.table-filter-w - root.head-buttons-w : Ink.pad-panel;
         y: root.table ? Ink.head-h - 4px : Ink.head-h + 26px;
         InkMenuFrame {
             open-y: root.absolute-position.y + (root.table ? Ink.head-h - 4px : Ink.head-h + 26px);
             menu-width: 220px;
+            InkMenuCaption {
+                text: "SHOW";
+            }
+
+            for source[i] in ["All", "Annotations", "Detections"]: InkMenuItem {
+                text: source;
+                checked: ObjectListState.filter-source == i;
+                clicked => {
+                    ObjectListState.filter-source = i;
+                    ObjectListState.filter-changed();
+                }
+            }
+
+            InkMenuSeparator { }
+
+            InkMenuCaption {
+                text: "CLASS";
+            }
+
             InkMenuItem {
                 text: "All classes";
                 checked: ObjectListState.filter-class < 0;
