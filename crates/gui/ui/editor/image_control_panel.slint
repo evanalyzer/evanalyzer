@@ -395,21 +395,36 @@ export component ImageControlPanel inherits Rectangle {
                     overflow: elide;
                 }
 
-                InkButton {
+                // Every channel (the original's only) or the selected one.
+                auto-scale := InkButton {
                     small: true;
                     kind: InkButtonKind.quiet;
+                    icon: InkIcons.caret-down;
                     text: "Auto-scale";
                     clicked => {
-                        HistogramState.auto_adjust_clicked();
+                        auto-scale-menu.show();
                     }
                 }
-                // Every channel (the original's).
-                if HistogramState.side == 0: InkButton {
-                    small: true;
-                    kind: InkButtonKind.quiet;
-                    text: "All channels";
-                    clicked => {
-                        HistogramState.auto_adjust_all_clicked();
+
+                auto-scale-menu := PopupWindow {
+                    x: auto-scale.x + auto-scale.width - 180px;
+                    y: auto-scale.y + auto-scale.height;
+                    InkMenuFrame {
+                        open-y: auto-scale.absolute-position.y + auto-scale.height;
+                        menu-width: 180px;
+                        InkMenuItem {
+                            text: "All channels";
+                            enabled: HistogramState.side == 0;
+                            clicked => {
+                                HistogramState.auto_adjust_all_clicked();
+                            }
+                        }
+                        InkMenuItem {
+                            text: "Selected channel";
+                            clicked => {
+                                HistogramState.auto_adjust_clicked();
+                            }
+                        }
                     }
                 }
             }
