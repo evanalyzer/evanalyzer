@@ -90,7 +90,7 @@ pub struct UiState {
     /// `image_states`.
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
-    image_opened_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
 }
 
 
@@ -118,7 +118,7 @@ impl UiState {
             app_settings: Mutex::new(app_settings),
             local_backend,
             image_states_listener: Mutex::new(None),
-            image_opened_listener: Mutex::new(None),
+            image_opened_listeners: Mutex::new(Vec::new()),
         }
     }
 
@@ -186,20 +186,18 @@ impl UiState {
         }
     }
 
-    /// Calls `f` when another image (or series) is shown.
+    /// Calls `f` (too) when another image (or series) is shown.
     pub fn on_image_opened(&self, f: impl Fn() + Send + Sync + 'static) {
-        *self.image_opened_listener.lock().expect("Poisoned") = Some(Box::new(f));
+        self.image_opened_listeners
+            .lock()
+            .expect("Poisoned")
+            .push(Box::new(f));
     }
 
     /// Another image (or series) is shown - e.g. the auto preview runs
     /// for it.
     pub fn image_opened(&self) {
-        if let Some(listener) = self
-            .image_opened_listener
-            .lock()
-            .expect("Poisoned")
-            .as_ref()
-        {
+        for listener in self.image_opened_listeners.lock().expect("Poisoned").iter() {
             listener();
         }
     }

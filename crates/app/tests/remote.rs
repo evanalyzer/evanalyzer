@@ -1099,6 +1099,7 @@ fn annotations_go_to_geojson_and_back_through_the_server() {
         &rel,
         &std::collections::HashSet::from([None]),
         &file,
+        evanalyzer_app::project::PipelineObjects { objects: &[], series },
     )
     .unwrap();
     assert_eq!(written, 1);

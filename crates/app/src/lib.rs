@@ -38,7 +38,8 @@ pub mod components {
     };
     pub use crate::workspace::component_editing::{
         ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,
-        bindable_settings, bound_setting_edited, clone_component_for_step, compatible_parameters,
+        bindable_settings, bound_setting_edited, clone_component_for_step, component_in_place_for_step,
+        compatible_parameters,
         component_uses, create_component, edit_parameter, expand_component, exposed_settings,
         list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,
         plan_component, prune_component_values, remove_binding, remove_component,
@@ -140,6 +141,7 @@ pub mod project {
     pub use crate::workspace::annotations_geojson::{
         ClassTarget, FileClass, ImportReport, PendingImport, apply_import, default_class_target,
         export_image_geojson, image_annotation_classes, measure_pending, read_image_geojson,
+        PipelineObjects,
     };
     pub use crate::workspace::class_ids::{
         ClassIdChange, change_class_id, free_class_ids, next_class_id,

@@ -54,6 +54,7 @@ export component ImportAnnotationsDialog inherits InkDialog {
                 horizontal-stretch: 0;
                 label: "Import " + (row.name == "" ? "the shapes without a class" : row.name) + " as";
                 model: AnnotationState.import-targets;
+                swatches: AnnotationState.import-target-colors;
                 selected: row.target;
                 picked(t) => {
                     AnnotationState.import-classes[i].target = t;

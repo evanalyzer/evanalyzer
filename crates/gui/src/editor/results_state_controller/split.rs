@@ -37,6 +37,8 @@ pub(super) struct SplitState {
     well_images: Vec<(String, String)>,
     /// The channel of the card's mean.
     channel: usize,
+    /// The split view is on screen (Results, List or Plate, split).
+    shown: bool,
     /// Plate "Color by value": the objects in the heatmap's colors. Kept
     /// here - the overlay is also pushed from the database thread, where
     /// the window can't be reached.
@@ -48,6 +50,14 @@ pub(super) struct SplitState {
 impl ResultsStateController {
     pub(super) fn attach_split_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
+
+        // The split's image open now: its objects and the selected one on it.
+        let weak = Arc::downgrade(self);
+        self._app_state.on_image_opened(move || {
+            if let Some(manager) = weak.upgrade() {
+                manager.split_image_opened();
+            }
+        });
 
         // As the user left it (a user setting).
         let settings = self._app_state.load_app_settings().results_split;
@@ -83,6 +93,7 @@ impl ResultsStateController {
         // the image, or the project's again.
         let manager = self.clone();
         state.on_split_shown(move |shown| {
+            manager.split.lock().expect("Poisoned").shown = shown;
             if shown {
                 manager.split_push_overlay();
             } else {
@@ -298,6 +309,8 @@ impl ResultsStateController {
     ) {
         let generation = {
             let mut split = self.split.lock().expect("Poisoned");
+            // Asked for from the split view: it is on screen.
+            split.shown = true;
             split.region = region;
             if split.image.as_deref() == Some(rel_path.as_str()) && !split.objects.is_empty() {
                 if select.is_none() {
@@ -409,6 +422,19 @@ impl ResultsStateController {
         });
     }
 
+    /// An image was opened: the split's own (it was being opened for a row
+    /// or a well) - its objects and the selection go on it now.
+    fn split_image_opened(&self) {
+        let (shown, image) = {
+            let split = self.split.lock().expect("Poisoned");
+            (split.shown, split.image.clone())
+        };
+        if shown && image.as_deref().is_some_and(|rel| self.split_in_viewer(rel)) {
+            self.split_push_overlay();
+            self.split_push_selection(false);
+        }
+    }
+
     /// The viewer shows the image `rel_path` (of the analysis).
     fn split_in_viewer(&self, rel_path: &str) -> bool {
         use evanalyzer_app::project::ProjectExt;
@@ -429,21 +455,13 @@ impl ResultsStateController {
             let split = self.split.lock().expect("Poisoned");
             (split.objects.clone(), split.selected, split.image.clone())
         };
-        // Another image opened meanwhile (in Images): not its objects.
+        // Its image isn't the one in the viewer (yet): opening it takes
+        // longer than reading its objects. They are kept and drawn once it
+        // is open (`split_image_opened`) - not dropped, which left a row's
+        // object unshown and the image unclickable.
         if image.as_deref().is_some_and(|rel| !self.split_in_viewer(rel)) {
-            warn!(
-                "Split view: {image:?} is not the image in the viewer ({:?}) - its objects are dropped",
-                self._app_state.get_project().tmp_settings.current_image
-            );
-            {
-                let mut split = self.split.lock().expect("Poisoned");
-                split.generation += 1;
-                split.image = None;
-                split.objects = Arc::new(Vec::new());
-                split.selected = None;
-            }
+            log::debug!("Split view: {image:?} not open yet - its objects wait for it");
             self.viewport().set_results_overlay(None);
-            self.split_push_selection(false);
             return;
         }
         if objects.is_empty() {

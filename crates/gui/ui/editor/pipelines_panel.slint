@@ -2033,6 +2033,7 @@ component StepRow inherits Rectangle {
     callback duplicate;
     callback create-component;
     callback open-component;
+    callback edit-in-place;
     callback view-component;
     callback expand-component;
     callback save-to-library;
@@ -2086,6 +2087,8 @@ component StepRow inherits Rectangle {
                 // stays hovered (as siblings they flickered - hiding the
                 // button hovered the line, which showed it again).
                 head-ta := TouchArea {
+                // A click opens or closes it: the hand says so, and ▸ / ▾.
+                mouse-cursor: pointer;
                 clicked => {
                     PipelinesPanelState.selected-step-id = root.idx;
                     root.toggle-expanded();
@@ -2093,6 +2096,17 @@ component StepRow inherits Rectangle {
 
                 HorizontalLayout {
                     spacing: 0px;
+
+                    // ▸ closed, ▾ open - as the folding panels.
+                    Text {
+                        width: 16px;
+                        text: step.expanded ? "▾" : "▸";
+                        font-size: Ink.fs-caption;
+                        color: head-ta.has-hover || step.expanded ? Ink.text-dim : Ink.text-mute;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
 
                     // The gutter: the step's id (what "#2 EV Detection"
                     // elsewhere refers to) - a click sets its breakpoint, like
@@ -2508,9 +2522,19 @@ component StepRow inherits Rectangle {
                         }
                     }
                 }
-                    // The component itself, on a line of its own (the card is narrow).
+                    // The component itself, on a line of its own (the card is narrow):
+                    // in place (this step only, with its values) or for all uses.
                     if root.step.category == StepCategory.component && root.editable: HorizontalLayout {
                         alignment: start;
+                        spacing: 6px;
+                        InkButton {
+                            small: true;
+                            text: "Edit in place…";
+                            tip: "Its steps with this step's values, to change any setting - only this step (it gets its own copy when others use the component)";
+                            clicked => {
+                                root.edit-in-place();
+                            }
+                        }
                         InkButton {
                             small: true;
                             kind: InkButtonKind.quiet;
@@ -2617,6 +2641,12 @@ component StepRow inherits Rectangle {
                 text: "View its steps (this step's values)";
                 clicked => {
                     root.view-component();
+                }
+            }
+            if root.step.category == StepCategory.component && root.editable: InkMenuItem {
+                text: "Edit in place (this step only)…";
+                clicked => {
+                    root.edit-in-place();
                 }
             }
             if root.step.category == StepCategory.component && root.editable: InkMenuItem {
@@ -3256,6 +3286,9 @@ export component PipelinesPanel inherits Rectangle {
                         }
                         open-component => {
                             PipelinesPanelState.open-component(cmd.id);
+                        }
+                        edit-in-place => {
+                            PipelinesPanelState.edit-component-in-place(cmd.id);
                         }
                         view-component => {
                             PipelinesPanelState.view-component(cmd.id);

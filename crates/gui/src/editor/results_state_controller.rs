@@ -7310,6 +7310,40 @@ mod tests {
         assert!(controller._app_state.load_app_settings().results_split.image_panel);
     }
 
+    /// A row's image opens slower than its objects are read: they wait for
+    /// it (they were dropped, so a row's object never showed) and go on it
+    /// once it is open.
+    #[test]
+    fn a_rows_objects_wait_for_its_image_to_open() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_split_shown(true);
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        assert!(controller.viewport().results_overlay().is_some());
+        let opened = controller._app_state.get_project().tmp_settings.current_image.clone();
+
+        // Another image still in the viewer when the objects arrive.
+        controller._app_state.get_project_write().tmp_settings.current_image =
+            Some(PathBuf::from("/data/images/still-the-old-one.tif"));
+        controller.split_push_overlay();
+        assert!(controller.viewport().results_overlay().is_none(), "not drawn on the wrong image");
+        assert!(!controller.split.lock().unwrap().objects.is_empty(), "kept, not dropped");
+
+        // Now it is open: the objects and the selection go on it.
+        controller._app_state.get_project_write().tmp_settings.current_image = opened;
+        controller._app_state.image_opened();
+        drain_ui_queue();
+        let overlay = controller.viewport().results_overlay().expect("drawn once the image is open");
+        assert_eq!(overlay.selected, Some(0));
+        assert!(state.get_split_sel().active);
+
+        // Split view away: an image opened elsewhere gets no results overlay.
+        state.invoke_split_shown(false);
+        controller._app_state.image_opened();
+        assert!(controller.viewport().results_overlay().is_none());
+    }
+
     /// Plate "Color by value" also when the overlay is pushed from the
     /// database thread (where the window can't be reached), as it is right
     /// after an image's objects are read.

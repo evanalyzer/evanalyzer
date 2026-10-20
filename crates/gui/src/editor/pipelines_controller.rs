@@ -1560,6 +1560,44 @@ impl PipelinesController {
                 manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
             });
 
+            // "Edit in place" on a component card: a component of its own
+            // with the step's values, opened - other uses untouched.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_edit_component_in_place(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        return;
+                    }
+                    manager.app_state.begin_undo_step();
+                    let result = {
+                        let mut project = manager.app_state.get_project_write();
+                        evanalyzer_app::components::component_in_place_for_step(
+                            &mut project,
+                            &manager.shown_list(pipeline_id),
+                            step_idx as usize,
+                        )
+                    };
+                    match result {
+                        Ok(_) => {
+                            manager.pipeline_settings_changed();
+                            manager.open_component_in_panel(pipeline_id, step_idx as usize, false);
+                        }
+                        Err(e) => {
+                            let warning = ui.global::<WarningState>();
+                            warning.set_info(false);
+                            warning.set_title("Cannot edit the component in place".into());
+                            warning.set_message(e.to_string().into());
+                            ui.global::<GlobalAppState>()
+                                .set_active_dialog(DialogType::Warning);
+                        }
+                    }
+                });
+
             // "Expand" on a component card: its steps in its place.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
@@ -8661,6 +8699,21 @@ mod tests {
             StepCategory::Component,
             "the component colour"
         );
+    }
+
+    /// "Edit in place" from a component card: the step gets a component of
+    /// its own (used twice: a copy) and it opens, to edit.
+    #[test]
+    fn edit_in_place_opens_the_steps_own_component() {
+        let (ui, ui_state, _controller) = with_a_component();
+        // Threshold, ◆ Smooth: used once - no copy, it opens to edit.
+        let before = ui_state.get_project().components.len();
+        ui.global::<PipelinesPanelState>().invoke_edit_component_in_place(1);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(ui_state.get_project().components.len(), before, "used once: no copy");
+        assert!(panel.get_open_component_name().contains("Smooth"));
+        assert!(!panel.get_open_component_read_only(), "to edit");
     }
 
     /// The picker's "Add its steps": the component's steps in its place -

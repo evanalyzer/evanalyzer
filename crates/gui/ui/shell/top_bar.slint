@@ -467,13 +467,14 @@ export component TopBar inherits Rectangle {
                         ViewportObjectState.compare = !ViewportObjectState.compare;
                     }
                 }
+                // AI training - used far more than debug mode (that one,
+                // for power users, is in the EVA menu).
                 InkIconButton {
                     size: 28px;
-                    icon: InkIcons.debug;
-                    label: "Debug mode";
-                    active: PipelinesPanelState.debug-mode;
+                    icon: InkIcons.ai;
+                    label: "AI training…";
                     clicked => {
-                        PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
+                        AiLearningState.open_requested();
                     }
                 }
                 if !root.running: AutoPreviewToggle { }

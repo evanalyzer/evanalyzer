@@ -14,7 +14,7 @@ use crate::{
 use evanalyzer_app::project::{
     AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, ProjectExt,
     ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
-    image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
+    PipelineObjects, image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -398,7 +398,9 @@ impl AnnotationController {
         let Some(ui) = self.ui.upgrade() else { return };
         let rows = {
             let project = self.app_state.get_project();
-            let classes: Vec<(ObjectClass, usize)> = image_annotation_classes(&project, &rel_path)
+            // Its manual annotations and the pipeline objects shown on it.
+            let classes: Vec<(ObjectClass, usize)> =
+                image_annotation_classes(&project, &rel_path, project.get_preview_objects())
                 .into_iter()
                 .map(|(id, count)| (id.map_or(ObjectClass::Unset, ObjectClass::Global), count))
                 .collect();
@@ -415,7 +417,7 @@ impl AnnotationController {
     /// open image's annotations of the ticked classes there.
     fn export_geojson(self: &Arc<Self>) {
         let Some(ui) = self.ui.upgrade() else { return };
-        let Some((rel_path, _, name)) = self.open_image() else { return };
+        let Some((rel_path, series, name)) = self.open_image() else { return };
         let classes: std::collections::HashSet<Option<u32>> =
             ticked(&ui.global::<AnnotationState>().get_export_classes())
                 .into_iter()
@@ -446,14 +448,21 @@ impl AnnotationController {
             crate::helper::ui_thread::spawn(move || {
                 let backend = m.app_state.backend();
                 // A snapshot: the project isn't locked while the file is written.
-                let project = ProjectWithRuntime {
-                    settings: m.app_state.get_project().settings.clone(),
-                    tmp_settings: Default::default(),
+                let (project, pipeline) = {
+                    let project = m.app_state.get_project();
+                    (
+                        ProjectWithRuntime {
+                            settings: project.settings.clone(),
+                            tmp_settings: Default::default(),
+                        },
+                        project.get_preview_objects().clone(),
+                    )
                 };
-                match export_image_geojson(&project, backend.files(), &rel_path, &classes, &file) {
+                let pipeline = PipelineObjects { objects: &pipeline, series };
+                match export_image_geojson(&project, backend.files(), &rel_path, &classes, &file, pipeline) {
                     Ok(count) => m.show_message(
                         "Annotations exported",
-                        format!("{} written to {}.", plural(count, "annotation", "annotations"), file.display()),
+                        format!("{} written to {}.", plural(count, "object", "objects"), file.display()),
                         true,
                     ),
                     Err(e) => m.show_message("Export failed", e, false),
@@ -483,7 +492,7 @@ impl AnnotationController {
                     Ok(pending) => pending,
                     Err(e) => return m.show_message("Import failed", e, false),
                 };
-                let (rows, targets, classes) = {
+                let ImportTargets { rows, targets, colors, classes } = {
                     let project = m.app_state.get_project();
                     import_rows(&project, &pending)
                 };
@@ -502,6 +511,7 @@ impl AnnotationController {
                     state.set_import_shapes(shapes);
                     state.set_import_classes(ModelRc::new(VecModel::from(rows)));
                     state.set_import_targets(ModelRc::new(VecModel::from(targets)));
+                    state.set_import_target_colors(ModelRc::new(VecModel::from(colors)));
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::ImportAnnotations);
                 });
@@ -616,19 +626,22 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 fn import_rows(
     project: &ProjectWithRuntime,
     pending: &PendingImport,
-) -> (Vec<ImportClassRow>, Vec<slint::SharedString>, Vec<u32>) {
-    let classes: Vec<(u32, String)> = project
+) -> ImportTargets {
+    let classes: Vec<(u32, String, u32)> = project
         .settings
         .classification
         .classes()
         .iter()
         .filter(|c| c.id != 0)
-        .map(|c| (c.id, c.name.clone()))
+        .map(|c| (c.id, c.name.clone(), c.color))
         .collect();
     let mut targets: Vec<slint::SharedString> =
         vec!["New class".into(), "No class".into(), "Don't import".into()];
-    targets.extend(classes.iter().map(|(_, name)| slint::SharedString::from(name.as_str())));
-    let ids: Vec<u32> = classes.iter().map(|(id, _)| *id).collect();
+    targets.extend(classes.iter().map(|(_, name, _)| slint::SharedString::from(name.as_str())));
+    // The project classes' colors beside their names; none for the first three.
+    let mut colors = vec![slint::Color::from_argb_u8(0, 0, 0, 0); 3];
+    colors.extend(classes.iter().map(|(_, _, color)| color_from_hex(*color)));
+    let ids: Vec<u32> = classes.iter().map(|(id, _, _)| *id).collect();
     let rows = pending
         .file_classes()
         .into_iter()
@@ -647,7 +660,16 @@ fn import_rows(
             }
         })
         .collect();
-    (rows, targets, ids)
+    ImportTargets { rows, targets, colors, classes: ids }
+}
+
+/// The import dialog's content: [`import_rows`].
+struct ImportTargets {
+    rows: Vec<ImportClassRow>,
+    targets: Vec<slint::SharedString>,
+    colors: Vec<slint::Color>,
+    /// The project classes the targets 3 + k stand for.
+    classes: Vec<u32>,
 }
 
 /// A target of the import dialog as a mapping.
@@ -841,13 +863,15 @@ mod tests {
         )
         .unwrap();
 
-        let (rows, targets, classes) = import_rows(&project, &pending);
+        let ImportTargets { rows, targets, colors, classes } = import_rows(&project, &pending);
         let names: Vec<(String, i32)> = rows.iter().map(|r| (r.name.to_string(), r.target)).collect();
         assert_eq!(
             names,
             vec![("nuclei".into(), 3), ("Tumor".into(), TARGET_NEW), (String::new(), TARGET_NONE)]
         );
         assert_eq!(targets[3], "Nuclei");
+        assert_eq!(colors[3], color_from_hex(0x3080f0), "beside its name, its colour");
+        assert_eq!(colors[0].alpha(), 0, "none for New class");
         assert_eq!(target_of(3, &classes), ClassTarget::Class(nuclei));
         assert_eq!(target_of(TARGET_SKIP, &classes), ClassTarget::Skip);
         assert_eq!(target_of(TARGET_NONE, &classes), ClassTarget::NoClass);

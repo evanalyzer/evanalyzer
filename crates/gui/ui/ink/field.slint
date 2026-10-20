@@ -435,9 +435,13 @@ export component InkSelect inherits Rectangle {
     in property <bool> mono: false;
     /// A colored dot before the text (a channel's, a class's color).
     in property <color> swatch: transparent;
+    /// A color per entry (a class's), drawn before it; transparent: none.
+    in property <[color]> swatches;
     in property <string> label;
     callback picked(int, string);
 
+    property <color> shown-swatch: root.swatch != transparent ? root.swatch
+        : root.selected >= 0 && root.selected < root.swatches.length ? root.swatches[root.selected] : transparent;
     property <string> current: root.value != "" ? root.value
         : root.selected >= 0 && root.selected < root.model.length ? root.model[root.selected] : "";
 
@@ -478,12 +482,12 @@ export component InkSelect inherits Rectangle {
             padding-right: 6px;
             spacing: 6px;
             Rectangle {
-                width: root.swatch == transparent ? 0px : 8px;
+                width: root.shown-swatch == transparent ? 0px : 8px;
                 Rectangle {
                     width: 8px;
                     height: 8px;
                     border-radius: 4px;
-                    background: root.swatch;
+                    background: root.shown-swatch;
                 }
             }
             Text {
@@ -548,6 +552,15 @@ export component InkSelect inherits Rectangle {
                         padding-left: 8px;
                         padding-right: 8px;
                         spacing: 8px;
+                        if i < root.swatches.length && root.swatches[i] != transparent: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: root.swatches[i];
+                            }
+                        }
                         Text {
                             horizontal-stretch: 1;
                             text: entry;

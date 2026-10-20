@@ -402,6 +402,9 @@ export global PipelinesPanelState {
         /// settings dialog at its parameter.
         callback edit-exposed(int, string);
         callback open-component(int);
+        // "Edit in place": the step gets a component of its own holding its
+        // current values (a copy when others use the component too), opened.
+        callback edit-component-in-place(int);
         callback close-component();
         callback expand-component(int);
         /// "Save to library…" on a component card (step index).
