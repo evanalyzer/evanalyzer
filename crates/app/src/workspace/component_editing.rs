@@ -2479,6 +2479,8 @@ mod tests {
                     1,
                     PipelineCommand::LoadChannel(LoadChannelSettings {
                         channel: ImageChannelIdx(1),
+                        projection: evanalyzer_cfg::settings::pipeline_command_settings::MathLoadChannelChannelZProjectionSettings::Auto,
+                        z_index: 0,
                     }),
                 ),
                 step(2, threshold(7)),

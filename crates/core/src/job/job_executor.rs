@@ -1,6 +1,6 @@
 use crate::pipeline::scope::Scope;
 use crate::{
-    ImageInfo, ZProjection,
+    ImageContainer, ImageInfo, ZProjection,
     algos::Connectivity,
     dataset::{DatasetAlgorithm, DatasetContext},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
@@ -8,7 +8,7 @@ use crate::{
         image_cache::ImageCache,
         object_cache::ObjectCache,
         pipeline::{Pipeline, PipelineImageMeta},
-        pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
+        pipeline_cache::{CacheAddress, ChannelVariant, GlobalImageMeta, GlobalPipelineCache},
     },
     storage::PipelineResultExporter,
     utils::resources::MAX_TILE_SIZE,
@@ -634,6 +634,20 @@ impl<'a> JobExecutor {
             .collect();
         let z_stacks: Vec<i32> = z_range.collect();
 
+        // Load Image Channel steps with their own projection or z-plane: read
+        // beside the channels (`add_channel_variants`), their z-plane checked
+        // before any tile is read.
+        let channel_variants = self.channel_variants();
+        check_channel_variant_planes(&channel_variants, nr_z_stacks)?;
+        if !channel_variants.is_empty() && z_stacks.len() > 1 {
+            warn!(
+                "{image_rel_path:?}: a Load Image Channel step sets its own z-projection, but the \
+                 project analyzes {} z-planes one by one - its pipeline runs once per plane, so \
+                 its objects repeat for every plane",
+                z_stacks.len()
+            );
+        }
+
         // Pre-select the breakpoint target tile before building work items so
         // we can mark exactly one tile as the event sender deterministically.
         // Only meaningful when `progress.is_some()` (interactive run); in a
@@ -734,6 +748,10 @@ impl<'a> JobExecutor {
         );
 
         'stacks: for &t in &t_stacks {
+            // A channel variant is the same image on every z-plane of this
+            // t: with several planes, read once per tile and reused.
+            let variant_store: VariantStore = Mutex::new(HashMap::new());
+            let reuse_variants = (z_stacks.len() > 1).then_some(&variant_store);
             for &z in &z_stacks {
                 let plane_annotations: Arc<Vec<ObjectMetricSettings>> = Arc::new(
                     series_annotations
@@ -794,6 +812,18 @@ impl<'a> JobExecutor {
                         &z_proj,
                         &z_range_in,
                         RES_IDX,
+                    )?;
+                    self.add_channel_variants(
+                        &mut cache,
+                        &reader,
+                        &image_entry_arc,
+                        &tile,
+                        t,
+                        z_proj,
+                        RES_IDX,
+                        &channel_variants,
+                        nr_c_stacks,
+                        reuse_variants,
                     )?;
 
                     let mut stop_capture: Option<crate::pipeline::pipeline::BreakpointCapture> =
@@ -1295,6 +1325,109 @@ impl<'a> JobExecutor {
         Ok(global_cache)
     }
 
+    /// The channels the pipelines read with their own projection or z-plane
+    /// (Load Image Channel steps not on Auto), each once.
+    fn channel_variants(&self) -> Vec<ChannelVariant> {
+        let mut variants: Vec<ChannelVariant> = Vec::new();
+        for variant in self
+            .pipelines_pre_process
+            .values()
+            .chain(self.pipelines_post_process.values())
+            .flat_map(|p| p.commands.iter().filter_map(|(_, _, c)| c.channel_variant()))
+        {
+            if !variants.contains(&variant) {
+                variants.push(variant);
+            }
+        }
+        variants
+    }
+
+    /// Reads `variants` - channels with their own projection or z-plane (Load
+    /// Image Channel steps not on Auto) - for `tile` into `cache`, beside the
+    /// channels [`Self::prepare_pipeline_cache`] read. One with the projection
+    /// those channels already have is theirs, not read again. With `reuse`
+    /// (several z-planes of one t) each is read once per tile, the planes
+    /// after share it. A channel the image doesn't have is skipped: the step
+    /// reports it.
+    #[allow(clippy::too_many_arguments)]
+    fn add_channel_variants(
+        &self,
+        cache: &mut GlobalPipelineCache,
+        reader: &ImageReader,
+        image_entry: &ImageEntry,
+        tile: &ImageTile,
+        t_stack: i32,
+        z_projection: ZProjection,
+        resolution_index: i32,
+        variants: &[ChannelVariant],
+        nr_c_stacks: u32,
+        reuse: Option<&VariantStore>,
+    ) -> Result<(), InternalErrors> {
+        for &variant in variants {
+            if variant.channel < 0 || variant.channel as u32 >= nr_c_stacks {
+                continue;
+            }
+            if variant.projection != ZProjection::None && variant.projection == z_projection {
+                let read = cache.channel_keys().find(|(c, t)| {
+                    *c == variant.channel
+                        && t.offset_x == tile.offset_x
+                        && t.offset_y == tile.offset_y
+                });
+                if let Some((channel, loaded_tile)) = read
+                    && let Some(image) =
+                        cache.image_cache.get(&CacheAddress::Channel((channel, loaded_tile)))
+                {
+                    cache
+                        .image_cache
+                        .insert(CacheAddress::ChannelVariant((variant, loaded_tile)), image);
+                    continue;
+                }
+            }
+
+            let key = (variant, tile.offset_x, tile.offset_y);
+            let stored = reuse.and_then(|store| store.lock().expect("Poisoned").get(&key).cloned());
+            let image = match stored {
+                Some(image) => image,
+                None => {
+                    let z_range =
+                        (variant.projection == ZProjection::None).then(|| variant.z..=variant.z);
+                    let Some(read) = reader
+                        .read_image_tile_combined(
+                            self.active_series(image_entry),
+                            resolution_index,
+                            variant.projection,
+                            &z_range,
+                            t_stack,
+                            Some(&vec![variant.channel]),
+                            tile,
+                        )?
+                        .into_iter()
+                        .next()
+                    else {
+                        continue;
+                    };
+                    if let Some(store) = reuse {
+                        store
+                            .lock()
+                            .expect("Poisoned")
+                            .insert(key, read.image.clone());
+                    }
+                    read.image
+                }
+            };
+            let size = image.size();
+            let loaded_tile = ImageTile {
+                width: size.width,
+                height: size.height,
+                ..*tile
+            };
+            cache
+                .image_cache
+                .insert(CacheAddress::ChannelVariant((variant, loaded_tile)), image);
+        }
+        Ok(())
+    }
+
     /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
     /// can be unit-tested without needing a real image file on disk.
     fn count_visible_tiles_for_image(&self, full_width: usize, full_height: usize) -> usize {
@@ -1518,6 +1651,8 @@ impl<'a> JobExecutor {
     /// (`ImageEntry`/`SeriesSettings`) - this never reopens a file, so it's
     /// cheap to call before starting a run.
     pub fn estimate_ram_budget(&self) -> crate::utils::resources::RamBudget {
+        // A channel read with its own projection is one more channel image.
+        let variants = self.channel_variants();
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&self.active_series(entry)))
@@ -1527,7 +1662,7 @@ impl<'a> JobExecutor {
                 crate::utils::resources::estimate_ram_budget(
                     tile_width,
                     tile_height,
-                    series.channels.len(),
+                    series.channels.len() + variants.len(),
                 )
             })
             .max_by_key(|budget| budget.total_bytes())
@@ -1541,6 +1676,35 @@ impl<'a> JobExecutor {
     /// actually wants.
     pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
         self.estimate_ram_budget().total_bytes()
+    }
+}
+
+/// Channel variants read for one t, by (variant, tile x, tile y) - shared by
+/// its z-planes (see `JobExecutor::add_channel_variants`).
+type VariantStore = Mutex<HashMap<(ChannelVariant, usize, usize), Arc<ImageContainer>>>;
+
+/// A Load Image Channel step's z-plane the image doesn't have - checked
+/// before any tile is read, for a clear message instead of a reader error.
+fn check_channel_variant_planes(
+    variants: &[ChannelVariant],
+    nr_z_stacks: u32,
+) -> Result<(), InternalErrors> {
+    let planes = nr_z_stacks.max(1) as i32;
+    match variants
+        .iter()
+        .find(|v| v.projection == ZProjection::None && (v.z < 0 || v.z >= planes))
+    {
+        Some(v) => Err(InternalErrors::InvalidArgument(format!(
+            "a Load Image Channel step loads z-plane {} of channel {}, but this image has {} \
+             - check the z-plane of the pipeline's Load Image Channel steps",
+            v.z,
+            v.channel,
+            match planes {
+                1 => "only z-plane 0".to_string(),
+                n => format!("z-planes 0–{}", n - 1),
+            }
+        ))),
+        None => Ok(()),
     }
 }
 
@@ -2609,6 +2773,8 @@ mod full_run_integration_tests {
                         Scope::Global,
                         Box::new(LoadChannel {
                             channel: ImageChannelIdx(0),
+                            projection: crate::algos::ChannelZProjection::Auto,
+                            z_index: 0,
                         }),
                     ),
                 );
@@ -2625,6 +2791,236 @@ mod full_run_integration_tests {
         let from_channel = run(false);
         assert!(!from_channel.is_empty(), "the fixture image has objects");
         assert_eq!(run(true), from_channel, "the same objects");
+    }
+
+    /// A run whose pipeline starts with `load` (no image source) - its
+    /// objects' areas, sorted, or the run's error.
+    fn run_loading(
+        load: crate::algos::LoadChannel,
+        z_stack: Option<ZStackSettings>,
+    ) -> Result<Vec<usize>, InternalErrors> {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        job.global_image_settings.z_stack = z_stack;
+        let mut pipeline = threshold_connected_components_extract_pipeline();
+        pipeline.settings.start_image = ImageAddress::None;
+        pipeline.commands.insert(
+            0,
+            (
+                evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                Scope::Global,
+                Box::new(load),
+            ),
+        );
+        job.pipelines_pre_process.clear();
+        job.add_pre_process_pipeline(pipeline);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false)))?;
+        let mut areas: Vec<usize> = out_objects.lock().unwrap().iter().map(|o| o.area).collect();
+        areas.sort_unstable();
+        Ok(areas)
+    }
+
+    fn load(
+        projection: crate::algos::ChannelZProjection,
+        z_index: u32,
+    ) -> crate::algos::LoadChannel {
+        crate::algos::LoadChannel {
+            channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+            projection,
+            z_index,
+        }
+    }
+
+    /// A Load Image Channel step with its own projection or z-plane reads
+    /// its channel so (the run finds what the step looks up) - also while the
+    /// project analyzes every z-plane.
+    #[test]
+    fn a_load_channel_step_with_its_own_projection_or_plane_runs() {
+        use crate::algos::ChannelZProjection;
+        let all_planes = Some(ZStackSettings {
+            z_projection: ZStackHandling::AllStacks,
+            z_range: None,
+        });
+        for z_stack in [None, all_planes] {
+            for step in [load(ChannelZProjection::MaxIntensity, 0), load(ChannelZProjection::None, 1)] {
+                let areas = run_loading(step, z_stack.clone()).unwrap();
+                assert!(!areas.is_empty(), "the fixture image has objects");
+            }
+        }
+    }
+
+    /// A z-plane the image doesn't have stops the run before any tile is
+    /// read, saying which plane and what the image has.
+    #[test]
+    fn a_load_channel_step_with_a_plane_the_image_lacks_fails_clearly() {
+        let err = run_loading(load(crate::algos::ChannelZProjection::None, 999), None).unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("loads z-plane 999 of channel 0"), "{message}");
+        assert!(message.contains("z-planes 0–"), "{message}");
+    }
+
+    fn fixture_reader() -> (ImageReader, i32) {
+        let path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        ));
+        let reader = ImageReader::new(&path, ReadMode::Default).unwrap();
+        let channels = reader.get_image_meta().series[&0].nr_c_stacks;
+        (reader, channels)
+    }
+
+    fn whole_image() -> ImageTile {
+        ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn pixels(image: &ImageContainer) -> Vec<f32> {
+        match image {
+            ImageContainer::F32Gray(image) => image.as_slice().to_vec(),
+            other => panic!("expected a gray image, got {other:?}"),
+        }
+    }
+
+    /// The variants in `cache`, by their projection.
+    fn variant_images(cache: &GlobalPipelineCache) -> Vec<(ChannelVariant, Arc<ImageContainer>)> {
+        cache
+            .image_cache
+            .keys()
+            .filter_map(|key| match key {
+                CacheAddress::ChannelVariant((variant, _)) => {
+                    Some((variant, cache.image_cache.get(&key)?))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A variant is the channel read with the variant's projection or plane.
+    #[test]
+    fn a_channel_variant_is_the_channel_read_with_its_projection() {
+        let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        let (reader, channels) = fixture_reader();
+        let entry = job.images.values().next().unwrap().clone();
+        let read = |projection: ZProjection, z: Option<RangeInclusive<i32>>| {
+            reader
+                .read_image_tile_combined(0, 0, projection, &z, 0, Some(&vec![0]), &whole_image())
+                .unwrap()
+                .remove(0)
+                .image
+        };
+        let max = ChannelVariant {
+            channel: 0,
+            projection: ZProjection::MaxIntensity,
+            z: 0,
+        };
+        let plane = ChannelVariant {
+            channel: 0,
+            projection: ZProjection::None,
+            z: 1,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        job.add_channel_variants(
+            &mut cache,
+            &reader,
+            &entry,
+            &whole_image(),
+            0,
+            ZProjection::None,
+            0,
+            &[max, plane],
+            channels as u32,
+            None,
+        )
+        .unwrap();
+        let images = variant_images(&cache);
+        let image_of = |v: ChannelVariant| {
+            pixels(&images.iter().find(|(variant, _)| *variant == v).expect("read").1)
+        };
+        assert_eq!(image_of(max), pixels(&read(ZProjection::MaxIntensity, None)));
+        assert_eq!(image_of(plane), pixels(&read(ZProjection::None, Some(1..=1))));
+        assert_ne!(image_of(max), image_of(plane), "the fixture's planes differ");
+    }
+
+    /// Not read again: a variant already read for this tile on an earlier
+    /// z-plane (`reuse`), or one with the projection the channels have.
+    #[test]
+    fn a_channel_variant_is_not_read_twice() {
+        let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        let (reader, channels) = fixture_reader();
+        let entry = job.images.values().next().unwrap().clone();
+        let tile = whole_image();
+        let max = ChannelVariant {
+            channel: 0,
+            projection: ZProjection::MaxIntensity,
+            z: 0,
+        };
+        let marker = |value: f32| {
+            Arc::new(ImageContainer::new_f32_gray_from_image_test(
+                kornia_image::Image::new(
+                    ImageSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    vec![value],
+                )
+                .unwrap(),
+            ))
+        };
+
+        // Read on an earlier plane: taken from the store.
+        let store: VariantStore = Mutex::new(HashMap::new());
+        store.lock().unwrap().insert((max, 0, 0), marker(42.0));
+        let mut cache = GlobalPipelineCache::default();
+        job.add_channel_variants(
+            &mut cache, &reader, &entry, &tile, 0, ZProjection::None, 0, &[max],
+            channels as u32, Some(&store),
+        )
+        .unwrap();
+        assert_eq!(pixels(&variant_images(&cache)[0].1), [42.0]);
+
+        // The channels are max projections already: the variant is theirs.
+        let mut cache = GlobalPipelineCache::default();
+        let channel = marker(7.0);
+        cache.add_to_channel_cache(channel.clone(), 0, ImageTile { width: 1, height: 1, ..tile });
+        job.add_channel_variants(
+            &mut cache, &reader, &entry, &tile, 0, ZProjection::MaxIntensity, 0, &[max],
+            channels as u32, None,
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&variant_images(&cache)[0].1, &channel));
+
+        // First read with a store: kept for the planes after.
+        let store: VariantStore = Mutex::new(HashMap::new());
+        let mut cache = GlobalPipelineCache::default();
+        job.add_channel_variants(
+            &mut cache, &reader, &entry, &tile, 0, ZProjection::None, 0, &[max],
+            channels as u32, Some(&store),
+        )
+        .unwrap();
+        assert!(store.lock().unwrap().contains_key(&(max, 0, 0)));
+    }
+
+    #[test]
+    fn a_plane_outside_the_image_is_refused_others_and_projections_pass() {
+        let variant = |projection, z| ChannelVariant {
+            channel: 2,
+            projection,
+            z,
+        };
+        assert!(check_channel_variant_planes(&[variant(ZProjection::None, 4)], 5).is_ok());
+        assert!(check_channel_variant_planes(&[variant(ZProjection::MaxIntensity, 0)], 1).is_ok());
+        let err = check_channel_variant_planes(&[variant(ZProjection::None, 5)], 5).unwrap_err();
+        assert!(
+            format!("{err}").contains("loads z-plane 5 of channel 2, but this image has z-planes 0–4"),
+            "{err}"
+        );
+        let err = check_channel_variant_planes(&[variant(ZProjection::None, 1)], 1).unwrap_err();
+        assert!(format!("{err}").contains("has only z-plane 0"), "{err}");
     }
 
     /// Pipeline 1 stores its image in a shared slot, pipeline 2 starts from

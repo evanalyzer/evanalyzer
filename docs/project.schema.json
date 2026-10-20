@@ -1590,17 +1590,27 @@
       }
     },
     "LoadChannelSettings": {
-      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na component that detects nuclei in one channel and cells in another.",
+      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na component that detects nuclei in one channel and cells in another.\n\nProjection: Auto loads the channel as the project's z-stack setting does.\nAny other choice loads it with its own z-projection, or one z-plane (None).\nUse it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.\nObjects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.",
       "type": "object",
       "properties": {
         "channel": {
           "description": "The image channel to load.",
-          "$ref": "#/$defs/ImageChannelIdx"
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "projection": {
+          "description": "Optional z projection setting\n\nIf set to Auto the global z-projection setting from the project is used.\nIf not Auto the image channel is loaded with the given z-projection settings.",
+          "$ref": "#/$defs/MathLoadChannelChannelZProjectionSettings",
+          "default": "AUTO"
+        },
+        "zIndex": {
+          "description": "With projection None: the z-plane loaded (0 = the first).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
         }
-      },
-      "required": [
-        "channel"
-      ]
+      }
     },
     "MathImageCacheImageCacheModeSettings": {
       "description": "Defines the interaction type with the persistent image storage.",
@@ -1685,6 +1695,18 @@
           "type": "string",
           "const": "DIFFERENCE_TYPE"
         }
+      ]
+    },
+    "MathLoadChannelChannelZProjectionSettings": {
+      "type": "string",
+      "enum": [
+        "AUTO",
+        "NONE",
+        "MAX_INTENSITY",
+        "MIN_INTENSITY",
+        "AVG_INTENSITY",
+        "SUM_INTENSITY",
+        "TAKE_THE_MIDDLE"
       ]
     },
     "MathSaveImageImageSourceSettings": {
