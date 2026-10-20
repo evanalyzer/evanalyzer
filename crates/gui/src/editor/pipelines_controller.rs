@@ -12115,6 +12115,105 @@ mod tests {
         assert_eq!(panel.get_tuned_settings().row_count(), 0);
     }
 
+    /// Real mouse events: a press and release at `at`.
+    fn click_at(ui: &AppWindow, at: slint::LogicalPosition) {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let window = ui.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position: at });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        drain_ui_queue();
+    }
+
+    fn center_of(e: &i_slint_backend_testing::ElementHandle) -> slint::LogicalPosition {
+        let (at, size) = (e.absolute_position(), e.size());
+        slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0)
+    }
+
+    /// The texts showing `text`, top to bottom.
+    fn texts(ui: &AppWindow, text: &str) -> Vec<i_slint_backend_testing::ElementHandle> {
+        let mut found: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_type_name(ui, "Text")
+            .filter(|t| t.accessible_label().is_some_and(|l| l == text) && t.size().width > 0.0)
+            .collect();
+        found.sort_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y));
+        found
+    }
+
+    /// A table row's pin sits in the card's margin, left of the row's
+    /// name - no pin column on the right - and a click there pins the row.
+    #[test]
+    fn a_table_rows_pin_in_the_cards_margin_takes_a_click() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_spots(2);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
+        let panel = ui.global::<PipelinesPanelState>();
+        let commands = panel.get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+
+        let pin = ElementHandle::find_by_accessible_label(&ui, "Pin Bead to the Tuning panel")
+            .next()
+            .expect("the row's pin");
+        let name = texts(&ui, "Bead").pop().expect("the row's name");
+        assert!(
+            pin.absolute_position().x + pin.size().width <= name.absolute_position().x,
+            "the pin ({}) is left of the name ({})",
+            pin.absolute_position().x,
+            name.absolute_position().x
+        );
+
+        click_at(&ui, center_of(&pin));
+        let bead = panel
+            .get_active_commands()
+            .row_data(0)
+            .unwrap()
+            .card_tables
+            .row_data(0)
+            .unwrap()
+            .rows
+            .row_data(1)
+            .unwrap();
+        assert_eq!(bead.name, "Bead");
+        assert!(bead.cells.iter().all(|cell| cell.pinned));
+    }
+
+    /// In the settings dialog a tab's settings start right below the tabs -
+    /// the other tabs' settings (hidden) push nothing down.
+    #[test]
+    fn a_settings_dialog_tab_shows_its_settings_at_the_top() {
+        let (ui, _ui_state, _controller) = with_spots(2);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
+        let panel = ui.global::<PipelinesPanelState>();
+        let step_id = panel.get_active_commands().row_data(0).unwrap().step_id;
+        panel.invoke_open_step_settings(step_id);
+        drain_ui_queue();
+
+        // Each tab has one setting, "Output class": where it starts.
+        let first_setting_y = || {
+            texts(&ui, "Output class")
+                .first()
+                .expect("the tab's setting")
+                .absolute_position()
+                .y
+        };
+        let on_spot = first_setting_y();
+        let bead_tab = texts(&ui, "Bead").into_iter().next().expect("the Bead tab");
+        click_at(&ui, center_of(&bead_tab));
+        let on_bead = first_setting_y();
+        assert_eq!(on_bead, on_spot, "the Bead tab's setting starts where the Spot tab's did");
+    }
+
     #[test]
     fn pins_are_kept_with_the_project() {
         let (ui, ui_state, _controller) = selected(vec![step("Blur")]);

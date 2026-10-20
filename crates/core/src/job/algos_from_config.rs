@@ -730,6 +730,7 @@ impl From<LoadChannelSettings> for LoadChannel {
         LoadChannel {
             channel: _s.channel,
             projection: ChannelZProjection::from(_s.projection),
+            z_index: _s.z_index,
         }
     }
 }

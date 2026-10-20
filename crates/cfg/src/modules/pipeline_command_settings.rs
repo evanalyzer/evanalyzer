@@ -1199,11 +1199,19 @@ pub struct LaplacianSettings {
 fn _serde_default_loadchannel_projection() -> MathLoadChannelChannelZProjectionSettings {
     MathLoadChannelChannelZProjectionSettings::Auto
 }
+fn _serde_default_loadchannel_z_index() -> u32 {
+    0u32
+}
 /// Loads an image channel as the image the following steps work on.
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
 /// without an image source, or to switch channels within a pipeline - e.g.
 /// a component that detects nuclei in one channel and cells in another.
+///
+/// Projection: Auto loads the channel as the project's z-stack setting does.
+/// Any other choice loads it with its own z-projection, or one z-plane (None).
+/// Use it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.
+/// Objects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1216,6 +1224,9 @@ pub struct LoadChannelSettings {
     /// If not Auto the image channel is loaded with the given z-projection settings.
     #[serde(default = "_serde_default_loadchannel_projection")]
     pub projection: MathLoadChannelChannelZProjectionSettings,
+    /// With projection None: the z-plane loaded (0 = the first).
+    #[serde(default = "_serde_default_loadchannel_z_index")]
+    pub z_index: u32,
 }
 
 impl Default for LoadChannelSettings {
@@ -1223,6 +1234,7 @@ impl Default for LoadChannelSettings {
         Self {
             channel: ImageChannelIdx::default(),
             projection: MathLoadChannelChannelZProjectionSettings::Auto,
+            z_index: 0u32,
         }
     }
 }

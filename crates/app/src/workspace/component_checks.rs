@@ -20,7 +20,9 @@ use evanalyzer_cfg::{
     settings::{
         classification_settings::Class,
         components::{ComponentDefinition, ComponentInstance},
+        images_settings::{ZStackHandling, ZStackSettings},
         pipeline_command::PipelineCommand,
+        pipeline_command_settings::MathLoadChannelChannelZProjectionSettings,
         pipeline_settings::{PipelineStepSettings, StepContent},
         project_settings::ProjectSettings,
     },
@@ -306,6 +308,23 @@ fn parameter_label(definition: &ComponentDefinition, key: &ComponentParamKey) ->
         )
 }
 
+/// Whether a run analyzes several z-planes one by one (the project's or an
+/// image's z-stack setting), not one projection or one plane.
+fn analyzes_planes_one_by_one(project: &ProjectSettings) -> bool {
+    let one_by_one = |z: &ZStackSettings| match z.z_projection {
+        ZStackHandling::AllStacks => true,
+        ZStackHandling::SingleStack => z.z_range.as_ref().is_some_and(|r| r.end() > r.start()),
+        _ => false,
+    };
+    project.images.settings.z_stack.as_ref().is_some_and(one_by_one)
+        || project
+            .images
+            .list
+            .values()
+            .flat_map(|entry| entry.series.values())
+            .any(|series| series.z_stack.as_ref().is_some_and(one_by_one))
+}
+
 /// Names joined for a message: "A", "A and B", "A, B and C".
 fn joined(names: Vec<String>) -> String {
     match names.split_last() {
@@ -350,6 +369,7 @@ impl Subject {
 fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
     let mut problems = Vec::new();
     let channels = image_channels(project);
+    let planes_one_by_one = analyzes_planes_one_by_one(project);
     // Each project class created: by which step (pipeline, step), a label
     // for it, and the step's parameters giving it.
     let mut creators: Vec<(u32, (PipelineId, StepId), String, String)> = Vec::new();
@@ -480,6 +500,34 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                             );
                         }
                     }
+                }
+
+                // Its own projection while each z-plane is analyzed: the
+                // pipeline runs per plane on the same image - repeated objects.
+                if planes_one_by_one
+                    && let PipelineCommand::LoadChannel(load) = &command.command
+                    && load.projection != MathLoadChannelChannelZProjectionSettings::Auto
+                {
+                    let keys = setting(command, "projection");
+                    let who = subject(command, &keys);
+                    problems.push(
+                        ComponentProblem::warning(
+                            None,
+                            at,
+                            format!(
+                                "{}, but the project analyzes the z-planes one by one: the \
+                                 pipeline then runs once per plane on the same image, so its \
+                                 objects repeat for every plane - use either one-by-one \
+                                 z-planes or a projection, not both",
+                                who.says(
+                                    "set to a z-projection of its own",
+                                    "loads its channel with a z-projection of its own"
+                                )
+                            ),
+                        )
+                        .about(keys)
+                        .inside(detail(command)),
+                    );
                 }
 
                 if let PipelineCommand::ClassifyObjects(classify) = &command.command
@@ -1243,6 +1291,8 @@ mod tests {
                     1,
                     PipelineCommand::LoadChannel(LoadChannelSettings {
                         channel: ImageChannelIdx(0),
+                        projection: evanalyzer_cfg::settings::pipeline_command_settings::MathLoadChannelChannelZProjectionSettings::Auto,
+                        z_index: 0,
                     }),
                 ),
                 step(2, extract(1)),
@@ -1250,6 +1300,8 @@ mod tests {
                     3,
                     PipelineCommand::LoadChannel(LoadChannelSettings {
                         channel: ImageChannelIdx(1),
+                        projection: evanalyzer_cfg::settings::pipeline_command_settings::MathLoadChannelChannelZProjectionSettings::Auto,
+                        z_index: 0,
                     }),
                 ),
                 step(4, extract(2)),
@@ -1302,6 +1354,82 @@ mod tests {
         instance
             .values
             .insert(ComponentParamKey::from(key), ParamValue::Int(value));
+    }
+
+    /// A Load Image Channel step with its own projection while the project
+    /// analyzes each z-plane: a warning at the step, for a command step and
+    /// inside a component; none with the default (one plane) or a projection.
+    #[test]
+    fn a_projection_of_its_own_while_planes_are_analyzed_one_by_one_warns() {
+        use evanalyzer_cfg::core_types::ImageChannelIdx;
+        use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            LoadChannelSettings, MathLoadChannelChannelZProjectionSettings as Projection,
+        };
+        let mut project = spots_project();
+        project.pipelines.push(PipelineSettings {
+            id: PipelineId(2),
+            name: "Nuclei".into(),
+            description: None,
+            image_source: ImageAddress::None,
+            enabled: true,
+            steps: vec![step(
+                7,
+                PipelineCommand::LoadChannel(LoadChannelSettings {
+                    channel: ImageChannelIdx(0),
+                    projection: Projection::MaxIntensity,
+                    z_index: 0,
+                }),
+            )],
+        });
+        let warnings = |project: &ProjectSettings| -> Vec<ComponentProblem> {
+            check_project(project)
+                .into_iter()
+                .filter(|p| p.severity == Severity::Warning && p.message.contains("one by one"))
+                .collect()
+        };
+        let z_stack = |z_projection, z_range| {
+            Some(ZStackSettings {
+                z_projection,
+                z_range,
+            })
+        };
+
+        assert_eq!(warnings(&project), [], "the default: one plane");
+        project.images.settings.z_stack = z_stack(ZStackHandling::MaxIntensity, None);
+        assert_eq!(warnings(&project), [], "the project projects too");
+        project.images.settings.z_stack = z_stack(ZStackHandling::SingleStack, Some(2..=2));
+        assert_eq!(warnings(&project), [], "one plane");
+
+        for one_by_one in [
+            z_stack(ZStackHandling::AllStacks, None),
+            z_stack(ZStackHandling::SingleStack, Some(0..=3)),
+        ] {
+            project.images.settings.z_stack = one_by_one;
+            let found = warnings(&project);
+            assert_eq!(found.len(), 1, "{:?}", messages(&found));
+            assert_eq!(found[0].step, Some((PipelineId(2), StepId(7))));
+            assert!(
+                found[0].message.starts_with("LoadChannel loads its channel with a z-projection"),
+                "{}",
+                found[0].message
+            );
+        }
+
+        // Inside a component: at the step using it.
+        let PipelineCommand::LoadChannel(load) = (match &mut project.components[0].steps[0].content {
+            StepContent::Command(command) => command,
+            _ => panic!("a command"),
+        }) else {
+            panic!("LoadChannel");
+        };
+        load.projection = Projection::None;
+        load.z_index = 1;
+        let found = warnings(&project);
+        assert_eq!(found.len(), 2, "{:?}", messages(&found));
+        let inside = found.iter().find(|p| p.step == Some((PipelineId(1), StepId(1)))).unwrap();
+        assert!(inside.message.starts_with("“Spots” loads"), "{}", inside.message);
+        assert_eq!(inside.detail, "LoadChannel (its step 1)");
     }
 
     #[test]

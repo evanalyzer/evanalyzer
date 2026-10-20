@@ -1735,6 +1735,8 @@ component ParamRow inherits VerticalLayout {
 // scripts and file paths need the width, so they're stacked (`ParamRow`).
 component InlineParamRow inherits VerticalLayout {
     in property <CommandParameter> p;
+    // The names' column (the settings dialog has more room).
+    in property <length> label-width: 150px;
     callback changed(string);
     callback item-field-changed(int, string, string);
     callback add-item();
@@ -1809,7 +1811,7 @@ component InlineParamRow inherits VerticalLayout {
         inline := HorizontalLayout {
         spacing: 6px;
         HorizontalLayout {
-            width: 150px;
+            width: root.label-width;
             alignment: start;
             ParamLabel {
                 p: root.p;
@@ -1978,15 +1980,26 @@ component CardTableView inherits VerticalLayout {
             color: Ink.text-mute;
             overflow: elide;
         }
-            // Over the pins.
-            Rectangle {
-            width: 20px;
-        }
     }
 
-    for row in root.table.rows: HorizontalLayout {
-        spacing: 4px;
+    // A row: its pin in the card's left margin (like a setting's) - when
+    // pinned, or (faint) while hovered; the cells get the room.
+    for row in root.table.rows: table-row := Rectangle {
         height: 26px;
+        property <bool> hovered: row-ta.has-hover || row-pin-ta.has-hover;
+
+        // The hover tint, out into the card's padding.
+        Rectangle {
+            x: -12px;
+            width: parent.width + 24px;
+            border-radius: Ink.radius-sm;
+            background: table-row.hovered ? Ink.hover : transparent;
+        }
+
+        // The row inside it: over a cell it stays hovered.
+        row-ta := TouchArea {
+        HorizontalLayout {
+        spacing: 4px;
         Text {
             width: 64px;
             text: row.name;
@@ -2016,14 +2029,16 @@ component CardTableView inherits VerticalLayout {
             }
         }
 
+        }
+        }
+
         // The row's settings into the Tuning panel.
-            row-pin := Rectangle {
+        row-pin := Rectangle {
             property <bool> pinned: row.cells.length > 0 && row.cells[0].pinned;
+            x: -11px;
             y: (parent.height - self.height) / 2;
-            width: 20px;
+            width: 10px;
             height: 20px;
-            border-radius: Ink.radius-sm;
-            background: row-pin-ta.has-hover ? Ink.hover : transparent;
             accessible-role: button;
             accessible-label: row-pin.pinned ? "Unpin \{row.name}" : "Pin \{row.name} to the Tuning panel";
             accessible-checked: row-pin.pinned;
@@ -2031,8 +2046,9 @@ component CardTableView inherits VerticalLayout {
                 root.toggle-pin-row(row.name);
             }
             Image {
+                visible: row-pin.pinned || table-row.hovered;
                 source: InkIcons.pin;
-                width: 12px;
+                width: 10px;
                 colorize: row-pin.pinned ? Ink.focus : row-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
             }
 
@@ -3579,7 +3595,8 @@ export component StepSettingsDialog inherits InkDialog {
     anchor-x: Places.beside-left;
     title: PipelinesPanelState.settings-step-name;
     subtitle: "step \{PipelinesPanelState.settings-step-id} · settings";
-    card-width: 430px;
+    // Room for the settings' names (fields as wide as on a card).
+    card-width: 490px;
     content-padding: 0px;
     close-on-backdrop: true;
 
@@ -3681,10 +3698,14 @@ export component StepSettingsDialog inherits InkDialog {
                             text: "SEARCH RESULTS";
                         }
 
+                        // Each setting's gap below it only when it shows: the
+                        // other tabs' (empty) slots would add up their gaps
+                        // and push the shown ones down.
                         if !on-advanced: VerticalLayout {
-                            spacing: 6px;
                             for p in cmd.parameters: VerticalLayout {
+                                padding-bottom: root.shows(p, cmd.sections) ? 6px : 0px;
                                 if root.shows(p, cmd.sections): InlineParamRow {
+                                    label-width: 200px;
                                     p: p;
                                     changed(v) => {
                                         PipelinesPanelState.param-changed(cmd.id, p.name, v);
@@ -3724,9 +3745,10 @@ export component StepSettingsDialog inherits InkDialog {
                         }
 
                         if on-advanced || root.searching: VerticalLayout {
-                            spacing: 6px;
                             for p in cmd.advanced-parameters: VerticalLayout {
+                                padding-bottom: !root.searching || root.matches(p) ? 6px : 0px;
                                 if !root.searching || root.matches(p): InlineParamRow {
+                                    label-width: 200px;
                                     p: p;
                                     changed(v) => {
                                         PipelinesPanelState.param-changed(cmd.id, p.name, v);

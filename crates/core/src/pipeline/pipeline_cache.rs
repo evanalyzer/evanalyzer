@@ -5,9 +5,21 @@ use crate::{
     image::{ImageContainer, PixelSizes},
     pipeline::{image_cache::ImageCache, object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
-use evanalyzer_cfg::core_types::{InternalErrors, MemoryId, MemorySlot, ObjectClass};
+use evanalyzer_cfg::core_types::{InternalErrors, MemoryId, MemorySlot, ObjectClass, ZProjection};
 use kornia_image::{Image, ImageSize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
+/// An image channel read with its own z-projection (or one z-plane) instead
+/// of the project's: what a `LoadChannel` step with a projection other than
+/// Auto needs (`ImageAlgorithm::channel_variant`). The executor reads it with
+/// the channels and caches it as [`CacheAddress::ChannelVariant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChannelVariant {
+    pub channel: i32,
+    pub projection: ZProjection,
+    /// The z-plane - with `ZProjection::None` only; else 0.
+    pub z: i32,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {
@@ -16,6 +28,9 @@ pub enum CacheAddress {
     /// [`CacheAddress::memory`].
     Memory(MemoryId),
     Channel((i32, ImageTile)),
+    /// An image channel read with its own z-projection or z-plane, not the
+    /// project's - for a `LoadChannel` step that sets one.
+    ChannelVariant((ChannelVariant, ImageTile)),
     /// A component instance's memory slot (`MemoryId::ComponentContext`).
     ComponentMemory(ScopeId, MemorySlot),
 }
@@ -109,7 +124,9 @@ impl GlobalPipelineCache {
     /// after it; [`Self::clear_shared_slots`] frees those.
     pub fn clear_pipeline_context(&mut self) {
         self.image_cache.retain(|key| match key {
-            CacheAddress::Channel(_) | CacheAddress::Memory(MemoryId::ProjectCache(_)) => true,
+            CacheAddress::Channel(_)
+            | CacheAddress::ChannelVariant(_)
+            | CacheAddress::Memory(MemoryId::ProjectCache(_)) => true,
             CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::ComponentContext(_))
             | CacheAddress::ComponentMemory(..)
             | CacheAddress::Scratchpad => false,
@@ -194,7 +211,9 @@ impl GlobalPipelineCache {
                 }))),
             },
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
-            CacheAddress::ComponentMemory(..) => self.image_cache.get(cache_slot),
+            CacheAddress::ComponentMemory(..) | CacheAddress::ChannelVariant(_) => {
+                self.image_cache.get(cache_slot)
+            }
             CacheAddress::Channel(channel_idx) => {
                 self.get_image_from_channel_cache_for_tile(channel_idx.clone())
             }

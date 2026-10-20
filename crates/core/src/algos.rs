@@ -131,6 +131,13 @@ pub trait ImageAlgorithm: Send + Sync {
         false
     }
 
+    /// The channel this command reads with its own z-projection or z-plane
+    /// (a `LoadChannel` step not on Auto) - the executor reads it beside the
+    /// channels before the pipelines run. `None`: it reads none.
+    fn channel_variant(&self) -> Option<crate::pipeline::pipeline_cache::ChannelVariant> {
+        None
+    }
+
     /// Entry point pipeline dispatchers should call instead of [`Self::execute`]
     /// directly: prepares `ctx.scratch_pad` (per [`Self::scratch_is_workspace`])
     /// and then runs the command.
