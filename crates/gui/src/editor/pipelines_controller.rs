@@ -8846,6 +8846,113 @@ mod tests {
         assert_eq!(size(), before);
     }
 
+    /// A setting's pin sits in the card's margin, left of its name, and a
+    /// click there (outside the row itself) pins it.
+    #[test]
+    fn a_settings_pin_in_the_cards_margin_takes_a_click() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+
+        let name = ui_param(&ui, 0, "kernel_size").display_name.to_string();
+        let pin = ElementHandle::find_by_accessible_label(
+            &ui,
+            &format!("Pin {name} to the Tuning panel"),
+        )
+        .next()
+        .expect("the pin");
+        let label = ElementHandle::find_by_element_type_name(&ui, "Text")
+            .find(|t| t.accessible_label().is_some_and(|l| l == name.as_str()))
+            .expect("the name");
+        let (at, size) = (pin.absolute_position(), pin.size());
+        assert!(
+            at.x + size.width <= label.absolute_position().x,
+            "the pin ({}) is left of the name ({})",
+            at.x,
+            label.absolute_position().x
+        );
+
+        let center = slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let window = ui.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position: center });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+        drain_ui_queue();
+        assert!(ui_param(&ui, 0, "kernel_size").pinned);
+    }
+
+    /// A setting's ⓘ shows while its row is hovered; its card, once
+    /// open, stays open when the mouse leaves the row (the ⓘ hides).
+    #[test]
+    fn a_settings_help_card_stays_open_when_the_row_is_left() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let param = ui_param(&ui, 0, "kernel_size");
+        assert!(!param.description.is_empty());
+        let name = param.display_name.to_string();
+        let window = ui.window();
+        let move_to = |position: slint::LogicalPosition| {
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+        };
+        let center = |e: &ElementHandle| {
+            let (at, size) = (e.absolute_position(), e.size());
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0)
+        };
+        let card_open = || {
+            ElementHandle::find_by_element_type_name(&ui, "Text").any(|t| {
+                t.accessible_label()
+                    .is_some_and(|l| l == param.description.as_str())
+            })
+        };
+
+        // Over the row's name: the ⓘ shows; a click opens the card.
+        let label = ElementHandle::find_by_element_type_name(&ui, "Text")
+            .find(|t| t.accessible_label().is_some_and(|l| l == name.as_str()))
+            .expect("the name");
+        move_to(center(&label));
+        let info = ElementHandle::find_by_accessible_label(&ui, &format!("About {name}"))
+            .find(|e| e.size().width > 0.0)
+            .expect("the ⓘ while hovered");
+        let at = center(&info);
+        move_to(at);
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        drain_ui_queue();
+        assert!(card_open(), "the card opens");
+
+        // The mouse leaves the row (into the card): the card stays.
+        move_to(slint::LogicalPosition::new(at.x, at.y + 60.0));
+        drain_ui_queue();
+        assert!(card_open(), "the card stays open");
+    }
+
     /// A setting with only a lower bound (Min Size >= 1, no max): + still
     /// steps it up, − not below the bound.
     #[test]

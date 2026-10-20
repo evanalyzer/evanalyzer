@@ -46,6 +46,30 @@ impl From<FiltersRollingBallBallTypeSettings> for BallType {
     }
 }
 
+impl From<MathLoadChannelChannelZProjectionSettings> for ChannelZProjection {
+    fn from(_s: MathLoadChannelChannelZProjectionSettings) -> Self {
+        match _s {
+            MathLoadChannelChannelZProjectionSettings::Auto => ChannelZProjection::Auto,
+            MathLoadChannelChannelZProjectionSettings::None => ChannelZProjection::None,
+            MathLoadChannelChannelZProjectionSettings::MaxIntensity => {
+                ChannelZProjection::MaxIntensity
+            }
+            MathLoadChannelChannelZProjectionSettings::MinIntensity => {
+                ChannelZProjection::MinIntensity
+            }
+            MathLoadChannelChannelZProjectionSettings::AvgIntensity => {
+                ChannelZProjection::AvgIntensity
+            }
+            MathLoadChannelChannelZProjectionSettings::SumIntensity => {
+                ChannelZProjection::SumIntensity
+            }
+            MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => {
+                ChannelZProjection::TakeTheMiddle
+            }
+        }
+    }
+}
+
 impl From<ObjectClassifyObjectsClassifyMatchHandlingSettings> for ClassifyMatchHandling {
     fn from(_s: ObjectClassifyObjectsClassifyMatchHandlingSettings) -> Self {
         match _s {
@@ -705,6 +729,7 @@ impl From<LoadChannelSettings> for LoadChannel {
     fn from(_s: LoadChannelSettings) -> Self {
         LoadChannel {
             channel: _s.channel,
+            projection: ChannelZProjection::from(_s.projection),
         }
     }
 }
