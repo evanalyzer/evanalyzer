@@ -439,6 +439,7 @@ export component TopBar inherits Rectangle {
                     size: 30px;
                     icon: InkIcons.annotate;
                     label: "Annotate";
+                    keys: ["A"];
                     active: LayoutState.annotate;
                     clicked => {
                         LayoutState.annotate = !LayoutState.annotate;
@@ -733,6 +734,13 @@ export component TopBar inherits Rectangle {
                     text: "Help";
                     opens: 3;
                 }
+                EvaMenuItem {
+                    icon: InkIcons.info;
+                    text: "About";
+                    clicked => {
+                        GlobalAppState.active-dialog = DialogType.about;
+                    }
+                }
             }
 
             // -- The submenus, beside their row --
@@ -900,14 +908,6 @@ export component TopBar inherits Rectangle {
                     clicked => {
                         eva-menu.close();
                         ToolbarState.open_website();
-                    }
-                }
-                InkMenuItem {
-                    icon: InkIcons.info;
-                    text: "About";
-                    clicked => {
-                        eva-menu.close();
-                        GlobalAppState.active-dialog = DialogType.about;
                     }
                 }
             }

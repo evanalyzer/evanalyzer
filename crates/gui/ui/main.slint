@@ -272,6 +272,9 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.shortcuts_help): ShortcutsHelpDialog { }
             if (GlobalAppState.active_dialog == DialogType.project_settings): ProjectSettingsDialog { }
             if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete): ConfirmDeleteClassDialog { }
+            if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete_all): ConfirmDeleteClassDialog {
+                all: true;
+            }
             if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
             if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
             if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }

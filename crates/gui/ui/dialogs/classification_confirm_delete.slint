@@ -6,11 +6,14 @@ import { ClassificationState } from "../api/classification.slint";
 import { Ink } from "../ink/palette.slint";
 
 export component ConfirmDeleteClassDialog inherits InkDialog {
+    // Every class, not the selected one.
+    in property <bool> all: false;
+
     // Left of the right-hand panels.
     from-right: true;
     anchor-x: Places.beside-right;
     anchor-y: 96px;
-    title: "Delete class";
+    title: root.all ? "Delete all classes" : "Delete class";
     card-width: 320px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
@@ -19,14 +22,14 @@ export component ConfirmDeleteClassDialog inherits InkDialog {
     VerticalLayout {
         spacing: 12px;
         Text {
-            text: "This action cannot be undone. Deleting a class breaks existing annotations and pipeline steps. Ensure you are not using this class before proceeding.";
+            text: root.all ? "This action cannot be undone. Deleting the classes breaks existing annotations and pipeline steps. Ensure you are not using them before proceeding." : "This action cannot be undone. Deleting a class breaks existing annotations and pipeline steps. Ensure you are not using this class before proceeding.";
             wrap: word-wrap;
             color: Ink.text;
             font-size: Ink.fs-heading;
         }
 
         Text {
-            text: "Delete class \{ClassificationState.selected_class_name}?";
+            text: root.all ? "Delete all \{ClassificationState.classes_list.length - 1} classes? Background stays." : "Delete class \{ClassificationState.selected_class_name}?";
             wrap: word-wrap;
             color: Ink.text-dim;
             font-size: Ink.fs-heading;
@@ -46,7 +49,11 @@ export component ConfirmDeleteClassDialog inherits InkDialog {
                 text: "Delete";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
-                    ClassificationState.class_delete(ClassificationState.selected_class_id);
+                    if root.all {
+                        ClassificationState.class_delete_all();
+                    } else {
+                        ClassificationState.class_delete(ClassificationState.selected_class_id);
+                    }
                     ClassificationState.selected_class_id = -1;
                     ClassificationState.selected_class_name = "";
                 }
