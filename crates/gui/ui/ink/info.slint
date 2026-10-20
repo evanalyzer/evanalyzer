@@ -6,6 +6,82 @@ import { InkIcons } from "icons.slint";
 import { InkIconButton } from "button.slint";
 import { InkTipZone } from "tooltip.slint";
 
+/// The card itself, for a popup of one's own (e.g. opened from a menu):
+/// the name, what it does, a sketch, a docs link, ✕.
+export component InkInfoCard inherits Rectangle {
+    in property <string> title;
+    in property <string> text;
+    in property <image> diagram;
+    in property <string> docs-url;
+    in property <string> docs-label: "Documentation";
+    callback close;
+
+    Rectangle {
+        background: Ink.panel;
+        border-width: 1px;
+        border-color: Ink.border;
+        border-radius: Ink.radius-lg;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: Ink.shadow;
+
+        VerticalLayout {
+            padding-left: 14px;
+            padding-right: 6px;
+            padding-top: 6px;
+            padding-bottom: 12px;
+            spacing: 6px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.title;
+                    font-size: Ink.fs-dialog-title;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                InkIconButton {
+                    size: 24px;
+                    icon: InkIcons.close;
+                    label: "Close";
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+            VerticalLayout {
+                padding-right: 8px;
+                spacing: 10px;
+                Text {
+                    text: root.text;
+                    font-size: Ink.fs-body;
+                    color: Ink.text;
+                    wrap: word-wrap;
+                }
+                if root.diagram.width > 0: Image {
+                    source: root.diagram;
+                    image-fit: contain;
+                    height: min(120px, self.source.height * 1px);
+                }
+                if root.docs-url != "": Text {
+                    text: root.docs-label + " ↗";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.focus;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Platform.open-url(root.docs-url);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component InkInfoButton inherits Rectangle {
     /// The setting's name (the card's title).
     in property <string> title;
@@ -62,68 +138,14 @@ export component InkInfoButton inherits Rectangle {
         width: root.card-width;
         close-policy: close-on-click-outside;
 
-        Rectangle {
-            background: Ink.panel;
-            border-width: 1px;
-            border-color: Ink.border;
-            border-radius: Ink.radius-lg;
-            drop-shadow-blur: 24px;
-            drop-shadow-offset-y: 8px;
-            drop-shadow-color: Ink.shadow;
-
-            VerticalLayout {
-                padding-left: 14px;
-                padding-right: 6px;
-                padding-top: 6px;
-                padding-bottom: 12px;
-                spacing: 6px;
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text {
-                        horizontal-stretch: 1;
-                        text: root.title;
-                        font-size: Ink.fs-dialog-title;
-                        font-weight: 600;
-                        color: Ink.text;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                    InkIconButton {
-                        size: 24px;
-                        icon: InkIcons.close;
-                        label: "Close";
-                        clicked => {
-                            card.close();
-                        }
-                    }
-                }
-                VerticalLayout {
-                    padding-right: 8px;
-                    spacing: 10px;
-                    Text {
-                        text: root.text;
-                        font-size: Ink.fs-body;
-                        color: Ink.text;
-                        wrap: word-wrap;
-                    }
-                    if root.diagram.width > 0: Image {
-                        source: root.diagram;
-                        image-fit: contain;
-                        height: min(120px, self.source.height * 1px);
-                    }
-                    if root.docs-url != "": Text {
-                        text: root.docs-label + " ↗";
-                        font-size: Ink.fs-secondary;
-                        color: Ink.focus;
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                Platform.open-url(root.docs-url);
-                            }
-                        }
-                    }
-                }
+        InkInfoCard {
+            title: root.title;
+            text: root.text;
+            diagram: root.diagram;
+            docs-url: root.docs-url;
+            docs-label: root.docs-label;
+            close => {
+                card.close();
             }
         }
     }

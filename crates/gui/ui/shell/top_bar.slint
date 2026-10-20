@@ -816,6 +816,14 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-hidden = !LayoutState.panels-hidden;
                     }
                 }
+                InkMenuItem {
+                    text: "Step values on a second line";
+                    checked: LayoutState.step-values-below;
+                    clicked => {
+                        LayoutState.step-values-below = !LayoutState.step-values-below;
+                        LayoutState.panels-changed();
+                    }
+                }
                 InkMenuSeparator { }
                 // The navigator: by itself (only zoomed in), always, never.
                 HorizontalLayout {

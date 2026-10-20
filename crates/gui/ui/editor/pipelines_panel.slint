@@ -76,6 +76,7 @@ import {
     InkTipSide,
     InkTipZone,
     InkInfoButton,
+    InkInfoCard,
 } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
@@ -2023,6 +2024,36 @@ component CardTableView inherits VerticalLayout {
     }
 }
 
+// A step row's values, like a line of code: "min 240 · max 65535".
+component StepValues inherits Text {
+    color: Ink.text-mute;
+    font-size: Ink.fs-secondary;
+    font-family: Ink.font-mono;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// A step row's ⌖: its settings into the Tuning dock (again: out) -
+// highlighted while pinned.
+component StepPinButton inherits Rectangle {
+    in property <bool> pinned;
+    callback clicked;
+    width: 22px;
+    height: 22px;
+    border-radius: Ink.radius-md;
+    background: root.pinned ? Ink.info-tint : transparent;
+    InkIconButton {
+        size: 22px;
+        icon: InkIcons.tune;
+        tint: root.pinned ? Ink.focus : Ink.text-dim;
+        label: root.pinned ? "Unpin from Tuning" : "Pin its settings to Tuning";
+        active: false;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 component StepRow inherits Rectangle {
     in property <PipelineCommand> step;
     in property <int> idx;
@@ -2044,6 +2075,13 @@ component StepRow inherits Rectangle {
 
     // Collapsed: a line. Expanded: a card around the settings.
         property <bool> hovered: head-ta.has-hover;
+    // The buttons (eye, settings, ⋯, ⌖) float over the row's end on hover
+    // or while open; hidden they keep no room - the values get it.
+    property <bool> controls-shown: root.hovered || step.expanded;
+    // What's under them, so the values fade out beneath.
+    property <color> line-bg: step.expanded ? Ink.panel : root.selected ? Ink.selection : root.hovered ? Ink.hover : Ink.panel;
+    // EVA › View › "Step values on a second line": the values under the name.
+    property <bool> values-below: LayoutState.step-values-below && step.summary != "";
     property <bool> editable: !PipelinesPanelState.steps-read-only;
         // 0 = off, 1 = stop, 2 = snapshot - for this step.
         property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
@@ -2060,7 +2098,7 @@ component StepRow inherits Rectangle {
 
         // -- The line --
             Rectangle {
-            height: 34px;
+            height: root.values-below ? 48px : 34px;
             opacity: step.enabled ? 1.0 : 0.5;
                 // The keyboard's ring (a click doesn't focus it).
                 border-radius: Ink.radius-md;
@@ -2148,7 +2186,7 @@ component StepRow inherits Rectangle {
                     Rectangle {
                         width: 3px;
                         Rectangle {
-                            height: 18px;
+                            height: root.values-below ? 32px : 18px;
                             width: 3px;
                             border-radius: 1.5px;
                             background: Cat.color(step.category);
@@ -2159,131 +2197,158 @@ component StepRow inherits Rectangle {
                         width: 8px;
                     }
 
-                    HorizontalLayout {
+                    VerticalLayout {
                         horizontal-stretch: 1;
-                        spacing: 6px;
+                        alignment: center;
+                        spacing: 2px;
                         padding-right: 6px;
 
-                        step-name := Text {
-                            text: step.name;
-                            // Locked while an analysis runs: grey.
-                            color: PipelinesPanelState.run-locked ? Ink.text-dim : Ink.text;
-                            font-size: Ink.fs-body;
-                            font-weight: 500;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            // Cut off: the whole name in a tip.
-                            InkTipZone {
-                                width: 100%;
-                                height: 100%;
-                                wanted: head-ta.has-hover && step-name.preferred-width > step-name.width + 0.5px;
+                        HorizontalLayout {
+                            spacing: 6px;
+
+                            step-name := Text {
                                 text: step.name;
-                                side: InkTipSide.right;
+                                // Locked while an analysis runs: grey.
+                                color: PipelinesPanelState.run-locked ? Ink.text-dim : Ink.text;
+                                font-size: Ink.fs-body;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                // Cut off: the whole name in a tip.
+                                InkTipZone {
+                                    width: 100%;
+                                    height: 100%;
+                                    wanted: head-ta.has-hover && step-name.preferred-width > step-name.width + 0.5px;
+                                    text: step.name;
+                                    side: InkTipSide.right;
+                                }
                             }
-                        }
 
-                        if step.help != "": InkInfoButton {
-                            title: step.name;
-                            text: step.help;
-                        }
-
-                        if step.problems.length > 0: Rectangle {
-                            y: (parent.height - self.height) / 2;
-                            height: 16px;
-                            width: badge-text.preferred-width + 10px;
-                            border-radius: 8px;
-                            background: step.problem-errors > 0 ? Ink.err-tint : Ink.warn-tint;
-                            accessible-role: text;
-                            accessible-label: "\{step.problems.length} problems";
-                            badge-text := Text {
-                                text: "⚠ \{step.problems.length}";
-                                font-size: Ink.fs-caption;
-                                font-weight: 600;
-                                color: step.problem-errors > 0 ? Ink.err : Ink.warn;
-                            }
-                        }
-
-                        // Edited since the running analysis started: for
-                        // the next run.
-                        if step.changed-since-run: VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 7px;
-                                height: 7px;
-                                border-radius: 3.5px;
-                                background: Ink.warn;
+                            if step.problems.length > 0: Rectangle {
+                                y: (parent.height - self.height) / 2;
+                                height: 16px;
+                                width: badge-text.preferred-width + 10px;
+                                border-radius: 8px;
+                                background: step.problem-errors > 0 ? Ink.err-tint : Ink.warn-tint;
                                 accessible-role: text;
-                                accessible-label: "Changed since the run started";
+                                accessible-label: "\{step.problems.length} problems";
+                                badge-text := Text {
+                                    text: "⚠ \{step.problems.length}";
+                                    font-size: Ink.fs-caption;
+                                    font-weight: 600;
+                                    color: step.problem-errors > 0 ? Ink.err : Ink.warn;
+                                }
+                            }
+
+                            // Edited since the running analysis started: for
+                            // the next run.
+                            if step.changed-since-run: VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 7px;
+                                    height: 7px;
+                                    border-radius: 3.5px;
+                                    background: Ink.warn;
+                                    accessible-role: text;
+                                    accessible-label: "Changed since the run started";
+                                }
+                            }
+
+                            // What it's set to, like a line of code.
+                            if !root.values-below: StepValues {
+                                horizontal-stretch: 1;
+                                text: step.summary;
+                            }
+                            if root.values-below: Rectangle {
+                                horizontal-stretch: 1;
                             }
                         }
 
-                        // What it's set to, like a line of code.
-                        Text {
-                            horizontal-stretch: 1;
+                        // Or on a line of their own, the row's whole width.
+                        if root.values-below: StepValues {
                             text: step.summary;
-                            color: Ink.text-mute;
-                            font-size: Ink.fs-secondary;
-                            font-family: Ink.font-mono;
-                            vertical-alignment: center;
-                            overflow: elide;
                         }
                     }
 
-                    // -- Controls: on hover, while open, or when set --
-                    HorizontalLayout {
-                        spacing: 0px;
+                    // Hidden buttons that still say something: a switched-off
+                    // step's eye, a pinned step's ⌖.
+                    if !root.controls-shown && (!step.enabled || step.pinned): HorizontalLayout {
                         padding-right: 4px;
-
-                        InkIconButton {
+                        if !step.enabled: InkIconButton {
                             y: (parent.height - self.height) / 2;
-                            visible: root.hovered || step.expanded || !step.enabled;
                             size: 22px;
-                            icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
-                            label: step.enabled ? "Switch the step off" : "Switch the step on";
+                            icon: InkIcons.hidden;
+                            label: "Switch the step on";
                             enabled: root.editable;
-                            disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This component is only viewed";
                             clicked => {
                                 root.toggle-enabled();
                             }
                         }
-
-                        // The settings in the larger dialog.
-                        InkIconButton {
+                        if step.pinned: StepPinButton {
                             y: (parent.height - self.height) / 2;
-                            visible: (root.hovered || step.expanded) && (step.parameters.length > 0 || step.advanced-count > 0);
-                            size: 22px;
-                            icon: InkIcons.expand;
-                            label: "Open the settings";
+                            pinned: true;
                             clicked => {
-                                root.open-settings();
+                                PipelinesPanelState.toggle-pin-step(root.idx);
                             }
                         }
+                    }
+                }
 
-                        InkIconButton {
-                            y: (parent.height - self.height) / 2;
-                            visible: root.hovered || step.expanded;
-                            size: 22px;
-                            icon: InkIcons.more;
-                            label: "Step actions";
-                            clicked => {
-                                step-menu.show();
-                            }
-                        }
+                // -- The buttons, over the row's end --
+                if root.controls-shown: HorizontalLayout {
+                    x: parent.width - self.width;
+                    width: self.preferred-width;
+                    height: parent.height;
+                    spacing: 0px;
 
-                        // ⌖ at the row's end: its settings into the Tuning
-                        // dock (again: out) - highlighted while pinned.
-                        if step.parameters.length > 0 || step.advanced-count > 0: Rectangle {
-                            y: (parent.height - self.height) / 2;
-                            width: 22px;
-                            height: 22px;
-                            border-radius: Ink.radius-md;
-                            background: step.pinned ? Ink.info-tint : transparent;
+                    // The values fade out under them.
+                    Rectangle {
+                        width: 20px;
+                        background: @linear-gradient(90deg, root.line-bg.transparentize(100%) 0%, root.line-bg 100%);
+                    }
+                    Rectangle {
+                        background: root.line-bg;
+                        HorizontalLayout {
+                            spacing: 0px;
+                            padding-right: 4px;
+
                             InkIconButton {
+                                y: (parent.height - self.height) / 2;
                                 size: 22px;
-                                icon: InkIcons.tune;
-                                tint: step.pinned ? Ink.focus : Ink.text-faint;
-                                label: step.pinned ? "Unpin from Tuning" : "Pin its settings to Tuning";
-                                active: false;
+                                icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
+                                label: step.enabled ? "Switch the step off" : "Switch the step on";
+                                enabled: root.editable;
+                                disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This component is only viewed";
+                                clicked => {
+                                    root.toggle-enabled();
+                                }
+                            }
+
+                            // The settings in the larger dialog.
+                            if step.parameters.length > 0 || step.advanced-count > 0: InkIconButton {
+                                y: (parent.height - self.height) / 2;
+                                size: 22px;
+                                icon: InkIcons.expand;
+                                label: "Open the settings";
+                                clicked => {
+                                    root.open-settings();
+                                }
+                            }
+
+                            InkIconButton {
+                                y: (parent.height - self.height) / 2;
+                                size: 22px;
+                                icon: InkIcons.more;
+                                label: "Step actions";
+                                clicked => {
+                                    step-menu.show();
+                                }
+                            }
+
+                            // ⌖: its settings into the Tuning dock (again: out).
+                            if step.parameters.length > 0 || step.advanced-count > 0: StepPinButton {
+                                y: (parent.height - self.height) / 2;
+                                pinned: step.pinned;
                                 clicked => {
                                     PipelinesPanelState.toggle-pin-step(root.idx);
                                 }
@@ -2499,6 +2564,22 @@ component StepRow inherits Rectangle {
         }
     }
 
+    // What the step does (⋯ › About): the card the ⓘ in Add step shows -
+    // useful when picking a step, so not on every row.
+    about-card := PopupWindow {
+        x: 28px;
+        y: 32px;
+        width: min(300px, root.width - 28px);
+        close-policy: close-on-click-outside;
+        InkInfoCard {
+            title: root.step.name;
+            text: root.step.help;
+            close => {
+                about-card.close();
+            }
+        }
+    }
+
     step-menu := PopupWindow {
         x: root.width - 220px;
         y: 32px;
@@ -2507,6 +2588,14 @@ component StepRow inherits Rectangle {
             menu-width: 220px;
             InkMenuCaption {
                 text: root.step.name;
+            }
+
+            if root.step.help != "": InkMenuItem {
+                icon: InkIcons.info;
+                text: "About \{root.step.name}";
+                clicked => {
+                    about-card.show();
+                }
             }
 
             InkMenuItem {
