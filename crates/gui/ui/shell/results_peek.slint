@@ -3,6 +3,7 @@
 // (‹ ›), leads back to the results or goes.
 
 import { ResultsState } from "../api/results.slint";
+import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { Ink, InkIcons, InkIconButton, InkButton, InkButtonKind } from "../ink/ink.slint";
 
@@ -82,8 +83,10 @@ export component ResultsPeek inherits Rectangle {
             size: 26px;
             icon: InkIcons.close;
             label: "Hide";
+            // The bar and the object's marker.
             clicked => {
                 ResultsState.peek = false;
+                ViewportObjectState.object_highlight = { };
             }
         }
     }

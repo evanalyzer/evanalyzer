@@ -447,6 +447,10 @@ impl ProjectExt for ProjectWithRuntime {
 
     /// Sets the path of the currently active image.
     fn set_current_image_path(&mut self, path: &PathBuf) {
+        // Another image: the last one's preview objects aren't its.
+        if self.tmp_settings.current_image.as_ref() != Some(path) {
+            self.forget_preview_objects();
+        }
         self.tmp_settings.current_image = Some(path.into());
     }
 
@@ -560,6 +564,10 @@ impl ProjectExt for ProjectWithRuntime {
     /// Selects the series for every image of the project - shown and
     /// analysed (see `ImageEntry::active_series`).
     fn set_active_series(&mut self, selected_series: &i32) {
+        // Another series: the preview's objects were the last one's.
+        if self.get_selected_series_idx() != *selected_series {
+            self.forget_preview_objects();
+        }
         self.images.settings.selected_series = Some(*selected_series);
     }
 
@@ -3586,6 +3594,34 @@ mod tests {
     }
 
     // -- get_selected_series_idx --------------------------------------------
+
+    /// The preview's objects (and a selection among them) go when another
+    /// image or series is shown - they were the last one's; the same image
+    /// again keeps them.
+    #[test]
+    fn another_image_or_series_forgets_the_preview_objects() {
+        use evanalyzer_cfg::core_types::ObjectId;
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+        let mut project = ProjectWithRuntime::default();
+        let preview = |project: &mut ProjectWithRuntime| {
+            project.tmp_settings.preview_objects = vec![ObjectMetricSettings { id: ObjectId(7), ..Default::default() }];
+            project.set_selected_object(Some(ObjectId(7)));
+        };
+        project.set_current_image_path(&PathBuf::from("/d/a.tif"));
+        preview(&mut project);
+        project.set_current_image_path(&PathBuf::from("/d/a.tif"));
+        assert_eq!(project.get_preview_objects().len(), 1, "the same image keeps them");
+
+        project.set_current_image_path(&PathBuf::from("/d/b.tif"));
+        assert!(project.get_preview_objects().is_empty());
+        assert_eq!(project.get_selected_object_id(), None, "the selection was one of them");
+
+        preview(&mut project);
+        project.set_active_series(&0);
+        assert_eq!(project.get_preview_objects().len(), 1, "the same series keeps them");
+        project.set_active_series(&1);
+        assert!(project.get_preview_objects().is_empty());
+    }
 
     #[test]
     fn get_selected_series_idx_defaults_to_zero_without_a_current_image() {
