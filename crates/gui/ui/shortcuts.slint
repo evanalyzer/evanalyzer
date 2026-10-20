@@ -282,6 +282,15 @@ export component GlobalShortcuts inherits FocusScope {
             ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
             return accept;
         }
+        // A: the annotate tool bar on / off - leaving it, like its ✕, back
+        // to Move.
+        if (!e.modifiers.control && !e.modifiers.alt && e.text == "a") {
+            LayoutState.annotate = !LayoutState.annotate;
+            if !LayoutState.annotate {
+                ViewportObjectState.act_tool_state = ToolState.Move;
+            }
+            return accept;
+        }
         // O (and the older #): the objects on the image on / off.
         if (!e.modifiers.control && (e.text == "o" || e.text == "#")) {
             ViewportObjectState.show_objects = !ViewportObjectState.show_objects;
@@ -395,7 +404,8 @@ export global DialogEscape {
             return false;
         }
         // Every remaining dialog type (about, missing_images,
-        // classification_confirm_delete, classification_confirm_auto_add_dialog,
+        // classification_confirm_delete, classification_confirm_delete_all,
+        // classification_confirm_auto_add_dialog,
         // object_confirm_delete, warning) closes with no other side effect
         // needed - same as their own Cancel/Close/OK button.
 

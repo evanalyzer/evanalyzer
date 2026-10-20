@@ -222,6 +222,16 @@ export component ClassificationPanel inherits Rectangle {
                 }
             }
 
+            InkMenuItem {
+                icon: InkIcons.delete;
+                text: "Delete all classes…";
+                danger: true;
+                enabled: ClassificationState.classes_list.length > 1;
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.classification_confirm_delete_all;
+                }
+            }
+
             InkMenuSeparator { }
 
             InkMenuItem {

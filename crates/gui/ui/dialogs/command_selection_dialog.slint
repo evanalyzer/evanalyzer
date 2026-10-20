@@ -88,6 +88,7 @@ component PickerTab inherits Rectangle {
             color: root.active ? Ink.text : Ink.text-dim;
             vertical-alignment: center;
         }
+
         Text {
             text: root.count;
             font-family: Ink.font-mono;
@@ -97,12 +98,14 @@ component PickerTab inherits Rectangle {
             vertical-alignment: center;
         }
     }
+
     Rectangle {
         visible: root.active;
         y: parent.height - 2px;
         height: 2px;
         background: Ink.focus;
     }
+
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
@@ -380,8 +383,15 @@ component DetailPane inherits Rectangle {
         padding: 16px;
         spacing: 10px;
 
-        // What it is: category, name, where it comes from.
+        // What it is: name, category - and where it comes from when that
+        // fits beside them (a component's source is long: "this project ·
+        // v1 · …"); the name is never squeezed for it.
         HorizontalLayout {
+            // The source's width, estimated (monospace) - not measured, so
+            // showing it or not doesn't feed back into the layout.
+            property <length> source-w: cmd.source.character-count * Ink.fs-secondary * 0.6;
+            property <bool> source-fits: cmd.source != ""
+                && root.width - 32px >= 8px + title.preferred-width + category.preferred-width + self.source-w + 3 * 8px;
             spacing: 8px;
             Rectangle {
                 width: 8px;
@@ -393,7 +403,7 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            Text {
+            title := Text {
                 text: cmd.name;
                 color: Ink.text;
                 font-size: Ink.fs-title;
@@ -402,7 +412,7 @@ component DetailPane inherits Rectangle {
                 overflow: elide;
             }
 
-            Text {
+            category := Text {
                 horizontal-stretch: 1;
                 text: cmd.is-component ? "Component" : PickerStyle.cat-name(cmd.category);
                 color: Ink.text-mute;
@@ -410,7 +420,7 @@ component DetailPane inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            Text {
+            if self.source-fits: Text {
                 text: cmd.source;
                 color: Ink.text-mute;
                 font-size: Ink.fs-secondary;
@@ -635,6 +645,7 @@ export component CommandSelectionDialog inherits InkDialog {
                             root.query-changed(root.query);
                         }
                     }
+
                     PickerTab {
                         text: "Components";
                         count: root.cat-count-grp;
@@ -646,6 +657,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         }
                     }
                 }
+
                 Rectangle {
                     y: parent.height - 1px;
                     height: 1px;
@@ -783,7 +795,6 @@ export component CommandSelectionDialog inherits InkDialog {
                    //         root.filter-category = -1;
                    //     }
                    // }
-
                 }
 
                 Rectangle {
@@ -1237,7 +1248,7 @@ export component CommandSelectionDialog inherits InkDialog {
                 // A component: one click for either - itself (linked to the
                 // library, gets updates) or a plain copy of its steps.
                 if root.component-picked: InkButton {
-                    text: "Add its steps";
+                    text: "Add steps";
                     tip: "A plain copy of its steps - every setting editable, no link: library updates don't reach it";
                     keys: ["Shift", "Enter"];
                     clicked => {
