@@ -28,6 +28,8 @@ export component Viewport inherits Rectangle {
     // and the navigator stay beside them.
     in property <length> inset-left: 0px;
     in property <length> inset-right: 0px;
+    // The right panels' room at the bottom (0: they end above it).
+    in property <length> inset-right-bottom: 0px;
     // Taken at the bottom (the Tuning dock, the objects table).
     in property <length> inset-bottom: 0px;
     // Results, split with the image: a click (no drag) picks the object
@@ -509,12 +511,17 @@ export component Viewport inherits Rectangle {
     property <length> margin: root.split-mode ? 10px : 12px;
     property <length> edge-left: root.inset-left > 0 ? root.inset-left : root.margin;
     property <length> edge-right: root.inset-right > 0 ? root.inset-right : root.margin;
+    // At the bottom: on the dock / table, their right end (the column's);
+    // else beside the right panels only where they reach down.
+    property <length> edge-right-bottom: root.inset-bottom > 0 ? root.edge-right
+        : root.inset-right-bottom > 0 ? root.inset-right-bottom : root.margin;
 
     stack-bar := StackBar {
         x: root.edge-left;
         y: parent.height - self.height - root.margin - root.inset-bottom;
-        room: root.width - root.edge-left - root.edge-right
-            - (root.split-mode && navigator.visible ? navigator.width + 12px : 0px);
+        room: root.split-mode
+            ? root.width - root.edge-left - root.edge-right - (navigator.visible ? navigator.width + 12px : 0px)
+            : root.width - root.edge-left - root.edge-right-bottom - (scale-row.visible ? scale-row.width + 12px : 0px);
     }
 
     // Above the image's touch area: clicks in it move the view. Top right,
@@ -528,17 +535,17 @@ export component Viewport inherits Rectangle {
         viewport-height: root.height;
     }
 
-    // The scale bar: under the navigator - in its place when it's hidden
-    // (in the split pane above it). Only with a pixel size; the zoom is in
-    // the status bar.
+    // The scale bar: bottom right, on the Z / T bar's line - beside the
+    // right panels where they reach the bottom, else at the window's edge
+    // (in the split pane above the navigator). Only with a pixel size; the
+    // zoom is in the status bar.
     scale-row := HorizontalLayout {
         property <bool> nav: navigator.visible;
         width: max(150px, ViewportState.scale_bar_width);
         height: 34px;
-        x: parent.width - self.width - root.edge-right;
-        y: root.split-mode
-            ? parent.height - self.height - root.margin - root.inset-bottom - (self.nav ? navigator.height + 8px : 0px)
-            : root.margin + (self.nav ? navigator.height + 8px : 0px);
+        x: parent.width - self.width - (root.split-mode ? root.edge-right : root.edge-right-bottom);
+        y: parent.height - self.height - root.margin - root.inset-bottom
+            - (root.split-mode && self.nav ? navigator.height + 8px : 0px);
         alignment: end;
         visible: ImageMetaData.image_name != "" && ViewportState.scale_bar_width > 0;
         accessible-role: text;

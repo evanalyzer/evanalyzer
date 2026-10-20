@@ -105,6 +105,9 @@ export component Workspace inherits Rectangle {
         border-bottom-right-radius: root.split && root.strip-h == 0 ? 10px : 0px;
         inset-left: root.left-shown ? Float.left-w + (LayoutState.mode == WorkspaceMode.images ? 20px : 0px) + 2 * Float.gap : 0px;
         inset-right: root.right-shown ? Float.right-w + 2 * Float.gap : 0px;
+        // The right column down to the bottom: only Objects (open) takes
+        // the column's rest - else the bottom right is free.
+        inset-right-bottom: root.right-shown && root.objects-in-column && !LayoutState.objects-folded ? Float.right-w + 2 * Float.gap : 0px;
         // The bar (objects, Z, T) and the navigator sit on the dock / table.
         inset-bottom: root.bottom-room;
     }
