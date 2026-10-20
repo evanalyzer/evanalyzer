@@ -2901,7 +2901,7 @@ export component PipelinesPanel inherits Rectangle {
                         enabled: root.pipeline-selected;
                         disabled-reason: "Pick a pipeline first";
                         clicked => {
-                            pipeline-menu.show();
+                            root.open-pipeline-menu(PipelinesPanelState.active-pipeline-id, PipelinesPanelState.active-pipeline-name, Ink.head-h - 4px, false);
                         }
                     }
                 }
@@ -2986,7 +2986,7 @@ export component PipelinesPanel inherits Rectangle {
                             PipelinesPanelState.move-pipeline-by(p.id, rows);
                         }
                         more-clicked => {
-                            PipelinesPanelState.pipeline-more(p.id);
+                            root.open-pipeline-menu(p.id, p.name, self.absolute-position.y - root.absolute-position.y + self.height, true);
                         }
                     }
                 }
@@ -3455,22 +3455,38 @@ export component PipelinesPanel inherits Rectangle {
         }
     }
 
+    // A pipeline's actions: the head's ⋯ (the shown pipeline) or a row's
+    // ⋯ (that row's pipeline, opening below it - without "New pipeline",
+    // the list's + is right there).
+    property <int> menu-pipeline-id: -1;
+    property <string> menu-pipeline-name;
+    property <length> menu-y: Ink.head-h - 4px;
+    property <bool> menu-from-row: false;
+
+    function open-pipeline-menu(id: int, name: string, y: length, from-row: bool) {
+        root.menu-pipeline-id = id;
+        root.menu-pipeline-name = name;
+        root.menu-y = y;
+        root.menu-from-row = from-row;
+        pipeline-menu.show();
+    }
+
     pipeline-menu := PopupWindow {
-        x: root.width - 250px;
-        y: Ink.head-h - 4px;
+        x: root.width - 250px - (root.menu-from-row ? 8px : 0px);
+        y: root.menu-y;
 
         InkMenuFrame {
-            open-y: root.absolute-position.y + Ink.head-h - 4px;
+            open-y: root.absolute-position.y + root.menu-y;
             menu-width: 250px;
             InkMenuCaption {
-                text: PipelinesPanelState.active-pipeline-name;
+                text: root.menu-pipeline-name;
             }
 
             InkMenuItem {
                 icon: InkIcons.edit;
                 text: "Edit pipeline …";
                 clicked => {
-                    PipelinesPanelState.pipeline-more(PipelinesPanelState.active-pipeline-id);
+                    PipelinesPanelState.pipeline-more(root.menu-pipeline-id);
                 }
             }
 
@@ -3478,7 +3494,7 @@ export component PipelinesPanel inherits Rectangle {
                 icon: InkIcons.copy;
                 text: "Duplicate";
                 clicked => {
-                    PipelinesPanelState.duplicate-pipeline(PipelinesPanelState.active-pipeline-id);
+                    PipelinesPanelState.duplicate-pipeline(root.menu-pipeline-id);
                 }
             }
 
@@ -3486,13 +3502,13 @@ export component PipelinesPanel inherits Rectangle {
                 icon: InkIcons.component;
                 text: "Save as component…";
                 clicked => {
-                    PipelinesPanelState.save-as-component();
+                    PipelinesPanelState.save-as-component(root.menu-pipeline-id);
                 }
             }
 
             InkMenuSeparator { }
 
-            InkMenuItem {
+            if !root.menu-from-row: InkMenuItem {
                 icon: InkIcons.add;
                 text: "New pipeline";
                 clicked => {
@@ -3505,7 +3521,7 @@ export component PipelinesPanel inherits Rectangle {
                 text: "Delete pipeline…";
                 danger: true;
                 clicked => {
-                    PipelinesPanelState.delete-pipeline(PipelinesPanelState.active-pipeline-id);
+                    PipelinesPanelState.delete-pipeline(root.menu-pipeline-id);
                 }
             }
         }

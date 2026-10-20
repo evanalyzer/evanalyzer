@@ -453,8 +453,8 @@ export global PipelinesPanelState {
         callback run-all();
         callback dry-run();
         callback auto-preview(bool);
-        // Saves the pipeline's steps to the library as one component.
-        callback save-as-component();
+        // Saves the pipeline's (id) steps to the library as one component.
+        callback save-as-component(int);
 
         // Opens the file browser for a file-path parameter, filtered to the given
     // comma-separated extensions (empty = any file), starting from the
