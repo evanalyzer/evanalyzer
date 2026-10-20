@@ -525,9 +525,40 @@ export component TopBar inherits Rectangle {
         animate width { duration: 200ms; }
     }
 
+    // The EVA menu. Rarely used groups one level down (▸, on hover or a
+    // click): Open recent, View, Help - the menu stays shorter than a
+    // laptop screen.
     eva-menu := PopupWindow {
         x: 6px;
         y: Ink.bar-h - 2px;
+
+        // One submenu open at a time: 1 Open recent, 2 View, 3 Help.
+        function open-sub(which: int) {
+            if which != 1 {
+                recent-menu.close();
+            }
+            if which != 2 {
+                view-menu.close();
+            }
+            if which != 3 {
+                help-menu.close();
+            }
+            if which == 1 {
+                recent-menu.show();
+            } else if which == 2 {
+                view-menu.show();
+            } else if which == 3 {
+                help-menu.show();
+            }
+        }
+
+        // An item of a submenu picked: both menus close.
+        function close-menus() {
+            recent-menu.close();
+            view-menu.close();
+            help-menu.close();
+            eva-menu.close();
+        }
 
         InkMenuFrame {
             open-y: root.absolute-position.y + Ink.bar-h - 2px;
@@ -549,6 +580,20 @@ export component TopBar inherits Rectangle {
                     ToolbarState.open_file_clicked();
                 }
             }
+            recent-item := InkMenuItem {
+                icon: InkIcons.project;
+                text: "Open recent";
+                submenu: true;
+                enabled: StartState.recent.length > 0;
+                changed has-hover => {
+                    if self.has-hover && self.enabled {
+                        eva-menu.open-sub(1);
+                    }
+                }
+                clicked => {
+                    eva-menu.open-sub(1);
+                }
+            }
             InkMenuItem {
                 icon: InkIcons.copy;
                 text: "New from template…";
@@ -565,21 +610,8 @@ export component TopBar inherits Rectangle {
                     ImagesListState.open_images_folder_clicked();
                 }
             }
-            // The last projects (the start page's list), one click away.
-            if StartState.recent.length > 0: InkMenuSeparator { }
-            if StartState.recent.length > 0: InkMenuCaption { text: "RECENT"; }
-            for project[i] in StartState.recent: InkMenuItem {
-                visible: i < 5;
-                height: i < 5 ? 28px : 0px;
-                icon: project.missing ? InkIcons.warning : InkIcons.project;
-                text: project.name;
-                shortcut: project.when;
-                enabled: !project.missing;
-                clicked => {
-                    StartState.open-recent(i);
-                }
-            }
-            if StartState.recent.length > 0: InkMenuSeparator { }
+
+            InkMenuSeparator { }
             InkMenuItem {
                 icon: InkIcons.save;
                 text: "Save";
@@ -600,6 +632,8 @@ export component TopBar inherits Rectangle {
                     ToolbarState.save_project_as_template_clicked();
                 }
             }
+
+            InkMenuSeparator { }
             InkMenuItem {
                 icon: InkIcons.settings;
                 text: "Project settings…";
@@ -616,79 +650,20 @@ export component TopBar inherits Rectangle {
             }
 
             InkMenuSeparator { }
-            InkMenuCaption { text: "VIEW"; }
-            InkMenuItem {
-                text: LayoutState.mode == WorkspaceMode.images ? "Images" : "Steps";
-                checked: LayoutState.steps-open;
-                shortcut: "Alt 1";
-                clicked => {
-                    LayoutState.steps-open = !LayoutState.steps-open;
-                    LayoutState.panels-hidden = false;
-                    LayoutState.panels-changed();
-                }
-            }
-            InkMenuItem {
-                text: "Classes";
-                checked: LayoutState.classes-open;
-                shortcut: "Alt 2";
-                clicked => {
-                    LayoutState.classes-open = !LayoutState.classes-open;
-                    LayoutState.panels-hidden = false;
-                    LayoutState.panels-changed();
-                }
-            }
-            InkMenuItem {
-                text: "Image";
-                checked: LayoutState.image-open;
-                shortcut: "Alt 3";
-                clicked => {
-                    LayoutState.image-open = !LayoutState.image-open;
-                    LayoutState.panels-hidden = false;
-                    LayoutState.panels-changed();
-                }
-            }
-            InkMenuItem {
-                text: "Objects";
-                checked: LayoutState.objects-open;
-                shortcut: "Alt 4";
-                clicked => {
-                    LayoutState.objects-open = !LayoutState.objects-open;
-                    LayoutState.panels-hidden = false;
-                    LayoutState.panels-changed();
-                }
-            }
-            // The navigator: by itself (only zoomed in), always, never.
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                padding-top: 4px;
-                padding-bottom: 4px;
-                spacing: 10px;
-                Text {
-                    text: "Navigator";
-                    font-size: Ink.fs-body;
-                    color: Ink.text;
-                    vertical-alignment: center;
-                }
-                InkSegmented {
-                    horizontal-stretch: 1;
-                    label: "Navigator";
-                    model: ["Auto", "Always", "Never"];
-                    selected: LayoutState.navigator-mode;
-                    picked(i) => {
-                        LayoutState.navigator-mode = i;
-                        LayoutState.panels-changed();
+            view-item := InkMenuItem {
+                icon: InkIcons.panels-hide;
+                text: "View";
+                submenu: true;
+                changed has-hover => {
+                    if self.has-hover {
+                        eva-menu.open-sub(2);
                     }
                 }
-            }
-            InkMenuItem {
-                icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
-                text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
-                shortcut: "Tab";
                 clicked => {
-                    LayoutState.panels-hidden = !LayoutState.panels-hidden;
+                    eva-menu.open-sub(2);
                 }
             }
+
             InkMenuSeparator { }
             InkMenuCaption { text: "TOOLS"; }
             InkMenuItem {
@@ -713,62 +688,196 @@ export component TopBar inherits Rectangle {
                     ToolbarState.connect_clicked();
                 }
             }
-            InkMenuItem {
+            // Only while connected to a server.
+            if ConnectionState.remote: InkMenuItem {
                 icon: InkIcons.computer;
                 text: "Disconnect";
-                enabled: ConnectionState.remote;
                 clicked => {
                     ToolbarState.disconnect_clicked();
                 }
             }
 
             InkMenuSeparator { }
-            // The colors: one row.
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                padding-top: 4px;
-                padding-bottom: 4px;
-                spacing: 10px;
-                Text {
-                    text: "Colors";
-                    font-size: Ink.fs-body;
-                    color: Ink.text;
-                    vertical-alignment: center;
+            help-item := InkMenuItem {
+                icon: InkIcons.help;
+                text: "Help";
+                submenu: true;
+                changed has-hover => {
+                    if self.has-hover {
+                        eva-menu.open-sub(3);
+                    }
                 }
-                InkSegmented {
-                    horizontal-stretch: 1;
-                    label: "Colors";
-                    model: ["Light", "Dark", "Dim"];
-                    selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
-                    picked(i) => {
-                        Appearance.pick(i == 1 ? InkScheme.dark : i == 2 ? InkScheme.dim : InkScheme.light);
+                clicked => {
+                    eva-menu.open-sub(3);
+                }
+            }
+
+            // -- The submenus, beside their row --
+            recent-menu := PopupWindow {
+                x: recent-item.x + recent-item.width + 4px;
+                y: recent-item.y - 5px;
+                InkMenuFrame {
+                    menu-width: 280px;
+                    for project[i] in StartState.recent: InkMenuItem {
+                        icon: project.missing ? InkIcons.warning : InkIcons.project;
+                        text: project.name;
+                        shortcut: project.when;
+                        enabled: !project.missing;
+                        clicked => {
+                            eva-menu.close-menus();
+                            StartState.open-recent(i);
+                        }
+                    }
+                    InkMenuSeparator { }
+                    InkMenuItem {
+                        text: "Clear the list";
+                        clicked => {
+                            eva-menu.close-menus();
+                            StartState.clear-recent();
+                        }
                     }
                 }
             }
-            InkMenuSeparator { }
-            InkMenuItem {
-                icon: InkIcons.keyboard;
-                text: "Shortcuts";
-                shortcut: "F1";
-                clicked => {
-                    GlobalAppState.active-dialog = DialogType.shortcuts-help;
+
+            view-menu := PopupWindow {
+                x: view-item.x + view-item.width + 4px;
+                y: view-item.y - 5px;
+                InkMenuFrame {
+                    menu-width: 280px;
+                    InkMenuItem {
+                        text: LayoutState.mode == WorkspaceMode.images ? "Images" : "Steps";
+                        checked: LayoutState.steps-open;
+                        shortcut: "Alt 1";
+                        clicked => {
+                            LayoutState.steps-open = !LayoutState.steps-open;
+                            LayoutState.panels-hidden = false;
+                            LayoutState.panels-changed();
+                        }
+                    }
+                    InkMenuItem {
+                        text: "Classes";
+                        checked: LayoutState.classes-open;
+                        shortcut: "Alt 2";
+                        clicked => {
+                            LayoutState.classes-open = !LayoutState.classes-open;
+                            LayoutState.panels-hidden = false;
+                            LayoutState.panels-changed();
+                        }
+                    }
+                    InkMenuItem {
+                        text: "Image";
+                        checked: LayoutState.image-open;
+                        shortcut: "Alt 3";
+                        clicked => {
+                            LayoutState.image-open = !LayoutState.image-open;
+                            LayoutState.panels-hidden = false;
+                            LayoutState.panels-changed();
+                        }
+                    }
+                    InkMenuItem {
+                        text: "Objects";
+                        checked: LayoutState.objects-open;
+                        shortcut: "Alt 4";
+                        clicked => {
+                            LayoutState.objects-open = !LayoutState.objects-open;
+                            LayoutState.panels-hidden = false;
+                            LayoutState.panels-changed();
+                        }
+                    }
+                    InkMenuItem {
+                        icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
+                        text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
+                        shortcut: "Tab";
+                        clicked => {
+                            LayoutState.panels-hidden = !LayoutState.panels-hidden;
+                        }
+                    }
+                    InkMenuSeparator { }
+                    // The navigator: by itself (only zoomed in), always, never.
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        spacing: 10px;
+                        Text {
+                            width: 70px;
+                            text: "Navigator";
+                            font-size: Ink.fs-body;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                        }
+                        InkSegmented {
+                            horizontal-stretch: 1;
+                            label: "Navigator";
+                            model: ["Auto", "Always", "Never"];
+                            selected: LayoutState.navigator-mode;
+                            picked(i) => {
+                                LayoutState.navigator-mode = i;
+                                LayoutState.panels-changed();
+                            }
+                        }
+                    }
+                    // The colors: one row.
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        spacing: 10px;
+                        Text {
+                            width: 70px;
+                            text: "Colors";
+                            font-size: Ink.fs-body;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                        }
+                        InkSegmented {
+                            horizontal-stretch: 1;
+                            label: "Colors";
+                            model: ["Light", "Dark", "Dim"];
+                            selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
+                            picked(i) => {
+                                Appearance.pick(i == 1 ? InkScheme.dark : i == 2 ? InkScheme.dim : InkScheme.light);
+                            }
+                        }
+                    }
                 }
             }
-            InkMenuItem {
-                icon: InkIcons.help;
-                text: "evanalyzer.org";
-                clicked => {
-                    ToolbarState.open_website();
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.info;
-                text: "About";
-                clicked => {
-                    GlobalAppState.active-dialog = DialogType.about;
+
+            help-menu := PopupWindow {
+                x: help-item.x + help-item.width + 4px;
+                y: help-item.y - 5px;
+                InkMenuFrame {
+                    menu-width: 240px;
+                    InkMenuItem {
+                        icon: InkIcons.keyboard;
+                        text: "Shortcuts";
+                        shortcut: "F1";
+                        clicked => {
+                            eva-menu.close-menus();
+                            GlobalAppState.active-dialog = DialogType.shortcuts-help;
+                        }
+                    }
+                    InkMenuItem {
+                        icon: InkIcons.help;
+                        text: "evanalyzer.org";
+                        clicked => {
+                            eva-menu.close-menus();
+                            ToolbarState.open_website();
+                        }
+                    }
+                    InkMenuItem {
+                        icon: InkIcons.info;
+                        text: "About";
+                        clicked => {
+                            eva-menu.close-menus();
+                            GlobalAppState.active-dialog = DialogType.about;
+                        }
+                    }
                 }
             }
         }
     }
+
 }
