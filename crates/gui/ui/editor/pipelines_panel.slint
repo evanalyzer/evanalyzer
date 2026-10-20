@@ -2087,7 +2087,8 @@ component StepRow inherits Rectangle {
                 // stays hovered (as siblings they flickered - hiding the
                 // button hovered the line, which showed it again).
                 head-ta := TouchArea {
-                // A click opens or closes it: the hand says so, and ▸ / ▾.
+                // A click opens or closes it: the hand and the hover say so (no
+                // arrow - the row's width is for the name and values).
                 mouse-cursor: pointer;
                 clicked => {
                     PipelinesPanelState.selected-step-id = root.idx;
@@ -2096,17 +2097,6 @@ component StepRow inherits Rectangle {
 
                 HorizontalLayout {
                     spacing: 0px;
-
-                    // ▸ closed, ▾ open - as the folding panels.
-                    Text {
-                        width: 16px;
-                        text: step.expanded ? "▾" : "▸";
-                        font-size: Ink.fs-caption;
-                        color: head-ta.has-hover || step.expanded ? Ink.text-dim : Ink.text-mute;
-                        horizontal-alignment: right;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
 
                     // The gutter: the step's id (what "#2 EV Detection"
                     // elsewhere refers to) - a click sets its breakpoint, like
@@ -2488,32 +2478,12 @@ component StepRow inherits Rectangle {
                     }
                 }
 
-                // A component's own actions; the step's actions are in ⋯.
-                    if root.step.category == StepCategory.component || root.step.update-version != "": HorizontalLayout {
-                    spacing: 6px;
+                // A newer version of the component: the one action on the
+                // card. Its other actions (values, view, edit) are in ⋯.
+                if root.step.update-version != "": HorizontalLayout {
                     padding-top: 2px;
                     alignment: start;
-                    // This step's own values (what most mean by "edit"),
-                    // its steps with them, or the component itself - the
-                    // defaults of every step that uses it.
-                    if root.step.category == StepCategory.component && root.editable && root.step.parameters.length > 0: InkButton {
-                        small: true;
-                        kind: InkButtonKind.primary;
-                        text: "This step's values…";
-                        tip: "Change the values this step uses - only this step";
-                        clicked => {
-                            root.open-settings();
-                        }
-                    }
-                    if root.step.category == StepCategory.component: InkButton {
-                        small: true;
-                        text: "View steps";
-                        tip: "Its steps with this step's values - read only";
-                        clicked => {
-                            root.view-component();
-                        }
-                    }
-                    if root.step.update-version != "": InkButton {
+                    InkButton {
                         small: true;
                         kind: InkButtonKind.primary;
                         text: "Update to v\{root.step.update-version}";
@@ -2522,30 +2492,6 @@ component StepRow inherits Rectangle {
                         }
                     }
                 }
-                    // The component itself, on a line of its own (the card is narrow):
-                    // in place (this step only, with its values) or for all uses.
-                    if root.step.category == StepCategory.component && root.editable: HorizontalLayout {
-                        alignment: start;
-                        spacing: 6px;
-                        InkButton {
-                            small: true;
-                            text: "Edit in place…";
-                            tip: "Its steps with this step's values, to change any setting - only this step (it gets its own copy when others use the component)";
-                            clicked => {
-                                root.edit-in-place();
-                            }
-                        }
-                        InkButton {
-                            small: true;
-                            kind: InkButtonKind.quiet;
-                            text: "Edit component (all uses)…";
-                            tip: "Change the component itself: its steps and the defaults of every step that uses it. This step's own values are kept.";
-                            clicked => {
-                                root.open-component();
-                            }
-                        }
-                    }
-                    // YODA
                 Rectangle {
                     vertical-stretch: 1;
                 }

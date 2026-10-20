@@ -10177,10 +10177,17 @@ mod tests {
                 "{label:?} ends at {right}, the step list at {edge}"
             );
         };
-        // Duplicate, Bundle, Expand, Save as and Remove are in the card's
-        // ⋯ menu ("Step actions").
-        for label in ["View steps", "Edit component (all uses)…", "Step actions", "About Threshold"] {
+        // All of a component's actions (its values, view, edit in place or
+        // for all uses) are in the card's ⋯ menu ("Step actions"), none on
+        // the card itself.
+        for label in ["Step actions", "About Threshold"] {
             fits(label);
+        }
+        for label in ["This step's values…", "View steps", "Edit in place…", "Edit component (all uses)…"] {
+            assert!(
+                ElementHandle::find_by_accessible_label(&ui, label).next().is_none(),
+                "{label:?} is on the card - it belongs in ⋯"
+            );
         }
 
         ui.global::<PipelinesPanelState>().invoke_open_component(1);
