@@ -24,13 +24,6 @@ use std::sync::Arc;
 /// The Laplacian is a second-order derivative operator used to find regions of
 /// rapid intensity change. It is particularly effective for detecting edges
 /// and fine details, though it is highly sensitive to noise.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::Laplacian;
-/// let filter = Laplacian { kernel_size: 3 };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct Laplacian {

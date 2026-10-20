@@ -42,17 +42,6 @@ pub enum Operand {
 /// pipeline image and a secondary image stored in the cache.
 ///
 /// This command allows for complex image blending, masking, and comparison.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{ImageMath, Operand};
-/// let subtract_bg = ImageMath {
-///     operand: Operand::Subtract,
-///     second_image_address: ImageAddress::from("background"),
-///     swap_operands: false,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct ImageMath {

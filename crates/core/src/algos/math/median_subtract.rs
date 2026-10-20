@@ -21,13 +21,6 @@ use macros::CommandsMeta;
 /// This algorithm is highly effective for removing large-scale background
 /// variations while preserving small, high-contrast features. It works by
 /// estimating the background as the median intensity within a local radius.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::MedianSubtract;
-/// let filter = MedianSubtract { radius: 10.0 };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct MedianSubtract {

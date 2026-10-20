@@ -18,7 +18,7 @@ use crate::{
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
-/// Instance segmentation using a Cellpose-SAM model exported as TorchScript
+/// Instance segmentation using a Cellpose-SAM model
 ///
 /// [AI Cellpose Segmentation] -> [Extract Objects]
 ///

@@ -29,13 +29,6 @@ pub enum ImageSource {
 /// This is a **transparent command**: it does not modify the image data in the
 /// pipeline context, nor does it perform a buffer swap. It acts as a tap
 /// to view the state of the image at a specific point in the pipeline.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::SaveImage;
-/// let saver = SaveImage {path:"output/processed_cell.png"};
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct SaveImage {

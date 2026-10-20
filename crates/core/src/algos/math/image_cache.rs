@@ -34,16 +34,6 @@ pub enum ImageCacheMode {
 ///
 /// `ImageCache` allows the pipeline to branch or "undo" operations by saving
 /// states to a named address and reloading them as needed.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};
-/// let checkpoint = ImageCache {
-///     mode: ImageCacheMode::Store,
-///     address: ImageAddress::from("pre_processed_state"),
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct ImageCache {

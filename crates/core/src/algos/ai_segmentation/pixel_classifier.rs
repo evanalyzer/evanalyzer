@@ -33,20 +33,16 @@ pub struct SegmentationMapping {
     pub segmentation_class: SegmentationClass,
 }
 
-/// A pixel classifier trained via the app's AI training dialog
-/// (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),
-/// applied here as a pipeline segmentation step: every pixel is classified
-/// independently (reusing the same feature recipe used at training time),
-/// then remapped through `segmentation_mapping` into this project's own
-/// classes and written to the segmentation map - the same output shape
-/// `Threshold` produces, so downstream steps (extraction, classification)
-/// don't need to care which one ran.
+/// Segments the image with a pixel classifier trained in the AI training dialog.
 ///
-/// Predicted classes with no matching `segmentation_mapping` entry are
-/// written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`
-/// leaves pixels outside every configured range as background - mapping
-/// only the classes you care about is a deliberate simplification, not an
-/// oversight.
+/// [Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
+///
+/// Train a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.
+/// The classifier assigns every pixel of the image to a class, producing a segmented image.
+/// The segmentation mapping translates the model's classes into this project's segmentation classes.
+///
+/// Use a pixel classifier in place of a threshold step.
+/// Like a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", display_name = "AI Pixel Classifier")]
 pub struct PixelClassifier {

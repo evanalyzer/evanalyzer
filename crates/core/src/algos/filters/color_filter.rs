@@ -19,18 +19,6 @@ use std::sync::Arc;
 /// Defines a range within the HSV (Hue, Saturation, Value) color space.
 ///
 /// This is commonly used for color-based filtering or "chroma keying."
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::HsvRange;
-///
-/// let green_filter = HsvRange {
-///     min_h: 100.0, max_h: 140.0,
-///     min_s: 0.2,   max_s: 1.0,
-///     min_v: 0.2,   max_v: 1.0,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 pub struct HsvRange {
     /// Minimum Hue angle in degrees [0.0, 360.0].

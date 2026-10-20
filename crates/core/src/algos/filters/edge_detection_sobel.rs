@@ -20,13 +20,6 @@ use std::sync::Arc;
 /// of pixel intensities across the horizontal and vertical axes. It highlights
 /// areas of sharp luminance changes, producing a continuous gradient map that
 /// emphasizes prominent structural edges and surface transitions.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EdgeDetectionSobel;
-/// let filter = EdgeDetectionSobel { kernel_size: 3 };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct EdgeDetectionSobel {

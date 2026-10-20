@@ -20,17 +20,6 @@ use std::sync::Arc;
 /// high-frequency pixel variations (like camera noise, salt-and-pepper artifacts,
 /// or dust) while preserving structural features. It is commonly used as a
 /// preprocessing step to optimize thresholding and edge detection tasks.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::GaussianBlur;
-///
-/// let settings = GaussianBlur {
-///     kernel_size: 5,
-///     sigma: 2.0
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct GaussianBlur {
