@@ -91,6 +91,8 @@ export component InkMenuItem inherits Rectangle {
     in property <bool> danger: false;
     /// Opens a submenu (a ▸ at the right).
     in property <bool> submenu: false;
+    /// Highlighted as if hovered - the row whose submenu is open.
+    in property <bool> active: false;
     in property <bool> is-new: false;
     out property <bool> has-hover: ta.has-hover;
     callback clicked;
@@ -108,7 +110,7 @@ export component InkMenuItem inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-sm;
-        background: ta.has-hover && root.enabled ? (root.danger ? Ink.err-tint : Ink.hover) : transparent;
+        background: (ta.has-hover || root.active) && root.enabled ? (root.danger ? Ink.err-tint : Ink.hover) : transparent;
         opacity: root.enabled ? 1.0 : 0.45;
 
         HorizontalLayout {

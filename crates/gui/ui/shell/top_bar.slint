@@ -25,6 +25,8 @@ global EvaMenu {
 component EvaMenuItem inherits InkMenuItem {
     in property <int> opens: 0;
     submenu: self.opens != 0;
+    // Its submenu open: the row stays highlighted while the mouse is in it.
+    active: self.opens != 0 && EvaMenu.sub == self.opens;
     changed has-hover => {
         if self.has-hover {
             EvaMenu.sub = self.enabled ? self.opens : 0;
