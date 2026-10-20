@@ -528,24 +528,24 @@ export component Viewport inherits Rectangle {
         viewport-height: root.height;
     }
 
-    // The scale bar and the zoom: under the navigator - in its place when
-    // it's hidden (in the split pane above it).
+    // The scale bar: under the navigator - in its place when it's hidden
+    // (in the split pane above it). Only with a pixel size; the zoom is in
+    // the status bar.
     scale-row := HorizontalLayout {
         property <bool> nav: navigator.visible;
-        width: max(150px, ViewportState.scale_bar_width + 60px);
+        width: max(150px, ViewportState.scale_bar_width);
         height: 34px;
         x: parent.width - self.width - root.edge-right;
         y: root.split-mode
             ? parent.height - self.height - root.margin - root.inset-bottom - (self.nav ? navigator.height + 8px : 0px)
             : root.margin + (self.nav ? navigator.height + 8px : 0px);
-        spacing: 8px;
-        visible: ImageMetaData.image_name != "";
+        alignment: end;
+        visible: ImageMetaData.image_name != "" && ViewportState.scale_bar_width > 0;
         accessible-role: text;
-        accessible-label: "Scale bar " + ViewportState.scale_bar_text + ", zoom " + round(ViewportState.zoom_factor * 100) + " percent";
+        accessible-label: "Scale bar " + ViewportState.scale_bar_text;
         VerticalLayout {
             alignment: end;
             spacing: 3px;
-            visible: ViewportState.scale_bar_width > 0;
             Text {
                 text: ViewportState.scale_bar_text;
                 font-size: Ink.fs-secondary;
@@ -562,20 +562,6 @@ export component Viewport inherits Rectangle {
                 background: #FFFFFF;
                 border-width: 0.5px;
                 border-color: #000000A0;
-            }
-        }
-        Rectangle {
-            horizontal-stretch: 1;
-        }
-        VerticalLayout {
-            alignment: end;
-            Text {
-                text: round(ViewportState.zoom_factor * 100) + " %";
-                font-family: Ink.font-mono;
-                font-size: Ink.fs-secondary;
-                color: #E4E4E7;
-                stroke: #000000A0;
-                stroke-width: 0.5px;
             }
         }
     }

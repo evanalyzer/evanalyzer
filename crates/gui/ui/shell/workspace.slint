@@ -178,9 +178,10 @@ export component Workspace inherits Rectangle {
             y: 10px;
             width: parent.width - 20px;
         }
+        // Above the bar at the bottom of the image (40 px, 10 px from the edge).
         SplitHint {
             x: 10px;
-            y: parent.height - self.height - 34px;
+            y: parent.height - self.height - 10px - 40px - 8px;
         }
     }
     if root.split && root.strip-h > 0: SplitFilmstrip {

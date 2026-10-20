@@ -987,6 +987,51 @@ pub fn clone_component_for_step(
     Ok(new_key)
 }
 
+/// "Edit in place": step `step_index` of `list` (a component step) gets a
+/// component of its own that holds its current values - the inner steps
+/// with the step's values applied, each parameter's default the step's
+/// value - so opened it shows what this step runs, and changes reach no
+/// other step. Used by other steps too: a copy ("Name (2)", a key of its
+/// own, no library origin); used only here: the definition itself. The
+/// step's own values are cleared (its definition holds them now - kept,
+/// they would override every edit made inside). Returns the key.
+pub fn component_in_place_for_step(
+    project: &mut ProjectSettings,
+    list: &StepList,
+    step_index: usize,
+) -> Result<String, InternalErrors> {
+    let instance = match &list.step_mut(project, step_index)?.content {
+        StepContent::Component(instance) => instance.clone(),
+        StepContent::Command(_) => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "step {} isn't a component",
+                step_index + 1
+            )));
+        }
+    };
+    let steps = evanalyzer_core::component_steps_with_values(&instance, &project.components)?;
+    let key = if component_uses(project, &instance.key) > 1 {
+        clone_component_for_step(project, list, step_index)?
+    } else {
+        instance.key.clone()
+    };
+    let definition = project
+        .components
+        .iter_mut()
+        .find(|d| d.key == key)
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no component {key}")))?;
+    definition.steps = steps;
+    for parameter in &mut definition.parameters {
+        if let Some(value) = instance.values.get(&parameter.key) {
+            parameter.default = value.clone();
+        }
+    }
+    if let StepContent::Component(own) = &mut list.step_mut(project, step_index)?.content {
+        own.values.clear();
+    }
+    Ok(key)
+}
+
 /// "Expand component": replaces step `step_index` of `list` (a component step) by
 /// its component's steps, with the step's values applied. The definition
 /// stays in the project.
@@ -2646,6 +2691,54 @@ mod tests {
             "the other use keeps it"
         );
         assert_eq!(component_uses(&project, &key), 1);
+    }
+
+    /// "Edit in place": the step's own component holds what it runs - its
+    /// values become the component's - so it runs the same; the other use
+    /// keeps the original. Used only here: no copy, the definition itself.
+    #[test]
+    fn edit_in_place_gives_the_step_a_component_with_its_values() {
+        let runs = |project: &ProjectSettings, pipeline: usize, step: usize| {
+            let StepContent::Component(instance) = &project.pipelines[pipeline].steps[step].content else {
+                panic!("a component step");
+            };
+            serde_json::to_string(
+                &evanalyzer_core::component_steps_with_values(instance, &project.components).unwrap(),
+            )
+            .unwrap()
+        };
+        let mut project = with_component();
+        // The step has a value of its own for each parameter.
+        let StepContent::Component(instance) = &mut project.pipelines[0].steps[2].content else {
+            panic!("a component step");
+        };
+        let parameters = project.components[0].parameters.clone();
+        assert!(!parameters.is_empty(), "the fixture's component has parameters");
+        for p in &parameters {
+            instance.values.insert(p.key.clone(), p.default.clone());
+        }
+        let mut second_use = project.pipelines[0].steps[2].clone();
+        second_use.id = StepId(1);
+        project.pipelines[1].steps.push(second_use);
+        let before = runs(&project, 0, 2);
+        let other_before = runs(&project, 1, 1);
+
+        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2).unwrap();
+        assert_eq!(key, "CELL_RECONSTRUCTION_2", "used twice: a copy");
+        assert_eq!(runs(&project, 0, 2), before, "the step runs as before");
+        assert_eq!(runs(&project, 1, 1), other_before, "the other use is untouched");
+        let StepContent::Component(own) = &project.pipelines[0].steps[2].content else {
+            panic!("a component step");
+        };
+        assert!(own.values.is_empty(), "its values are its component's now");
+        assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 1);
+
+        // The other use, now alone with its component: no copy.
+        let count = project.components.len();
+        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1).unwrap();
+        assert_eq!(key, "CELL_RECONSTRUCTION");
+        assert_eq!(project.components.len(), count, "no copy");
+        assert_eq!(runs(&project, 1, 1), other_before);
     }
 
     /// Pipeline 1 made the component "Outer": local Nuclei (L1, extracted in

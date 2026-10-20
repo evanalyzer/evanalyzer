@@ -269,7 +269,7 @@ export component SplitSelection inherits Rectangle {
     }
 }
 
-// Bottom left on the image: the zoom, and what a click does.
+// Bottom left on the image, above its bar: what a click does.
 export component SplitHint inherits Hud {
     property <bool> plate: ResultsState.rail-mode == ResultsRailMode.matrix;
     height: 28px;
@@ -278,15 +278,9 @@ export component SplitHint inherits Hud {
         padding-left: 10px;
         padding-right: 10px;
         spacing: 8px;
+        // The zoom is in the status bar.
         Text {
-            text: round(ViewportState.zoom_factor * 100) + " %";
-            font-size: Ink.fs-caption;
-            font-family: Ink.font-mono;
-            color: #A1A1AA;
-            vertical-alignment: center;
-        }
-        Text {
-            text: "·  Click an object to find it in the " + (root.plate ? "well" : "list");
+            text: "Click an object to find it in the " + (root.plate ? "well" : "list");
             font-size: Ink.fs-caption;
             color: #A1A1AA;
             vertical-alignment: center;

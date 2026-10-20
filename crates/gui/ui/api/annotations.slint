@@ -77,6 +77,9 @@ export global AnnotationState {
     // the project's class k).
     in-out property <[ImportClassRow]> import-classes;
     in property <[string]> import-targets;
+    // The targets' colors (the project classes'; transparent for the first
+    // three).
+    in property <[color]> import-target-colors;
     // Measures the read shapes on the image and adds them to its manual
     // annotations - or replaces those (true).
     callback apply-import(bool);

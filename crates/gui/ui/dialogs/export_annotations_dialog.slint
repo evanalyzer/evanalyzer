@@ -1,6 +1,6 @@
-// dialogs/export_annotations_dialog.slint — the open image's manual
-// annotations as GeoJSON (QuPath reads it): the classes to export, then
-// where to save it.
+// dialogs/export_annotations_dialog.slint — the open image's objects as
+// GeoJSON (QuPath reads it): its manual annotations and the pipeline objects
+// shown on it, of the classes ticked; then where to save it.
 
 import { Places } from "../api/layout.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
@@ -22,7 +22,7 @@ export component ExportAnnotationsDialog inherits InkDialog {
     VerticalLayout {
         spacing: 8px;
         Text {
-            text: AnnotationState.export-classes.length == 0 ? "This image has no manual annotations." : "The manual annotations of these classes, as GeoJSON (QuPath reads it):";
+            text: AnnotationState.export-classes.length == 0 ? "This image has no objects." : "Every object of these classes - drawn ones and the pipeline's - as GeoJSON (QuPath reads it):";
             wrap: word-wrap;
             color: Ink.text;
             font-size: Ink.fs-secondary;
