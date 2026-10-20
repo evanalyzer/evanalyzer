@@ -1196,7 +1196,7 @@ component ScalarControls inherits Rectangle {
 
 // A setting of a list entry, on a line like the other settings: its name,
 // its control, a pin. Inside an opened component also ◇ / ✎ (expose it).
-component LeafParamRow inherits HorizontalLayout {
+component LeafParamRow inherits Rectangle {
     in property <LeafParam> p;
     callback changed(string);
     callback toggle-exposed();
@@ -1205,6 +1205,13 @@ component LeafParamRow inherits HorizontalLayout {
 
     property <bool> in-component: PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && root.p.param-type != ParamType.label;
 
+    min-height: leaf-row.min-height;
+    preferred-height: leaf-row.preferred-height;
+
+    // ⓘ and 📌 (unless pinned) only while the row is hovered; the row
+    // inside, so over the field or 📌 it stays hovered.
+    leaf-row-ta := TouchArea {
+    leaf-row := HorizontalLayout {
     spacing: 6px;
 
     HorizontalLayout {
@@ -1276,7 +1283,7 @@ component LeafParamRow inherits HorizontalLayout {
             overflow: elide;
         }
 
-        if root.p.description != "": InkInfoButton {
+        if root.p.description != "" && leaf-row-ta.has-hover: InkInfoButton {
             title: root.p.display-name == "" ? root.p.name : root.p.display-name;
             text: root.p.description;
         }
@@ -1316,6 +1323,7 @@ component LeafParamRow inherits HorizontalLayout {
             root.toggle-pin();
         }
         Image {
+            visible: root.p.pinned || leaf-row-ta.has-hover;
             source: InkIcons.pin;
             width: 12px;
             colorize: root.p.pinned ? Ink.focus : leaf-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
@@ -1334,6 +1342,8 @@ component LeafParamRow inherits HorizontalLayout {
             wanted: leaf-pin-ta.has-hover && !leaf-pin-ta.pressed;
             text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
         }
+    }
+    }
     }
 }
 
@@ -1364,6 +1374,9 @@ component ParamLabel inherits HorizontalLayout {
         // The settings dialog's layout: a larger name, and "?" shows the
         // full help text below the short one (`help-open`) instead of a popup.
         in property <bool> wide: false;
+        // The ⓘ (not wide): beside a field only while its row is hovered -
+        // the name gets the room otherwise.
+        in property <bool> show-info: true;
     in-out property <bool> help-open: false;
     callback toggle-exposed();
     callback edit-exposed();
@@ -1455,7 +1468,7 @@ component ParamLabel inherits HorizontalLayout {
             text: root.help-open ? "Hide the help" : "About " + (p.display-name == "" ? p.name : p.display-name);
         }
     }
-    if !root.wide && p.description != "": InkInfoButton {
+    if !root.wide && root.show-info && p.description != "": InkInfoButton {
         title: p.display-name == "" ? p.name : p.display-name;
         text: p.description;
     }
@@ -1773,13 +1786,20 @@ component InlineParamRow inherits VerticalLayout {
         }
     }
 
-    if !root.stacked: HorizontalLayout {
+    // ⓘ and 📌 (unless pinned) only while the row is hovered.
+    if !root.stacked: Rectangle {
+        min-height: inline.min-height;
+        preferred-height: inline.preferred-height;
+        // The row inside it: over the field or 📌 it stays hovered.
+        row-ta := TouchArea {
+        inline := HorizontalLayout {
         spacing: 6px;
         HorizontalLayout {
             width: 112px;
             alignment: start;
             ParamLabel {
                 p: root.p;
+                show-info: row-ta.has-hover;
                 toggle-exposed => {
                     root.toggle-exposed();
                 }
@@ -1832,6 +1852,7 @@ component InlineParamRow inherits VerticalLayout {
                 root.toggle-pin();
             }
             Image {
+                visible: root.p.pinned || row-ta.has-hover;
                 source: InkIcons.pin;
                 width: 12px;
                 colorize: root.p.pinned ? Ink.focus : pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
@@ -1850,6 +1871,8 @@ component InlineParamRow inherits VerticalLayout {
                 wanted: pin-ta.has-hover && !pin-ta.pressed;
                 text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
             }
+        }
+        }
         }
     }
 
