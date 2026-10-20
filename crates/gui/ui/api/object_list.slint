@@ -48,6 +48,9 @@ export global ObjectListState {
     // ("12" an id, "area > 50", "circ < 0.6", a class name; terms split by
     // commas). `filter-changed` after a change.
     in-out property <int> filter-class: -1;
+    // Where they come from: 0 both, 1 the manual annotations, 2 the
+    // pipeline's detections.
+    in-out property <int> filter-source: 0;
     in-out property <string> filter-text;
     callback filter-changed();
     // Columns of the objects table hidden: "area", "circ", "ch<i>" each

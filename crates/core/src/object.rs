@@ -1,4 +1,9 @@
+use crate::ImagePlane;
+use crate::ImageTile;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+use crate::pipeline::scope::Scope;
 use bitvec::prelude::*;
+use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::{
     core_types::{ObjectClass, ObjectId, SegmentationClass, TrackId},
     settings::object_settings::{IntensitySettings, ObjectMetricSettings, TrackSettings},
@@ -7,12 +12,6 @@ use indexmap::IndexMap;
 use kornia_image::ImageSize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-
-use crate::ImagePlane;
-use crate::ImageTile;
-use crate::pipeline::pipeline_cache::GlobalPipelineCache;
-use crate::pipeline::scope::Scope;
-use evanalyzer_cfg::core_types::InternalErrors;
 
 /// An object's (or annotation's) intensities over its mask - one
 /// implementation for the pipeline and stored annotations.

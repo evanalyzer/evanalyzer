@@ -107,7 +107,10 @@ impl ObjectListController {
             if let Some(ui) = ui_weak.upgrade() {
                 let label_counts = precompute_label_counts(&bridge_ptr.app_state);
                 let state = ui.global::<ObjectListState>();
-                let filter = ObjectFilter::parse(state.get_filter_class(), &state.get_filter_text());
+                let filter = ObjectFilter {
+                    source: ObjectSource::from_slint(state.get_filter_source()),
+                    ..ObjectFilter::parse(state.get_filter_class(), &state.get_filter_text())
+                };
                 let visible_rows = compute_visible_rows(&bridge_ptr.app_state, &filter);
                 let nr_of_bits = current_image_nr_of_bits(&bridge_ptr.app_state);
                 let bridge = Rc::new(ObjectModalBridge {
@@ -264,18 +267,50 @@ fn compute_visible_rows(app_state: &Arc<UiState>, filter: &ObjectFilter) -> Vec<
         .iter()
         .chain(preview.iter())
         .enumerate()
+        .filter(|(i, _)| filter.source.shows(*i < manual.len()))
         .filter(|(_, object)| !hide_unclassified || !object.object_class.is_empty())
         .filter(|(_, object)| filter.matches(object, &project))
         .map(|(i, _)| i)
         .collect()
 }
 
-/// What the objects list / table shows: a class (`None` all) and the search
-/// terms - all must match.
+/// What the objects list / table shows: manual annotations and/or
+/// detections, a class (`None` all) and the search terms - all must match.
 #[derive(Debug, Default, PartialEq)]
 struct ObjectFilter {
+    source: ObjectSource,
     class: Option<u32>,
     terms: Vec<ObjectTerm>,
+}
+
+/// Where the objects shown come from (`ObjectListState.filter-source`).
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
+enum ObjectSource {
+    #[default]
+    Both,
+    /// The manual annotations only.
+    Manual,
+    /// The pipeline's detections (preview objects) only.
+    Detections,
+}
+
+impl ObjectSource {
+    /// 0 both, 1 manual annotations, 2 detections.
+    fn from_slint(source: i32) -> Self {
+        match source {
+            1 => ObjectSource::Manual,
+            2 => ObjectSource::Detections,
+            _ => ObjectSource::Both,
+        }
+    }
+
+    fn shows(self, manual: bool) -> bool {
+        match self {
+            ObjectSource::Both => true,
+            ObjectSource::Manual => manual,
+            ObjectSource::Detections => !manual,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -321,6 +356,7 @@ impl ObjectFilter {
             .map(ObjectTerm::parse)
             .collect();
         Self {
+            source: ObjectSource::Both,
             class: u32::try_from(class).ok(),
             terms,
         }
@@ -863,6 +899,28 @@ mod tests {
         let ui_state = test_ui_state_with_project(project);
 
         assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![0, 1]);
+    }
+
+    #[test]
+    fn compute_visible_rows_shows_only_manual_annotations_or_only_detections() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true)); // manual, index 0
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // detection, index 1
+        let ui_state = test_ui_state_with_project(project);
+
+        let rows = |source: i32| {
+            let filter = ObjectFilter {
+                source: ObjectSource::from_slint(source),
+                ..ObjectFilter::default()
+            };
+            compute_visible_rows(&ui_state, &filter)
+        };
+        assert_eq!(rows(0), vec![0, 1]);
+        assert_eq!(rows(1), vec![0]);
+        assert_eq!(rows(2), vec![1]);
     }
 
     #[test]
