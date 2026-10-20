@@ -100,6 +100,12 @@ impl PipelineWorker {
         }))
     }
 
+    /// The image shown and its series - what a preview runs for.
+    fn shown_image(&self) -> (Option<std::path::PathBuf>, i32) {
+        let project = self.app_state.get_project();
+        (project.get_current_image_path_cloned(), project.get_selected_series_idx())
+    }
+
     /// A job that could not start (e.g. a pipeline reads a channel the images
     /// don't have): logged, and shown to the user in the run status - the
     /// same place "zoomed out too far to preview" is reported.
@@ -129,6 +135,10 @@ impl PipelineWorker {
         let self_handle = Arc::clone(self);
         {
             let is_preview = task.preview;
+            // The image (and series) a preview runs for: its objects go on
+            // that one only - not on the next image, if the user switched
+            // meanwhile.
+            let preview_of = self.shown_image();
 
             let job = if is_preview {
                 // Restrict processing to tiles currently visible in the viewport
@@ -286,7 +296,7 @@ impl PipelineWorker {
                         objects,
                     } => {
                         info!("Tile {tile_index}/{total_tiles} completed");
-                        if is_preview {
+                        if is_preview && self_handle.shown_image() == preview_of {
                             // Append the new ROIs and redraw so the user sees partial results.
                             self_handle
                                 .app_state
@@ -475,7 +485,9 @@ impl PipelineWorker {
                 }
                 Ok(output) => {
                     info!("Pipeline completed successfully");
-                    if is_preview {
+                    if is_preview && self_handle.shown_image() != preview_of {
+                        info!("The preview's image isn't shown any more - its objects are left out");
+                    } else if is_preview {
                         // Replace the incrementally-streamed per-tile ROIs with
                         // the final, tile-merged result - otherwise cross-tile
                         // fragments stay displayed as two separate objects even

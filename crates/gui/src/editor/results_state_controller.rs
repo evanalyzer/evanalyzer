@@ -7310,6 +7310,33 @@ mod tests {
         assert!(controller._app_state.load_app_settings().results_split.image_panel);
     }
 
+    /// Leaving the split view takes its marker off the image; "Open in
+    /// Images" keeps it, with the bar back to the results.
+    #[test]
+    fn leaving_the_split_view_takes_its_marker_off_the_image() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        let marker = || ui.global::<crate::ViewportObjectState>().get_object_highlight().active;
+        state.invoke_split_shown(true);
+        state.invoke_list_row_selected(1);
+        drain_ui_queue();
+        assert!(marker(), "the row's object marked");
+
+        state.invoke_split_shown(false);
+        assert!(!marker(), "gone with the split view");
+
+        state.invoke_split_shown(true);
+        state.invoke_list_row_selected(1);
+        drain_ui_queue();
+        state.set_list_selected_row(1);
+        state.invoke_split_open_in_images();
+        state.invoke_split_shown(false);
+        assert!(marker(), "Open in Images keeps it");
+        assert!(state.get_peek(), "with the bar back to the results");
+        assert_eq!(state.get_peek_label(), "Row 2 of 3");
+        let _ = controller;
+    }
+
     /// A row's image opens slower than its objects are read: they wait for
     /// it (they were dropped, so a row's object never showed) and go on it
     /// once it is open.

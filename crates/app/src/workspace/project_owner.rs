@@ -359,6 +359,21 @@ impl ProjectWithRuntime {
         return &self.tmp_settings.preview_objects;
     }
 
+    /// The preview's objects belong to the image (and series) it ran on:
+    /// gone when another one is shown - and the selection with them, when
+    /// it was one of them.
+    pub fn forget_preview_objects(&mut self) {
+        let selected_is_preview = self
+            .tmp_settings
+            .selected_object
+            .as_ref()
+            .is_some_and(|id| self.tmp_settings.preview_objects.iter().any(|o| &o.id == id));
+        if selected_is_preview {
+            self.tmp_settings.selected_object = None;
+        }
+        self.tmp_settings.preview_objects.clear();
+    }
+
     pub fn set_selected_object(&mut self, object_id: Option<ObjectId>) {
         self.tmp_settings.selected_object = object_id;
     }

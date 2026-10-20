@@ -39,6 +39,9 @@ pub(super) struct SplitState {
     channel: usize,
     /// The split view is on screen (Results, List or Plate, split).
     shown: bool,
+    /// Left with "Open in Images": its marker stays on the image (with the
+    /// way back to the results) - else it goes with the split view.
+    keep_marker: bool,
     /// Plate "Color by value": the objects in the heatmap's colors. Kept
     /// here - the overlay is also pushed from the database thread, where
     /// the window can't be reached.
@@ -93,12 +96,22 @@ impl ResultsStateController {
         // the image, or the project's again.
         let manager = self.clone();
         state.on_split_shown(move |shown| {
-            manager.split.lock().expect("Poisoned").shown = shown;
+            let keep_marker = {
+                let mut split = manager.split.lock().expect("Poisoned");
+                split.shown = shown;
+                std::mem::take(&mut split.keep_marker)
+            };
             if shown {
                 manager.split_push_overlay();
             } else {
                 manager.viewport().set_results_overlay(None);
                 *manager.viewport().viewport_cache.focus.lock().expect("Poisoned") = None;
+                // Its marker goes with it (it stayed on the image after
+                // leaving the results) - unless it was opened in Images.
+                if !keep_marker && let Some(ui) = manager.ui.upgrade() {
+                    ui.global::<crate::ViewportObjectState>()
+                        .set_object_highlight(crate::ObjectHighlightBox::default());
+                }
             }
         });
         let manager = self.clone();
@@ -145,10 +158,25 @@ impl ResultsStateController {
             }
         });
         let manager = self.clone();
+        // In Images with its marker - and the bar back to the results, as
+        // "Show on image" has it.
         state.on_split_open_in_images(move || {
-            if let Some(ui) = manager.ui.upgrade() {
-                ui.global::<crate::LayoutState>().set_mode(crate::WorkspaceMode::Images);
-            }
+            let Some(ui) = manager.ui.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            let row = state.get_list_selected_row();
+            let rows = manager.list_row_locations.lock().expect("Poisoned").len();
+            let label = if manager.in_plate() || row < 0 {
+                state.get_split_title().to_string()
+            } else {
+                format!("Row {} of {rows}", row + 1)
+            };
+            manager.split.lock().expect("Poisoned").keep_marker = true;
+            state.set_peek_label(label.into());
+            state.set_peek_can_step(!manager.in_plate() && row >= 0);
+            state.set_peek(true);
+            ui.global::<crate::LayoutState>().set_mode(crate::WorkspaceMode::Images);
         });
     }
 
