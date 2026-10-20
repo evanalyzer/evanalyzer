@@ -92,9 +92,12 @@ export component InkInfoButton inherits Rectangle {
     in property <string> docs-url;
     in property <string> docs-label: "Documentation";
     in property <length> card-width: 300px;
+    /// Hidden (no width, no clicks) - but kept, so an open card stays open
+    /// when the button hides (a row's ⓘ shown only while it is hovered).
+    in property <bool> shown: true;
 
     // As high as its row; the button is centred in it.
-    width: 16px;
+    width: root.shown ? 16px : 0px;
     min-height: 16px;
     accessible-role: button;
     accessible-label: "About " + root.title;
@@ -107,6 +110,7 @@ export component InkInfoButton inherits Rectangle {
         width: 16px;
         height: 16px;
         border-radius: 8px;
+        opacity: root.shown ? 1 : 0;
         background: ta.has-hover ? Ink.info-tint : transparent;
         Image {
             source: InkIcons.info;
@@ -119,6 +123,7 @@ export component InkInfoButton inherits Rectangle {
     ta := TouchArea {
         y: face.y;
         height: face.height;
+        enabled: root.shown;
         mouse-cursor: pointer;
         clicked => {
             card.show();

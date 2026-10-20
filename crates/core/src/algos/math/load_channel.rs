@@ -12,6 +12,17 @@ use crate::pipeline::pipeline_cache::CacheAddress;
 use evanalyzer_cfg::core_types::{CitationMetadata, ImageChannelIdx, InternalErrors};
 use macros::CommandsMeta;
 
+#[derive(CommandsMeta)]
+pub enum ChannelZProjection {
+    Auto,
+    None,
+    MaxIntensity,
+    MinIntensity,
+    AvgIntensity,
+    SumIntensity,
+    TakeTheMiddle,
+}
+
 /// Loads an image channel as the image the following steps work on.
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
@@ -23,6 +34,13 @@ pub struct LoadChannel {
     /// The image channel to load.
     #[cmdsmeta(summary = true)]
     pub channel: ImageChannelIdx,
+
+    /// Optional z projection setting
+    ///
+    /// If set to Auto the global z-projection setting from the project is used.
+    /// If not Auto the image channel is loaded with the given z-projection settings.
+    #[cmdsmeta(default = ChannelZProjection::Auto,optional = true)]
+    pub projection: ChannelZProjection,
 }
 
 impl ImageAlgorithm for LoadChannel {
@@ -132,6 +150,7 @@ mod tests {
 
         LoadChannel {
             channel: ImageChannelIdx(1),
+            projection: ChannelZProjection::Auto,
         }
         .execute(&mut ctx, &mut cache)
         .unwrap();
@@ -152,6 +171,7 @@ mod tests {
 
         let error = LoadChannel {
             channel: ImageChannelIdx(9),
+            projection: ChannelZProjection::Auto,
         }
         .execute(&mut ctx, &mut cache)
         .unwrap_err()

@@ -1283,7 +1283,8 @@ component LeafParamRow inherits Rectangle {
             overflow: elide;
         }
 
-        if root.p.description != "" && leaf-row-ta.has-hover: InkInfoButton {
+        if root.p.description != "": InkInfoButton {
+            shown: leaf-row-ta.has-hover;
             title: root.p.display-name == "" ? root.p.name : root.p.display-name;
             text: root.p.description;
         }
@@ -1468,7 +1469,8 @@ component ParamLabel inherits HorizontalLayout {
             text: root.help-open ? "Hide the help" : "About " + (p.display-name == "" ? p.name : p.display-name);
         }
     }
-    if !root.wide && root.show-info && p.description != "": InkInfoButton {
+    if !root.wide && p.description != "": InkInfoButton {
+        shown: root.show-info;
         title: p.display-name == "" ? p.name : p.display-name;
         text: p.description;
     }
@@ -1786,16 +1788,28 @@ component InlineParamRow inherits VerticalLayout {
         }
     }
 
-    // ⓘ and 📌 (unless pinned) only while the row is hovered.
-    if !root.stacked: Rectangle {
+    // The field runs to the right edge; the name gets the room. ⓘ only
+    // while the row is hovered; 📌 in the card's left margin, beside the
+    // name - when pinned, or (faint) while hovered. Nothing moves on hover.
+    if !root.stacked: inline-row := Rectangle {
         min-height: inline.min-height;
         preferred-height: inline.preferred-height;
-        // The row inside it: over the field or 📌 it stays hovered.
+        property <bool> hovered: row-ta.has-hover || pin-ta.has-hover;
+
+        // The hover tint, out into the card's padding.
+        Rectangle {
+            x: -12px;
+            width: parent.width + 24px;
+            border-radius: Ink.radius-sm;
+            background: parent.hovered ? Ink.hover : transparent;
+        }
+
+        // The row inside it: over the field it stays hovered.
         row-ta := TouchArea {
         inline := HorizontalLayout {
         spacing: 6px;
         HorizontalLayout {
-            width: 112px;
+            width: 150px;
             alignment: start;
             ParamLabel {
                 p: root.p;
@@ -1838,13 +1852,15 @@ component InlineParamRow inherits VerticalLayout {
             }
         }
 
+        }
+        }
+
         // Into the Tuning panel - with the settings of other steps.
-            pin := Rectangle {
+        Rectangle {
+            x: -11px;
             y: (parent.height - self.height) / 2;
-            width: 20px;
+            width: 10px;
             height: 20px;
-            border-radius: Ink.radius-sm;
-            background: pin-ta.has-hover ? Ink.hover : transparent;
             accessible-role: button;
             accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
             accessible-checked: root.p.pinned;
@@ -1852,9 +1868,9 @@ component InlineParamRow inherits VerticalLayout {
                 root.toggle-pin();
             }
             Image {
-                visible: root.p.pinned || row-ta.has-hover;
+                visible: root.p.pinned || inline-row.hovered;
                 source: InkIcons.pin;
-                width: 12px;
+                width: 10px;
                 colorize: root.p.pinned ? Ink.focus : pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
             }
 
@@ -1871,8 +1887,6 @@ component InlineParamRow inherits VerticalLayout {
                 wanted: pin-ta.has-hover && !pin-ta.pressed;
                 text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
             }
-        }
-        }
         }
     }
 

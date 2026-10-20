@@ -519,7 +519,8 @@ export component InkSelect inherits Rectangle {
     popup := PopupWindow {
         x: 0px;
         y: root.height + 4px;
-        width: max(root.width, 140px);
+        // As wide as its longest entry (at most 360px), at least the field's.
+        width: min(max(root.width, 140px, list.preferred-width + 8px), max(root.width, 360px));
         height: min(list.preferred-height + 8px, 280px);
 
         Rectangle {

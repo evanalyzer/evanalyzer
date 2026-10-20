@@ -81,6 +81,46 @@ pub enum FiltersRollingBallBallTypeSettings {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathLoadChannelChannelZProjectionSettings {
+    #[default]
+    #[serde(alias = "auto")]
+    Auto,
+    #[serde(alias = "none")]
+    None,
+    #[serde(
+        alias = "max-intensity",
+        alias = "maxIntensity",
+        alias = "max_intensity"
+    )]
+    MaxIntensity,
+    #[serde(
+        alias = "min-intensity",
+        alias = "minIntensity",
+        alias = "min_intensity"
+    )]
+    MinIntensity,
+    #[serde(
+        alias = "avg-intensity",
+        alias = "avgIntensity",
+        alias = "avg_intensity"
+    )]
+    AvgIntensity,
+    #[serde(
+        alias = "sum-intensity",
+        alias = "sumIntensity",
+        alias = "sum_intensity"
+    )]
+    SumIntensity,
+    #[serde(
+        alias = "take-the-middle",
+        alias = "takeTheMiddle",
+        alias = "take_the_middle"
+    )]
+    TakeTheMiddle,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ObjectClassifyObjectsClassifyMatchHandlingSettings {
     #[default]
     #[serde(
@@ -1156,16 +1196,35 @@ pub struct LaplacianSettings {
     pub kernel_size: usize,
 }
 
+fn _serde_default_loadchannel_projection() -> MathLoadChannelChannelZProjectionSettings {
+    MathLoadChannelChannelZProjectionSettings::Auto
+}
 /// Loads an image channel as the image the following steps work on.
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
 /// without an image source, or to switch channels within a pipeline - e.g.
 /// a component that detects nuclei in one channel and cells in another.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadChannelSettings {
     /// The image channel to load.
     pub channel: ImageChannelIdx,
+    /// Optional z projection setting
+    ///
+    /// If set to Auto the global z-projection setting from the project is used.
+    /// If not Auto the image channel is loaded with the given z-projection settings.
+    #[serde(default = "_serde_default_loadchannel_projection")]
+    pub projection: MathLoadChannelChannelZProjectionSettings,
+}
+
+impl Default for LoadChannelSettings {
+    fn default() -> Self {
+        Self {
+            channel: ImageChannelIdx::default(),
+            projection: MathLoadChannelChannelZProjectionSettings::Auto,
+        }
+    }
 }
 
 /// A background subtraction filter that uses a median rank operator.
