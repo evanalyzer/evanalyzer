@@ -5,6 +5,7 @@
 
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { ViewportState } from "../api/viewport.slint";
+import { ChannelState } from "../api/state.slint";
 import { Ink, InkIcons } from "../ink/ink.slint";
 
 // Floats on the image: dark in every scheme, as the image is.
@@ -299,29 +300,25 @@ export component SplitTracksBar inherits Hud {
     }
 }
 
-// The selected object's card beside it, past the viewer's yellow crosshair
-// (the same as a list row opened in the full view). Covers the image; takes
-// no input.
+// The selected object's facts, docked top left under the image's head -
+// never over the object or its track (the viewer's yellow crosshair marks
+// it). Folds to its first line; hidden while the time series plays.
+// Tracks: the track's facts are under its row in the table.
 export component SplitSelection inherits Rectangle {
-    property <length> cx: ViewportState.offset_x + (ResultsState.split-sel.x + ResultsState.split-sel.w / 2) * ViewportState.zoom_factor * 1px;
-    property <length> cy: ViewportState.offset_y + (ResultsState.split-sel.y + ResultsState.split-sel.h / 2) * ViewportState.zoom_factor * 1px;
-    // To the end of the viewer's crosshair arms (its gap round the object,
-    // then 44 px of arm): the card goes beyond.
-    property <length> r: max(max(ResultsState.split-sel.w, ResultsState.split-sel.h) / 2 * ViewportState.zoom_factor * 1px + 8px, 14px) + 44px;
+    property <bool> folded: ResultsState.split-card-folded;
 
-    // The card: right of the object, else left; kept on the image.
     card := Hud {
-        property <length> right-x: root.cx + root.r + 12px;
-        x: self.right-x + self.width <= root.width - 8px ? self.right-x : max(8px, root.cx - root.r - 12px - self.width);
-        y: clamp(root.cy - self.height / 2, 54px, max(54px, root.height - self.height - 48px));
-        width: max(170px, card-box.preferred-width);
+        x: 10px;
+        y: 10px + 36px + 8px;
+        width: clamp(card-box.preferred-width, 200px, min(320px, root.width - 20px));
         height: card-box.preferred-height;
+        visible: !ChannelState.is_play_active;
 
         card-box := VerticalLayout {
             padding-left: 10px;
-            padding-right: 10px;
-            padding-top: 8px;
-            padding-bottom: 8px;
+            padding-right: 4px;
+            padding-top: 4px;
+            padding-bottom: root.folded ? 4px : 8px;
             spacing: 4px;
             HorizontalLayout {
                 spacing: 6px;
@@ -339,6 +336,8 @@ export component SplitSelection inherits Rectangle {
                     font-size: Ink.fs-body;
                     font-weight: 600;
                     color: #F4F4F5;
+                    vertical-alignment: center;
+                    overflow: elide;
                     horizontal-stretch: 1;
                 }
                 Text {
@@ -346,20 +345,28 @@ export component SplitSelection inherits Rectangle {
                     font-size: Ink.fs-caption;
                     font-family: Ink.font-mono;
                     color: #A1A1AA;
+                    vertical-alignment: center;
+                }
+                HudButton {
+                    text: root.folded ? "⌄" : "⌃";
+                    label: root.folded ? "Show the facts" : "Fold the facts";
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        ResultsState.split-card-folded = !ResultsState.split-card-folded;
+                        ResultsState.split-card-folded-changed(ResultsState.split-card-folded);
+                    }
                 }
             }
-            // Tracks: its track's facts.
-            if ResultsState.rail-mode == ResultsRailMode.tracks && ResultsState.track-card.active: VerticalLayout {
-                spacing: 4px;
+            if !root.folded: VerticalLayout {
+                spacing: 3px;
                 for fact in [
-                    { k: "Track", v: ResultsState.track-card.id },
-                    { k: "Time points", v: ResultsState.track-card.span },
-                    { k: "Moved", v: ResultsState.track-card.displacement },
-                    { k: "Speed", v: ResultsState.track-card.speed },
+                    { k: "Area", v: ResultsState.split-sel.area },
+                    { k: ResultsState.split-channels.length > 0 ? "Mean " + ResultsState.split-channels[ResultsState.split-channel] : "Mean", v: ResultsState.split-sel.mean },
+                    { k: "Position", v: ResultsState.split-sel.position },
                 ]: HorizontalLayout {
                     spacing: 8px;
                     Text {
-                        width: 72px;
+                        width: 96px;
                         text: fact.k;
                         font-size: Ink.fs-caption;
                         color: #A1A1AA;
@@ -371,26 +378,6 @@ export component SplitSelection inherits Rectangle {
                         font-family: Ink.font-mono;
                         color: #F4F4F5;
                     }
-                }
-            }
-            for fact in [
-                { k: "Area", v: ResultsState.split-sel.area },
-                { k: ResultsState.split-channels.length > 0 ? "Mean " + ResultsState.split-channels[ResultsState.split-channel] : "Mean", v: ResultsState.split-sel.mean },
-                { k: "Position", v: ResultsState.split-sel.position },
-            ]: HorizontalLayout {
-                spacing: 8px;
-                Text {
-                    width: 64px;
-                    text: fact.k;
-                    font-size: Ink.fs-caption;
-                    color: #A1A1AA;
-                    overflow: elide;
-                }
-                Text {
-                    text: fact.v;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: #F4F4F5;
                 }
             }
         }

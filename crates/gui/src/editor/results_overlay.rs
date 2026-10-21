@@ -300,9 +300,9 @@ fn blend(dst: &mut slint::Rgba8Pixel, rgb: [u8; 3], alpha: f32) {
 }
 
 /// The view that shows `bbox` (image pixels, inclusive) in a `v_w` × `v_h`
-/// viewport: centred, the object about a quarter of the view - never
-/// smaller than the whole image fitted, never beyond 4×. As
-/// `(zoom, offset_x, offset_y)`.
+/// viewport: centred, the object about a sixth of the view (its
+/// surroundings in view too) - never smaller than the whole image fitted,
+/// never beyond 2.5×. As `(zoom, offset_x, offset_y)`.
 pub fn focus_view(
     v_w: f32,
     v_h: f32,
@@ -315,7 +315,7 @@ pub fn focus_view(
         (bbox[2] - bbox[0] + 1.0).max(1.0),
         (bbox[3] - bbox[1] + 1.0).max(1.0),
     );
-    let zoom = (v_w / (bw * 4.0)).min(v_h / (bh * 4.0)).min(4.0).max(fit);
+    let zoom = (v_w / (bw * 6.0)).min(v_h / (bh * 6.0)).min(2.5).max(fit);
     let (cx, cy) = (
         (bbox[0] + bbox[2] + 1.0) / 2.0,
         (bbox[1] + bbox[3] + 1.0) / 2.0,
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn the_focus_centres_the_object_and_keeps_within_fit_and_4x() {
+    fn the_focus_centres_the_object_and_keeps_within_fit_and_2_5x() {
         let (zoom, ox, oy) = focus_view(
             800.0,
             600.0,
@@ -660,9 +660,11 @@ mod tests {
             10_000.0,
             [4990.0, 4990.0, 5009.0, 5009.0],
         );
-        assert_eq!(zoom, 4.0, "a small object: at most 4×");
+        assert_eq!(zoom, 2.5, "a small object: at most 2.5×");
         assert!((ox + 5000.0 * zoom - 400.0).abs() < 0.01);
         assert!((oy + 5000.0 * zoom - 300.0).abs() < 0.01);
+        let (zoom, ..) = focus_view(600.0, 600.0, 10_000.0, 10_000.0, [0.0, 0.0, 199.0, 99.0]);
+        assert_eq!(zoom, 0.5, "a sixth of the view: 600 / (200 × 6)");
         let (zoom, ..) = focus_view(800.0, 600.0, 1000.0, 1000.0, [0.0, 0.0, 999.0, 999.0]);
         assert!(
             (zoom - 0.6 * 0.95).abs() < 1e-5,

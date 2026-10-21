@@ -251,3 +251,9 @@ Kept private on purpose (one screen's own, not a copy of an Ink piece): the step
   - [ ] Click through it once in the real app (copy, delete dialog, export, import of a QuPath file) - checked by tests and screenshots only.
   - Imported annotations are measured on their image file (every channel, full resolution, only the tiles they touch) as if drawn; an unreadable image is reported and its annotations stay unmeasured.
 - [x] **Drawn annotations got wrong intensities on large/zoomed images** (fixed 2026-10-19): drawn shapes (and brush/eraser changes, imports) are now measured on the image file through the backend (`measure_on_source`: every channel, full resolution, only the regions with annotations; this computer or the server), in the background; the values shown at the current zoom are no longer used. "Re-measure manual annotations" (objects panel ⋯) measures old annotations again. Drawing builds its objects from the mask alone (`annotation_from_mask` / `Object::from_mask_geometry`, on the plane shown); the old image-based `Object::from_mask`/`update_object_metrics` (wrong integer-zoom mapping) is gone. Cost of measuring a drawn shape on a 60000 x 40000 slide (release): 40 px 3 ms, 400 px 11 ms, 2000 px 166 ms, in the background (`bench_measure_drawn` in crates/app/src/workspace/annotation_measure.rs). One intensity implementation for pipeline objects and annotations: `evanalyzer_core::{IntensityAccumulator, MaskIntensities}` (crates/core/src/object/intensities.rs); the app only plans and reads the regions.
+
+
+# Results
+
+- [ ] Allow to remove objects from the results table
+- [ ] Allow manual setting a tracking id

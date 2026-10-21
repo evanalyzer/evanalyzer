@@ -136,6 +136,8 @@ pub struct ResultsSplitSettings {
     /// The image controls (channels, histogram, overlay) open over the
     /// image.
     pub image_panel: bool,
+    /// The selected object's facts folded to their first line.
+    pub card_folded: bool,
     /// Tracks: how much of each track's path is drawn.
     pub trail: TrailMode,
     /// `TrailMode::Frames`: this many time points back.
@@ -153,6 +155,7 @@ impl Default for ResultsSplitSettings {
             on: false,
             width_px: 640.0,
             image_panel: false,
+            card_folded: false,
             follow: true,
             trail: TrailMode::Frames,
             trail_frames: 10,

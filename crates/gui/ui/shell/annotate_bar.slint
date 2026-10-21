@@ -118,7 +118,6 @@ export component AnnotateBar inherits Rectangle {
                     InkToolButton {
                         icon: InkIcons.brush;
                         label: "Brush";
-                        is-new: true;
                         enabled: root.has-class;
                         disabled-reason: "Pick the class to paint as first";
                         active: root.tool == ToolState.Brush;
@@ -129,7 +128,6 @@ export component AnnotateBar inherits Rectangle {
                     InkToolButton {
                         icon: InkIcons.eraser;
                         label: "Eraser";
-                        is-new: true;
                         active: root.tool == ToolState.Eraser;
                         clicked => {
                             ViewportObjectState.act_tool_state = ToolState.Eraser;

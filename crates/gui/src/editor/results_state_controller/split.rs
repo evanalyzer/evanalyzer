@@ -77,6 +77,13 @@ impl ResultsStateController {
         state.set_split_w(settings.width_px.max(0.0));
         state.set_split_follow(settings.follow);
         state.set_split_image_panel(settings.image_panel);
+        state.set_split_card_folded(settings.card_folded);
+        let manager = self.clone();
+        state.on_split_card_folded_changed(move |folded| {
+            manager
+                ._app_state
+                .update_app_settings(|s| s.results_split.card_folded = folded);
+        });
 
         let manager = self.clone();
         state.on_split_changed(move |on| {
