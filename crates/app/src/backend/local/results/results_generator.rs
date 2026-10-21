@@ -344,35 +344,38 @@ impl ResultsGenerator {
         }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
-        // Two-step fetch: first find just the `object_id`s of this page —
-        // a query that only ever touches the (fixed-width, cheap) filter
-        // columns and `object_id` itself, never the wide/JSON columns below
-        // — then re-fetch full rows filtered to exactly those ids. Doing it
-        // in one wide `SELECT ... WHERE ... ORDER BY object_id LIMIT n`
-        // forces DuckDB to decode every selected column (including whatever
-        // of the colocalization map/intensity lists was requested) for every row
+        // Two-step fetch: first find just the first and last `object_id` of
+        // this page — a query that only ever touches the (fixed-width,
+        // cheap) filter columns and `object_id` itself, never the wide/JSON
+        // columns below — then fetch the full rows of the same filter
+        // between those two ids: exactly this page's rows, since the page is
+        // the first `limit` matching ids in order. Doing it in one wide
+        // `SELECT ... WHERE ... ORDER BY object_id LIMIT n` forces DuckDB to
+        // decode every selected column (including whatever of the
+        // colocalization map/intensity lists was requested) for every row
         // that matches the WHERE clause before it can even start sorting —
         // on this app's tables that's routinely the *entire* table, since
         // z/t-plane and image/class filters often don't narrow anything.
-        // Splitting it lets the second query's `object_id IN (...)` use
-        // DuckDB's per-row-group zone maps to skip straight to the row
-        // groups that actually contain those ids (measured this dropping a
+        // The id range lets DuckDB's per-row-group zone maps skip straight
+        // to the row groups holding the page (measured this dropping a
         // ~5.5M-row table's per-page cost from single-digit GB to
-        // single-digit MB, first page included).
+        // single-digit MB, first page included). A range, not the page's
+        // ids as an `IN (...)` list: DuckDB parsed and planned a 20,000-id
+        // list for every export page - 39 s of a 6.6M-object List export.
         let limit = filter.page.limit.max(0);
         let key_sql = format!(
-            "SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit}"
+            "SELECT MIN(object_id)::VARCHAR, MAX(object_id)::VARCHAR FROM \
+             (SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit})"
         );
-        let mut key_stmt = self.database.prepare(&key_sql).map_err(err)?;
-        let ids: Vec<String> = key_stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(err)?
-            .collect::<Result<Vec<_>, _>>()
+        let (first, last): (Option<String>, Option<String>) = self
+            .database
+            .query_row(&key_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(err)?;
-        if ids.is_empty() {
+        let (Some(first), Some(last)) = (first, last) else {
             return Ok(empty_result(column_names));
-        }
-        let where_clause = format!("WHERE object_id IN ({})", sql_string_in_list(&ids));
+        };
+        let where_clause =
+            format!("{where_clause} AND object_id BETWEEN '{first}'::UUID AND '{last}'::UUID");
 
         // Only pull the source columns `ordered_columns` actually needs.
         // DuckDB is columnar: a column replaced by a constant here is never
@@ -385,7 +388,8 @@ impl ResultsGenerator {
         // objects even though only `LIST_PAGE_SIZE` rows ever reach the GUI.
         let needs = ObjectColumnNeeds::for_columns(&ordered_columns);
         let sql = format!(
-            "SELECT {}\n FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n {where_clause}\n ORDER BY o.object_id",
+            "SELECT {}\n FROM (SELECT * FROM objects {where_clause}) o \
+             LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n ORDER BY o.object_id",
             object_select_clause(needs)
         );
 
