@@ -2644,6 +2644,7 @@ dependencies = [
  "tempfile",
  "tungstenite",
  "webpki-roots",
+ "zmij",
 ]
 
 [[package]]

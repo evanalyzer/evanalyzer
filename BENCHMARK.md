@@ -238,6 +238,97 @@ OpenMP runtime). The stand-in models show no such gap, so it may be
 specific to the ViT model. The plugin's ~0.2 GB more peak RAM is not
 explained yet either.
 
+## Time course: "Over time" chart and its export (2026-10-21)
+
+A synthetic time series: 48 wells × 2 fields, 48 time points, 1500
+tracked objects per image and time point - 6.6M objects, 144,000 tracks,
+1.3 GB (`tests/timeseries_96img_48t_tracked.evadb`, not in git). Each case
+runs in its own process, so the peak RAM is that case's alone (the process
+starts at 27 MB with the file open); chart times are the median of 5 runs.
+
+```sh
+# Make the dataset (~70 s, ~2.4 GB RAM)
+cargo run --release -p evanalyzer_core --example make_time_series -- tests/timeseries_96img_48t_tracked.evadb
+
+# One case (0-6 chart queries, 7-10 exports); without --case all in one process
+cargo build --release -p evanalyzer_app --example bench_time_course
+./target/release/examples/bench_time_course tests/timeseries_96img_48t_tracked.evadb --iters 5 --case 10
+```
+
+Exports write 3 values (area, two intensities) as mean + SD.
+
+| Case | Before | After RAM work | After speed work |
+|---|---|---|---|
+| Chart: a line per class, mean ± SD | 186 ms / 684 MB | 92 ms / 187 MB | 91 ms / 183 MB |
+| Chart: a line per class, median + IQR | 254 ms / 1153 MB | 126 ms / 462 MB | 117 ms / 467 MB |
+| Chart: a line per class, relative to start | 191 ms / 685 MB | 90 ms / 182 MB | 88 ms / 181 MB |
+| Chart: a line per image (13,824 points) | 221 ms / 709 MB | 102 ms / 194 MB | 97 ms / 195 MB |
+| Chart: a line per well (6,912 points) | 207 ms / 696 MB | 101 ms / 194 MB | 93 ms / 186 MB |
+| Chart: faint tracks (400 sampled) | 53 ms / 232 MB | 47 ms / 183 MB | 47 ms / 188 MB |
+| Every track held in memory (6.8M points) | 5274 ms / 5055 MB | 2736 ms / 2440 MB | 2058 ms / 2137 MB |
+| Export CSV long + wide, per class | 245 ms / 700 MB | 137 ms / 245 MB | 137 ms / 247 MB |
+| Export CSV long + wide, per well | 274 ms / 717 MB | 180 ms / 253 MB | 160 ms / 252 MB |
+| Export XLSX long + wide, per image | 502 ms / 757 MB | 387 ms / 263 MB | 384 ms / 262 MB |
+| Export CSV long, per track (6.8M rows, 610 MB) | 15.7 s / 6205 MB | 11.7 s / 428 MB | 3.6 s / 411 MB |
+
+Before these the per-track export did not finish at all (stopped after
+12 minutes at 4.9 GB): the time unit was looked up over every point for
+every row.
+
+What brought the RAM down:
+
+- Tracks counted without `COUNT(DISTINCT track_id)`: a track has at most
+  one object per plane and class (the tracker links each object once), so
+  its objects there are its tracks. The distinct count held every
+  (plane, track) pair: ~470 MB of the chart's 684 MB.
+- Rows streamed from DuckDB (Arrow chunks) and each point built once.
+- Every track: one query per time point - grouping and sorting 6.8M rows
+  in one go took ~1.6 GB inside DuckDB. Four time points per query would
+  be ~10 % faster for ~100 MB more.
+- Median, Q1 and Q3 in one aggregate (each kept its own copy of the
+  values: 730 → 390 MB for the query alone).
+- The export writes the long table as the rows come; points are kept only
+  for the wide tables (never per track - refused).
+
+What made the export faster: fields written straight into one reused line
+(no vectors and strings per row), one point reused for every row, whole
+numbers written as integers and fractions through `zmij`. `zmij` writes
+the shortest text that reads back as the same number, like before; where
+17 digits are needed it may pick a different last digit (same value).
+`zmij` instead of `ryu`: 3.70-3.82 vs 3.84-4.19 s for the per-track
+export, alternated (~5 %; both crates were already dependencies). Rust's
+own `{}` formatting instead: 4.45-4.75 s (`zmij` saves ~0.75 s, ~17 %).
+
+Every track held in memory (2.1 GB) is only the benchmark's: the chart
+draws a sample of 400 tracks, the export streams.
+
+## Peak RAM overview - for the system requirements
+
+The highest peaks measured so far, per activity. "Test process" numbers
+are without the window; add the idle app (~210 MB, plus ~150 MB without a
+graphics driver).
+
+| Activity | Peak RAM | Measured | Where |
+|---|---|---|---|
+| App idle after start (AI not loaded) | 207 MB | 2026-10-19 | The real app above |
+| Image viewer, whole slide, default caches | ~280 MB above start | 2026-10-17 | Image viewer |
+| Image viewer, 2 threads, small caches | ~190 MB above start | 2026-10-17 | Image viewer |
+| Viewer with a breakpoint tile compared | ~400 MB | 2026-10-18 | Breakpoint compare |
+| Results views, 1.7 GB analysis (List, Plate, Charts, split) | 323 MB (test process) | 2026-10-17 | Results |
+| Over time chart, 6.6M objects | 180-470 MB (query process) | 2026-10-21 | Time course |
+| Time course export, 6.6M objects | 250-410 MB (query process) | 2026-10-21 | Time course |
+| Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
+| Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
+| Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |
+| Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
+
+DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
+then it spills to a temporary file) - the queries above stay far below.
+
+Not measured yet: the per-object List export of a large file, the real
+app's total with a large results file open, a run on a computer with
+little RAM.
+
 ## Not covered
 
 - The RAM of the real app (window, fonts, GPU renderer): there is no
