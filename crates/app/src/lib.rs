@@ -71,9 +71,9 @@ pub mod global {
     pub use crate::workspace::settings::PanelSettings;
     pub use crate::workspace::settings::RecentProject;
     pub use crate::workspace::settings::RecentServer;
-    pub use crate::workspace::settings::ResultsSplitSettings;
     pub use crate::workspace::settings::UserInformation;
     pub use crate::workspace::settings::ViewportMemorySettings;
+    pub use crate::workspace::settings::{ResultsSplitSettings, SpeedUnit, TrailMode};
 }
 
 pub mod results {
@@ -114,7 +114,9 @@ pub mod results {
     pub use crate::api::WellsBatchFilter;
     pub use crate::api::WellsBatchFilterMulti;
     pub use crate::api::color_scale_gradient;
-    pub use crate::api::{ImageObjectsFilter, ResultObject};
+    pub use crate::api::{
+        ImageObjectsFilter, ImageTracks, ImageTracksFilter, ResultObject, TrackPath, TrackPoint,
+    };
     pub use crate::api::{
         TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
         TimeCoursePoint, TimeCourseResult, TimeCourseStat,

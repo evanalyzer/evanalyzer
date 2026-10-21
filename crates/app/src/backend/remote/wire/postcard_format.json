@@ -1,5 +1,5 @@
 {
-  "protocol_version": 22,
+  "protocol_version": 23,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -623,6 +623,43 @@
         }
       ]
     },
+    "ImageTracks": {
+      "STRUCT": [
+        {
+          "tracks": {
+            "SEQ": {
+              "TYPENAME": "TrackPath"
+            }
+          }
+        },
+        {
+          "total_tracks": "U64"
+        },
+        {
+          "pixel_size_nm": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "frame_interval_s": {
+            "OPTION": "F64"
+          }
+        }
+      ]
+    },
+    "ImageTracksFilter": {
+      "STRUCT": [
+        {
+          "image_rel_path": "STR"
+        },
+        {
+          "z_stack": "U32"
+        },
+        {
+          "max_points": "U64"
+        }
+      ]
+    },
     "ListFilter": {
       "STRUCT": [
         {
@@ -978,6 +1015,11 @@
           "value": {
             "OPTION": "F64"
           }
+        },
+        {
+          "track_id": {
+            "OPTION": "U64"
+          }
         }
       ]
     },
@@ -1080,6 +1122,13 @@
           "TimeCourse": {
             "NEWTYPE": {
               "TYPENAME": "TimeCourseResult"
+            }
+          }
+        },
+        "14": {
+          "Tracks": {
+            "NEWTYPE": {
+              "TYPENAME": "ImageTracks"
             }
           }
         }
@@ -1211,6 +1260,16 @@
               "TYPENAME": "ImageObjectsFilter"
             }
           }
+        },
+        "19": {
+          "ImageTracks": {
+            "NEWTYPE": {
+              "TYPENAME": "ImageTracksFilter"
+            }
+          }
+        },
+        "20": {
+          "HasTracks": "UNIT"
         }
       }
     },
@@ -1563,6 +1622,39 @@
           "Sum": "UNIT"
         }
       }
+    },
+    "TrackPath": {
+      "STRUCT": [
+        {
+          "track_id": "U64"
+        },
+        {
+          "class_id": "I32"
+        },
+        {
+          "points": {
+            "SEQ": {
+              "TYPENAME": "TrackPoint"
+            }
+          }
+        }
+      ]
+    },
+    "TrackPoint": {
+      "STRUCT": [
+        {
+          "t": "U32"
+        },
+        {
+          "x": "F32"
+        },
+        {
+          "y": "F32"
+        },
+        {
+          "area_px": "F32"
+        }
+      ]
     },
     "View": {
       "ENUM": {

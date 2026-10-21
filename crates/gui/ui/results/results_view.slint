@@ -8,6 +8,7 @@ import { Ink, InkBanner, InkTone } from "../ink/ink.slint";
 import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
+import { ResultsTracksView } from "results_tracks.slint";
 import { ResultsListPanel } from "../editor/results_list_panel.slint";
 
 export component ResultsView inherits Rectangle {
@@ -50,6 +51,9 @@ export component ResultsView inherits Rectangle {
             vertical-stretch: 1;
         }
         if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
+            vertical-stretch: 1;
+        }
+        if ResultsState.rail-mode == ResultsRailMode.tracks: ResultsTracksView {
             vertical-stretch: 1;
         }
     }

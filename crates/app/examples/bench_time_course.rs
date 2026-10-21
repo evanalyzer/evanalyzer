@@ -4,13 +4,15 @@
 // the median of `--iters` runs after a warm-up run; each export runs once.
 // Peak RSS at the end (`VmHWM`, Linux). `--case N` runs only the N-th query
 // or export (in the order printed, from 0): its own peak RSS. The last two
-// exports are the List (a row per object, CSV and XLSX).
+// exports are the List (a row per object, CSV and XLSX); case 13 is
+// Results › Tracks' query: one image's tracks (median of `--iters`).
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N]
 
 use evanalyzer_app::results::{
-    Column, ExportFormat, Grouping, LocalResultsGenerator, ResultExport, TimeCourseExport,
-    TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize, TimeCourseStat,
+    Column, ExportFormat, Grouping, ImageTracksFilter, LocalResultsGenerator, ResultExport,
+    TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
+    TimeCourseStat,
 };
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -217,5 +219,36 @@ fn main() {
     export("List CSV, a row per object", ExportFormat::CSV, None);
     export("List XLSX, a row per object", ExportFormat::XLSX, None);
     let _ = std::fs::remove_dir_all(&out_root);
+
+    if runs(n_export) {
+        let image = database.get_images().expect("images")[0]
+            .rel_path
+            .to_string_lossy()
+            .into_owned();
+        let filter = ImageTracksFilter {
+            image_rel_path: image,
+            z_stack: 0,
+            max_points: 1_000_000,
+        };
+        let mut times = Vec::new();
+        let mut tracks = None;
+        for i in 0..=iters {
+            let start = Instant::now();
+            let result = database.image_tracks(&filter).expect("tracks");
+            if i > 0 {
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            tracks = Some(result);
+        }
+        times.sort_by(f64::total_cmp);
+        let tracks = tracks.expect("ran");
+        let points: usize = tracks.tracks.iter().map(|t| t.points.len()).sum();
+        println!(
+            "\n{:<42} {:>10.1} {:>6} tracks {points:>8} points",
+            "Tracks: one image's tracks",
+            times[times.len() / 2],
+            tracks.tracks.len()
+        );
+    }
     println!("\npeak RSS {:.0} MB", peak_rss_mb());
 }

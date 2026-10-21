@@ -144,6 +144,17 @@ impl ResultsSource for LocalResults {
         self.with(|db| ResultCharts {}.image_objects(db, filter))
     }
 
+    fn has_tracks(&self) -> Result<bool, InternalErrors> {
+        self.with(|db| ResultCharts {}.has_tracks(db))
+    }
+
+    fn image_tracks(
+        &self,
+        filter: &crate::api::ImageTracksFilter,
+    ) -> Result<crate::api::ImageTracks, InternalErrors> {
+        self.with(|db| ResultCharts {}.image_tracks(db, filter))
+    }
+
     fn export(
         &self,
         export: &ResultExport,

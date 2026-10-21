@@ -20,7 +20,7 @@ import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
-import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitSelection } from "../results/results_split.slint";
+import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitSelection, SplitTracksBar } from "../results/results_split.slint";
 import { ResultsPeek } from "results_peek.slint";
 import { SeriesChooser } from "series_chooser.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
@@ -58,7 +58,8 @@ export component Workspace inherits Rectangle {
     property <length> bottom-room: root.tuning-shown ? root.dock-h + Float.gap : root.table-room;
     // Results, split with the image (board Z): the results left, the
     // viewer in a pane right - List and Plate, with an analysis open.
-    property <bool> split: LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts;
+    // Tracks: always beside their image.
+    property <bool> split: LayoutState.mode == WorkspaceMode.results && (ResultsState.split || ResultsState.rail-mode == ResultsRailMode.tracks) && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts;
     changed split => {
         ResultsState.split-shown(self.split);
     }
@@ -180,6 +181,11 @@ export component Workspace inherits Rectangle {
             x: 10px;
             y: 10px;
             width: parent.width - 20px;
+        }
+        // Tracks: their trails and colors.
+        if ResultsState.rail-mode == ResultsRailMode.tracks: SplitTracksBar {
+            x: parent.width - self.width - 10px;
+            y: 10px + 36px + 8px;
         }
         // Above the bar at the bottom of the image (40 px, 10 px from the edge).
         SplitHint {

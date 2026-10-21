@@ -778,6 +778,8 @@ fn answer_query(
         ResultsQuery::ImageObjects(filter) => {
             ResultsAnswer::Objects(source.image_objects(&filter)?)
         }
+        ResultsQuery::ImageTracks(filter) => ResultsAnswer::Tracks(source.image_tracks(&filter)?),
+        ResultsQuery::HasTracks => ResultsAnswer::Count(u32::from(source.has_tracks()?)),
         ResultsQuery::GroupingRegex(grouping) => {
             ResultsAnswer::Text(source.grouping_regex(&grouping)?)
         }

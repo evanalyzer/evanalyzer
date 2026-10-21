@@ -451,7 +451,7 @@ impl ResultCharts {
             "SELECT object_id::VARCHAR, coalesce(object_class_id[1], -1), \
              bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
              centroid_x_px, centroid_y_px, area_px, intensity_mean_gray, \
-             ({value_expr})::DOUBLE \
+             ({value_expr})::DOUBLE, NULLIF(track_id, 0) \
              FROM objects WHERE image_rel_path = ? AND z_stack = ? AND t_stack = ? \
              ORDER BY object_id"
         );
@@ -485,12 +485,117 @@ impl ResultCharts {
                     area_px: row.get::<_, Option<u64>>(8)?.unwrap_or(0),
                     means,
                     value: row.get(10)?,
+                    track_id: row.get(11)?,
                 })
             },
         )
         .map_err(err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)
+    }
+
+    /// Some object has a track.
+    pub fn has_tracks(&self, database: &ResultsGenerator) -> Result<bool, InternalErrors> {
+        database
+            .connection()
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM objects WHERE COALESCE(track_id, 0) <> 0)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    /// One image's tracks on one z-plane, their points by time - see
+    /// [`ImageTracksFilter`]. One query for the points (ordered by track
+    /// and time), one for how many there are.
+    pub fn image_tracks(
+        &self,
+        database: &ResultsGenerator,
+        filter: &ImageTracksFilter,
+    ) -> Result<ImageTracks, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = database.connection();
+        let path = filter.image_rel_path.as_str();
+        let z = filter.z_stack;
+        let tracked = "image_rel_path = ? AND z_stack = ? AND COALESCE(track_id, 0) <> 0";
+        let (n_points, n_tracks, pixel_size_nm): (i64, i64, Option<f64>) = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*), COUNT(DISTINCT track_id), MIN(NULLIF(pixel_size_x_nm, 0)) \
+                     FROM objects WHERE {tracked}"
+                ),
+                duckdb::params![path, z],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(err)?;
+        // Results from before the frame interval was recorded: unknown.
+        let frame_interval_s: Option<f64> = conn
+            .query_row(
+                "SELECT MIN(frame_interval_s) FROM images WHERE image_rel_path = ?",
+                duckdb::params![path],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        // Too many points: a sample of the tracks, whole - the same each
+        // time - with about `max_points` points.
+        let sample = match n_points as usize > filter.max_points && n_tracks > 0 {
+            true => {
+                let keep = (filter.max_points as f64 * n_tracks as f64 / n_points as f64) as usize;
+                format!(
+                    " AND track_id IN (SELECT track_id FROM (SELECT DISTINCT track_id FROM objects \
+                     WHERE {tracked}) USING SAMPLE reservoir({} ROWS) REPEATABLE (7))",
+                    keep.max(1)
+                )
+            }
+            false => String::new(),
+        };
+        // The image and plane once more for the sample's own query.
+        let once: [&dyn duckdb::ToSql; 2] = [&path, &z];
+        let params: Vec<&dyn duckdb::ToSql> = match sample.is_empty() {
+            true => once.to_vec(),
+            false => once.iter().chain(&once).copied().collect(),
+        };
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT track_id, t_stack, centroid_x_px, centroid_y_px, area_px, \
+                 COALESCE(object_class_id[1], -1) FROM objects WHERE {tracked}{sample} \
+                 ORDER BY track_id, t_stack"
+            ))
+            .map_err(err)?;
+        let mut tracks: Vec<TrackPath> = Vec::new();
+        let mut rows = stmt.query(duckdb::params_from_iter(params)).map_err(err)?;
+        while let Some(row) = rows.next().map_err(err)? {
+            let track_id: u64 = row.get(0).map_err(err)?;
+            let point = TrackPoint {
+                t: row.get::<_, i64>(1).map_err(err)? as u32,
+                x: row.get::<_, Option<f64>>(2).map_err(err)?.unwrap_or(0.0) as f32,
+                y: row.get::<_, Option<f64>>(3).map_err(err)?.unwrap_or(0.0) as f32,
+                area_px: row.get::<_, Option<u64>>(4).map_err(err)?.unwrap_or(0) as f32,
+            };
+            match tracks.last_mut() {
+                Some(track) if track.track_id == track_id => track.points.push(point),
+                _ => tracks.push(TrackPath {
+                    track_id,
+                    class_id: row.get(5).map_err(err)?,
+                    points: vec![point],
+                }),
+            }
+        }
+        Ok(ImageTracks {
+            tracks,
+            total_tracks: n_tracks as usize,
+            pixel_size_nm,
+            frame_interval_s,
+        })
+    }
+}
+
+impl ResultsGenerator {
+    /// One image's tracks - see [`ResultCharts::image_tracks`].
+    pub fn image_tracks(&self, filter: &ImageTracksFilter) -> Result<ImageTracks, InternalErrors> {
+        ResultCharts {}.image_tracks(self, filter)
     }
 }
 
@@ -986,6 +1091,108 @@ mod tests {
         values.sort_by(f64::total_cmp);
         assert_eq!(values, [10.0, 20.0, 30.0]);
         assert_eq!(result[0].area_px as f64, result[0].value.unwrap());
+    }
+
+    /// Tracks: an image's tracks on its plane, each its points in time
+    /// order with the centroid and area - not other images', planes' or
+    /// untracked objects. Its objects know their track.
+    #[test]
+    fn image_tracks_are_the_paths_of_that_images_tracks() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .in_track(7)
+                .at_plane(0, 1)
+                .at_centroid(5.0, 6.0),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20)
+                .in_track(7)
+                .at_centroid(1.0, 2.0),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 30).in_track(3),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 40),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 50)
+                .in_track(9)
+                .at_plane(1, 0),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 60).in_track(8),
+        ];
+        let generator = open(&objects);
+        let tracks = ResultCharts {}
+            .image_tracks(
+                &generator,
+                &ImageTracksFilter {
+                    image_rel_path: "img1.tif".into(),
+                    z_stack: 0,
+                    max_points: 1000,
+                },
+            )
+            .expect("tracks");
+        assert_eq!(tracks.total_tracks, 2);
+        let ids: Vec<u64> = tracks.tracks.iter().map(|t| t.track_id).collect();
+        assert_eq!(ids, [3, 7]);
+        assert_eq!(tracks.tracks[0].class_id, 2);
+        assert_eq!(
+            tracks.tracks[1].points,
+            [
+                TrackPoint {
+                    t: 0,
+                    x: 1.0,
+                    y: 2.0,
+                    area_px: 20.0
+                },
+                TrackPoint {
+                    t: 1,
+                    x: 5.0,
+                    y: 6.0,
+                    area_px: 10.0
+                },
+            ]
+        );
+
+        let on_image = ResultCharts {}
+            .image_objects(
+                &generator,
+                &ImageObjectsFilter {
+                    image_rel_path: "img1.tif".into(),
+                    plane: plane(),
+                    value_column: None,
+                },
+            )
+            .expect("objects");
+        let mut track_ids: Vec<Option<u64>> = on_image.iter().map(|o| o.track_id).collect();
+        track_ids.sort();
+        assert_eq!(track_ids, [None, Some(3), Some(7)]);
+        assert!(ResultCharts {}.has_tracks(&generator).unwrap());
+        let untracked = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        assert!(!ResultCharts {}.has_tracks(&untracked).unwrap());
+    }
+
+    /// More points than allowed: whole tracks, a sample - the same each
+    /// time - and how many there are.
+    #[test]
+    fn image_tracks_beyond_the_limit_are_a_repeatable_sample_of_whole_tracks() {
+        let objects: Vec<ObjectSpec> = (1..=20)
+            .flat_map(|track| {
+                (0..4).map(move |t| {
+                    ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                        .in_track(track)
+                        .at_plane(0, t)
+                })
+            })
+            .collect();
+        let generator = open(&objects);
+        let filter = ImageTracksFilter {
+            image_rel_path: "img1.tif".into(),
+            z_stack: 0,
+            max_points: 20,
+        };
+        let first = ResultCharts {}
+            .image_tracks(&generator, &filter)
+            .expect("tracks");
+        assert_eq!(first.total_tracks, 20);
+        assert_eq!(first.tracks.len(), 5);
+        assert!(first.tracks.iter().all(|t| t.points.len() == 4));
+        let again = ResultCharts {}
+            .image_tracks(&generator, &filter)
+            .expect("tracks");
+        assert_eq!(first, again);
     }
 
     #[test]

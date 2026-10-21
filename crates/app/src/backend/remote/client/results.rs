@@ -247,6 +247,23 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn has_tracks(&self) -> Result<bool, InternalErrors> {
+        match self.query(ResultsQuery::HasTracks)? {
+            ResultsAnswer::Count(n) => Ok(n > 0),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn image_tracks(
+        &self,
+        filter: &crate::api::ImageTracksFilter,
+    ) -> Result<crate::api::ImageTracks, InternalErrors> {
+        match self.query(ResultsQuery::ImageTracks(filter.clone()))? {
+            ResultsAnswer::Tracks(tracks) => Ok(tracks),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn export(
         &self,
         export: &ResultExport,
