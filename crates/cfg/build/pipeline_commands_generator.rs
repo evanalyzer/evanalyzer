@@ -20,14 +20,14 @@ pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     let enum_code = generate_pipeline_command_enum(&commands, &enums);
 
     write_if_changed(
-        Path::new("src/modules/pipeline_command_settings.rs"),
+        Path::new("src/settings/pipeline_command_settings.rs"),
         &config_code,
     );
     write_if_changed(
         Path::new("../core/src/job/algos_from_config.rs"),
         &from_code,
     );
-    write_if_changed(Path::new("src/modules/pipeline_command.rs"), &enum_code);
+    write_if_changed(Path::new("src/settings/pipeline_command.rs"), &enum_code);
 
     // A note in the build log (`cargo build -vv`), not a warning.
     println!(
@@ -293,7 +293,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     out.push_str("use std::path::PathBuf;\n");
     // A Script step's values (`ParamValue`s by `param` name).
     out.push_str("#[allow(unused_imports)]\nuse std::collections::BTreeMap;\n");
-    out.push_str("#[allow(unused_imports)]\nuse crate::modules::components::ParamValue;\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::settings::modules::ParamValue;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
@@ -3126,8 +3126,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     let algo_commands: Vec<&CommandInfo> = commands.iter().filter(|c| c.kind.is_some()).collect();
 
     out.push_str("// @generated - do not edit by hand\n");
-    out.push_str("use crate::modules::pipeline_command_settings::*;\n");
-    out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
+    out.push_str("use crate::settings::pipeline_command_settings::*;\n");
+    out.push_str("use crate::settings::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
@@ -3432,7 +3432,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // object_classes() - every project class a command creates, reads or filters on
     out.push_str("    /// Every object class this command creates, reads or filters on.\n");
     out.push_str("    /// Segmentation classes count as the object class Extract Objects turns\n");
-    out.push_str("    /// them into. `Unset`, a component's `Local` classes, Background, the\n");
+    out.push_str("    /// them into. `Unset`, a module's `Local` classes, Background, the\n");
     out.push_str("    /// manual-annotation marker and\n");
     out.push_str("    /// `ModelClass`/`ModelSegmentationClass` fields (a trained model's own\n");
     out.push_str("    /// class IDs) are left out - they never name a class of the project.\n");
@@ -3445,8 +3445,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        });\n");
     out.push_str("        classes\n");
     out.push_str("    }\n\n");
-    out.push_str("    /// The component local classes (`ObjectClass::Local`) this command\n");
-    out.push_str("    /// uses - only allowed inside a component.\n");
+    out.push_str("    /// The module local classes (`ObjectClass::Local`) this command\n");
+    out.push_str("    /// uses - only allowed inside a module.\n");
     out.push_str("    pub fn local_classes(&self) -> Vec<ObjectClass> {\n");
     out.push_str("        let mut classes = self.all_object_classes();\n");
     out.push_str("        classes.retain(|c| matches!(c, ObjectClass::Local(_)));\n");

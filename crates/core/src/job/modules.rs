@@ -1,18 +1,16 @@
-//! Expanding components into plain commands before a job runs.
+//! Expanding modules into plain commands before a job runs.
 //!
-//! A pipeline step is a command or an instance of a component (see
-//! `evanalyzer_cfg::settings::components`). The executor only knows
-//! commands, so the job generator replaces each component instance by its
+//! A pipeline step is a command or an instance of a module (see
+//! `evanalyzer_cfg::settings::modules`). The executor only knows
+//! commands, so the job generator replaces each module instance by its
 //! definition's commands, with the instance's parameter values written into
 //! the inner parameters they're bound to.
 
 use crate::pipeline::scope::{Scope, ScopeId};
 use evanalyzer_cfg::{
-    core_types::{ComponentParamKey, InternalErrors, MemorySlot, ObjectClass, StepId},
+    core_types::{InternalErrors, MemorySlot, ModuleParamKey, ObjectClass, StepId},
     settings::{
-        components::{
-            ComponentDefinition, ComponentInstance, ComponentParameterDef, ParamBinding, ParamValue,
-        },
+        modules::{ModuleDefinition, ModuleInstance, ModuleParameterDef, ParamBinding, ParamValue},
         parameter_def::{ParamType, ParameterDef},
         pipeline_command::{CommandCategory, PipelineCommand},
         pipeline_command_settings::{
@@ -24,32 +22,32 @@ use evanalyzer_cfg::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-/// How deep components may nest - deeper is almost certainly a mistake.
-const MAX_COMPONENT_DEPTH: usize = 8;
+/// How deep modules may nest - deeper is almost certainly a mistake.
+const MAX_MODULE_DEPTH: usize = 8;
 
 /// One command a pipeline step runs.
 #[derive(Debug, Clone)]
 pub struct ExpandedCommand {
     /// What a breakpoint targets - see [`expand_step`].
     pub step_id: StepId,
-    /// The scope the command runs in: its component instance's, else `Global`.
+    /// The scope the command runs in: its module instance's, else `Global`.
     pub scope: Scope,
-    /// The component uses the command belongs to, outermost first - each
+    /// The module uses the command belongs to, outermost first - each
     /// ends after its last command (see [`ScopeCounter::end_of`]).
     pub uses: Vec<UseId>,
     pub command: PipelineCommand,
 }
 
-/// One use of a component in a job, numbered at expansion.
+/// One use of a module in a job, numbered at expansion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UseId(pub u32);
 
-/// What goes when a component use ends.
+/// What goes when a module use ends.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseEnd {
     /// A use in a pipeline: its scope - its objects and memory slots.
     Scope(Scope),
-    /// A use inside another component: it runs in the scope of the use in the
+    /// A use inside another module: it runs in the scope of the use in the
     /// pipeline around it (so it can work on that one's classes), with
     /// classes and memory slots of its own numbered apart - those go.
     Nested {
@@ -59,7 +57,7 @@ pub enum UseEnd {
     },
 }
 
-/// Numbers the component uses of a job - one counter per job, so no two
+/// Numbers the module uses of a job - one counter per job, so no two
 /// uses in pipelines share a scope - and remembers what ends with each.
 #[derive(Debug, Default)]
 pub struct ScopeCounter {
@@ -82,7 +80,7 @@ impl ScopeCounter {
 }
 
 /// The classes and memory slots a use in a pipeline hands out to the
-/// components nested in it: they run in its scope, so each gets numbers no
+/// modules nested in it: they run in its scope, so each gets numbers no
 /// other class or slot of the scope has.
 struct Frame {
     scope: Scope,
@@ -93,7 +91,7 @@ struct Frame {
 impl Frame {
     /// For a use of `definition` in a pipeline, in `scope`: the numbers after
     /// its own.
-    fn new(scope: Scope, definition: &ComponentDefinition) -> Self {
+    fn new(scope: Scope, definition: &ModuleDefinition) -> Self {
         let (classes, slots) = own_numbers(definition);
         Self {
             scope,
@@ -104,17 +102,17 @@ impl Frame {
 }
 
 /// The commands `step` runs, in order, each with the id a breakpoint
-/// targets, the scope it runs in and the component uses it belongs to: a
-/// command step is itself, in the global scope; a component is its
+/// targets, the scope it runs in and the module uses it belongs to: a
+/// command step is itself, in the global scope; a module is its
 /// definition's enabled commands with the instance's values applied, in a
-/// new scope from `scopes` - a component nested in it in that scope too, its
+/// new scope from `scopes` - a module nested in it in that scope too, its
 /// own classes and memory slots numbered apart (see [`UseEnd::Nested`]).
-/// The last command carries the component step's id (a breakpoint on a
-/// component stops after the whole component), the others
+/// The last command carries the module step's id (a breakpoint on a
+/// module stops after the whole module), the others
 /// [`StepId::UNASSIGNED`] (inner steps can't be targeted).
 pub fn expand_step(
     step: &PipelineStepSettings,
-    definitions: &[ComponentDefinition],
+    definitions: &[ModuleDefinition],
     scopes: &mut ScopeCounter,
 ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
     match &step.content {
@@ -122,7 +120,7 @@ pub fn expand_step(
             if let Some(class) = command.local_classes().first() {
                 return Err(only_inside_class(*class));
             }
-            if let Some(slot) = component_memory_slots(command).first() {
+            if let Some(slot) = module_memory_slots(command).first() {
                 return Err(only_inside_slot(*slot));
             }
             Ok(vec![ExpandedCommand {
@@ -132,13 +130,13 @@ pub fn expand_step(
                 command: command.clone(),
             }])
         }
-        StepContent::Component(instance) => {
-            // A pipeline has no component classes or memory to hand in.
+        StepContent::Module(instance) => {
+            // A pipeline has no module classes or memory to hand in.
             for value in instance.values.values() {
                 if let Some(class) = local_class_in(value) {
                     return Err(only_inside_class(class));
                 }
-                if let Some(slot) = component_slot_in(value) {
+                if let Some(slot) = module_slot_in(value) {
                     return Err(only_inside_slot(slot as u64));
                 }
             }
@@ -171,14 +169,14 @@ pub fn expand_step(
 
 fn only_inside_class(class: ObjectClass) -> InternalErrors {
     InternalErrors::InvalidArgument(format!(
-        "uses the component class {}, which only exists inside a component",
+        "uses the module class {}, which only exists inside a module",
         class.to_text()
     ))
 }
 
 fn only_inside_slot(slot: u64) -> InternalErrors {
     InternalErrors::InvalidArgument(format!(
-        "uses the component memory slot {slot}, which only exists inside a component"
+        "uses the module memory slot {slot}, which only exists inside a module"
     ))
 }
 
@@ -186,10 +184,10 @@ fn only_inside_slot(slot: u64) -> InternalErrors {
 /// with the scope it runs in and the uses it belongs to. `around` is the
 /// frame of the use in the pipeline this one is nested in - `None` for that
 /// use itself, which gets a new scope from `scopes`. `open` holds the keys
-/// of the components being expanded around this one, `uses` their uses.
+/// of the modules being expanded around this one, `uses` their uses.
 fn expand_instance(
-    instance: &ComponentInstance,
-    definitions: &[ComponentDefinition],
+    instance: &ModuleInstance,
+    definitions: &[ModuleDefinition],
     scopes: &mut ScopeCounter,
     around: Option<&mut Frame>,
     open: &mut Vec<String>,
@@ -197,12 +195,12 @@ fn expand_instance(
 ) -> Result<Vec<(Scope, Vec<UseId>, PipelineCommand)>, InternalErrors> {
     let raw = definition_of(instance, definitions)?;
     if open.contains(&instance.key) {
-        return Err(component_error(&instance.key, "contains itself".into()));
+        return Err(module_error(&instance.key, "contains itself".into()));
     }
-    if open.len() >= MAX_COMPONENT_DEPTH {
-        return Err(component_error(
+    if open.len() >= MAX_MODULE_DEPTH {
+        return Err(module_error(
             &instance.key,
-            format!("is nested deeper than {MAX_COMPONENT_DEPTH} components"),
+            format!("is nested deeper than {MAX_MODULE_DEPTH} modules"),
         ));
     }
     check_own_classes(raw)?;
@@ -240,10 +238,10 @@ fn expand_instance(
             StepContent::Command(command) => {
                 if matches!(command.category(), CommandCategory::Dataset) {
                     if let Some(class) = command.local_classes().first() {
-                        return Err(component_error(
+                        return Err(module_error(
                             &definition.key,
                             format!(
-                                "step {} is a dataset step using the component class {} - dataset \
+                                "step {} is a dataset step using the module class {} - dataset \
                                  steps run on stored objects, which only have project classes",
                                 step.id,
                                 class.to_text()
@@ -252,14 +250,14 @@ fn expand_instance(
                     }
                 }
                 if let Some(why) = mixed_classes(command) {
-                    return Err(component_error(
+                    return Err(module_error(
                         &definition.key,
                         format!("step {} {why}", step.id),
                     ));
                 }
                 commands.push((frame.scope, uses.clone(), command.clone()))
             }
-            StepContent::Component(inner) => commands.extend(expand_instance(
+            StepContent::Module(inner) => commands.extend(expand_instance(
                 inner,
                 definitions,
                 scopes,
@@ -274,22 +272,22 @@ fn expand_instance(
     Ok(commands)
 }
 
-/// Refuses a component class `definition` uses without defining it - in a
-/// command, a value it gives a component inside it, or a parameter's default.
-fn check_own_classes(definition: &ComponentDefinition) -> Result<(), InternalErrors> {
+/// Refuses a module class `definition` uses without defining it - in a
+/// command, a value it gives a module inside it, or a parameter's default.
+fn check_own_classes(definition: &ModuleDefinition) -> Result<(), InternalErrors> {
     let defined = |class: &ObjectClass| definition.classes.iter().any(|c| c.local() == *class);
     for step in &definition.steps {
         let used: Vec<ObjectClass> = match &step.content {
             StepContent::Command(command) => command.local_classes(),
-            StepContent::Component(inner) => {
+            StepContent::Module(inner) => {
                 inner.values.values().filter_map(local_class_in).collect()
             }
         };
         if let Some(class) = used.into_iter().find(|c| !defined(c)) {
-            return Err(component_error(
+            return Err(module_error(
                 &definition.key,
                 format!(
-                    "step {} uses the component class {}, which the component doesn't define",
+                    "step {} uses the module class {}, which the module doesn't define",
                     step.id,
                     class.to_text()
                 ),
@@ -298,10 +296,10 @@ fn check_own_classes(definition: &ComponentDefinition) -> Result<(), InternalErr
     }
     for parameter in &definition.parameters {
         if let Some(class) = local_class_in(&parameter.default).filter(|c| !defined(c)) {
-            return Err(component_error(
+            return Err(module_error(
                 &definition.key,
                 format!(
-                    "parameter \"{}\" starts with the component class {}, which the component \
+                    "parameter \"{}\" starts with the module class {}, which the module \
                      doesn't define",
                     parameter.label,
                     class.to_text()
@@ -312,20 +310,20 @@ fn check_own_classes(definition: &ComponentDefinition) -> Result<(), InternalErr
     Ok(())
 }
 
-/// The component classes (their numbers) and memory slots `definition` has:
+/// The module classes (their numbers) and memory slots `definition` has:
 /// the classes it defines, the slots its steps and parameters use - sorted.
-pub fn own_numbers(definition: &ComponentDefinition) -> (Vec<u32>, Vec<MemorySlot>) {
+pub fn own_numbers(definition: &ModuleDefinition) -> (Vec<u32>, Vec<MemorySlot>) {
     let classes: BTreeSet<u32> = definition.classes.iter().map(|c| c.id).collect();
     let mut slots: BTreeSet<MemorySlot> = BTreeSet::new();
     for step in &definition.steps {
         match &step.content {
             StepContent::Command(command) => slots.extend(
-                component_memory_slots(command)
+                module_memory_slots(command)
                     .into_iter()
                     .map(|s| s as MemorySlot),
             ),
-            StepContent::Component(inner) => {
-                slots.extend(inner.values.values().filter_map(component_slot_in))
+            StepContent::Module(inner) => {
+                slots.extend(inner.values.values().filter_map(module_slot_in))
             }
         }
     }
@@ -333,7 +331,7 @@ pub fn own_numbers(definition: &ComponentDefinition) -> (Vec<u32>, Vec<MemorySlo
         definition
             .parameters
             .iter()
-            .filter_map(|p| component_slot_in(&p.default)),
+            .filter_map(|p| module_slot_in(&p.default)),
     );
     (classes.into_iter().collect(), slots.into_iter().collect())
 }
@@ -341,9 +339,9 @@ pub fn own_numbers(definition: &ComponentDefinition) -> (Vec<u32>, Vec<MemorySlo
 /// `definition` with its classes and memory slots numbered from `frame`'s
 /// next free ones - and the classes and slots they became.
 fn renumber(
-    definition: &ComponentDefinition,
+    definition: &ModuleDefinition,
     frame: &mut Frame,
-) -> (ComponentDefinition, Vec<ObjectClass>, Vec<MemorySlot>) {
+) -> (ModuleDefinition, Vec<ObjectClass>, Vec<MemorySlot>) {
     let (own_classes, own_slots) = own_numbers(definition);
     let classes: BTreeMap<u32, u32> = own_classes
         .into_iter()
@@ -368,15 +366,15 @@ fn renumber(
     )
 }
 
-/// `definition` with its component classes and memory slots renumbered as
+/// `definition` with its module classes and memory slots renumbered as
 /// `classes` and `slots` say (old → new) - wherever they're written: its
-/// classes, commands, the values it gives components inside it, its
+/// classes, commands, the values it gives modules inside it, its
 /// parameters' defaults.
 pub fn renumbered(
-    definition: &ComponentDefinition,
+    definition: &ModuleDefinition,
     classes: &BTreeMap<u32, u32>,
     slots: &BTreeMap<MemorySlot, MemorySlot>,
-) -> ComponentDefinition {
+) -> ModuleDefinition {
     let mut renumbered = definition.clone();
     for class in &mut renumbered.classes {
         if let Some(new) = classes.get(&class.id) {
@@ -393,7 +391,7 @@ pub fn renumbered(
                     }
                 }
             }
-            StepContent::Component(inner) => {
+            StepContent::Module(inner) => {
                 for value in inner.values.values_mut() {
                     renumber_value(value, classes, slots);
                 }
@@ -406,8 +404,8 @@ pub fn renumbered(
     renumbered
 }
 
-/// Renumbers the component classes (`{"LOCAL": n}`) and memory slots
-/// (`{"componentContext": n}`) of a command in its file form.
+/// Renumbers the module classes (`{"LOCAL": n}`) and memory slots
+/// (`{"moduleContext": n}`) of a command in its file form.
 fn renumber_json(
     value: &mut serde_json::Value,
     classes: &BTreeMap<u32, u32>,
@@ -419,7 +417,7 @@ fn renumber_json(
                 let (key, number) = map.iter_mut().next().expect("one entry");
                 let table = match key.as_str() {
                     "LOCAL" => Some(classes),
-                    "componentContext" => Some(slots),
+                    "moduleContext" => Some(slots),
                     _ => None,
                 };
                 if let (Some(table), Some(n)) = (table, number.as_u64())
@@ -439,8 +437,8 @@ fn renumber_json(
     }
 }
 
-/// Renumbers the component classes ("L1") and memory slots ("component:1")
-/// of a component parameter's value.
+/// Renumbers the module classes ("L1") and memory slots ("module:1")
+/// of a module parameter's value.
 fn renumber_value(
     value: &mut ParamValue,
     classes: &BTreeMap<u32, u32>,
@@ -452,10 +450,10 @@ fn renumber_value(
                 && let Some(new) = classes.get(&n)
             {
                 *text = ObjectClass::Local(*new).to_text();
-            } else if let Some(n) = component_slot_text(text)
+            } else if let Some(n) = module_slot_text(text)
                 && let Some(new) = slots.get(&n)
             {
-                *text = format!("component:{new}");
+                *text = format!("module:{new}");
             }
         }
         ParamValue::List(items) => items
@@ -468,8 +466,8 @@ fn renumber_value(
 /// `definition`'s steps with `instance`'s values written into what they're
 /// bound to - the instance's value, else the definition's default.
 fn steps_with_values(
-    instance: &ComponentInstance,
-    definition: &ComponentDefinition,
+    instance: &ModuleInstance,
+    definition: &ModuleDefinition,
 ) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
     let mut steps = definition.steps.clone();
     // A class list several parameters set gets all their classes (in
@@ -502,16 +500,16 @@ fn steps_with_values(
                 .iter_mut()
                 .find(|s| s.id == binding.step)
                 .ok_or_else(|| {
-                    component_error(
+                    module_error(
                         &definition.key,
                         format!(
-                            "parameter \"{}\" is bound to step {}, which the component doesn't have",
+                            "parameter \"{}\" is bound to step {}, which the module doesn't have",
                             parameter.label, binding.step
                         ),
                     )
                 })?;
             set_bound_value(step, &binding.param, value).map_err(|why| {
-                component_error(
+                module_error(
                     &definition.key,
                     format!(
                         "parameter \"{}\" can't set {} of step {}: {why}",
@@ -527,7 +525,7 @@ fn steps_with_values(
             .find(|s| s.id == step_id)
             .expect("found by is_class_list");
         set_bound_value(step, &path, &ParamValue::Text(classes.join(","))).map_err(|why| {
-            component_error(
+            module_error(
                 &definition.key,
                 format!("its parameters can't set {path} of step {step_id}: {why}"),
             )
@@ -538,8 +536,8 @@ fn steps_with_values(
 
 /// The value `instance` gives `parameter`: its own, else the default.
 fn own_value<'a>(
-    instance: &'a ComponentInstance,
-    parameter: &'a ComponentParameterDef,
+    instance: &'a ModuleInstance,
+    parameter: &'a ModuleParameterDef,
 ) -> &'a ParamValue {
     instance
         .values
@@ -565,23 +563,23 @@ fn is_class_list(steps: &[PipelineStepSettings], binding: &ParamBinding) -> bool
         .unwrap_or(false)
 }
 
-/// `instance`'s component's steps with the instance's values applied - what
-/// "Expand component" puts into the pipeline in its place.
-pub fn component_steps_with_values(
-    instance: &ComponentInstance,
-    definitions: &[ComponentDefinition],
+/// `instance`'s module's steps with the instance's values applied - what
+/// "Expand module" puts into the pipeline in its place.
+pub fn module_steps_with_values(
+    instance: &ModuleInstance,
+    definitions: &[ModuleDefinition],
 ) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
     steps_with_values(instance, definition_of(instance, definitions)?)
 }
 
-/// The parameters a component card shows for `instance`: each component parameter
+/// The parameters a module card shows for `instance`: each module parameter
 /// as the inner parameter it's bound to (its first binding) - same type,
 /// options and range, so the card gets the same control as the command -
-/// with the instance's value, the component parameter's id as `name`, its label
+/// with the instance's value, the module parameter's id as `name`, its label
 /// and description, and its default.
-pub fn component_parameters(
-    instance: &ComponentInstance,
-    definitions: &[ComponentDefinition],
+pub fn module_parameters(
+    instance: &ModuleInstance,
+    definitions: &[ModuleDefinition],
 ) -> Result<Vec<ParameterDef>, InternalErrors> {
     let definition = definition_of(instance, definitions)?;
     let steps = steps_with_values(instance, definition)?;
@@ -590,7 +588,7 @@ pub fn component_parameters(
         .iter()
         .map(|parameter| {
             let binding = parameter.bindings.first().ok_or_else(|| {
-                component_error(
+                module_error(
                     &definition.key,
                     format!("parameter \"{}\" isn't bound to anything", parameter.label),
                 )
@@ -614,12 +612,12 @@ pub fn component_parameters(
                 StepContent::Command(command) => {
                     find_param(&crate::algos::command_parameters(command), &binding.param).cloned()
                 }
-                StepContent::Component(inner) => component_parameters(inner, definitions)?
+                StepContent::Module(inner) => module_parameters(inner, definitions)?
                     .into_iter()
                     .find(|p| p.name == binding.param),
             };
             let mut shown = bound.ok_or_else(|| {
-                component_error(
+                module_error(
                     &definition.key,
                     format!(
                         "parameter \"{}\" is bound to {} of step {}, which doesn't exist",
@@ -641,14 +639,14 @@ pub fn component_parameters(
         .collect()
 }
 
-/// Sets `instance`'s value of component parameter `key` from `text` - a value as
+/// Sets `instance`'s value of module parameter `key` from `text` - a value as
 /// the card's control reports it (`apply_param_change`'s format, e.g. a
 /// dropdown label or "toggle:3"). It's applied to a copy of the bound
 /// command and read back, so the value is the one the command took.
-pub fn set_component_parameter(
-    instance: &mut ComponentInstance,
-    definitions: &[ComponentDefinition],
-    key: &ComponentParamKey,
+pub fn set_module_parameter(
+    instance: &mut ModuleInstance,
+    definitions: &[ModuleDefinition],
+    key: &ModuleParamKey,
     text: &str,
 ) -> Result<(), InternalErrors> {
     let definition = definition_of(instance, definitions)?;
@@ -656,9 +654,9 @@ pub fn set_component_parameter(
         .parameters
         .iter()
         .find(|p| &p.key == key)
-        .ok_or_else(|| component_error(&definition.key, format!("has no parameter {key}")))?;
+        .ok_or_else(|| module_error(&definition.key, format!("has no parameter {key}")))?;
     let binding = parameter.bindings.first().ok_or_else(|| {
-        component_error(
+        module_error(
             &definition.key,
             format!("parameter \"{}\" isn't bound to anything", parameter.label),
         )
@@ -682,9 +680,9 @@ pub fn set_component_parameter(
                 .unwrap_or_default();
             value_from_text(&now)
         }
-        StepContent::Component(inner) => {
-            let inner_key = ComponentParamKey::from(binding.param.as_str());
-            set_component_parameter(inner, definitions, &inner_key, text)?;
+        StepContent::Module(inner) => {
+            let inner_key = ModuleParamKey::from(binding.param.as_str());
+            set_module_parameter(inner, definitions, &inner_key, text)?;
             let inner_definition = definition_of(inner, definitions)?;
             inner.values.get(&inner_key).cloned().unwrap_or_else(|| {
                 inner_definition
@@ -700,30 +698,30 @@ pub fn set_component_parameter(
 }
 
 fn definition_of<'a>(
-    instance: &ComponentInstance,
-    definitions: &'a [ComponentDefinition],
-) -> Result<&'a ComponentDefinition, InternalErrors> {
+    instance: &ModuleInstance,
+    definitions: &'a [ModuleDefinition],
+) -> Result<&'a ModuleDefinition, InternalErrors> {
     definitions
         .iter()
         .find(|d| d.key == instance.key)
-        .ok_or_else(|| component_error(&instance.key, "isn't defined in this project".into()))
+        .ok_or_else(|| module_error(&instance.key, "isn't defined in this project".into()))
 }
 
 fn missing_step(
-    definition: &ComponentDefinition,
-    parameter: &ComponentParameterDef,
+    definition: &ModuleDefinition,
+    parameter: &ModuleParameterDef,
     binding: &ParamBinding,
 ) -> InternalErrors {
-    component_error(
+    module_error(
         &definition.key,
         format!(
-            "parameter \"{}\" is bound to step {}, which the component doesn't have",
+            "parameter \"{}\" is bound to step {}, which the module doesn't have",
             parameter.label, binding.step
         ),
     )
 }
 
-/// A parameter's text value (`ParameterDef::value`) as a typed component value -
+/// A parameter's text value (`ParameterDef::value`) as a typed module value -
 /// the reverse of [`value_text`]: `true`/`false`, whole and decimal numbers,
 /// comma-separated lists (e.g. classes "1,3"), else text.
 pub fn value_from_text(text: &str) -> ParamValue {
@@ -782,8 +780,8 @@ fn mixed_classes(command: &PipelineCommand) -> Option<String> {
         if inputs.is_empty() {
             if is_local(output) {
                 return Some(format!(
-                    "adds the component class {} to all objects, also the project's - an object \
-                     can't have both; select the component classes it applies to",
+                    "adds the module class {} to all objects, also the project's - an object \
+                     can't have both; select the module classes it applies to",
                     output.to_text()
                 ));
             }
@@ -792,9 +790,9 @@ fn mixed_classes(command: &PipelineCommand) -> Option<String> {
         for input in inputs.iter().filter(|c| **c != ObjectClass::Unset) {
             if is_local(input) != is_local(output) {
                 let (adding, to) = if is_local(output) {
-                    ("component class", "project class")
+                    ("module class", "project class")
                 } else {
-                    ("project class", "component class")
+                    ("project class", "module class")
                 };
                 return Some(format!(
                     "adds the {adding} {} to objects of the {to} {} - an object can't have \
@@ -810,7 +808,7 @@ fn mixed_classes(command: &PipelineCommand) -> Option<String> {
 
 /// Writes `value` into `param` of `step`: a command's parameter (checked
 /// to have taken it - `apply_param_change` ignores what it can't use), or
-/// for a nested component, the value of its component parameter `param` (its id).
+/// for a nested module, the value of its module parameter `param` (its id).
 fn set_bound_value(
     step: &mut PipelineStepSettings,
     param: &str,
@@ -832,27 +830,27 @@ fn set_bound_value(
                 Err(format!("it doesn't accept {text:?}"))
             }
         }
-        StepContent::Component(inner) => {
-            // A component class or memory slot too: the nested component
+        StepContent::Module(inner) => {
+            // A module class or memory slot too: the nested module
             // runs in this one's scope (see `UseEnd::Nested`).
-            let key = ComponentParamKey::from(param);
+            let key = ModuleParamKey::from(param);
             inner.values.insert(key, value.clone());
             Ok(())
         }
     }
 }
 
-/// The component memory slots (`MemoryId::ComponentContext`) `command` reads or writes.
+/// The module memory slots (`MemoryId::ModuleContext`) `command` reads or writes.
 /// Found in its file form, where such a slot is always `{"memory":
-/// {"componentContext": n}}` - whichever setting holds it (an image address, a
+/// {"moduleContext": n}}` - whichever setting holds it (an image address, a
 /// threshold's value source, ...).
-fn component_memory_slots(command: &PipelineCommand) -> Vec<u64> {
+fn module_memory_slots(command: &PipelineCommand) -> Vec<u64> {
     fn collect(value: &serde_json::Value, slots: &mut Vec<u64>) {
         match value {
             serde_json::Value::Object(map) => {
                 if let Some(slot) = map
                     .get("memory")
-                    .and_then(|memory| memory.get("componentContext"))
+                    .and_then(|memory| memory.get("moduleContext"))
                     .and_then(serde_json::Value::as_u64)
                 {
                     slots.push(slot);
@@ -870,19 +868,19 @@ fn component_memory_slots(command: &PipelineCommand) -> Vec<u64> {
     slots
 }
 
-/// The first component memory slot in `value`, in its text form
-/// (`"component:2"`), if any.
-fn component_slot_in(value: &ParamValue) -> Option<MemorySlot> {
+/// The first module memory slot in `value`, in its text form
+/// (`"module:2"`), if any.
+fn module_slot_in(value: &ParamValue) -> Option<MemorySlot> {
     match value {
-        ParamValue::Text(text) => component_slot_text(text),
-        ParamValue::List(items) => items.iter().find_map(component_slot_in),
+        ParamValue::Text(text) => module_slot_text(text),
+        ParamValue::List(items) => items.iter().find_map(module_slot_in),
         _ => None,
     }
 }
 
-/// The slot of a component memory slot's text form (`"component:2"`).
-fn component_slot_text(text: &str) -> Option<MemorySlot> {
-    text.trim().strip_prefix("component:")?.trim().parse().ok()
+/// The slot of a module memory slot's text form (`"module:2"`).
+fn module_slot_text(text: &str) -> Option<MemorySlot> {
+    text.trim().strip_prefix("module:")?.trim().parse().ok()
 }
 
 /// The first local class (`"L1"`) in `value`, if any.
@@ -931,8 +929,8 @@ fn same_value(a: &str, b: &str) -> bool {
     }
 }
 
-fn component_error(key: &str, what: String) -> InternalErrors {
-    InternalErrors::InvalidArgument(format!("Component {key}: {what}"))
+fn module_error(key: &str, what: String) -> InternalErrors {
+    InternalErrors::InvalidArgument(format!("Module {key}: {what}"))
 }
 
 #[cfg(test)]
@@ -942,7 +940,7 @@ mod tests {
     use evanalyzer_cfg::core_types::SegmentationClass;
     use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
     use evanalyzer_cfg::settings::classification_settings::Class;
-    use evanalyzer_cfg::settings::components::{ComponentParameterDef, ParamBinding};
+    use evanalyzer_cfg::settings::modules::{ModuleParameterDef, ParamBinding};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         AiObjectClassifierSettings, BlurSettings, ClassificationMappingSettings,
         ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
@@ -959,23 +957,23 @@ mod tests {
         }
     }
 
-    fn component_step(id: u32, key: &str, values: &[(u32, ParamValue)]) -> PipelineStepSettings {
+    fn module_step(id: u32, key: &str, values: &[(u32, ParamValue)]) -> PipelineStepSettings {
         PipelineStepSettings {
             id: StepId(id),
             enabled: true,
-            content: StepContent::Component(ComponentInstance {
+            content: StepContent::Module(ModuleInstance {
                 key: key.into(),
                 values: values
                     .iter()
-                    .map(|(k, v)| (ComponentParamKey(k.to_string()), v.clone()))
+                    .map(|(k, v)| (ModuleParamKey(k.to_string()), v.clone()))
                     .collect::<BTreeMap<_, _>>(),
             }),
         }
     }
 
-    fn parameter(id: u32, default: ParamValue, bindings: &[(u32, &str)]) -> ComponentParameterDef {
-        ComponentParameterDef {
-            key: ComponentParamKey(id.to_string()),
+    fn parameter(id: u32, default: ParamValue, bindings: &[(u32, &str)]) -> ModuleParameterDef {
+        ModuleParameterDef {
+            key: ModuleParamKey(id.to_string()),
             label: format!("Parameter {id}"),
             description: String::new(),
             section: String::new(),
@@ -993,9 +991,9 @@ mod tests {
     fn definition(
         key: &str,
         steps: Vec<PipelineStepSettings>,
-        parameters: Vec<ComponentParameterDef>,
-    ) -> ComponentDefinition {
-        ComponentDefinition {
+        parameters: Vec<ModuleParameterDef>,
+    ) -> ModuleDefinition {
+        ModuleDefinition {
             key: key.into(),
             meta: Default::default(),
             classes: vec![],
@@ -1006,7 +1004,7 @@ mod tests {
     }
 
     /// Blur, then Voronoi - "Cell class" set in both places.
-    fn cell_reconstruction() -> ComponentDefinition {
+    fn cell_reconstruction() -> ModuleDefinition {
         definition(
             "CELL_RECONSTRUCTION",
             vec![
@@ -1027,7 +1025,7 @@ mod tests {
     /// Expands `step` with a fresh scope counter, like one job does.
     fn expand(
         step: &PipelineStepSettings,
-        definitions: &[ComponentDefinition],
+        definitions: &[ModuleDefinition],
     ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
         expand_step(step, definitions, &mut ScopeCounter::default())
     }
@@ -1048,8 +1046,8 @@ mod tests {
     }
 
     #[test]
-    fn a_component_runs_its_commands_with_the_instances_values_and_defaults() {
-        let step = component_step(9, "CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]);
+    fn a_module_runs_its_commands_with_the_instances_values_and_defaults() {
+        let step = module_step(9, "CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]);
         let commands = expand(&step, &[cell_reconstruction()]).unwrap();
 
         assert_eq!(commands.len(), 2);
@@ -1057,7 +1055,7 @@ mod tests {
             panic!("expected Blur");
         };
         assert_eq!(blur.kernel_size, 3, "the definition's default");
-        // One component parameter, two inner parameters - always the same value.
+        // One module parameter, two inner parameters - always the same value.
         assert_eq!(
             voronoi(&commands[1].command).centers,
             ObjectClass::Global(4)
@@ -1066,34 +1064,33 @@ mod tests {
             voronoi(&commands[1].command).output_class,
             ObjectClass::Global(4)
         );
-        // A breakpoint on the component stops after it.
+        // A breakpoint on the module stops after it.
         assert_eq!(commands[0].step_id, StepId::UNASSIGNED);
         assert_eq!(commands[1].step_id, StepId(9));
     }
 
     #[test]
     fn disabled_inner_steps_are_left_out() {
-        let mut component = cell_reconstruction();
-        component.steps[0].enabled = false;
-        let commands =
-            expand(&component_step(9, "CELL_RECONSTRUCTION", &[]), &[component]).unwrap();
+        let mut module = cell_reconstruction();
+        module.steps[0].enabled = false;
+        let commands = expand(&module_step(9, "CELL_RECONSTRUCTION", &[]), &[module]).unwrap();
         assert_eq!(commands.len(), 1);
         assert!(matches!(commands[0].command, PipelineCommand::Voronoi(_)));
     }
 
     #[test]
-    fn components_nest_and_an_outer_parameter_can_set_an_inner_components_parameter() {
+    fn modules_nest_and_an_outer_parameter_can_set_an_inner_modules_parameter() {
         let outer = definition(
             "OUTER",
             vec![
-                component_step(1, "CELL_RECONSTRUCTION", &[]),
+                module_step(1, "CELL_RECONSTRUCTION", &[]),
                 command_step(2, PipelineCommand::Blur(BlurSettings::default())),
             ],
-            // Sets the inner component's "Cell class" (its parameter 2).
+            // Sets the inner module's "Cell class" (its parameter 2).
             vec![parameter(1, ParamValue::Int(7), &[(1, "2")])],
         );
         let commands = expand(
-            &component_step(4, "OUTER", &[]),
+            &module_step(4, "OUTER", &[]),
             &[cell_reconstruction(), outer],
         )
         .unwrap();
@@ -1106,39 +1103,33 @@ mod tests {
     }
 
     #[test]
-    fn mistakes_are_reported_with_the_component_and_what_is_wrong() {
-        let error = |definitions: &[ComponentDefinition], step: PipelineStepSettings| {
+    fn mistakes_are_reported_with_the_module_and_what_is_wrong() {
+        let error = |definitions: &[ModuleDefinition], step: PipelineStepSettings| {
             expand(&step, definitions).unwrap_err().to_string()
         };
 
-        let err = error(&[], component_step(1, "MISSING", &[]));
+        let err = error(&[], module_step(1, "MISSING", &[]));
         assert!(
             err.contains("MISSING") && err.contains("isn't defined"),
             "{err}"
         );
 
-        let looping = definition("LOOP", vec![component_step(1, "LOOP", &[])], vec![]);
-        let err = error(&[looping], component_step(1, "LOOP", &[]));
+        let looping = definition("LOOP", vec![module_step(1, "LOOP", &[])], vec![]);
+        let err = error(&[looping], module_step(1, "LOOP", &[]));
         assert!(err.contains("contains itself"), "{err}");
 
         let mut unknown_step = cell_reconstruction();
         unknown_step.parameters[0].bindings[0].step = StepId(99);
-        let err = error(
-            &[unknown_step],
-            component_step(1, "CELL_RECONSTRUCTION", &[]),
-        );
+        let err = error(&[unknown_step], module_step(1, "CELL_RECONSTRUCTION", &[]));
         assert!(err.contains("step 99"), "{err}");
 
         let mut unknown_param = cell_reconstruction();
         unknown_param.parameters[0].bindings[0].param = "no_such".into();
-        let err = error(
-            &[unknown_param],
-            component_step(1, "CELL_RECONSTRUCTION", &[]),
-        );
+        let err = error(&[unknown_param], module_step(1, "CELL_RECONSTRUCTION", &[]));
         assert!(err.contains("no such parameter"), "{err}");
 
         // A value the parameter can't take is an error, not silently ignored.
-        let bad_value = component_step(
+        let bad_value = module_step(
             1,
             "CELL_RECONSTRUCTION",
             &[(1, ParamValue::Text("big".into()))],
@@ -1181,14 +1172,14 @@ mod tests {
     }
 
     #[test]
-    fn a_local_class_outside_a_component_is_refused() {
+    fn a_local_class_outside_a_module_is_refused() {
         let step = command_step(4, voronoi_with_center(ObjectClass::Local(1)));
         let error = expand(&step, &[]).unwrap_err().to_string();
-        assert!(error.contains("component class L1"), "{error}");
+        assert!(error.contains("module class L1"), "{error}");
     }
 
     #[test]
-    fn extracting_into_a_local_class_outside_a_component_is_refused() {
+    fn extracting_into_a_local_class_outside_a_module_is_refused() {
         let extract = PipelineCommand::ExtractObjects(ExtractObjectsSettings {
             class_mapping: vec![ExtractClassMappingSettings {
                 segmentation_class: SegmentationClass(1),
@@ -1199,25 +1190,22 @@ mod tests {
         let error = expand(&command_step(1, extract), &[])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("component class L1"), "{error}");
+        assert!(error.contains("module class L1"), "{error}");
     }
 
     #[test]
-    fn a_component_may_only_use_the_local_classes_it_defines() {
+    fn a_module_may_only_use_the_local_classes_it_defines() {
         let undeclared = definition(
             "SEEDS",
             vec![command_step(1, voronoi_with_center(ObjectClass::Local(2)))],
             vec![],
         );
-        let error = expand(&component_step(1, "SEEDS", &[]), &[undeclared])
+        let error = expand(&module_step(1, "SEEDS", &[]), &[undeclared])
             .unwrap_err()
             .to_string();
-        assert!(
-            error.contains("step 1 uses the component class L2"),
-            "{error}"
-        );
+        assert!(error.contains("step 1 uses the module class L2"), "{error}");
 
-        // Declared, and set through a component parameter in its text form.
+        // Declared, and set through a module parameter in its text form.
         let mut declared = definition(
             "SEEDS",
             vec![command_step(1, voronoi_with_center(ObjectClass::Global(4)))],
@@ -1228,7 +1216,7 @@ mod tests {
             )],
         );
         declared.classes = vec![local_class(2)];
-        let commands = expand(&component_step(1, "SEEDS", &[]), &[declared]).unwrap();
+        let commands = expand(&module_step(1, "SEEDS", &[]), &[declared]).unwrap();
         assert_eq!(voronoi(&commands[0].command).centers, ObjectClass::Local(2));
     }
 
@@ -1237,18 +1225,18 @@ mod tests {
     }
 
     #[test]
-    fn each_component_instance_runs_in_a_scope_of_its_own() {
+    fn each_module_instance_runs_in_a_scope_of_its_own() {
         let mut scopes = ScopeCounter::default();
         let plain = command_step(1, PipelineCommand::Blur(BlurSettings::default()));
-        let component = component_step(2, "CELL_RECONSTRUCTION", &[]);
+        let module = module_step(2, "CELL_RECONSTRUCTION", &[]);
         let definitions = [cell_reconstruction()];
 
         let commands = expand_step(&plain, &definitions, &mut scopes).unwrap();
-        assert_eq!(commands[0].scope, Scope::Global, "outside components");
+        assert_eq!(commands[0].scope, Scope::Global, "outside modules");
 
-        // Two instances of one component, as in two pipelines of a job.
-        let first = expand_step(&component, &definitions, &mut scopes).unwrap();
-        let second = expand_step(&component, &definitions, &mut scopes).unwrap();
+        // Two instances of one module, as in two pipelines of a job.
+        let first = expand_step(&module, &definitions, &mut scopes).unwrap();
+        let second = expand_step(&module, &definitions, &mut scopes).unwrap();
         assert!(first.iter().all(|c| c.scope == scope(1)));
         assert!(second.iter().all(|c| c.scope == scope(2)));
     }
@@ -1303,7 +1291,7 @@ mod tests {
         };
 
         let commands = expand(
-            &component_step(1, "COLOC", &[(2, ParamValue::Int(6))]),
+            &module_step(1, "COLOC", &[(2, ParamValue::Int(6))]),
             &definitions,
         )
         .unwrap();
@@ -1320,22 +1308,16 @@ mod tests {
 
         // Each card shows the parameter's own value, not the list's.
         let mut instance = instance("COLOC", &[(2, ParamValue::Int(6))]);
-        let shown = component_parameters(&instance, &definitions).unwrap();
+        let shown = module_parameters(&instance, &definitions).unwrap();
         assert_eq!(shown[2].value, "7");
 
         // Changing one changes only its part of the list.
-        set_component_parameter(
-            &mut instance,
-            &definitions,
-            &ComponentParamKey::from("1"),
-            "8",
-        )
-        .unwrap();
+        set_module_parameter(&mut instance, &definitions, &ModuleParamKey::from("1"), "8").unwrap();
         let commands = expand_step(
             &PipelineStepSettings {
                 id: StepId(1),
                 enabled: true,
-                content: StepContent::Component(instance),
+                content: StepContent::Module(instance),
             },
             &definitions,
             &mut ScopeCounter::default(),
@@ -1345,18 +1327,18 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_component_runs_in_the_scope_of_the_use_around_it() {
+    fn a_nested_module_runs_in_the_scope_of_the_use_around_it() {
         let outer = definition(
             "OUTER",
             vec![
-                component_step(1, "CELL_RECONSTRUCTION", &[]),
+                module_step(1, "CELL_RECONSTRUCTION", &[]),
                 command_step(2, PipelineCommand::Blur(BlurSettings::default())),
             ],
             vec![],
         );
         let mut scopes = ScopeCounter::default();
         let commands = expand_step(
-            &component_step(4, "OUTER", &[]),
+            &module_step(4, "OUTER", &[]),
             &[cell_reconstruction(), outer],
             &mut scopes,
         )
@@ -1384,8 +1366,8 @@ mod tests {
     }
 
     #[test]
-    fn a_local_class_is_passed_into_a_nested_component_whose_own_are_numbered_apart() {
-        // "Centers" is a parameter; L1 is the inner component's own class.
+    fn a_local_class_is_passed_into_a_nested_module_whose_own_are_numbered_apart() {
+        // "Centers" is a parameter; L1 is the inner module's own class.
         let mut inner = definition(
             "INNER",
             vec![command_step(
@@ -1398,11 +1380,11 @@ mod tests {
             vec![parameter(1, ParamValue::Int(1), &[(1, "centers")])],
         );
         inner.classes = vec![local_class(1)];
-        // The outer component's L1 as the inner "Centers"; L2 its own too.
+        // The outer module's L1 as the inner "Centers"; L2 its own too.
         let mut outer = definition(
             "OUTER",
             vec![
-                component_step(1, "INNER", &[]),
+                module_step(1, "INNER", &[]),
                 command_step(2, voronoi_with_center(ObjectClass::Local(2))),
             ],
             vec![parameter(1, ParamValue::Text("L1".into()), &[(1, "1")])],
@@ -1410,12 +1392,8 @@ mod tests {
         outer.classes = vec![local_class(1), local_class(2)];
 
         let mut scopes = ScopeCounter::default();
-        let commands = expand_step(
-            &component_step(4, "OUTER", &[]),
-            &[inner, outer],
-            &mut scopes,
-        )
-        .unwrap();
+        let commands =
+            expand_step(&module_step(4, "OUTER", &[]), &[inner, outer], &mut scopes).unwrap();
         let nested = voronoi(&commands[0].command);
         assert_eq!(nested.centers, ObjectClass::Local(1), "the outer one's L1");
         assert_eq!(
@@ -1437,7 +1415,7 @@ mod tests {
     }
 
     #[test]
-    fn two_uses_of_a_nested_component_get_classes_of_their_own() {
+    fn two_uses_of_a_nested_module_get_classes_of_their_own() {
         let mut inner = definition(
             "INNER",
             vec![command_step(1, voronoi_with_center(ObjectClass::Local(1)))],
@@ -1446,13 +1424,10 @@ mod tests {
         inner.classes = vec![local_class(1)];
         let outer = definition(
             "OUTER",
-            vec![
-                component_step(1, "INNER", &[]),
-                component_step(2, "INNER", &[]),
-            ],
+            vec![module_step(1, "INNER", &[]), module_step(2, "INNER", &[])],
             vec![],
         );
-        let commands = expand(&component_step(4, "OUTER", &[]), &[inner, outer]).unwrap();
+        let commands = expand(&module_step(4, "OUTER", &[]), &[inner, outer]).unwrap();
         let centers: Vec<ObjectClass> = commands
             .iter()
             .map(|c| voronoi(&c.command).centers)
@@ -1461,9 +1436,9 @@ mod tests {
     }
 
     #[test]
-    fn a_component_class_a_pipeline_hands_in_is_refused() {
+    fn a_module_class_a_pipeline_hands_in_is_refused() {
         let error = expand(
-            &component_step(
+            &module_step(
                 1,
                 "CELL_RECONSTRUCTION",
                 &[(2, ParamValue::Text("L1".into()))],
@@ -1472,11 +1447,11 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(error.contains("component class L1"), "{error}");
+        assert!(error.contains("module class L1"), "{error}");
     }
 
     #[test]
-    fn a_dataset_step_in_a_component_may_not_use_local_classes() {
+    fn a_dataset_step_in_a_module_may_not_use_local_classes() {
         let mut tracker = definition(
             "TRACK",
             vec![command_step(
@@ -1489,11 +1464,11 @@ mod tests {
             vec![],
         );
         tracker.classes = vec![local_class(1)];
-        let error = expand(&component_step(1, "TRACK", &[]), &[tracker])
+        let error = expand(&module_step(1, "TRACK", &[]), &[tracker])
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("dataset step using the component class L1"),
+            error.contains("dataset step using the module class L1"),
             "{error}"
         );
     }
@@ -1513,11 +1488,11 @@ mod tests {
         })
     }
 
-    /// Expands a component with local classes 1 and 2 running `command`.
-    fn in_component(command: PipelineCommand) -> Result<Vec<ExpandedCommand>, InternalErrors> {
-        let mut component = definition("MIX", vec![command_step(3, command)], vec![]);
-        component.classes = vec![local_class(1), local_class(2)];
-        expand(&component_step(1, "MIX", &[]), &[component])
+    /// Expands a module with local classes 1 and 2 running `command`.
+    fn in_module(command: PipelineCommand) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+        let mut module = definition("MIX", vec![command_step(3, command)], vec![]);
+        module.classes = vec![local_class(1), local_class(2)];
+        expand(&module_step(1, "MIX", &[]), &[module])
     }
 
     #[test]
@@ -1526,23 +1501,23 @@ mod tests {
         let local = ObjectClass::Local(1);
         let global = ObjectClass::Global(5);
 
-        let error = in_component(classify(vec![local], AddOutputClassIfMatch, global))
+        let error = in_module(classify(vec![local], AddOutputClassIfMatch, global))
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("step 3 adds the project class 5 to objects of the component class L1")
+            error.contains("step 3 adds the project class 5 to objects of the module class L1")
                 && error.contains("Reclassify"),
             "{error}"
         );
-        let error = in_component(classify(vec![global], AddOutputClassIfNotMatch, local))
+        let error = in_module(classify(vec![global], AddOutputClassIfNotMatch, local))
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("adds the component class L1 to objects of the project class 5"),
+            error.contains("adds the module class L1 to objects of the project class 5"),
             "{error}"
         );
         // No input classes: every object the command sees, the project's too.
-        let error = in_component(classify(vec![], AddOutputClassIfMatch, local))
+        let error = in_module(classify(vec![], AddOutputClassIfMatch, local))
             .unwrap_err()
             .to_string();
         assert!(
@@ -1567,7 +1542,7 @@ mod tests {
             classify(vec![], AddOutputClassIfMatch, global),
             classify(vec![l1], RemoveInputClassIfMatch, global),
         ] {
-            assert!(in_component(command).is_ok());
+            assert!(in_module(command).is_ok());
         }
     }
 
@@ -1590,21 +1565,21 @@ mod tests {
                 ..Default::default()
             })
         };
-        let error = in_component(ai(
+        let error = in_module(ai(
             ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch,
         ))
         .unwrap_err()
         .to_string();
         assert!(error.contains("adds the project class 7"), "{error}");
         assert!(
-            in_component(ai(
+            in_module(ai(
                 ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch
             ))
             .is_ok()
         );
     }
 
-    // ---- Component memory slots ----
+    // ---- Module memory slots ----
 
     fn store_in(address: ImageAddress) -> PipelineCommand {
         PipelineCommand::ImageCache(ImageCacheSettings {
@@ -1614,23 +1589,23 @@ mod tests {
     }
 
     #[test]
-    fn a_component_memory_slot_outside_a_component_is_refused() {
-        let component_slot = ImageAddress::Memory(MemoryId::ComponentContext(2));
-        let error = expand(&command_step(1, store_in(component_slot)), &[])
+    fn a_module_memory_slot_outside_a_module_is_refused() {
+        let module_slot = ImageAddress::Memory(MemoryId::ModuleContext(2));
+        let error = expand(&command_step(1, store_in(module_slot)), &[])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("component memory slot 2"), "{error}");
+        assert!(error.contains("module memory slot 2"), "{error}");
 
-        let component = definition(
+        let module = definition(
             "SLOTS",
-            vec![command_step(1, store_in(component_slot))],
+            vec![command_step(1, store_in(module_slot))],
             vec![],
         );
-        assert!(expand(&component_step(1, "SLOTS", &[]), &[component]).is_ok());
+        assert!(expand(&module_step(1, "SLOTS", &[]), &[module]).is_ok());
     }
 
     #[test]
-    fn a_component_memory_slot_is_passed_into_a_nested_component() {
+    fn a_module_memory_slot_is_passed_into_a_nested_module() {
         // Stores in its "address"; slot 1 also its own.
         let inner = definition(
             "INNER",
@@ -1641,7 +1616,7 @@ mod tests {
                 ),
                 command_step(
                     2,
-                    store_in(ImageAddress::Memory(MemoryId::ComponentContext(1))),
+                    store_in(ImageAddress::Memory(MemoryId::ModuleContext(1))),
                 ),
             ],
             vec![parameter(
@@ -1652,32 +1627,28 @@ mod tests {
         );
         let outer = definition(
             "OUTER",
-            vec![component_step(1, "INNER", &[])],
+            vec![module_step(1, "INNER", &[])],
             vec![parameter(
                 1,
-                ParamValue::Text("component:1".into()),
+                ParamValue::Text("module:1".into()),
                 &[(1, "1")],
             )],
         );
         let mut scopes = ScopeCounter::default();
-        let commands = expand_step(
-            &component_step(4, "OUTER", &[]),
-            &[inner, outer],
-            &mut scopes,
-        )
-        .unwrap();
+        let commands =
+            expand_step(&module_step(4, "OUTER", &[]), &[inner, outer], &mut scopes).unwrap();
         let address = |command: &PipelineCommand| match command {
             PipelineCommand::ImageCache(settings) => settings.address,
             _ => panic!("image cache"),
         };
         assert_eq!(
             address(&commands[0].command),
-            ImageAddress::Memory(MemoryId::ComponentContext(1)),
+            ImageAddress::Memory(MemoryId::ModuleContext(1)),
             "the outer one's slot"
         );
         assert_eq!(
             address(&commands[1].command),
-            ImageAddress::Memory(MemoryId::ComponentContext(2)),
+            ImageAddress::Memory(MemoryId::ModuleContext(2)),
             "the inner one's own, after the outer one's"
         );
         assert_eq!(
@@ -1690,19 +1661,19 @@ mod tests {
         );
     }
 
-    // ---- The component card's parameters ----
+    // ---- The module card's parameters ----
 
-    fn instance(key: &str, values: &[(u32, ParamValue)]) -> ComponentInstance {
-        let StepContent::Component(instance) = component_step(1, key, values).content else {
+    fn instance(key: &str, values: &[(u32, ParamValue)]) -> ModuleInstance {
+        let StepContent::Module(instance) = module_step(1, key, values).content else {
             unreachable!()
         };
         instance
     }
 
     #[test]
-    fn a_component_parameter_shows_as_the_parameter_it_is_bound_to() {
+    fn a_module_parameter_shows_as_the_parameter_it_is_bound_to() {
         let definitions = [cell_reconstruction()];
-        let shown = component_parameters(
+        let shown = module_parameters(
             &instance("CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]),
             &definitions,
         )
@@ -1729,72 +1700,49 @@ mod tests {
 
         let cell_class = &shown[1];
         assert_eq!(cell_class.value, "4", "the instance's value");
-        assert_eq!(cell_class.default_value, "1", "the component's default");
+        assert_eq!(cell_class.default_value, "1", "the module's default");
     }
 
     #[test]
-    fn setting_a_component_parameter_stores_what_the_command_took() {
+    fn setting_a_module_parameter_stores_what_the_command_took() {
         let definitions = [cell_reconstruction()];
         let mut cells = instance("CELL_RECONSTRUCTION", &[]);
 
-        set_component_parameter(&mut cells, &definitions, &ComponentParamKey::from("1"), "5")
-            .unwrap();
-        set_component_parameter(
-            &mut cells,
-            &definitions,
-            &ComponentParamKey::from("2"),
-            "L1",
-        )
-        .unwrap();
+        set_module_parameter(&mut cells, &definitions, &ModuleParamKey::from("1"), "5").unwrap();
+        set_module_parameter(&mut cells, &definitions, &ModuleParamKey::from("2"), "L1").unwrap();
+        assert_eq!(cells.values[&ModuleParamKey::from("1")], ParamValue::Int(5));
         assert_eq!(
-            cells.values[&ComponentParamKey::from("1")],
-            ParamValue::Int(5)
-        );
-        assert_eq!(
-            cells.values[&ComponentParamKey::from("2")],
+            cells.values[&ModuleParamKey::from("2")],
             ParamValue::Text("L1".into())
         );
 
         // Text the command doesn't take leaves the value as it was.
-        set_component_parameter(
-            &mut cells,
-            &definitions,
-            &ComponentParamKey::from("1"),
-            "big",
-        )
-        .unwrap();
-        assert_eq!(
-            cells.values[&ComponentParamKey::from("1")],
-            ParamValue::Int(5)
-        );
+        set_module_parameter(&mut cells, &definitions, &ModuleParamKey::from("1"), "big").unwrap();
+        assert_eq!(cells.values[&ModuleParamKey::from("1")], ParamValue::Int(5));
 
         assert!(
-            set_component_parameter(&mut cells, &definitions, &ComponentParamKey::from("9"), "1")
+            set_module_parameter(&mut cells, &definitions, &ModuleParamKey::from("9"), "1")
                 .is_err()
         );
     }
 
     #[test]
-    fn a_parameter_bound_to_a_nested_components_parameter_works_the_same() {
+    fn a_parameter_bound_to_a_nested_modules_parameter_works_the_same() {
         let outer = definition(
             "OUTER",
-            vec![component_step(1, "CELL_RECONSTRUCTION", &[])],
+            vec![module_step(1, "CELL_RECONSTRUCTION", &[])],
             vec![parameter(1, ParamValue::Int(7), &[(1, "2")])],
         );
         let definitions = [cell_reconstruction(), outer];
         let mut outer = instance("OUTER", &[]);
 
-        let shown = component_parameters(&outer, &definitions).unwrap();
+        let shown = module_parameters(&outer, &definitions).unwrap();
         assert_eq!(shown[0].value, "7");
 
-        set_component_parameter(&mut outer, &definitions, &ComponentParamKey::from("1"), "8")
-            .unwrap();
-        assert_eq!(
-            outer.values[&ComponentParamKey::from("1")],
-            ParamValue::Int(8)
-        );
+        set_module_parameter(&mut outer, &definitions, &ModuleParamKey::from("1"), "8").unwrap();
+        assert_eq!(outer.values[&ModuleParamKey::from("1")], ParamValue::Int(8));
         let commands = expand(
-            &component_step(1, "OUTER", &[(1, ParamValue::Int(8))]),
+            &module_step(1, "OUTER", &[(1, ParamValue::Int(8))]),
             &definitions,
         )
         .unwrap();

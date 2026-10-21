@@ -20,7 +20,7 @@ import {
     Cat,
     ClassHelper,
     CommandParameter,
-    ComponentClassesState,
+    ModuleClassesState,
     LeafParam,
     ParamType,
     Pipeline,
@@ -314,8 +314,8 @@ component PipelineTab inherits Rectangle {
 component ClassDropdown inherits Rectangle {
     in property <bool> is-seg: false;
     in-out property <string> value: "0";
-        /// Also offer the opened component's classes (`ComponentClassesState`).
-        in property <bool> component-classes: false;
+        /// Also offer the opened module's classes (`ModuleClassesState`).
+        in property <bool> module-classes: false;
         // A narrow field (a table cell): a numbered class by its number alone.
         in property <bool> compact: false;
     callback changed(string);
@@ -353,7 +353,7 @@ component ClassDropdown inherits Rectangle {
             color: cls.color;
             name: cls.name;
         }
-        for cls in ComponentClassesState.classes: InkSwatchName {
+        for cls in ModuleClassesState.classes: InkSwatchName {
             visible: root.value == "L\{cls.id}";
             color: cls.color;
             name: cls.name;
@@ -427,12 +427,12 @@ component ClassDropdown inherits Rectangle {
 
                     InkDivider { }
 
-                    // The opened component's own classes.
-                        for cls in ComponentClassesState.classes: InkPickerRow {
-                        height: root.component-classes && !root.is-seg ? 26px : 0px;
-                        visible: root.component-classes && !root.is-seg;
+                    // The opened module's own classes.
+                        for cls in ModuleClassesState.classes: InkPickerRow {
+                        height: root.module-classes && !root.is-seg ? 26px : 0px;
+                        visible: root.module-classes && !root.is-seg;
                         label: "◆ L\{cls.id}";
-                        label-color: Ink.cat-component;
+                        label-color: Ink.cat-module;
                         selected: root.value == "L\{cls.id}";
                         clicked => {
                             root.pick("L\{cls.id}");
@@ -443,7 +443,7 @@ component ClassDropdown inherits Rectangle {
                         }
                     }
 
-                    if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
+                    if root.module-classes && !root.is-seg && ModuleClassesState.classes.length > 0: Rectangle {
                         height: 1px;
                         background: Ink.border-soft;
                     }
@@ -477,11 +477,11 @@ component ClassDropdown inherits Rectangle {
 export component MultiClassDropdown inherits Rectangle {
     in property <bool> is-seg: false;
     in-out property <string> value: "";
-        /// flags[0..33] the project's classes; with `component-classes`,
-        /// flags[33 + k] the opened component's class k (`ComponentClassesState`).
+        /// flags[0..33] the project's classes; with `module-classes`,
+        /// flags[33 + k] the opened module's class k (`ModuleClassesState`).
         in property <[string]> selection-flags: [];
-        /// Also offer the opened component's classes.
-        in property <bool> component-classes: false;
+        /// Also offer the opened module's classes.
+        in property <bool> module-classes: false;
     callback changed(string);
 
     property <string> prefix: root.is-seg ? "Seg." : "Obj.";
@@ -629,9 +629,9 @@ export component MultiClassDropdown inherits Rectangle {
                                 }
                             }
 
-                            // The opened component's classes selected.
-                            for cls[k] in ComponentClassesState.classes: Rectangle {
-                                width: root.component-classes && root.selection-flags[33 + k] == "1" ? 46px : 0px;
+                            // The opened module's classes selected.
+                            for cls[k] in ModuleClassesState.classes: Rectangle {
+                                width: root.module-classes && root.selection-flags[33 + k] == "1" ? 46px : 0px;
                                 height: 18px;
                                 clip: true;
                                 Rectangle {
@@ -640,9 +640,9 @@ export component MultiClassDropdown inherits Rectangle {
                                     width: 43px;
                                     height: 18px;
                                     border-radius: 3px;
-                                    background: Ink.cat-component.with-alpha(0.12);
+                                    background: Ink.cat-module.with-alpha(0.12);
                                     border-width: 1px;
-                                    border-color: Ink.cat-component.with-alpha(0.35);
+                                    border-color: Ink.cat-module.with-alpha(0.35);
                                     HorizontalLayout {
                                         alignment: center;
                                         spacing: 3px;
@@ -753,10 +753,10 @@ export component MultiClassDropdown inherits Rectangle {
 
                         InkDivider { }
 
-                        // The opened component's classes - flags[33 + k].
-                        for cls[k] in ComponentClassesState.classes: local-ta := TouchArea {
-                            height: root.component-classes && !root.is-seg ? 26px : 0px;
-                            visible: root.component-classes && !root.is-seg;
+                        // The opened module's classes - flags[33 + k].
+                        for cls[k] in ModuleClassesState.classes: local-ta := TouchArea {
+                            height: root.module-classes && !root.is-seg ? 26px : 0px;
+                            visible: root.module-classes && !root.is-seg;
                             clicked => {
                                 root.changed("toggle:L\{cls.id}");
                             }
@@ -783,7 +783,7 @@ export component MultiClassDropdown inherits Rectangle {
                                         width: 96px;
                                         text: "◆ L\{cls.id}";
                                         font-size: Ink.fs-secondary;
-                                        color: Ink.cat-component;
+                                        color: Ink.cat-module;
                                         vertical-alignment: center;
                                     }
 
@@ -809,7 +809,7 @@ export component MultiClassDropdown inherits Rectangle {
                             }
                         }
 
-                        if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
+                        if root.module-classes && !root.is-seg && ModuleClassesState.classes.length > 0: Rectangle {
                             height: 1px;
                             background: Ink.border-soft;
                         }
@@ -909,7 +909,7 @@ export component MultiClassDropdown inherits Rectangle {
 }
 
 // One setting's control (text field, spinner, dropdown, class, channel …)
-// - every type but a list. Locked while a component is only viewed.
+// - every type but a list. Locked while a module is only viewed.
 component ScalarControls inherits Rectangle {
     in property <CommandParameter> p;
         // A narrow field (a table cell): the controls that have it get their
@@ -1033,7 +1033,7 @@ component ScalarControls inherits Rectangle {
                 icon: InkIcons.open;
                 label: "Browse…";
                 enabled: !PipelinesPanelState.steps-read-only;
-                disabled-reason: "This component is read-only - open it to edit";
+                disabled-reason: "This module is read-only - open it to edit";
                 clicked => {
                     PipelinesPanelState.browse-token-counter += 1;
                     root.browse-token = PipelinesPanelState.browse-token-counter;
@@ -1114,7 +1114,7 @@ component ScalarControls inherits Rectangle {
         ClassDropdown {
             is-seg: false;
             compact: root.compact;
-            component-classes: true;
+            module-classes: true;
             value: p.value;
             changed(v) => {
                 root.changed(v);
@@ -1134,7 +1134,7 @@ component ScalarControls inherits Rectangle {
         if p.param-type == ParamType.multi-obj-class:
         MultiClassDropdown {
             is-seg: false;
-            component-classes: true;
+            module-classes: true;
             value: p.value;
             selection-flags: p.options;
             changed(v) => {
@@ -1167,7 +1167,7 @@ component ScalarControls inherits Rectangle {
             enabled: !PipelinesPanelState.steps-read-only;
             kind: p.options[0];
             number: p.options[1].to-float();
-            in-component: PipelinesPanelState.open-component-name != "";
+            in-module: PipelinesPanelState.open-module-name != "";
             changed(v) => {
                 root.changed(v);
             }
@@ -1195,7 +1195,7 @@ component ScalarControls inherits Rectangle {
 // Leaf parameter row (used inside group items)
 
 // A setting of a list entry, on a line like the other settings: its name,
-// its control, a pin. Inside an opened component also ◇ / ✎ (expose it).
+// its control, a pin. Inside an opened module also ◇ / ✎ (expose it).
 component LeafParamRow inherits Rectangle {
     in property <LeafParam> p;
     callback changed(string);
@@ -1203,7 +1203,7 @@ component LeafParamRow inherits Rectangle {
     callback edit-exposed();
     callback toggle-pin();
 
-    property <bool> in-component: PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && root.p.param-type != ParamType.label;
+    property <bool> in-module: PipelinesPanelState.open-module-name != "" && !PipelinesPanelState.open-module-read-only && root.p.param-type != ParamType.label;
 
     min-height: leaf-row.min-height;
     preferred-height: leaf-row.preferred-height;
@@ -1219,7 +1219,7 @@ component LeafParamRow inherits Rectangle {
         spacing: 3px;
         alignment: start;
 
-        if root.in-component: Rectangle {
+        if root.in-module: Rectangle {
             y: (parent.height - self.height) / 2;
             width: 14px;
             height: 14px;
@@ -1230,7 +1230,7 @@ component LeafParamRow inherits Rectangle {
             Text {
                 text: root.p.exposed ? "◆" : "◇";
                 font-size: Ink.fs-caption;
-                color: root.p.exposed ? Ink.cat-component : Ink.text-mute;
+                color: root.p.exposed ? Ink.cat-module : Ink.text-mute;
             }
 
             leaf-expose-ta := TouchArea {
@@ -1247,7 +1247,7 @@ component LeafParamRow inherits Rectangle {
                 text: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
             }
         }
-        if root.in-component && root.p.exposed: Rectangle {
+        if root.in-module && root.p.exposed: Rectangle {
             y: (parent.height - self.height) / 2;
             width: 14px;
             height: 14px;
@@ -1258,7 +1258,7 @@ component LeafParamRow inherits Rectangle {
             Text {
                 text: "✎";
                 font-size: 9px;
-                color: Ink.cat-component;
+                color: Ink.cat-module;
             }
 
             leaf-edit-ta := TouchArea {
@@ -1278,7 +1278,7 @@ component LeafParamRow inherits Rectangle {
         Text {
             text: root.p.display-name == "" ? root.p.name : root.p.display-name;
             font-size: Ink.fs-secondary;
-            color: root.p.exposed ? Ink.cat-component : Ink.text-dim;
+            color: root.p.exposed ? Ink.cat-module : Ink.text-dim;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -1368,7 +1368,7 @@ component SectionHeader inherits VerticalLayout {
     InkDivider { }
 }
 
-// A setting's name line: ◇/✎ inside an opened component, the name, and "?"
+// A setting's name line: ◇/✎ inside an opened module, the name, and "?"
 // for its help text.
 component ParamLabel inherits HorizontalLayout {
     in property <CommandParameter> p;
@@ -1384,9 +1384,9 @@ component ParamLabel inherits HorizontalLayout {
 
     spacing: 4px;
     alignment: start;
-        // Inside an opened component: ◆ exposes the setting as a component
+        // Inside an opened module: ◆ exposes the setting as a module
         // parameter (filled) or hides it again.
-        if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
+        if PipelinesPanelState.open-module-name != "" && !PipelinesPanelState.open-module-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
         width: 16px;
         height: 16px;
         border-radius: 3px;
@@ -1394,7 +1394,7 @@ component ParamLabel inherits HorizontalLayout {
         Text {
             text: p.exposed ? "◆" : "◇";
             font-size: Ink.fs-caption;
-            color: p.exposed ? Ink.cat-component : Ink.text-mute;
+            color: p.exposed ? Ink.cat-module : Ink.text-mute;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -1406,7 +1406,7 @@ component ParamLabel inherits HorizontalLayout {
             }
         }
     }
-    if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.exposed: Rectangle {
+    if PipelinesPanelState.open-module-name != "" && !PipelinesPanelState.open-module-read-only && p.exposed: Rectangle {
         width: 16px;
         height: 16px;
         border-radius: 3px;
@@ -1414,7 +1414,7 @@ component ParamLabel inherits HorizontalLayout {
         Text {
             text: "✎";
             font-size: 10px;
-            color: Ink.cat-component;
+            color: Ink.cat-module;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -1430,7 +1430,7 @@ component ParamLabel inherits HorizontalLayout {
         text: p.display-name == "" ? p.name : p.display-name;
         font-size: root.wide ? Ink.fs-body : Ink.fs-secondary;
         font-weight: root.wide ? 600 : 400;
-        color: p.exposed ? Ink.cat-component : (root.wide ? Ink.text : Ink.text-dim);
+        color: p.exposed ? Ink.cat-module : (root.wide ? Ink.text : Ink.text-dim);
         vertical-alignment: center;
         overflow: elide;
     }
@@ -1477,7 +1477,7 @@ component ParamLabel inherits HorizontalLayout {
 }
 
 // A setting's control (text field, spinner, dropdown, list entries, …).
-// Locked while a component is only viewed.
+// Locked while a module is only viewed.
 // A setting's control: `ScalarControls`, or a list's entries (each entry's
 // settings as rows) with "Add item".
 component ParamControls inherits Rectangle {
@@ -1579,7 +1579,7 @@ component ParamNotes inherits VerticalLayout {
     if p.wiring != "": Text {
         text: p.wiring;
         font-size: Ink.fs-caption;
-        color: Ink.cat-component.with-alpha(0.85);
+        color: Ink.cat-module.with-alpha(0.85);
         wrap: word-wrap;
         height: self.preferred-height;
     }
@@ -2115,13 +2115,13 @@ component StepRow inherits Rectangle {
     callback toggle-expanded;
     callback remove;
     callback duplicate;
-    callback create-component;
-    callback open-component;
+    callback create-module;
+    callback open-module;
     callback edit-in-place;
-    callback view-component;
-    callback expand-component;
+    callback view-module;
+    callback expand-module;
     callback save-to-library;
-    callback update-component;
+    callback update-module;
     callback param-changed(string, string);
     callback toggle-breakpoint;
     callback open-settings;
@@ -2192,9 +2192,9 @@ component StepRow inherits Rectangle {
                     // The gutter: the step's id (what "#2 EV Detection"
                     // elsewhere refers to) - a click sets its breakpoint, like
                     // a source editor's line numbers: red stop, orange
-                    // snapshot, off. Not for a component's inner steps.
+                    // snapshot, off. Not for a module's inner steps.
                     gutter := Rectangle {
-                        property <bool> can-break: PipelinesPanelState.open-component-name == "";
+                        property <bool> can-break: PipelinesPanelState.open-module-name == "";
                         width: 28px;
                         accessible-role: button;
                         accessible-label: "Breakpoint at step \{root.step.step-id}";
@@ -2372,7 +2372,7 @@ component StepRow inherits Rectangle {
                                 icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
                                 label: step.enabled ? "Switch the step off" : "Switch the step on";
                                 enabled: root.editable;
-                                disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This component is only viewed";
+                                disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This module is only viewed";
                                 clicked => {
                                     root.toggle-enabled();
                                 }
@@ -2440,7 +2440,7 @@ component StepRow inherits Rectangle {
                     }
                 }
 
-                // A component card with sections: collapsed to their
+                // A module card with sections: collapsed to their
                     // values, a table where sections have the same settings.
                     // The settings as rows (name left, control right): those
                     // without a section first, then each section - collapsed
@@ -2597,7 +2597,7 @@ component StepRow inherits Rectangle {
                     }
                 }
 
-                // A newer version of the component: the one action on the
+                // A newer version of the module: the one action on the
                 // card. Its other actions (values, view, edit) are in ⋯.
                 if root.step.update-version != "": HorizontalLayout {
                     padding-top: 2px;
@@ -2607,7 +2607,7 @@ component StepRow inherits Rectangle {
                         kind: InkButtonKind.primary;
                         text: "Update to v\{root.step.update-version}";
                         clicked => {
-                            root.update-component();
+                            root.update-module();
                         }
                     }
                 }
@@ -2711,40 +2711,40 @@ component StepRow inherits Rectangle {
             }
 
             InkMenuItem {
-                icon: InkIcons.component;
-                text: "Create component";
+                icon: InkIcons.module;
+                text: "Create module";
                 enabled: root.editable;
                 clicked => {
-                    root.create-component();
+                    root.create-module();
                 }
             }
 
-            if root.step.category == StepCategory.component: InkMenuItem {
+            if root.step.category == StepCategory.module: InkMenuItem {
                 text: "View";
                 clicked => {
-                    root.view-component();
+                    root.view-module();
                 }
             }
-            if root.step.category == StepCategory.component && root.editable: InkMenuItem {
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
                 text: "Edit in place";
                 clicked => {
                     root.edit-in-place();
                 }
             }
-            if root.step.category == StepCategory.component && root.editable: InkMenuItem {
-                icon: InkIcons.component;
-                text: "Edit component";
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
+                icon: InkIcons.module;
+                text: "Edit module";
                 clicked => {
-                    root.open-component();
+                    root.open-module();
                 }
             }
-            if root.step.category == StepCategory.component && root.editable: InkMenuItem {
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
                 text: "Expand";
                 clicked => {
-                    root.expand-component();
+                    root.expand-module();
                 }
             }
-            if root.step.category == StepCategory.component && PipelinesPanelState.open-component-name == "": InkMenuItem {
+            if root.step.category == StepCategory.module && PipelinesPanelState.open-module-name == "": InkMenuItem {
                 icon: InkIcons.save;
                 text: "Save as";
                 clicked => {
@@ -3152,8 +3152,8 @@ export component PipelinesPanel inherits Rectangle {
             }
         }
 
-        // -- An opened component: its bar stays on top while its steps scroll --
-        if PipelinesPanelState.open-component-name != "": VerticalLayout {
+        // -- An opened module: its bar stays on top while its steps scroll --
+        if PipelinesPanelState.open-module-name != "": VerticalLayout {
             padding-left: 8px;
             padding-right: 8px;
             padding-top: 8px;
@@ -3161,9 +3161,9 @@ export component PipelinesPanel inherits Rectangle {
                 // As high as its (wrapping) text needs.
                 height: bar.preferred-height;
                 border-radius: Ink.radius-md;
-                background: Ink.cat-component.with-alpha(0.10);
+                background: Ink.cat-module.with-alpha(0.10);
                 border-width: 1px;
-                border-color: Ink.cat-component.with-alpha(0.5);
+                border-color: Ink.cat-module.with-alpha(0.5);
                 bar := HorizontalLayout {
                     padding: 8px;
                     spacing: 8px;
@@ -3174,7 +3174,7 @@ export component PipelinesPanel inherits Rectangle {
                             kind: InkButtonKind.quiet;
                             text: "‹ Back";
                             clicked => {
-                                PipelinesPanelState.close-component();
+                                PipelinesPanelState.close-module();
                             }
                         }
                     }
@@ -3184,7 +3184,7 @@ export component PipelinesPanel inherits Rectangle {
                         alignment: center;
                         spacing: 2px;
                         Text {
-                            text: "\{PipelinesPanelState.active-pipeline-name} › ◆ \{PipelinesPanelState.open-component-name}";
+                            text: "\{PipelinesPanelState.active-pipeline-name} › ◆ \{PipelinesPanelState.open-module-name}";
                             font-size: Ink.fs-body;
                             font-weight: 600;
                             color: Ink.text;
@@ -3192,21 +3192,21 @@ export component PipelinesPanel inherits Rectangle {
                         }
 
                         Text {
-                            text: PipelinesPanelState.open-component-read-only ? "Viewing · read only"
-                                : "Editing the component: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting";
+                            text: PipelinesPanelState.open-module-read-only ? "Viewing · read only"
+                                : "Editing the module: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting";
                             font-size: Ink.fs-caption;
                             color: Ink.text-mute;
                             wrap: word-wrap;
                         }
 
-                        if PipelinesPanelState.open-component-values != "": Text {
-                            text: PipelinesPanelState.open-component-values;
+                        if PipelinesPanelState.open-module-values != "": Text {
+                            text: PipelinesPanelState.open-module-values;
                             font-size: Ink.fs-caption;
                             color: Ink.text-dim;
                             wrap: word-wrap;
                         }
-                        if PipelinesPanelState.open-component-problem != "": Text {
-                            text: "⚠ \{PipelinesPanelState.open-component-problem}";
+                        if PipelinesPanelState.open-module-problem != "": Text {
+                            text: "⚠ \{PipelinesPanelState.open-module-problem}";
                             font-size: Ink.fs-caption;
                             color: Ink.warn;
                             wrap: word-wrap;
@@ -3215,11 +3215,11 @@ export component PipelinesPanel inherits Rectangle {
 
                     VerticalLayout {
                         alignment: center;
-                        if !PipelinesPanelState.open-component-read-only: InkButton {
+                        if !PipelinesPanelState.open-module-read-only: InkButton {
                             small: true;
                             text: "Settings";
                             clicked => {
-                                PipelinesPanelState.open-component-settings();
+                                PipelinesPanelState.open-module-settings();
                             }
                         }
                     }
@@ -3356,26 +3356,26 @@ export component PipelinesPanel inherits Rectangle {
                         duplicate => {
                             PipelinesPanelState.duplicate-step(cmd.id);
                         }
-                        create-component => {
-                            PipelinesPanelState.create-component(cmd.id);
+                        create-module => {
+                            PipelinesPanelState.create-module(cmd.id);
                         }
-                        open-component => {
-                            PipelinesPanelState.open-component(cmd.id);
+                        open-module => {
+                            PipelinesPanelState.open-module(cmd.id);
                         }
                         edit-in-place => {
-                            PipelinesPanelState.edit-component-in-place(cmd.id);
+                            PipelinesPanelState.edit-module-in-place(cmd.id);
                         }
-                        view-component => {
-                            PipelinesPanelState.view-component(cmd.id);
+                        view-module => {
+                            PipelinesPanelState.view-module(cmd.id);
                         }
-                        expand-component => {
-                            PipelinesPanelState.expand-component(cmd.id);
+                        expand-module => {
+                            PipelinesPanelState.expand-module(cmd.id);
                         }
                         save-to-library => {
-                            PipelinesPanelState.save-component-to-library(cmd.id);
+                            PipelinesPanelState.save-module-to-library(cmd.id);
                         }
-                        update-component => {
-                            PipelinesPanelState.update-component(cmd.id);
+                        update-module => {
+                            PipelinesPanelState.update-module(cmd.id);
                         }
                         param-changed(n, v) => {
                             PipelinesPanelState.param-changed(cmd.id, n, v);
@@ -3545,10 +3545,10 @@ export component PipelinesPanel inherits Rectangle {
             }
 
             InkMenuItem {
-                icon: InkIcons.component;
-                text: "Save as component…";
+                icon: InkIcons.module;
+                text: "Save as module…";
                 clicked => {
-                    PipelinesPanelState.save-as-component(root.menu-pipeline-id);
+                    PipelinesPanelState.save-as-module(root.menu-pipeline-id);
                 }
             }
 

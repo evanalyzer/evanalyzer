@@ -1,7 +1,7 @@
 use crate::api::{Backend, FileSystem};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::templates::{ComponentTemplate, ProjectTemplate};
-use evanalyzer_cfg::{COMPONENT_TEMPLATE_EXTENSION, PROJECT_FILE_TEMPLATE_EXTENSIONS};
+use evanalyzer_cfg::settings::templates::{ModuleTemplate, ProjectTemplate};
+use evanalyzer_cfg::{MODULE_TEMPLATE_EXTENSION, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use std::path::{Path, PathBuf};
 
 /// Loads a single `ProjectTemplate` from an arbitrary path (e.g. one picked
@@ -19,10 +19,10 @@ pub fn load_project_template_from_file(
         .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))
 }
 
-/// Loads all component library files (`.evacomp`, see `ComponentTemplate`)
+/// Loads all module library files (`.evamodule`, see `ModuleTemplate`)
 /// found in the backend's user and app templates folders.
-pub fn load_component_templates(backend: &dyn Backend) -> Vec<(PathBuf, ComponentTemplate)> {
-    load_templates(backend, COMPONENT_TEMPLATE_EXTENSION)
+pub fn load_module_templates(backend: &dyn Backend) -> Vec<(PathBuf, ModuleTemplate)> {
+    load_templates(backend, MODULE_TEMPLATE_EXTENSION)
 }
 
 /// Loads all `ProjectTemplate`s found in the backend's user and app
@@ -130,9 +130,9 @@ mod tests {
     fn loads_only_files_with_the_matching_extension() {
         let dir = tempfile::tempdir().unwrap();
         let json = serde_json::to_string(&project_template("Match")).unwrap();
-        write(dir.path(), "a.evapt", &json);
+        write(dir.path(), "a.evatemplate", &json);
         write(dir.path(), "b.txt", &json); // same content, wrong extension
-        write(dir.path(), "c.evapt.bak", &json); // extension is "bak", not "evapt"
+        write(dir.path(), "c.evatemplate.bak", &json); // extension is "bak", not "evatemplate"
 
         let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
         load_templates_from_folder(
@@ -143,7 +143,7 @@ mod tests {
         );
 
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].0, dir.path().join("a.evapt"));
+        assert_eq!(out[0].0, dir.path().join("a.evatemplate"));
         assert_eq!(out[0].1.meta.name, "Match");
     }
 
@@ -152,10 +152,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(
             dir.path(),
-            "good.evapt",
+            "good.evatemplate",
             &serde_json::to_string(&project_template("Good")).unwrap(),
         );
-        write(dir.path(), "bad.evapt", "{ this is not valid json");
+        write(dir.path(), "bad.evatemplate", "{ this is not valid json");
 
         let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
         load_templates_from_folder(
@@ -176,10 +176,14 @@ mod tests {
     #[test]
     fn skips_a_file_that_matches_the_extension_but_is_not_readable_as_utf8() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("binary.evapt"), [0xFFu8, 0xFE, 0x00, 0x01]).unwrap();
+        std::fs::write(
+            dir.path().join("binary.evatemplate"),
+            [0xFFu8, 0xFE, 0x00, 0x01],
+        )
+        .unwrap();
         write(
             dir.path(),
-            "good.evapt",
+            "good.evatemplate",
             &serde_json::to_string(&project_template("Good")).unwrap(),
         );
 
@@ -210,7 +214,7 @@ mod tests {
         };
         write(
             dir.path(),
-            "a.evapt",
+            "a.evatemplate",
             &serde_json::to_string(&template).unwrap(),
         );
 

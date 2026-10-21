@@ -1,39 +1,39 @@
-use crate::modules::classification_settings::ClassificationSettings;
-use crate::modules::components::ComponentDefinition;
-use crate::modules::meta_data::MetaData;
-use crate::modules::pipeline_settings::PipelineSettings;
-use crate::modules::plate_settings::PlateSettings;
+use crate::settings::classification_settings::ClassificationSettings;
+use crate::settings::meta_data::MetaData;
+use crate::settings::modules::ModuleDefinition;
+use crate::settings::pipeline_settings::PipelineSettings;
+use crate::settings::plate_settings::PlateSettings;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A component saved to a library file (`.evacomp`). Inserting it copies
-/// the component into a project, where it lives on its own from then on.
+/// A module saved to a library file (`.evamodule`). Inserting it copies
+/// the module into a project, where it lives on its own from then on.
 #[allow(unused)]
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentTemplate {
-    /// On-disk format version (`.evacomp`), see
-    /// `CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not
+pub struct ModuleTemplate {
+    /// On-disk format version (`.evamodule`), see
+    /// `CURRENT_MODULE_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not
     /// migrated.
     #[serde(default)]
     pub schema_version: u32,
 
-    /// The component, its fields at the top level of the file. Its `meta` is
+    /// The module, its fields at the top level of the file. Its `meta` is
     /// the template's: name, description, authors, version ("Update
     /// available" compares it).
     #[serde(flatten)]
-    pub component: ComponentDefinition,
+    pub module: ModuleDefinition,
 
-    /// The components it uses inside, so the file is complete on its own.
+    /// The modules it uses inside, so the file is complete on its own.
     #[serde(default)]
-    pub uses: Vec<ComponentDefinition>,
+    pub uses: Vec<ModuleDefinition>,
 }
 
 #[allow(unused)]
 #[derive(Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTemplate {
-    /// On-disk format version of this project template (`.evapt`). Absent on
+    /// On-disk format version of this project template (`.evatemplate`). Absent on
     /// files written before versioning was introduced, which `serde(default)`
     /// reads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike
     /// `ProjectSettings.schema_version`, nothing currently rejects a too-new
@@ -54,8 +54,8 @@ pub struct ProjectTemplate {
     /// Pipelines to execute
     pub pipelines: Vec<PipelineSettings>,
 
-    /// The component definitions the pipelines use. Absent in templates
-    /// saved before components existed.
+    /// The module definitions the pipelines use. Absent in templates
+    /// saved before modules existed.
     #[serde(default)]
-    pub components: Vec<ComponentDefinition>,
+    pub modules: Vec<ModuleDefinition>,
 }

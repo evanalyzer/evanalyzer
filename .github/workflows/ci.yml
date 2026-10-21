@@ -178,11 +178,11 @@ jobs:
         run: cargo fmt --check
 
   templates:
-    # Templates (`.evapt`/`.evacomp`) live in a separate repository
+    # Templates (`.evatemplate`/`.evamodule`) live in a separate repository
     # (evanalyzer/evanalyzer-templates), not this one - see release.yml's
     # "templates" job for how they're fetched/shipped. This checks every
     # template there - not just the subset release.yml actually ships -
-    # still deserializes as ProjectTemplate/ComponentTemplate under this
+    # still deserializes as ProjectTemplate/ModuleTemplate under this
     # repo's current schema (crates/cfg/examples/check_templates.rs),
     # catching a schema change breaking published templates as early as a
     # push/PR here, rather than only at release time.
@@ -210,7 +210,7 @@ jobs:
         run: |
           git clone --filter=blob:none --sparse --depth 1 \
             https://github.com/evanalyzer/evanalyzer-templates.git evanalyzer-templates
-          git -C evanalyzer-templates sparse-checkout set --no-cone '*.evapt' '*.evacomp'
+          git -C evanalyzer-templates sparse-checkout set --no-cone '*.evatemplate' '*.evamodule'
 
       - name: Check every template against the current schema
         run: cargo run -p evanalyzer_cfg --example check_templates -- evanalyzer-templates

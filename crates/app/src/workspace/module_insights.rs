@@ -1,14 +1,14 @@
-//! What a project's steps and components do, worked out from their settings:
+//! What a project's steps and modules do, worked out from their settings:
 //! the commands a pipeline step runs with its values applied, the classes a
-//! command creates and the channels it reads, what a component parameter
-//! sets - for the checks (`component_checks`) and the editor's "Sets …"
+//! command creates and the channels it reads, what a module parameter
+//! sets - for the checks (`module_checks`) and the editor's "Sets …"
 //! lines - and the parameter keys that follow section and label.
 
-use crate::workspace::component_editing::step_setting;
+use crate::workspace::module_editing::step_setting;
 use evanalyzer_cfg::{
-    core_types::{ComponentParamKey, ImageAddress, ObjectClass, StepId},
+    core_types::{ImageAddress, ModuleParamKey, ObjectClass, StepId},
     settings::{
-        components::{ComponentDefinition, ComponentInstance, ComponentParameterDef, ParamValue},
+        modules::{ModuleDefinition, ModuleInstance, ModuleParameterDef, ParamValue},
         parameter_def::{ParamType, ParameterDef},
         pipeline_command::PipelineCommand,
         pipeline_settings::{PipelineStepSettings, StepContent},
@@ -17,36 +17,36 @@ use evanalyzer_cfg::{
 };
 use std::collections::BTreeMap;
 
-/// How deep components are followed - as deep as a run expands them.
+/// How deep modules are followed - as deep as a run expands them.
 const MAX_DEPTH: usize = 8;
 
 /// A command a pipeline step runs, with the step's values applied.
 #[derive(Debug, Clone)]
 pub struct ResolvedCommand {
-    /// The ids of the steps it is, from the pipeline step's component
+    /// The ids of the steps it is, from the pipeline step's module
     /// inwards: empty for a command step, one id for a command of the
-    /// component, more for one nested in it.
+    /// module, more for one nested in it.
     pub steps: Vec<StepId>,
     pub command: PipelineCommand,
 }
 
-/// The enabled commands `step` runs (none if it's disabled), components
-/// opened with their values - also nested ones. A component whose values
+/// The enabled commands `step` runs (none if it's disabled), modules
+/// opened with their values - also nested ones. A module whose values
 /// don't work is skipped: the checks report that on their own.
 pub fn resolved_commands(
     step: &PipelineStepSettings,
-    definitions: &[ComponentDefinition],
+    definitions: &[ModuleDefinition],
 ) -> Vec<ResolvedCommand> {
     fn walk(
-        instance: &ComponentInstance,
-        definitions: &[ComponentDefinition],
+        instance: &ModuleInstance,
+        definitions: &[ModuleDefinition],
         prefix: &mut Vec<StepId>,
         out: &mut Vec<ResolvedCommand>,
     ) {
         if prefix.len() >= MAX_DEPTH {
             return;
         }
-        let Ok(steps) = evanalyzer_core::component_steps_with_values(instance, definitions) else {
+        let Ok(steps) = evanalyzer_core::module_steps_with_values(instance, definitions) else {
             return;
         };
         for step in steps.iter().filter(|s| s.enabled) {
@@ -56,7 +56,7 @@ pub fn resolved_commands(
                     steps: prefix.clone(),
                     command: command.clone(),
                 }),
-                StepContent::Component(inner) => walk(inner, definitions, prefix, out),
+                StepContent::Module(inner) => walk(inner, definitions, prefix, out),
             }
             prefix.pop();
         }
@@ -70,7 +70,7 @@ pub fn resolved_commands(
             steps: Vec::new(),
             command: command.clone(),
         }),
-        StepContent::Component(instance) => walk(instance, definitions, &mut Vec::new(), &mut out),
+        StepContent::Module(instance) => walk(instance, definitions, &mut Vec::new(), &mut out),
     }
     out
 }
@@ -198,19 +198,19 @@ pub fn channels_read(command: &PipelineCommand) -> Vec<(String, i32)> {
 }
 
 /// The parameters of `definition` that set setting `path` of the command
-/// at `steps` (as [`ResolvedCommand::steps`]) - through the components nested
+/// at `steps` (as [`ResolvedCommand::steps`]) - through the modules nested
 /// in it too.
 pub fn parameters_setting(
-    definition: &ComponentDefinition,
-    definitions: &[ComponentDefinition],
+    definition: &ModuleDefinition,
+    definitions: &[ModuleDefinition],
     steps: &[StepId],
     path: &str,
-) -> Vec<ComponentParamKey> {
+) -> Vec<ModuleParamKey> {
     let Some((first, rest)) = steps.split_first() else {
         return Vec::new();
     };
-    // Inside a component nested at `first`: its parameters that set it.
-    let inner: Vec<ComponentParamKey> = if rest.is_empty() {
+    // Inside a module nested at `first`: its parameters that set it.
+    let inner: Vec<ModuleParamKey> = if rest.is_empty() {
         Vec::new()
     } else {
         match definition
@@ -219,7 +219,7 @@ pub fn parameters_setting(
             .find(|s| s.id == *first)
             .map(|s| &s.content)
         {
-            Some(StepContent::Component(instance)) => definitions
+            Some(StepContent::Module(instance)) => definitions
                 .iter()
                 .find(|d| d.key == instance.key)
                 .map(|d| parameters_setting(d, definitions, rest, path))
@@ -245,16 +245,16 @@ pub fn parameters_setting(
 }
 
 /// Whether `parameter` of `definition` gives the objects a command creates
-/// their class (see [`created_classes`]) - also through a component nested in it.
+/// their class (see [`created_classes`]) - also through a module nested in it.
 pub fn creates_objects(
-    definition: &ComponentDefinition,
-    definitions: &[ComponentDefinition],
-    parameter: &ComponentParameterDef,
+    definition: &ModuleDefinition,
+    definitions: &[ModuleDefinition],
+    parameter: &ModuleParameterDef,
 ) -> bool {
     fn creates(
-        definition: &ComponentDefinition,
-        definitions: &[ComponentDefinition],
-        parameter: &ComponentParameterDef,
+        definition: &ModuleDefinition,
+        definitions: &[ModuleDefinition],
+        parameter: &ModuleParameterDef,
         depth: usize,
     ) -> bool {
         depth < MAX_DEPTH
@@ -268,7 +268,7 @@ pub fn creates_objects(
                     Some(StepContent::Command(command)) => created_classes(command)
                         .iter()
                         .any(|(path, _)| *path == binding.param),
-                    Some(StepContent::Component(inner)) => definitions
+                    Some(StepContent::Module(inner)) => definitions
                         .iter()
                         .find(|d| d.key == inner.key)
                         .and_then(|d| {
@@ -302,13 +302,13 @@ pub fn classes_in(value: &ParamValue) -> Vec<ObjectClass> {
         .collect()
 }
 
-/// What each parameter of component `key` sets, for its card: "Extract
+/// What each parameter of module `key` sets, for its card: "Extract
 /// Objects › Class Mapping 1 · Object Class (step 7) · Classify Objects ›
 /// Overlapping With (steps 12, 13)" - a setting set in several steps once.
 pub fn parameter_wiring(
-    definitions: &[ComponentDefinition],
+    definitions: &[ModuleDefinition],
     key: &str,
-) -> Vec<(ComponentParamKey, String)> {
+) -> Vec<(ModuleParamKey, String)> {
     let Some(definition) = definitions.iter().find(|d| d.key == key) else {
         return Vec::new();
     };
@@ -324,7 +324,7 @@ pub fn parameter_wiring(
                 };
                 let owner = match &step.content {
                     StepContent::Command(command) => command.name().to_string(),
-                    StepContent::Component(inner) => definitions
+                    StepContent::Module(inner) => definitions
                         .iter()
                         .find(|d| d.key == inner.key)
                         .map_or_else(|| inner.key.clone(), |d| d.meta.name.clone()),
@@ -362,7 +362,7 @@ pub fn parameter_wiring(
 /// sets it - "Set by “Output class” (Tetraspeck)", and how many other
 /// settings it sets too - or `None`.
 pub fn setting_wiring(
-    definition: &ComponentDefinition,
+    definition: &ModuleDefinition,
     step_id: StepId,
     path: &str,
 ) -> Option<String> {
@@ -476,17 +476,17 @@ pub fn parameter_key(section: &str, label: &str) -> String {
     snake_key(&format!("{section} {label}"))
 }
 
-/// Gives the parameters of component `key` the keys their sections and
+/// Gives the parameters of module `key` the keys their sections and
 /// labels make ([`parameter_key`], `_2` … for a second one alike) - and
-/// every use of them too: the values of the component's steps in pipelines
-/// and components, and what components using it bind. Returns how many
+/// every use of them too: the values of the module's steps in pipelines
+/// and modules, and what modules using it bind. Returns how many
 /// parameters got a new key.
 pub fn rekey_parameters(project: &mut ProjectSettings, key: &str) -> usize {
-    let Some(definition) = project.components.iter().find(|d| d.key == key) else {
+    let Some(definition) = project.modules.iter().find(|d| d.key == key) else {
         return 0;
     };
     let mut taken: Vec<String> = Vec::new();
-    let mut renames: BTreeMap<ComponentParamKey, ComponentParamKey> = BTreeMap::new();
+    let mut renames: BTreeMap<ModuleParamKey, ModuleParamKey> = BTreeMap::new();
     for parameter in &definition.parameters {
         let base = parameter_key(&parameter.section, &parameter.label);
         let mut new = base.clone();
@@ -497,17 +497,17 @@ pub fn rekey_parameters(project: &mut ProjectSettings, key: &str) -> usize {
         }
         taken.push(new.clone());
         if new != parameter.key.as_str() {
-            renames.insert(parameter.key.clone(), ComponentParamKey(new));
+            renames.insert(parameter.key.clone(), ModuleParamKey(new));
         }
     }
     if renames.is_empty() {
         return 0;
     }
-    let rename = |old: &ComponentParamKey| renames.get(old).cloned().unwrap_or_else(|| old.clone());
+    let rename = |old: &ModuleParamKey| renames.get(old).cloned().unwrap_or_else(|| old.clone());
 
     let renamed_values = |steps: &mut Vec<PipelineStepSettings>| {
         for step in steps {
-            if let StepContent::Component(instance) = &mut step.content
+            if let StepContent::Module(instance) = &mut step.content
                 && instance.key == key
             {
                 instance.values = std::mem::take(&mut instance.values)
@@ -520,23 +520,23 @@ pub fn rekey_parameters(project: &mut ProjectSettings, key: &str) -> usize {
     for pipeline in &mut project.pipelines {
         renamed_values(&mut pipeline.steps);
     }
-    for definition in &mut project.components {
+    for definition in &mut project.modules {
         if definition.key == key {
             for parameter in &mut definition.parameters {
                 parameter.key = rename(&parameter.key);
             }
         }
-        // A component using this one: its bindings name the parameters.
+        // A module using this one: its bindings name the parameters.
         let uses: Vec<StepId> = definition
             .steps
             .iter()
-            .filter(|s| matches!(&s.content, StepContent::Component(i) if i.key == key))
+            .filter(|s| matches!(&s.content, StepContent::Module(i) if i.key == key))
             .map(|s| s.id)
             .collect();
         for parameter in &mut definition.parameters {
             for binding in &mut parameter.bindings {
                 if uses.contains(&binding.step) {
-                    binding.param = rename(&ComponentParamKey::from(binding.param.as_str())).0;
+                    binding.param = rename(&ModuleParamKey::from(binding.param.as_str())).0;
                 }
             }
         }
@@ -549,8 +549,8 @@ pub fn rekey_parameters(project: &mut ProjectSettings, key: &str) -> usize {
 mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::{PipelineId, SegmentationClass};
-    use evanalyzer_cfg::settings::components::ParamBinding;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+    use evanalyzer_cfg::settings::modules::ParamBinding;
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         BlurSettings, ExtractClassMappingSettings, ExtractObjectsSettings, LoadChannelSettings,
     };
@@ -568,11 +568,11 @@ mod tests {
         PipelineStepSettings {
             id: StepId(id),
             enabled: true,
-            content: StepContent::Component(ComponentInstance {
+            content: StepContent::Module(ModuleInstance {
                 key: key.into(),
                 values: values
                     .iter()
-                    .map(|(k, v)| (ComponentParamKey::from(*k), v.clone()))
+                    .map(|(k, v)| (ModuleParamKey::from(*k), v.clone()))
                     .collect(),
             }),
         }
@@ -584,9 +584,9 @@ mod tests {
         label: &str,
         default: ParamValue,
         bindings: &[(u32, &str)],
-    ) -> ComponentParameterDef {
-        ComponentParameterDef {
-            key: ComponentParamKey::from(key),
+    ) -> ModuleParameterDef {
+        ModuleParameterDef {
+            key: ModuleParamKey::from(key),
             label: label.into(),
             description: String::new(),
             section: section.into(),
@@ -616,7 +616,7 @@ mod tests {
     /// parameters as "Spot" and "Bead" sections.
     fn project() -> ProjectSettings {
         let mut project = ProjectSettings::default();
-        project.components.push(ComponentDefinition {
+        project.modules.push(ModuleDefinition {
             key: "DETECT".into(),
             meta: Default::default(),
             classes: vec![],
@@ -645,7 +645,7 @@ mod tests {
             ],
             origin: None,
         });
-        project.components.push(ComponentDefinition {
+        project.modules.push(ModuleDefinition {
             key: "TWO".into(),
             meta: Default::default(),
             classes: vec![],
@@ -692,9 +692,9 @@ mod tests {
     }
 
     #[test]
-    fn a_component_step_runs_its_commands_with_its_values_also_nested_ones() {
+    fn a_module_step_runs_its_commands_with_its_values_also_nested_ones() {
         let project = project();
-        let resolved = resolved_commands(&project.pipelines[0].steps[0], &project.components);
+        let resolved = resolved_commands(&project.pipelines[0].steps[0], &project.modules);
         let steps: Vec<Vec<u32>> = resolved
             .iter()
             .map(|r| r.steps.iter().map(|s| s.0).collect())
@@ -722,16 +722,16 @@ mod tests {
 
         let mut disabled = project.pipelines[0].steps[0].clone();
         disabled.enabled = false;
-        assert!(resolved_commands(&disabled, &project.components).is_empty());
+        assert!(resolved_commands(&disabled, &project.modules).is_empty());
     }
 
     #[test]
-    fn the_parameters_setting_a_nested_setting_are_found_through_the_component_in_between() {
+    fn the_parameters_setting_a_nested_setting_are_found_through_the_module_in_between() {
         let project = project();
-        let two = &project.components[1];
+        let two = &project.modules[1];
         let found = |steps: &[u32], path: &str| -> Vec<String> {
             let steps: Vec<StepId> = steps.iter().map(|s| StepId(*s)).collect();
-            parameters_setting(two, &project.components, &steps, path)
+            parameters_setting(two, &project.modules, &steps, path)
                 .into_iter()
                 .map(|k| k.0)
                 .collect()
@@ -748,7 +748,7 @@ mod tests {
         let creating: Vec<&str> = two
             .parameters
             .iter()
-            .filter(|p| creates_objects(two, &project.components, p))
+            .filter(|p| creates_objects(two, &project.modules, p))
             .map(|p| p.key.as_str())
             .collect();
         assert_eq!(creating, ["a", "b"]);
@@ -757,26 +757,26 @@ mod tests {
     #[test]
     fn a_parameters_wiring_names_each_setting_once_with_its_steps() {
         let mut project = project();
-        project.components[0].meta.name = "Detect".into();
-        project.components[1].parameters[0]
+        project.modules[0].meta.name = "Detect".into();
+        project.modules[1].parameters[0]
             .bindings
             .push(ParamBinding {
                 step: StepId(2),
                 param: "output_class".into(),
             });
-        let wiring = parameter_wiring(&project.components, "TWO");
+        let wiring = parameter_wiring(&project.modules, "TWO");
         assert_eq!(wiring[0].1, "Detect › Output class (steps 1, 2)");
         assert_eq!(wiring[3].1, "Blur › Kernel size (step 3)");
         assert_eq!(
-            setting_wiring(&project.components[1], StepId(2), "output_class").as_deref(),
+            setting_wiring(&project.modules[1], StepId(2), "output_class").as_deref(),
             Some("Set by “Output class” (Spot) - which sets 1 other setting too")
         );
         assert_eq!(
-            setting_wiring(&project.components[1], StepId(3), "kernel_size").as_deref(),
+            setting_wiring(&project.modules[1], StepId(3), "kernel_size").as_deref(),
             Some("Set by “Size”")
         );
         assert_eq!(
-            setting_wiring(&project.components[1], StepId(3), "nothing"),
+            setting_wiring(&project.modules[1], StepId(3), "nothing"),
             None
         );
     }
@@ -847,11 +847,11 @@ mod tests {
 
         // DETECT's keys are already its labels'.
         assert_eq!(rekey_parameters(&mut project, "DETECT"), 0);
-        project.components[0].parameters[1].label = "Class".into();
+        project.modules[0].parameters[1].label = "Class".into();
         assert_eq!(rekey_parameters(&mut project, "DETECT"), 1);
-        assert_eq!(project.components[0].parameters[1].key.as_str(), "class");
+        assert_eq!(project.modules[0].parameters[1].key.as_str(), "class");
         // TWO binds DETECT's parameter: by its new key now - and still works.
-        let bound: Vec<&str> = project.components[1]
+        let bound: Vec<&str> = project.modules[1]
             .parameters
             .iter()
             .flat_map(|p| p.bindings.iter().map(|b| b.param.as_str()))
@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(bound, ["class", "class", "channel", "kernel_size"]);
 
         assert_eq!(rekey_parameters(&mut project, "TWO"), 4);
-        let keys: Vec<&str> = project.components[1]
+        let keys: Vec<&str> = project.modules[1]
             .parameters
             .iter()
             .map(|p| p.key.as_str())
@@ -873,8 +873,8 @@ mod tests {
                 "size"
             ]
         );
-        let StepContent::Component(instance) = &project.pipelines[0].steps[0].content else {
-            panic!("a component step");
+        let StepContent::Module(instance) = &project.pipelines[0].steps[0].content else {
+            panic!("a module step");
         };
         assert_eq!(
             instance
@@ -885,7 +885,7 @@ mod tests {
             ["bead_output_class"],
             "the pipeline's value moved along"
         );
-        let resolved = resolved_commands(&project.pipelines[0].steps[0], &project.components);
+        let resolved = resolved_commands(&project.pipelines[0].steps[0], &project.modules);
         let created: Vec<ObjectClass> = resolved
             .iter()
             .flat_map(|r| created_classes(&r.command))
@@ -894,10 +894,10 @@ mod tests {
         assert_eq!(created, [ObjectClass::Global(2), ObjectClass::Global(5)]);
 
         // Two alike: the second gets `_2`.
-        project.components[1].parameters[1].section = "Spot".into();
+        project.modules[1].parameters[1].section = "Spot".into();
         rekey_parameters(&mut project, "TWO");
         assert_eq!(
-            project.components[1].parameters[1].key.as_str(),
+            project.modules[1].parameters[1].key.as_str(),
             "spot_output_class_2"
         );
     }

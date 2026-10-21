@@ -1,6 +1,6 @@
-use crate::modules::components::ComponentDefinition;
+use crate::settings::modules::ModuleDefinition;
 use crate::{
-    modules::meta_data::MetaData,
+    settings::meta_data::MetaData,
     settings::{
         classification_settings::ClassificationSettings, images_settings::ImageSettings,
         pipeline_settings::PipelineSettings, plate_settings::PlateSettings,
@@ -112,10 +112,10 @@ pub struct ProjectSettings {
     /// Pipelines to execute
     pub pipelines: Vec<PipelineSettings>,
 
-    /// The component definitions; pipelines use them as instances
-    /// (by `key`). Absent in projects saved before components existed.
+    /// The module definitions; pipelines use them as instances
+    /// (by `key`). Absent in projects saved before modules existed.
     #[serde(default)]
-    pub components: Vec<ComponentDefinition>,
+    pub modules: Vec<ModuleDefinition>,
 
     /// What the editor keeps with the project: the Tuning panel's pinned
     /// settings, which images were previewed or analysed.

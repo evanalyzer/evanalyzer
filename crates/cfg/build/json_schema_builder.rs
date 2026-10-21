@@ -13,18 +13,18 @@ fn write_schema<T: schemars::JsonSchema>(out_file: &str) -> Result<(), Box<dyn s
 /// Generates `docs/project.schema.json` for `ProjectSettings`, the full project
 /// file format (`.json` projects saved from the GUI/CLI).
 pub fn generate_project_struct_schema() -> Result<(), Box<dyn std::error::Error>> {
-    write_schema::<crate::modules::project_settings::ProjectSettings>("project.schema.json")
+    write_schema::<crate::settings::project_settings::ProjectSettings>("project.schema.json")
 }
 
 /// Generates `docs/project_template.schema.json` for `ProjectTemplate`
-/// (`.evapt` files) and `docs/component_template.schema.json` for `ComponentTemplate` (`.evacomp` files). These are deliberately separate from
+/// (`.evatemplate` files) and `docs/module_template.schema.json` for `ModuleTemplate` (`.evamodule` files). These are deliberately separate from
 /// `ProjectSettings` - templates only carry a subset of a full project (no
 /// `images`, and `meta` instead of `metadata`) - so validating a template
 /// against `project.schema.json` will always fail even when the template
 /// itself is correct.
 pub fn generate_template_schemas() -> Result<(), Box<dyn std::error::Error>> {
-    write_schema::<crate::modules::templates::ProjectTemplate>("project_template.schema.json")?;
-    write_schema::<crate::modules::templates::ComponentTemplate>("component_template.schema.json")?;
+    write_schema::<crate::settings::templates::ProjectTemplate>("project_template.schema.json")?;
+    write_schema::<crate::settings::templates::ModuleTemplate>("module_template.schema.json")?;
     Ok(())
 }
 
@@ -32,7 +32,7 @@ pub fn generate_template_schemas() -> Result<(), Box<dyn std::error::Error>> {
 /// standalone `--settings` file `train-classifier` reads, and the copy
 /// embedded in every saved `.evamodel` classifier.
 pub fn generate_ai_learning_settings_schema() -> Result<(), Box<dyn std::error::Error>> {
-    write_schema::<crate::modules::ai_learning_settings::AiLearningSettings>(
+    write_schema::<crate::settings::ai_learning_settings::AiLearningSettings>(
         "ai_learning.schema.json",
     )
 }

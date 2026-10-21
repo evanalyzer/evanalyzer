@@ -1,9 +1,9 @@
-//! Validates that every `.evapt`/`.evacomp` file under a given directory
+//! Validates that every `.evatemplate`/`.evamodule` file under a given directory
 //! (searched recursively) still deserializes as `ProjectTemplate`/
-//! `ComponentTemplate` - the same types and the same `serde_json::from_str`
+//! `ModuleTemplate` - the same types and the same `serde_json::from_str`
 //! call the GUI/CLI actually use to load them. This is stronger than
 //! validating against `docs/project_template.schema.json`/
-//! `docs/component_template.schema.json` with a generic JSON Schema
+//! `docs/module_template.schema.json` with a generic JSON Schema
 //! validator: a `#[serde(alias = ...)]` or an enum's tagging behavior can
 //! change what actually deserializes without necessarily showing up as a
 //! schema-shape difference.
@@ -17,7 +17,7 @@
 //!
 //! Usage: `cargo run -p evanalyzer_cfg --example check_templates -- <dir>`
 
-use evanalyzer_cfg::settings::templates::{ComponentTemplate, ProjectTemplate};
+use evanalyzer_cfg::settings::templates::{ModuleTemplate, ProjectTemplate};
 use std::path::Path;
 
 fn main() {
@@ -28,14 +28,14 @@ fn main() {
     };
     let root = Path::new(&root);
 
-    let mut checked_evapt = 0;
-    let mut checked_evacomp = 0;
+    let mut checked_evatemplate = 0;
+    let mut checked_evamodule = 0;
     let mut failures = Vec::new();
 
     walk(root, &mut |path| {
-        let is_evapt = path.extension().and_then(|e| e.to_str()) == Some("evapt");
-        let is_evacomp = path.extension().and_then(|e| e.to_str()) == Some("evacomp");
-        if !is_evapt && !is_evacomp {
+        let is_evatemplate = path.extension().and_then(|e| e.to_str()) == Some("evatemplate");
+        let is_evamodule = path.extension().and_then(|e| e.to_str()) == Some("evamodule");
+        if !is_evatemplate && !is_evamodule {
             return;
         }
 
@@ -44,16 +44,16 @@ fn main() {
             return;
         };
 
-        if is_evacomp {
-            checked_evacomp += 1;
-            if let Err(e) = serde_json::from_str::<ComponentTemplate>(&json) {
+        if is_evamodule {
+            checked_evamodule += 1;
+            if let Err(e) = serde_json::from_str::<ModuleTemplate>(&json) {
                 failures.push(format!(
-                    "{}: failed to deserialize as ComponentTemplate: {e}",
+                    "{}: failed to deserialize as ModuleTemplate: {e}",
                     path.display()
                 ));
             }
         } else {
-            checked_evapt += 1;
+            checked_evatemplate += 1;
             if let Err(e) = serde_json::from_str::<ProjectTemplate>(&json) {
                 failures.push(format!(
                     "{}: failed to deserialize as ProjectTemplate: {e}",
@@ -63,11 +63,13 @@ fn main() {
         }
     });
 
-    println!("checked {checked_evapt} .evapt file(s), {checked_evacomp} .evacomp file(s)");
+    println!(
+        "checked {checked_evatemplate} .evatemplate file(s), {checked_evamodule} .evamodule file(s)"
+    );
 
-    if checked_evapt == 0 && checked_evacomp == 0 {
+    if checked_evatemplate == 0 && checked_evamodule == 0 {
         eprintln!(
-            "no .evapt/.evacomp files found under {} - check the path/checkout is correct",
+            "no .evatemplate/.evamodule files found under {} - check the path/checkout is correct",
             root.display()
         );
         std::process::exit(1);

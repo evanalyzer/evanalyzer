@@ -45,7 +45,7 @@ component ProjectTemplateDetailPane inherits Rectangle {
         alignment: center;
         spacing: 8px;
         Image {
-            source: InkIcons.component;
+            source: InkIcons.module;
             height: 22px;
             colorize: Ink.text-faint;
         }
@@ -235,7 +235,7 @@ export component ProjectTemplateDialog inherits InkDialog {
 
                         for t in ProjectTemplateState.templates: InkListRow {
                             height: 44px;
-                            icon: InkIcons.component;
+                            icon: InkIcons.module;
                             title: t.name;
                             subtitle: t.short-description;
                             selected: t.id == ProjectTemplateState.selected-id;

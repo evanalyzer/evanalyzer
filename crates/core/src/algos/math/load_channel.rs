@@ -27,7 +27,7 @@ pub enum ChannelZProjection {
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
 /// without an image source, or to switch channels within a pipeline - e.g.
-/// a component that detects nuclei in one channel and cells in another.
+/// a module that detects nuclei in one channel and cells in another.
 ///
 /// Projection: Auto loads the channel as the project's z-stack setting does.
 /// Any other choice loads it with its own z-projection, or one z-plane (None).

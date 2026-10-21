@@ -84,8 +84,8 @@ pub enum ObjectClass {
     Unset,
     #[serde(alias = "VALID")]
     Global(u32),
-    /// A class of a component (`ComponentDefinition::classes`): only valid
-    /// inside the component, each instance has its own.
+    /// A class of a module (`ModuleDefinition::classes`): only valid
+    /// inside the module, each instance has its own.
     Local(u32),
 }
 
@@ -105,7 +105,7 @@ impl ObjectClass {
     }
     /// The class as a command parameter's text value (`ParameterDef::value`,
     /// `apply_param_change`): `"-1"` unset, `"3"` a project class, `"L3"` a
-    /// component's local class.
+    /// module's local class.
     pub fn to_text(&self) -> String {
         match self {
             ObjectClass::Unset => "-1".to_string(),

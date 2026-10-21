@@ -1362,7 +1362,7 @@ mod tests {
         }
     }
 
-    // ---- Scopes: two instances of one component ----
+    // ---- Scopes: two instances of one module ----
 
     const LOCAL_SEED: ObjectClass = ObjectClass::Local(1);
 

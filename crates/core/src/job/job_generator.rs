@@ -5,8 +5,8 @@ use crate::{
     image::PixelSizes,
     job::{
         algos_from_config::into_pipeline_step,
-        components::{ExpandedCommand, ScopeCounter, UseId, expand_step},
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+        modules::{ExpandedCommand, ScopeCounter, UseId, expand_step},
         pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
@@ -18,8 +18,8 @@ use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, StepId},
     settings::{
-        components::ComponentDefinition,
         images_settings::ImageEntry,
+        modules::ModuleDefinition,
         object_settings::ObjectMetricSettings,
         pipeline_command::{CommandCategory, PipelineCommand},
         pipeline_command_settings::MathImageCacheImageCacheModeSettings,
@@ -262,7 +262,7 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
     const LISTED: usize = 5;
     let mut problems = Vec::new();
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
-        for channel in pipeline_channels(pipeline, &config.components) {
+        for channel in pipeline_channels(pipeline, &config.modules) {
             let missing: Vec<String> = config
                 .images
                 .list
@@ -315,18 +315,18 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
 
 /// The image channels `pipeline` reads: its image source's and those its
 /// steps load (Load Image Channel, Image Cache Load, Image Math's second
-/// image) - also inside components, with the instances' values. A component
+/// image) - also inside modules, with the instances' values. A module
 /// that can't be expanded is skipped here; building the job reports it.
 pub fn pipeline_channels(
     pipeline: &PipelineSettings,
-    components: &[ComponentDefinition],
+    modules: &[ModuleDefinition],
 ) -> BTreeSet<i32> {
     let mut channels = BTreeSet::new();
     if let ImageAddress::Channel(channel) = pipeline.image_source {
         channels.insert(channel);
     }
     for step in pipeline.steps.iter().filter(|s| s.enabled) {
-        let Ok(commands) = expand_step(step, components, &mut ScopeCounter::default()) else {
+        let Ok(commands) = expand_step(step, modules, &mut ScopeCounter::default()) else {
             continue;
         };
         for ExpandedCommand { command, .. } in commands {
@@ -337,17 +337,17 @@ pub fn pipeline_channels(
 }
 
 /// The project classes `pipeline`'s enabled steps use - also inside command
-/// components, with the instances' values (a component's own classes aren't project
-/// classes and are left out). A component that can't be expanded is skipped.
+/// modules, with the instances' values (a module's own classes aren't project
+/// classes and are left out). A module that can't be expanded is skipped.
 pub fn pipeline_classes(
     pipeline: &PipelineSettings,
-    components: &[ComponentDefinition],
+    modules: &[ModuleDefinition],
 ) -> BTreeSet<ObjectClass> {
     pipeline
         .steps
         .iter()
         .filter(|s| s.enabled)
-        .filter_map(|step| expand_step(step, components, &mut ScopeCounter::default()).ok())
+        .filter_map(|step| expand_step(step, modules, &mut ScopeCounter::default()).ok())
         .flatten()
         .flat_map(|ExpandedCommand { command, .. }| command.object_classes())
         .collect()
@@ -569,22 +569,18 @@ fn generate_job_from_project_settings_intenal(
 
         // A pipeline without an image source must load one first.
         let mut needs_image = pipeline_setting.image_source == ImageAddress::None;
-        // Each component use's last command, per phase (index in that list).
+        // Each module use's last command, per phase (index in that list).
         let mut last_tile: BTreeMap<UseId, usize> = BTreeMap::new();
         let mut last_whole_image: BTreeMap<UseId, usize> = BTreeMap::new();
         for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
-            // A component runs as its commands.
+            // A module runs as its commands.
             for ExpandedCommand {
                 step_id,
                 scope,
                 uses,
                 command,
-            } in step_commands(
-                &pipeline_setting.name,
-                step,
-                &config.components,
-                &mut scopes,
-            )? {
+            } in step_commands(&pipeline_setting.name, step, &config.modules, &mut scopes)?
+            {
                 let loads = loads_image(&command);
                 match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
@@ -629,7 +625,7 @@ fn generate_job_from_project_settings_intenal(
     Ok(job)
 }
 
-/// Adds an [`EndScope`] right after each component use's last command
+/// Adds an [`EndScope`] right after each module use's last command
 /// across both phases: in the whole-image list if the use has a command
 /// there (it runs after every tile command), else in the tile list - where
 /// it frees the use's objects tile by tile, before they're ever merged into
@@ -675,11 +671,11 @@ fn end_uses(
 }
 
 /// The commands `step` runs, with their breakpoint ids and scopes (see
-/// [`expand_step`]) - a component's error says which pipeline and step it is.
+/// [`expand_step`]) - a module's error says which pipeline and step it is.
 fn step_commands(
     pipeline_name: &str,
     step: &PipelineStepSettings,
-    definitions: &[ComponentDefinition],
+    definitions: &[ModuleDefinition],
     scopes: &mut ScopeCounter,
 ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
     expand_step(step, definitions, scopes).map_err(|e| {
@@ -702,7 +698,7 @@ pub(crate) fn dataset_steps_from_project_settings(
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
         for step in pipeline.steps.iter().filter(|s| s.enabled) {
             for ExpandedCommand { command, .. } in
-                step_commands(&pipeline.name, step, &config.components, &mut scopes)?
+                step_commands(&pipeline.name, step, &config.modules, &mut scopes)?
             {
                 if !matches!(command.category(), CommandCategory::Dataset) {
                     continue;
@@ -928,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pipelines_classes_are_its_enabled_steps_and_its_components_project_classes() {
+    fn a_pipelines_classes_are_its_enabled_steps_and_its_modules_project_classes() {
         use evanalyzer_cfg::core_types::ObjectClass;
         use evanalyzer_cfg::settings::pipeline_command_settings::TransformObjectsSettings;
         let transform = |input: ObjectClass, output: u32, enabled: bool| PipelineStepSettings {
@@ -946,9 +942,9 @@ mod tests {
         pipeline.steps = vec![
             transform(ObjectClass::Global(1), 10, true),
             transform(ObjectClass::Global(3), 11, false),
-            component_step("INNER"),
+            module_step("INNER"),
         ];
-        let mut inner = component("INNER", vec![transform(ObjectClass::Local(1), 12, true)]);
+        let mut inner = module("INNER", vec![transform(ObjectClass::Local(1), 12, true)]);
         inner.steps[0].id = evanalyzer_cfg::core_types::StepId(1);
         inner.classes = vec![evanalyzer_cfg::settings::classification_settings::Class {
             id: 1,
@@ -957,32 +953,32 @@ mod tests {
         assert_eq!(
             pipeline_classes(&pipeline, &[inner]),
             BTreeSet::from([1, 10, 12].map(ObjectClass::Global)),
-            "disabled steps and the component's own class left out"
+            "disabled steps and the module's own class left out"
         );
     }
 
     #[test]
-    fn the_channels_a_pipeline_reads_include_its_load_steps_also_in_components() {
+    fn the_channels_a_pipeline_reads_include_its_load_steps_also_in_modules() {
         let mut pipeline = named(1, "Cells", ImageAddress::Channel(0), true);
-        pipeline.steps = vec![load_channel_step(3), component_step("LOADS")];
-        let components = [component("LOADS", vec![load_channel_step(5)])];
+        pipeline.steps = vec![load_channel_step(3), module_step("LOADS")];
+        let modules = [module("LOADS", vec![load_channel_step(5)])];
         assert_eq!(
-            pipeline_channels(&pipeline, &components),
+            pipeline_channels(&pipeline, &modules),
             BTreeSet::from([0, 3, 5])
         );
     }
 
     #[test]
-    fn a_load_step_in_a_component_reading_a_missing_channel_is_refused() {
+    fn a_load_step_in_a_module_reading_a_missing_channel_is_refused() {
         let mut pipeline = named(1, "Cells", ImageAddress::None, true);
-        pipeline.steps = vec![component_step("LOADS")];
+        pipeline.steps = vec![module_step("LOADS")];
         let mut project = project_with_images(
             vec![pipeline],
             vec![image("a.tif", &[0, 1]), image("b.tif", &[0, 1, 2])],
         );
         project
-            .components
-            .push(component("LOADS", vec![load_channel_step(2)]));
+            .modules
+            .push(module("LOADS", vec![load_channel_step(2)]));
         let message = check_pipeline_channels(&project).unwrap_err().to_string();
         assert!(
             message.contains("pipeline 'Cells' reads channel 2"),
@@ -1355,12 +1351,12 @@ mod tests {
         )
     }
 
-    fn component_step(key: &str) -> PipelineStepSettings {
+    fn module_step(key: &str) -> PipelineStepSettings {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(4),
             enabled: true,
-            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
-                evanalyzer_cfg::settings::components::ComponentInstance {
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(
+                evanalyzer_cfg::settings::modules::ModuleInstance {
                     key: key.into(),
                     values: Default::default(),
                 },
@@ -1369,16 +1365,16 @@ mod tests {
     }
 
     #[test]
-    fn a_component_runs_as_its_commands() {
+    fn a_module_runs_as_its_commands() {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
         let mut project = project_with(
             Some(image_root.path().to_path_buf()),
-            vec![pipeline(1, true, vec![component_step("TWO_BLURS")])],
+            vec![pipeline(1, true, vec![module_step("TWO_BLURS")])],
         );
         project
-            .components
-            .push(evanalyzer_cfg::settings::components::ComponentDefinition {
+            .modules
+            .push(evanalyzer_cfg::settings::modules::ModuleDefinition {
                 key: "TWO_BLURS".into(),
                 meta: Default::default(),
                 classes: vec![],
@@ -1394,12 +1390,12 @@ mod tests {
         assert_eq!(
             command_names(&job.pipelines_pre_process[&PipelineId(1)]),
             ["Blur", "Blur", "End Scope"],
-            "the component's two blurs, then its scope ends"
+            "the module's two blurs, then its scope ends"
         );
         assert_eq!(
             commands[1].0,
             evanalyzer_cfg::core_types::StepId(4),
-            "a breakpoint on the component stops after it"
+            "a breakpoint on the module stops after it"
         );
     }
 
@@ -1407,8 +1403,8 @@ mod tests {
         pipeline.commands.iter().map(|(_, _, c)| c.name()).collect()
     }
 
-    fn component(key: &str, steps: Vec<PipelineStepSettings>) -> ComponentDefinition {
-        ComponentDefinition {
+    fn module(key: &str, steps: Vec<PipelineStepSettings>) -> ModuleDefinition {
+        ModuleDefinition {
             key: key.into(),
             meta: Default::default(),
             classes: vec![],
@@ -1440,7 +1436,7 @@ mod tests {
     }
 
     #[test]
-    fn a_components_scope_ends_after_its_last_command_across_both_phases() {
+    fn a_modules_scope_ends_after_its_last_command_across_both_phases() {
         let image_root = tempfile::tempdir().unwrap();
         let mut project = project_with(
             Some(image_root.path().to_path_buf()),
@@ -1448,19 +1444,19 @@ mod tests {
                 1,
                 true,
                 vec![
-                    component_step("BLUR_CLASSIFY"),
+                    module_step("BLUR_CLASSIFY"),
                     blur_step(true),
                     classify_step(),
                 ],
             )],
         );
-        project.components.push(component(
+        project.modules.push(module(
             "BLUR_CLASSIFY",
             vec![blur_step(true), classify_step()],
         ));
 
         let (tiles, whole_image) = phases(project);
-        // The blur after the component is a tile command, but the component's last
+        // The blur after the module is a tile command, but the module's last
         // command (Classify) runs in the whole-image phase - it ends there.
         assert_eq!(tiles, ["Blur", "Blur"]);
         assert_eq!(
@@ -1470,25 +1466,23 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_component_ends_before_the_component_around_it() {
+    fn a_nested_module_ends_before_the_module_around_it() {
         let image_root = tempfile::tempdir().unwrap();
         let mut project = project_with(
             Some(image_root.path().to_path_buf()),
-            vec![pipeline(1, true, vec![component_step("OUTER")])],
+            vec![pipeline(1, true, vec![module_step("OUTER")])],
         );
-        project.components.push(component(
+        project.modules.push(module(
             "OUTER",
             vec![
                 PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId(1),
-                    ..component_step("INNER")
+                    ..module_step("INNER")
                 },
                 classify_step(),
             ],
         ));
-        project
-            .components
-            .push(component("INNER", vec![classify_step()]));
+        project.modules.push(module("INNER", vec![classify_step()]));
 
         let (_, whole_image) = phases(project);
         assert_eq!(
@@ -1503,7 +1497,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pipeline_without_components_gets_no_scope_end() {
+    fn a_pipeline_without_modules_gets_no_scope_end() {
         let image_root = tempfile::tempdir().unwrap();
         let project = project_with(
             Some(image_root.path().to_path_buf()),
@@ -1515,7 +1509,7 @@ mod tests {
     }
 
     #[test]
-    fn a_component_the_project_doesnt_define_is_refused_with_a_clear_error() {
+    fn a_module_the_project_doesnt_define_is_refused_with_a_clear_error() {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
         let project = project_with(
@@ -1523,7 +1517,7 @@ mod tests {
             vec![pipeline(
                 1,
                 true,
-                vec![blur_step(true), component_step("MISSING")],
+                vec![blur_step(true), module_step("MISSING")],
             )],
         );
 
@@ -1743,13 +1737,13 @@ mod tests {
         assert_eq!(runs(), 1, "only the earlier analysis");
     }
 
-    /// A component written by hand into the project file - local
-    /// classes, a component parameter bound to an inner setting, an instance with
-    /// its value - loads like a saved project and runs: the objects the component
+    /// A module written by hand into the project file - local
+    /// classes, a module parameter bound to an inner setting, an instance with
+    /// its value - loads like a saved project and runs: the objects the module
     /// extracts internally (`L1`) leave it reclassified into the project class
     /// the instance chose.
     #[test]
-    fn a_hand_written_component_loads_and_runs() {
+    fn a_hand_written_module_loads_and_runs() {
         use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
@@ -1791,17 +1785,17 @@ mod tests {
         project.images.list.insert(image.rel_path.clone(), image);
         let mut raw = serde_json::to_value(&project).unwrap();
         raw["schemaVersion"] = json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION);
-        // Written by hand: no step ids in the pipeline, the component's steps
+        // Written by hand: no step ids in the pipeline, the module's steps
         // numbered because the binding names them.
         raw["pipelines"] = json!([{
             "id": 1, "name": "Cells", "imageSource": {"channel": 0}, "enabled": true,
             "steps": [
                 {"enabled": true, "command": threshold},
                 {"enabled": true, "command": components},
-                {"enabled": true, "component": {"key": "CELLS", "values": {"cell_class": 7}}}
+                {"enabled": true, "module": {"key": "CELLS", "values": {"cell_class": 7}}}
             ]
         }]);
-        raw["components"] = json!([{
+        raw["modules"] = json!([{
             "key": "CELLS",
             "meta": serde_json::to_value(evanalyzer_cfg::settings::meta_data::MetaData::default()).unwrap(),
             "classes": [{"id": 1, "color": "#FF0000", "name": "Candidates", "notes": ""}],
@@ -1835,12 +1829,12 @@ mod tests {
         }
     }
 
-    /// An outer component hands its own classes into a component nested in
+    /// An outer module hands its own classes into a module nested in
     /// it: the inner one moves the outer one's L1 objects into a class of
     /// its own, then into the outer one's L2 - which survive the inner one's
     /// end and leave the outer one reclassified into the project class.
     #[test]
-    fn an_outer_components_classes_go_into_a_nested_component_and_back() {
+    fn an_outer_modules_classes_go_into_a_nested_module_and_back() {
         use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
@@ -1892,10 +1886,10 @@ mod tests {
             "steps": [
                 {"enabled": true, "command": threshold},
                 {"enabled": true, "command": components},
-                {"enabled": true, "component": {"key": "OUTER", "values": {"cell_class": 7}}}
+                {"enabled": true, "module": {"key": "OUTER", "values": {"cell_class": 7}}}
             ]
         }]);
-        raw["components"] = json!([
+        raw["modules"] = json!([
             {
                 "key": "OUTER", "meta": meta,
                 "classes": [
@@ -1904,7 +1898,7 @@ mod tests {
                 ],
                 "steps": [
                     {"id": 1, "enabled": true, "command": extract},
-                    {"id": 2, "enabled": true, "component": {"key": "PASS_THROUGH"}},
+                    {"id": 2, "enabled": true, "module": {"key": "PASS_THROUGH"}},
                     {"id": 3, "enabled": true,
                      "command": reclassify(ObjectClass::Local(2), ObjectClass::Global(5))}
                 ],
@@ -1947,13 +1941,13 @@ mod tests {
         let objects = out_objects.lock().unwrap();
         assert!(
             !objects.is_empty(),
-            "the objects survive the nested component's end"
+            "the objects survive the nested module's end"
         );
         for object in objects.iter() {
             assert_eq!(
                 object.object_class,
                 std::collections::HashSet::from([ObjectClass::Global(7)]),
-                "through the nested component and back, nothing local left"
+                "through the nested module and back, nothing local left"
             );
         }
     }

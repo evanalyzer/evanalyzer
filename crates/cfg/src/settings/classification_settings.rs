@@ -22,8 +22,8 @@ impl Class {
         ObjectClass::Global(self.id)
     }
 
-    /// This class as a component's local class - for the classes of
-    /// `ComponentDefinition::classes`.
+    /// This class as a module's local class - for the classes of
+    /// `ModuleDefinition::classes`.
     pub fn local(&self) -> ObjectClass {
         ObjectClass::Local(self.id)
     }

@@ -80,17 +80,17 @@ pub fn cite_project(
 
         let mut rows = Vec::with_capacity(steps.len());
         for (i, step) in steps.iter().enumerate() {
-            // A component is cited with every method its commands use.
+            // A module is cited with every method its commands use.
             let (name, cites) = match &step.content {
                 evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command) => {
                     // Image and dataset steps alike.
                     let algo = into_pipeline_step(command.clone())?;
                     (algo.name().to_string(), algo.cite())
                 }
-                evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(component) => {
+                evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(module) => {
                     let mut cites: Vec<&'static CitationMetadata> = Vec::new();
                     for ExpandedCommand { command, .. } in
-                        expand_step(step, &config.components, &mut ScopeCounter::default())?
+                        expand_step(step, &config.modules, &mut ScopeCounter::default())?
                     {
                         for cite in into_pipeline_step(command)?.cite() {
                             if !cites.iter().any(|c| c.cite_key == cite.cite_key) {
@@ -99,11 +99,11 @@ pub fn cite_project(
                         }
                     }
                     let name = config
-                        .components
+                        .modules
                         .iter()
-                        .find(|d| d.key == component.key)
-                        .map_or_else(|| component.key.clone(), |d| d.meta.name.clone());
-                    (format!("Component: {name}"), cites)
+                        .find(|d| d.key == module.key)
+                        .map_or_else(|| module.key.clone(), |d| d.meta.name.clone());
+                    (format!("Module: {name}"), cites)
                 }
             };
             let label = format!("[Step {}] {}", i + 1, name);
@@ -205,7 +205,7 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 
     #[test]
-    fn a_component_step_is_cited_with_the_methods_of_its_commands() {
+    fn a_module_step_is_cited_with_the_methods_of_its_commands() {
         let threshold = |method| PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(1),
             enabled: true,
@@ -220,8 +220,8 @@ mod tests {
         };
         let mut config = ProjectSettings::default();
         config
-            .components
-            .push(evanalyzer_cfg::settings::components::ComponentDefinition {
+            .modules
+            .push(evanalyzer_cfg::settings::modules::ModuleDefinition {
                 key: "SEGMENT".into(),
                 meta: evanalyzer_cfg::settings::meta_data::MetaData {
                     name: "Segment nuclei".into(),
@@ -240,8 +240,8 @@ mod tests {
             steps: vec![PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId(1),
                 enabled: true,
-                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
-                    evanalyzer_cfg::settings::components::ComponentInstance {
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(
+                    evanalyzer_cfg::settings::modules::ModuleInstance {
                         key: "SEGMENT".into(),
                         values: Default::default(),
                     },
@@ -255,7 +255,7 @@ mod tests {
         cite_project(&LocalFileSystem::default(), &config, &output_file).unwrap();
         let content = std::fs::read_to_string(&output_file).unwrap();
         assert!(
-            content.contains("[Step 1] Component: Segment nuclei"),
+            content.contains("[Step 1] Module: Segment nuclei"),
             "{content}"
         );
         assert!(

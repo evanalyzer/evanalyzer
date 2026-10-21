@@ -62,7 +62,7 @@ import { Ink } from "../ink/palette.slint";
 // ---------- Local visual constants ----------
 // ---------- Filter chip ----------
 
-// "Commands 36" / "Components 5" above the search: the count turns into
+// "Commands 36" / "Modules 5" above the search: the count turns into
 // the hits (blue) while searching.
 component PickerTab inherits Rectangle {
     in property <string> text;
@@ -249,7 +249,7 @@ component CommandRow inherits Rectangle {
             background: Ink.ground;
             border-width: 1px;
             border-color: Ink.border-soft;
-            // The component diamond is drawn: as a glyph, the font's metrics
+            // The module diamond is drawn: as a glyph, the font's metrics
             // put it off centre.
             if cmd.icon-glyph == "◆": Path {
                 x: (parent.width - self.width) / 2;
@@ -357,7 +357,7 @@ component DetailSection inherits VerticalLayout {
 component DetailPane inherits Rectangle {
     in property <CommandDef> cmd;
     in property <bool> has-selection: false;
-    /// A project component no pipeline uses: "Remove from project".
+    /// A project module no pipeline uses: "Remove from project".
     in property <bool> removable: false;
     callback remove();
 
@@ -384,7 +384,7 @@ component DetailPane inherits Rectangle {
         spacing: 10px;
 
         // What it is: name, category - and where it comes from when that
-        // fits beside them (a component's source is long: "this project ·
+        // fits beside them (a module's source is long: "this project ·
         // v1 · …"); the name is never squeezed for it.
         HorizontalLayout {
             // The source's width, estimated (monospace) - not measured, so
@@ -414,7 +414,7 @@ component DetailPane inherits Rectangle {
 
             category := Text {
                 horizontal-stretch: 1;
-                text: cmd.is-component ? "Component" : PickerStyle.cat-name(cmd.category);
+                text: cmd.is-module ? "Module" : PickerStyle.cat-name(cmd.category);
                 color: Ink.text-mute;
                 font-size: Ink.fs-secondary;
                 vertical-alignment: center;
@@ -476,7 +476,7 @@ component DetailPane inherits Rectangle {
                     }
                 }
 
-                // Who made it (components).
+                // Who made it (modules).
                 if cmd.authors.length > 0: DetailSection {
                     title: "AUTHORS";
                     for author in cmd.authors: Text {
@@ -507,7 +507,7 @@ component DetailPane inherits Rectangle {
                         font-size: Ink.fs-secondary;
                         vertical-alignment: center;
                     }
-                    if cmd.is-component && root.removable: InkButton {
+                    if cmd.is-module && root.removable: InkButton {
                         small: true;
                         kind: InkButtonKind.quiet;
                         text: "Remove from project";
@@ -546,7 +546,7 @@ export component CommandSelectionDialog inherits InkDialog {
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
     in-out property <bool> fcat-dat: false;
-    in-out property <bool> filter-components: false;
+    in-out property <bool> filter-modules: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
 
@@ -560,8 +560,8 @@ export component CommandSelectionDialog inherits InkDialog {
     in property <[CommandDef]> shown-classify;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-components;
-    in property <[CommandDef]> shown-library-components;
+    in property <[CommandDef]> shown-modules;
+    in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;            // command for selected-id (or default)
     in property <bool> has-detail;
     in property <int> total-shown;       // sum across the five categories
@@ -572,9 +572,9 @@ export component CommandSelectionDialog inherits InkDialog {
     in property <int> cat-count-dat;
     in property <int> cat-count-mea;
     in property <int> cat-count-grp;
-    /// The project's components no pipeline uses ("Remove N unused").
-    in property <int> unused-component-count;
-    /// The selected entry is a project component no pipeline uses.
+    /// The project's modules no pipeline uses ("Remove N unused").
+    in property <int> unused-module-count;
+    /// The selected entry is a project module no pipeline uses.
     in property <bool> detail-removable;
     in property <int> cat-count-rec;
 
@@ -583,17 +583,17 @@ export component CommandSelectionDialog inherits InkDialog {
     callback select(int);            // by id
     callback toggle-favorite(int);
     callback confirm(int);           // commit: insert this id
-    callback confirm-steps(int);     // a component, as its steps
+    callback confirm-steps(int);     // a module, as its steps
     /// The Commands tab's count: commands the search finds (all of them
     /// without a search).
     in property <int> commands-matching;
-    callback remove-component(int);
-    callback remove-unused-components();
+    callback remove-module(int);
+    callback remove-unused-modules();
     callback cancel();
     callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
-    // The selected entry is a component (the footer's two ways to add it).
-    property <bool> component-picked: root.has-detail && root.detail.is-component && root.selected-id != -1;
+    // The selected entry is a module (the footer's two ways to add it).
+    property <bool> module-picked: root.has-detail && root.detail.is-module && root.selected-id != -1;
 
     title: "Add step";
     subtitle: insert-after-idx < 0 ? "Append to \"\{target-pipeline}\"" : "After step \{insert-after-idx + 1} of \"\{target-pipeline}\"";
@@ -607,8 +607,8 @@ export component CommandSelectionDialog inherits InkDialog {
     // -------- Keyboard -------- (Esc is the Dialog's: `close` above)
     kbd := FocusScope {
         key-pressed(e) => {
-            // A component: Enter adds it, Shift+Enter its steps.
-            if e.text == Key.Return && root.selected-id != -1 && e.modifiers.shift && root.component-picked {
+            // A module: Enter adds it, Shift+Enter its steps.
+            if e.text == Key.Return && root.selected-id != -1 && e.modifiers.shift && root.module-picked {
                 root.confirm-steps(root.selected-id);
                 return accept;
             }
@@ -618,7 +618,7 @@ export component CommandSelectionDialog inherits InkDialog {
             }
             // The other tab.
             if e.text == Key.Tab && e.modifiers.control {
-                root.filter-components = !root.filter-components;
+                root.filter-modules = !root.filter-modules;
                 root.query-changed(root.query);
                 return accept;
             }
@@ -628,7 +628,7 @@ export component CommandSelectionDialog inherits InkDialog {
         VerticalLayout {
             spacing: 0;
 
-            // Commands | Components: a search counts the hits of both.
+            // Commands | Modules: a search counts the hits of both.
             Rectangle {
                 height: 36px;
                 HorizontalLayout {
@@ -639,20 +639,20 @@ export component CommandSelectionDialog inherits InkDialog {
                         text: "Commands";
                         count: root.commands-matching;
                         searching: root.query != "";
-                        active: !root.filter-components;
+                        active: !root.filter-modules;
                         clicked => {
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.query-changed(root.query);
                         }
                     }
 
                     PickerTab {
-                        text: "Components";
+                        text: "Modules";
                         count: root.cat-count-grp;
                         searching: root.query != "";
-                        active: root.filter-components;
+                        active: root.filter-modules;
                         clicked => {
-                            root.filter-components = true;
+                            root.filter-modules = true;
                             root.query-changed(root.query);
                         }
                     }
@@ -671,7 +671,7 @@ export component CommandSelectionDialog inherits InkDialog {
                 padding-top: 10px;
                 padding-bottom: 4px;
                 InkSearchField {
-                    placeholder: root.filter-components ? "Search components…" : "Search commands…";
+                    placeholder: root.filter-modules ? "Search modules…" : "Search commands…";
                     text <=> root.query;
                     edited(t) => {
                         root.query-changed(t);
@@ -679,7 +679,7 @@ export component CommandSelectionDialog inherits InkDialog {
                 }
             }
 
-            if !root.filter-components: Rectangle {
+            if !root.filter-modules: Rectangle {
                 height: 40px;
                 background: Ink.panel;
                 HorizontalLayout {
@@ -692,7 +692,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         label: "All";
                         count: total-shown;
                         tinted: false;
-                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !fcat-dat && !filter-components && !filter-recents;
+                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !fcat-dat && !filter-modules && !filter-recents;
                         clicked => {
                             root.fcat-pre = false;
                             root.fcat-seg = false;
@@ -700,7 +700,7 @@ export component CommandSelectionDialog inherits InkDialog {
                             root.fcat-mea = false;
                             root.fcat-cls = false;
                             root.fcat-dat = false;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -713,7 +713,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         active: fcat-pre;
                         clicked => {
                             root.fcat-pre = !fcat-pre;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -726,7 +726,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         active: fcat-seg;
                         clicked => {
                             root.fcat-seg = !fcat-seg;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -739,7 +739,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         active: fcat-obj;
                         clicked => {
                             root.fcat-obj = !fcat-obj;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -752,7 +752,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         active: fcat-mea;
                         clicked => {
                             root.fcat-mea = !fcat-mea;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -765,7 +765,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         active: fcat-cls;
                         clicked => {
                             root.fcat-cls = !fcat-cls;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -778,7 +778,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         active: fcat-dat;
                         clicked => {
                             root.fcat-dat = !fcat-dat;
-                            root.filter-components = false;
+                            root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -829,12 +829,12 @@ export component CommandSelectionDialog inherits InkDialog {
                                 alignment: start;
 
                                 // Empty state
-                            if total-shown == 0 && !filter-components: VerticalLayout {
+                            if total-shown == 0 && !filter-modules: VerticalLayout {
                                     padding-top: 60px;
                                     spacing: 6px;
                                     Text {
                                         text: query != "" && cat-count-grp > 0
-                                            ? "No commands match “\{query}” - \{cat-count-grp} " + (cat-count-grp == 1 ? "component does." : "components do.")
+                                            ? "No commands match “\{query}” - \{cat-count-grp} " + (cat-count-grp == 1 ? "module does." : "modules do.")
                                             : "No commands match";
                                         color: Ink.text-dim;
                                         font-size: Ink.fs-body;
@@ -853,10 +853,10 @@ export component CommandSelectionDialog inherits InkDialog {
                                         alignment: center;
                                         padding-top: 4px;
                                         InkButton {
-                                            text: cat-count-grp == 1 ? "Show the component" : "Show the \{cat-count-grp} components";
+                                            text: cat-count-grp == 1 ? "Show the module" : "Show the \{cat-count-grp} modules";
                                             keys: ["Ctrl", "Tab"];
                                             clicked => {
-                                                root.filter-components = true;
+                                                root.filter-modules = true;
                                                 root.query-changed(root.query);
                                             }
                                         }
@@ -864,7 +864,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                 }
 
                                 // Preprocess
-                            if shown-preprocess.length > 0 && !filter-components: VerticalLayout {
+                            if shown-preprocess.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.preprocess;
@@ -888,7 +888,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                 }
 
                                 // Segment
-                            if shown-segment.length > 0 && !filter-components: VerticalLayout {
+                            if shown-segment.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.segment;
@@ -927,7 +927,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                 }
 
                                 // Instance Segmentation
-                            if shown-object.length > 0 && !filter-components: VerticalLayout {
+                            if shown-object.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.instance-segmentation;
@@ -951,7 +951,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                 }
 
                                 // Measure
-                            if shown-measure.length > 0 && !filter-components: VerticalLayout {
+                            if shown-measure.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.measure;
@@ -975,7 +975,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                 }
 
                                 // Object
-                            if shown-classify.length > 0 && !filter-components: VerticalLayout {
+                            if shown-classify.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.object;
@@ -999,7 +999,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                 }
 
                                 // Dataset
-                            if shown-dataset.length > 0 && !filter-components: VerticalLayout {
+                            if shown-dataset.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.dataset;
@@ -1022,18 +1022,18 @@ export component CommandSelectionDialog inherits InkDialog {
                                     }
                                 }
 
-                                // Components: on their own tab.
-                            if filter-components: VerticalLayout {
+                                // Modules: on their own tab.
+                            if filter-modules: VerticalLayout {
                                     spacing: 0;
 
-                                    if filter-components && unused-component-count > 0: Rectangle {
+                                    if filter-modules && unused-module-count > 0: Rectangle {
                                         height: 30px;
                                         HorizontalLayout {
                                             padding-left: 14px;
                                             padding-right: 14px;
                                             spacing: 8px;
                                             Text {
-                                                text: unused-component-count == 1 ? "1 component no pipeline uses" : "\{unused-component-count} components no pipeline uses";
+                                                text: unused-module-count == 1 ? "1 module no pipeline uses" : "\{unused-module-count} modules no pipeline uses";
                                                 color: Ink.text-mute;
                                                 font-size: Ink.fs-caption;
                                                 vertical-alignment: center;
@@ -1059,27 +1059,27 @@ export component CommandSelectionDialog inherits InkDialog {
                                                 remove-unused-ta := TouchArea {
                                                     mouse-cursor: pointer;
                                                     clicked => {
-                                                        root.remove-unused-components();
+                                                        root.remove-unused-modules();
                                                     }
                                                 }
                                             }
                                         }
                                     }
 
-                                    if filter-components && shown-components.length == 0 && shown-library-components.length == 0: VerticalLayout {
+                                    if filter-modules && shown-modules.length == 0 && shown-library-modules.length == 0: VerticalLayout {
                                         padding-top: 60px;
                                         spacing: 10px;
                                         Text {
-                                            text: query == "" ? "No components in this project"
-                                                : commands-matching > 0 ? "No component matches “\{query}” - \{commands-matching} " + (commands-matching == 1 ? "command does." : "commands do.")
-                                                : "No component matches";
+                                            text: query == "" ? "No modules in this project"
+                                                : commands-matching > 0 ? "No module matches “\{query}” - \{commands-matching} " + (commands-matching == 1 ? "command does." : "commands do.")
+                                                : "No module matches";
                                             color: Ink.text-dim;
                                             font-size: Ink.fs-body;
                                             horizontal-alignment: center;
                                         }
 
                                         Text {
-                                            text: "A component is a step made of other steps";
+                                            text: "A module is a step made of other steps";
                                             color: Ink.text-mute;
                                             font-size: Ink.fs-caption;
                                             font-family: Ink.font-mono;
@@ -1087,7 +1087,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                         }
                                     }
 
-                                    if shown-components.length > 0: Rectangle {
+                                    if shown-modules.length > 0: Rectangle {
                                         height: 28px;
                                         HorizontalLayout {
                                             padding-left: 14px;
@@ -1097,14 +1097,14 @@ export component CommandSelectionDialog inherits InkDialog {
                                             Rectangle {
                                                 width: 3px;
                                                 height: 10px;
-                                                background: Ink.cat-component;
+                                                background: Ink.cat-module;
                                                 border-radius: 1.5px;
                                                 y: (parent.height - 10px) / 2;
                                             }
 
                                             Text {
-                                                text: filter-components ? "IN THIS PROJECT" : "COMPONENTS";
-                                                color: Ink.cat-component;
+                                                text: filter-modules ? "IN THIS PROJECT" : "MODULES";
+                                                color: Ink.cat-module;
                                                 font-size: Ink.fs-caption;
                                                 font-weight: 600;
                                                 letter-spacing: 0.6px;
@@ -1116,7 +1116,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                             }
 
                                             Text {
-                                                text: "\{shown-components.length}";
+                                                text: "\{shown-modules.length}";
                                                 color: Ink.text-mute;
                                                 font-size: Ink.fs-caption;
                                                 font-family: Ink.font-mono;
@@ -1125,7 +1125,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                         }
                                     }
 
-                                    for c in shown-components: CommandRow {
+                                    for c in shown-modules: CommandRow {
                                         cmd: c;
                                         selected: c.id == selected-id;
                                         clicked => {
@@ -1140,7 +1140,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                         }
                                     }
 
-                                    if shown-library-components.length > 0: Rectangle {
+                                    if shown-library-modules.length > 0: Rectangle {
                                         height: 28px;
                                         HorizontalLayout {
                                             padding-left: 14px;
@@ -1150,14 +1150,14 @@ export component CommandSelectionDialog inherits InkDialog {
                                             Rectangle {
                                                 width: 3px;
                                                 height: 10px;
-                                                background: Ink.cat-component.with-alpha(0.6);
+                                                background: Ink.cat-module.with-alpha(0.6);
                                                 border-radius: 1.5px;
                                                 y: (parent.height - 10px) / 2;
                                             }
 
                                             Text {
                                                 text: "LIBRARY";
-                                                color: Ink.cat-component;
+                                                color: Ink.cat-module;
                                                 font-size: Ink.fs-caption;
                                                 font-weight: 600;
                                                 letter-spacing: 0.6px;
@@ -1169,7 +1169,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                             }
 
                                             Text {
-                                                text: "\{shown-library-components.length}";
+                                                text: "\{shown-library-modules.length}";
                                                 color: Ink.text-mute;
                                                 font-size: Ink.fs-caption;
                                                 font-family: Ink.font-mono;
@@ -1178,7 +1178,7 @@ export component CommandSelectionDialog inherits InkDialog {
                                         }
                                     }
 
-                                    for c in shown-library-components: CommandRow {
+                                    for c in shown-library-modules: CommandRow {
                                         cmd: c;
                                         selected: c.id == selected-id;
                                         clicked => {
@@ -1210,7 +1210,7 @@ export component CommandSelectionDialog inherits InkDialog {
                         has-selection: root.has-detail;
                         removable: root.detail-removable;
                         remove => {
-                            root.remove-component(root.detail.id);
+                            root.remove-module(root.detail.id);
                         }
                     }
                 }
@@ -1245,9 +1245,9 @@ export component CommandSelectionDialog inherits InkDialog {
                     }
                 }
 
-                // A component: one click for either - itself (linked to the
+                // A module: one click for either - itself (linked to the
                 // library, gets updates) or a plain copy of its steps.
-                if root.component-picked: InkButton {
+                if root.module-picked: InkButton {
                     text: "Add steps";
                     tip: "A plain copy of its steps - every setting editable, no link: library updates don't reach it";
                     keys: ["Shift", "Enter"];
@@ -1255,16 +1255,16 @@ export component CommandSelectionDialog inherits InkDialog {
                         root.confirm-steps(root.selected-id);
                     }
                 }
-                if root.component-picked: InkButton {
+                if root.module-picked: InkButton {
                     kind: InkButtonKind.primary;
-                    text: "Add component";
+                    text: "Add module";
                     tip: "One step, linked to the library - gets updates, shows its exposed settings";
                     keys: ["Enter"];
                     clicked => {
                         root.confirm(root.selected-id);
                     }
                 }
-                if !root.component-picked: InkButton {
+                if !root.module-picked: InkButton {
                     kind: InkButtonKind.primary;
                     text: "Add to pipeline";
                     keys: ["Enter"];
@@ -1300,8 +1300,8 @@ export component CommandPickerModal inherits Rectangle {
     in property <[CommandDef]> shown-classify;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-components;
-    in property <[CommandDef]> shown-library-components;
+    in property <[CommandDef]> shown-modules;
+    in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;
     in property <bool> has-detail;
     in property <int> total-shown;
@@ -1312,9 +1312,9 @@ export component CommandPickerModal inherits Rectangle {
     in property <int> cat-count-dat;
     in property <int> cat-count-mea;
     in property <int> cat-count-grp;
-    /// The project's components no pipeline uses ("Remove N unused").
-    in property <int> unused-component-count;
-    /// The selected entry is a project component no pipeline uses.
+    /// The project's modules no pipeline uses ("Remove N unused").
+    in property <int> unused-module-count;
+    /// The selected entry is a project module no pipeline uses.
     in property <bool> detail-removable;
     in property <int> cat-count-rec;
 
@@ -1325,7 +1325,7 @@ export component CommandPickerModal inherits Rectangle {
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
     in-out property <bool> fcat-dat: false;
-    in-out property <bool> filter-components: false;
+    in-out property <bool> filter-modules: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
 
@@ -1333,8 +1333,8 @@ export component CommandPickerModal inherits Rectangle {
     callback select(int);
     callback toggle-favorite(int);
     callback confirm(int);
-    callback remove-component(int);
-    callback remove-unused-components();
+    callback remove-module(int);
+    callback remove-unused-modules();
     callback cancel();
     callback import-bioimageio();
 
@@ -1353,8 +1353,8 @@ export component CommandPickerModal inherits Rectangle {
         shown-classify: root.shown-classify;
         shown-dataset: root.shown-dataset;
         shown-measure: root.shown-measure;
-        shown-components: root.shown-components;
-        shown-library-components: root.shown-library-components;
+        shown-modules: root.shown-modules;
+        shown-library-modules: root.shown-library-modules;
         detail: root.detail;
         has-detail: root.has-detail;
         total-shown: root.total-shown;
@@ -1365,7 +1365,7 @@ export component CommandPickerModal inherits Rectangle {
         cat-count-dat: root.cat-count-dat;
         cat-count-mea: root.cat-count-mea;
         cat-count-grp: root.cat-count-grp;
-        unused-component-count: root.unused-component-count;
+        unused-module-count: root.unused-module-count;
         detail-removable: root.detail-removable;
         cat-count-rec: root.cat-count-rec;
         query <=> root.query;
@@ -1375,7 +1375,7 @@ export component CommandPickerModal inherits Rectangle {
         fcat-mea <=> root.fcat-mea;
         fcat-cls <=> root.fcat-cls;
         fcat-dat <=> root.fcat-dat;
-        filter-components <=> root.filter-components;
+        filter-modules <=> root.filter-modules;
         filter-recents <=> root.filter-recents;
         selected-id <=> root.selected-id;
 
@@ -1391,11 +1391,11 @@ export component CommandPickerModal inherits Rectangle {
         confirm(id) => {
             root.confirm(id);
         }
-        remove-component(id) => {
-            root.remove-component(id);
+        remove-module(id) => {
+            root.remove-module(id);
         }
-        remove-unused-components => {
-            root.remove-unused-components();
+        remove-unused-modules => {
+            root.remove-unused-modules();
         }
         cancel => {
             root.cancel();

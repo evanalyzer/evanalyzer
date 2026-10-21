@@ -482,7 +482,7 @@
           }
         },
         "version": {
-          "description": "The author's version of this component or template",
+          "description": "The author's version of this module or template",
           "type": [
             "integer",
             "null"
@@ -583,7 +583,7 @@
           ]
         },
         {
-          "description": "A class of a component (`ComponentDefinition::classes`): only valid\ninside the component, each instance has its own.",
+          "description": "A class of a module (`ModuleDefinition::classes`): only valid\ninside the module, each instance has its own.",
           "type": "object",
           "properties": {
             "LOCAL": {

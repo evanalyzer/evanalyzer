@@ -14,11 +14,11 @@ use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
-use evanalyzer_cfg::settings::components::ComponentDefinition;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
 };
 use evanalyzer_cfg::settings::meta_data::MetaData;
+use evanalyzer_cfg::settings::modules::ModuleDefinition;
 use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
 use evanalyzer_cfg::{
@@ -1499,8 +1499,8 @@ impl ProjectExt for ProjectWithRuntime {
                 &mut on_disk_settings.pipelines,
                 project_dir,
             );
-            crate::workspace::extensions::utils::relativize_component_file_paths(
-                &mut on_disk_settings.components,
+            crate::workspace::extensions::utils::relativize_module_file_paths(
+                &mut on_disk_settings.modules,
                 project_dir,
             );
         }
@@ -1527,7 +1527,7 @@ impl ProjectExt for ProjectWithRuntime {
             classification: self.classification.clone(),
             plate: self.plate.clone(),
             pipelines: self.pipelines.clone(),
-            components: self.components.clone(),
+            modules: self.modules.clone(),
         };
 
         let mut final_path = path.clone();
@@ -1610,9 +1610,9 @@ impl ProjectExt for ProjectWithRuntime {
                 pipeline
             })
             .collect();
-        self.components = template.components.clone();
-        for component in &mut self.components {
-            if let Err(e) = super::utils::assign_component_step_ids(component) {
+        self.modules = template.modules.clone();
+        for module in &mut self.modules {
+            if let Err(e) = super::utils::assign_module_step_ids(module) {
                 warn!("Project template {}: {e}", template.meta.name);
             }
         }
@@ -1640,7 +1640,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     /// Focuses the given pipeline: only the image channels it reads (its
-    /// source's and its load steps', also inside components - all channels if it
+    /// source's and its load steps', also inside modules - all channels if it
     /// reads none) and its object classes are shown.
     /// Returns `false` (and clears any focus) if there is no such pipeline.
     fn focus_pipeline(&mut self, pipeline_id: PipelineId) -> bool {
@@ -1648,8 +1648,8 @@ impl ProjectExt for ProjectWithRuntime {
             self.tmp_settings.pipeline_focus = None;
             return false;
         };
-        let channels = focus_channels(pipeline, &self.components);
-        let pipeline_classes = evanalyzer_core::pipeline_classes(pipeline, &self.components);
+        let channels = focus_channels(pipeline, &self.modules);
+        let pipeline_classes = evanalyzer_core::pipeline_classes(pipeline, &self.modules);
         self.tmp_settings.pipeline_focus = Some(PipelineFocus {
             pipeline_id,
             channels,
@@ -1671,14 +1671,13 @@ impl ProjectExt for ProjectWithRuntime {
             self.tmp_settings.pipeline_focus = None;
             return;
         };
-        let source_channels = focus_channels(pipeline, &self.components);
+        let source_channels = focus_channels(pipeline, &self.modules);
         let source_changed = match (&source_channels, &focus.channels) {
             (FocusChannels::Only(new), FocusChannels::Only(old)) => !new.is_subset(old),
             (a, b) => a != b,
         };
         if source_changed
-            || evanalyzer_core::pipeline_classes(pipeline, &self.components)
-                != focus.pipeline_classes
+            || evanalyzer_core::pipeline_classes(pipeline, &self.modules) != focus.pipeline_classes
         {
             self.focus_pipeline(focus.pipeline_id);
         }
@@ -1723,11 +1722,8 @@ impl ProjectExt for ProjectWithRuntime {
 
 /// The channels a focus on `pipeline` shows - see
 /// [`ProjectExt::focus_pipeline`].
-fn focus_channels(
-    pipeline: &PipelineSettings,
-    components: &[ComponentDefinition],
-) -> FocusChannels {
-    let channels = evanalyzer_core::pipeline_channels(pipeline, components);
+fn focus_channels(pipeline: &PipelineSettings, modules: &[ModuleDefinition]) -> FocusChannels {
+    let channels = evanalyzer_core::pipeline_channels(pipeline, modules);
     if channels.is_empty() {
         FocusChannels::All
     } else {
@@ -1821,10 +1817,10 @@ pub fn load_project(
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
 
-    // A component definition's steps are a list of their own (see
-    // `assign_component_step_ids`).
-    for component in &mut inner.components {
-        super::utils::assign_component_step_ids(component)?;
+    // A module definition's steps are a list of their own (see
+    // `assign_module_step_ids`).
+    for module in &mut inner.modules {
+        super::utils::assign_module_step_ids(module)?;
     }
     // Steps written without an id (or copied within a hand-written file,
     // sharing one) get the next number of their pipeline.
@@ -1844,17 +1840,17 @@ pub fn load_project(
     // plain absolute paths.
     if let Some(project_dir) = path.parent() {
         crate::workspace::extensions::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
-        crate::workspace::extensions::utils::resolve_component_file_paths(
-            &mut inner.components,
+        crate::workspace::extensions::utils::resolve_module_file_paths(
+            &mut inner.modules,
             project_dir,
         );
     }
 
-    // Values for parameters a component no longer has (e.g. a hand edit).
-    crate::workspace::component_editing::prune_component_values(&mut inner);
+    // Values for parameters a module no longer has (e.g. a hand edit).
+    crate::workspace::module_editing::prune_module_values(&mut inner);
 
-    // Component mistakes show in the editor too; here they're logged.
-    for problem in crate::workspace::component_checks::check_project(&inner) {
+    // Module mistakes show in the editor too; here they're logged.
+    for problem in crate::workspace::module_checks::check_project(&inner) {
         warn!("{}", problem.message);
     }
 
@@ -2752,7 +2748,7 @@ mod tests {
                 steps: vec![],
                 image_source: ImageAddress::Scratchpad
             }],
-            components: vec![evanalyzer_cfg::settings::components::ComponentDefinition {
+            modules: vec![evanalyzer_cfg::settings::modules::ModuleDefinition {
                 key: "CELL_RECONSTRUCTION".into(),
                 meta: Default::default(),
                 classes: vec![],
@@ -2767,9 +2763,9 @@ mod tests {
             ..Default::default()
         };
         project.apply_project_template(&template);
-        assert_eq!(project.components.len(), 1, "the definitions come along");
+        assert_eq!(project.modules.len(), 1, "the definitions come along");
         assert_eq!(
-            project.components[0].steps[0].id,
+            project.modules[0].steps[0].id,
             evanalyzer_cfg::core_types::StepId(1),
             "numbered within the definition"
         );
@@ -3212,14 +3208,14 @@ mod tests {
     }
 
     #[test]
-    fn focus_shows_the_classes_used_inside_a_pipelines_components() {
+    fn focus_shows_the_classes_used_inside_a_pipelines_modules() {
         let mut project = project_with_focus_pipelines();
-        // Pipeline 3: only a component step, whose transform uses classes 7 → 8.
+        // Pipeline 3: only a module step, whose transform uses classes 7 → 8.
         let mut inner = focus_test_pipeline(9, ImageAddress::Channel(0), 7, 8).steps;
         inner[0].id = evanalyzer_cfg::core_types::StepId(1);
         project
-            .components
-            .push(evanalyzer_cfg::settings::components::ComponentDefinition {
+            .modules
+            .push(evanalyzer_cfg::settings::modules::ModuleDefinition {
                 key: "INNER".into(),
                 meta: Default::default(),
                 classes: vec![],
@@ -3231,8 +3227,8 @@ mod tests {
         pipeline.steps = vec![PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(1),
             enabled: true,
-            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
-                evanalyzer_cfg::settings::components::ComponentInstance {
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(
+                evanalyzer_cfg::settings::modules::ModuleInstance {
                     key: "INNER".into(),
                     values: Default::default(),
                 },

@@ -127,7 +127,7 @@ Instead, a small hand-rolled sibling of the same pattern:
   `#[cmdsmeta(...)]` field attrs — same shape as generated pipeline-command
   settings, just not generator-produced. The reusable, generic part
   downstream — `ParameterDef`/`ParamType`
-  (`crates/cfg/src/modules/parameter_def.rs`) and the generic settings form
+  (`crates/cfg/src/settings/parameter_def.rs`) and the generic settings form
   in `pipelines_panel.slint` — is *not* generator-specific, so
   `to_parameters()`/`apply_param_change()` can be hand-written for this one
   enum (a handful of match arms) and fed into that same generic form

@@ -124,40 +124,40 @@
 
 
 
-# Components
+# Modules
 
 - [x] If group or command name is too long the question mark to the right is not shown any more
 - [x] To organize group and command paramters allow to define a "parameter category/group" all parameters in same categeory get an own section in the parameter list in the ui. For algos this should be deifned using #cmdsmeta for group parameters an optional category field should be added which is editable by the user
 - [x] Expand featute for commands in the list. If a command or group gets many parameters the list may get a little bit overloaded. An exapnd feature would be noce which when clicked opens the command/group settings in a bigger dialog which shows the paremeter better organized simialr to the project settings.
 
-## Components – not started
+## Modules – not started
 
 - [ ] **Project templates with a setup wizard** ("ready-to-use application"; the main selling point - rare on the market: map channels and classes, check a few values, run, yet still reproducible and open to experts).
-  `ProjectTemplate` gets its own parameters with bindings, the same mechanism as component parameters (`ComponentParameter` / bindings, applied before the run). Bindings point to steps in the pipelines (including component parameters) **and** to project settings. Two special kinds:
+  `ProjectTemplate` gets its own parameters with bindings, the same mechanism as module parameters (`ModuleParameter` / bindings, applied before the run). Bindings point to steps in the pipelines (including module parameters) **and** to project settings. Two special kinds:
   - **Channel roles:** "Nuclear channel", "Spot channel" - the user picks which image channel that is.
   - **Class roles:** "Nuclei", "Spots" - keep, rename, or map to existing project classes.
 
   Loading the template opens a **setup wizard**: name, images, channel roles, class roles, two or three values - done. Afterwards the same parameters stay available as a **"Template settings" panel**, so changing something later doesn't mean opening the pipelines.
-- [ ] **CLI `--set`** (after the template parameters): `evanalyzer analyze --template spots.evapt --images ./plate1 --set "Spot channel=2" --set "Spot size=3"` - sets template parameters by label, for servers and batch runs.
-- [ ] **Locking by the template author** - postponed on purpose: editing inside a component is always allowed today (an edited library component is detected by `origin.content_hash`).
+- [ ] **CLI `--set`** (after the template parameters): `evanalyzer analyze --template spots.evatemplate --images ./plate1 --set "Spot channel=2" --set "Spot size=3"` - sets template parameters by label, for servers and batch runs.
+- [ ] **Locking by the template author** - postponed on purpose: editing inside a module is always allowed today (an edited library module is detected by `origin.content_hash`).
 
-## Components – smaller gaps
+## Modules – smaller gaps
 
-- [ ] **Breakpoints inside components.** Disabled inside an opened component; a breakpoint on the component card stops after the whole component. Needs a step path ("step 3, inside it step 2") instead of one `StepId` (`PipelineTask::breakpoint`, `expand_step`).
-- [x] **Nested components (components inside components).** Done: open/edit/create/expand nested components in the editor, hand classes and memory slots inward, library fingerprint and insert/update with inner components.
-  - [x] 1. Open a nested component from an opened component: `open_component` is a stack of `OpenComponent` levels, the bar shows "Pipeline › ◆ Outer › ◆ Inner", "‹ Back" goes one level up ([`pipelines_controller.rs`](crates/gui/src/editor/pipelines_controller.rs)). Inside a viewed component nested ones are only viewed ("View" stays on their cards); "Edit" in the bar opens the first viewed level to edit. "Only this step" works inside a component (`clone_component_for_step` takes a `StepList`). "Expand" is hidden inside a component until 5. is done.
-  - [x] 2. Indirect cycles: `would_contain_itself` checks at any depth; inside an opened component the picker leaves out the components containing it, and inserting one anyway (e.g. through a library component's inner components) is refused with a message.
-  - [x] 3. "Create component" inside an opened component: `plan_component`/`create_component` take a `StepList`. The outer component's local classes / component memory only the moved steps use go into the new component (same numbers); used by its other steps too → refused (needs 4.). Outer parameters setting moved settings set them through new parameters of the inner component (same label, default, section). Only applied if the outer component still expands.
-  - [x] 4. Pass the outer component's local classes / memory slots into an inner one. Done differently than first proposed (no alias table): a nested use runs in the scope of the pipeline-level use around it, its own classes and component slots renumbered apart at expansion (`renumber` in [`components.rs`](crates/core/src/job/components.rs)); a handed-in "L1" / "component:1" is then just that number. Its end (`UseEnd::Nested`) removes objects with only its own classes, strips them from the outer one's objects, frees its own slots. Inside an opened component the class dropdowns offer its classes. "Create component" inside a component makes a class other steps use too a parameter (unset in the new component, the outer one's step hands it in). Behavior change: a nested component's "all objects" now also sees the outer one's objects.
-  - [x] 4b. "Create component" inside a component: a component memory slot other steps of the outer one use too becomes a parameter of the new one (bound to the image-address settings naming it, "none" on its own, the outer one's step hands "component:N" in). Refused only where a moved step uses the slot outside an address setting (a threshold's memory value source) - it can't be bound.
-  - [x] 5. "Expand" inside an opened component: the inner component's classes/slots become the outer one's (numbered after its own, via core `renumbered`), outer parameters setting its parameters set the settings behind them. In a pipeline, what an expanded component hands a component inside it becomes project classes / pipeline slots too (was left as "L1").
-  - [x] 6. `content_hash` covers the components used inside (unchanged for one using none). Insert/update from the library: an inner component the project has with the same key but other content (changed here, or unrelated) stays - the library's is added under its own key ("INNER_2").
-  - [x] 7. ◇/◆ on a component card inside an opened component: exposes its parameter on the outer component (`step_setting`), the card marks it, editing it sets the outer parameter's default.
-- [ ] **Shift-click step selection** for "Create component" - today a from/to range dialog (the step list has no multi-selection).
-- [ ] **"New empty component"** - not built; rarely needed since "Create component" exists.
-- [ ] **Run the component checks on save** - `check_components` runs on load ([`project_ext.rs`](crates/app/src/workspace/extensions/project_ext.rs)) and in the editor, not on save. Runs still refuse a broken component at expansion, so mostly cosmetic.
-- [ ] **Check the picker's component look on screen** (◆ Components chip, component colour, "used N×", Library section) - never looked at, no headless screenshot in the tests.
-- [ ] Optional, only if someone needs it: "don't merge this local class" at the tile merge - `classes_to_not_merge` only knows project classes, so local objects are always merged; would need a setting in the component definition.
+- [ ] **Breakpoints inside modules.** Disabled inside an opened module; a breakpoint on the module card stops after the whole module. Needs a step path ("step 3, inside it step 2") instead of one `StepId` (`PipelineTask::breakpoint`, `expand_step`).
+- [x] **Nested modules (modules inside modules).** Done: open/edit/create/expand nested modules in the editor, hand classes and memory slots inward, library fingerprint and insert/update with inner modules.
+  - [x] 1. Open a nested module from an opened module: `open_module` is a stack of `OpenModule` levels, the bar shows "Pipeline › ◆ Outer › ◆ Inner", "‹ Back" goes one level up ([`pipelines_controller.rs`](crates/gui/src/editor/pipelines_controller.rs)). Inside a viewed module nested ones are only viewed ("View" stays on their cards); "Edit" in the bar opens the first viewed level to edit. "Only this step" works inside a module (`clone_module_for_step` takes a `StepList`). "Expand" is hidden inside a module until 5. is done.
+  - [x] 2. Indirect cycles: `would_contain_itself` checks at any depth; inside an opened module the picker leaves out the modules containing it, and inserting one anyway (e.g. through a library module's inner modules) is refused with a message.
+  - [x] 3. "Create module" inside an opened module: `plan_module`/`create_module` take a `StepList`. The outer module's local classes / module memory only the moved steps use go into the new module (same numbers); used by its other steps too → refused (needs 4.). Outer parameters setting moved settings set them through new parameters of the inner module (same label, default, section). Only applied if the outer module still expands.
+  - [x] 4. Pass the outer module's local classes / memory slots into an inner one. Done differently than first proposed (no alias table): a nested use runs in the scope of the pipeline-level use around it, its own classes and module slots renumbered apart at expansion (`renumber` in [`modules.rs`](crates/core/src/job/modules.rs)); a handed-in "L1" / "module:1" is then just that number. Its end (`UseEnd::Nested`) removes objects with only its own classes, strips them from the outer one's objects, frees its own slots. Inside an opened module the class dropdowns offer its classes. "Create module" inside a module makes a class other steps use too a parameter (unset in the new module, the outer one's step hands it in). Behavior change: a nested module's "all objects" now also sees the outer one's objects.
+  - [x] 4b. "Create module" inside a module: a module memory slot other steps of the outer one use too becomes a parameter of the new one (bound to the image-address settings naming it, "none" on its own, the outer one's step hands "module:N" in). Refused only where a moved step uses the slot outside an address setting (a threshold's memory value source) - it can't be bound.
+  - [x] 5. "Expand" inside an opened module: the inner module's classes/slots become the outer one's (numbered after its own, via core `renumbered`), outer parameters setting its parameters set the settings behind them. In a pipeline, what an expanded module hands a module inside it becomes project classes / pipeline slots too (was left as "L1").
+  - [x] 6. `content_hash` covers the modules used inside (unchanged for one using none). Insert/update from the library: an inner module the project has with the same key but other content (changed here, or unrelated) stays - the library's is added under its own key ("INNER_2").
+  - [x] 7. ◇/◆ on a module card inside an opened module: exposes its parameter on the outer module (`step_setting`), the card marks it, editing it sets the outer parameter's default.
+- [ ] **Shift-click step selection** for "Create module" - today a from/to range dialog (the step list has no multi-selection).
+- [ ] **"New empty module"** - not built; rarely needed since "Create module" exists.
+- [ ] **Run the module checks on save** - `check_modules` runs on load ([`project_ext.rs`](crates/app/src/workspace/extensions/project_ext.rs)) and in the editor, not on save. Runs still refuse a broken module at expansion, so mostly cosmetic.
+- [ ] **Check the picker's module look on screen** (◆ Modules chip, module colour, "used N×", Library section) - never looked at, no headless screenshot in the tests.
+- [ ] Optional, only if someone needs it: "don't merge this local class" at the tile merge - `classes_to_not_merge` only knows project classes, so local objects are always merged; would need a setting in the module definition.
 ## Open after 2026-10-19 (AI plugin, annotations)
 
 To do:
@@ -207,11 +207,11 @@ Done (generated code 39.55 -> 40.48 MB). Open:
 - [x] Step rows show that a click opens them (board AM, without a hover hint): hand cursor and the hover highlight, no ▸ / ▾ (they took the values' room) (2026-10-20).
 - [x] Step rows' values (board AO, 2026-10-20): A - the buttons float over the row's end on hover, no room kept while hidden (only an off step's eye and a pinned ⌖ stay); B - EVA › View › "Step values on a second line" (per user, `panels.step_values_below`). The step's ⓘ moved to ⋯ › About; the parameters keep theirs.
 - [ ] Look at it in the real app: a long step name with values (the fade under the buttons), ⋯ › About on a step with help.
-- [x] Component card: its buttons (values, view, edit in place, edit for all uses) are only in ⋯; "Update to v…" stays on the card (2026-10-20).
+- [x] Module card: its buttons (values, view, edit in place, edit for all uses) are only in ⋯; "Update to v…" stays on the card (2026-10-20).
 - [x] EVA menu (board AN, 2026-10-20): Open recent ▸, View ▸, Help ▸ - submenus drawn inside the menu's popup (a nested PopupWindow took the mouse away from the menu); Disconnect only while connected.
 - [x] Scale bar bottom right (board AP, 2026-10-20): on the Z/T bar's line, beside the right panels when Objects (open) reaches the bottom, else at the window's edge; on the Tuning dock when it's open. Split view unchanged.
 - [x] EVA menu: the ▸ row ("View") stays highlighted while its submenu is open (`InkMenuItem.active`, 2026-10-20).
-- [ ] Add step: the hover preview of what a component adds (board AL) isn't built - the buttons' tooltips say it.
+- [ ] Add step: the hover preview of what a module adds (board AL) isn't built - the buttons' tooltips say it.
 
 ## AI plugin
 
@@ -238,7 +238,7 @@ Open:
 
 Done with the Ink redesign (2026-10-17): the old `components/` folder is gone - every dialog uses `InkDialog` (About is custom on purpose), buttons, fields, chips, menus, rows, settings rows, tabs and dividers come from `crates/gui/ui/ink/`. This round: `InkFact` (object card + objects panel), plain dividers → `InkDivider`, the AI dialog's private header/divider → `InkCaption`/`InkDivider`, dead `CategoryChip` removed (generated code −12 KB).
 
-Kept private on purpose (one screen's own, not a copy of an Ink piece): the step picker's category header and filter chips (category colours), pipeline step / parameter rows, the plate's wells, About's cards. `FormLabel` (AI training, component dialogs) stays a plain `Text` in Ink's style: `InkLabel`'s elide costs ~2 KB per use, 35 uses.
+Kept private on purpose (one screen's own, not a copy of an Ink piece): the step picker's category header and filter chips (category colours), pipeline step / parameter rows, the plate's wells, About's cards. `FormLabel` (AI training, module dialogs) stays a plain `Text` in Ink's style: `InkLabel`'s elide costs ~2 KB per use, 35 uses.
 
 - [ ] Lower priority: `std-widgets` `ScrollView` (14×) / `ListView` (6×) / `TextEdit` (2×) are still Slint's own - an Ink scroll bar would make scrolling look the same everywhere.
 

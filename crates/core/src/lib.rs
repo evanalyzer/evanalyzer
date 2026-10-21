@@ -56,11 +56,6 @@ pub use crate::algos::{
     declared_script_params, script_syntax_error,
 };
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
-pub use crate::job::components::{
-    ExpandedCommand, ScopeCounter, UseEnd, UseId, component_parameters,
-    component_steps_with_values, expand_step, own_numbers, renumbered, set_component_parameter,
-    value_from_text,
-};
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;
 pub use crate::job::job_executor::ProgressEvent;
@@ -70,6 +65,10 @@ pub use crate::job::job_generator::generate_dataset_job_from_project_settings;
 pub use crate::job::job_generator::generate_preview_job_from_project_settings;
 pub use crate::job::job_generator::pipeline_channels;
 pub use crate::job::job_generator::pipeline_classes;
+pub use crate::job::modules::{
+    ExpandedCommand, ScopeCounter, UseEnd, UseId, expand_step, module_parameters,
+    module_steps_with_values, own_numbers, renumbered, set_module_parameter, value_from_text,
+};
 pub use crate::job::pipeline_step::PipelineStep;
 pub use crate::storage::duckdb::DuckDbExporter;
 pub use crate::storage::file::CsvExporter;

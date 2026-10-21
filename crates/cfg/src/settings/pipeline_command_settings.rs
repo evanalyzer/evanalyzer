@@ -1,6 +1,6 @@
 // @generated - do not edit by hand
 #[allow(unused_imports)]
-use crate::modules::components::ParamValue;
+use crate::settings::modules::ParamValue;
 #[allow(unused_imports)]
 use crate::types::classes::{ModelClass, ModelSegmentationClass};
 use crate::{
@@ -1206,7 +1206,7 @@ fn _serde_default_loadchannel_z_index() -> u32 {
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
 /// without an image source, or to switch channels within a pipeline - e.g.
-/// a component that detects nuclei in one channel and cells in another.
+/// a module that detects nuclei in one channel and cells in another.
 ///
 /// Projection: Auto loads the channel as the project's z-stack setting does.
 /// Any other choice loads it with its own z-projection, or one z-plane (None).
@@ -2045,8 +2045,8 @@ pub struct ExtractObjectsSettings {
     ///
     /// Without an entry, a segmentation class's objects get the project class
     /// with the same number - what the Threshold's class choice means. Inside
-    /// a component, map to one of the component's own classes to keep the
-    /// objects internal to the component.
+    /// a module, map to one of the module's own classes to keep the
+    /// objects internal to the module.
     #[serde(default = "_serde_default_extractobjects_class_mapping")]
     pub class_mapping: Vec<ExtractClassMappingSettings>,
 }
@@ -2397,7 +2397,7 @@ pub struct ExtractClassMappingSettings {
     /// The segmentation class, as set by Threshold, Pixel classifier, ...
     pub segmentation_class: SegmentationClass,
     /// The object class its objects get: a project class, or inside a
-    /// component one of the component's own classes.
+    /// module one of the module's own classes.
     pub object_class: ObjectClass,
 }
 

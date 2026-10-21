@@ -10,7 +10,7 @@
 // with a Load Image Channel step first (0: the channel itself, the default).
 // `--shared 1`: pipeline 1 stores channel 0 in shared memory slot 1, the
 // detection pipeline starts from that slot (an image passed between pipelines).
-// `--component 1` adds a component instance that turns the larger objects
+// `--module 1` adds a module instance that turns the larger objects
 // into local (internal) objects - they don't reach the results.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
@@ -73,7 +73,7 @@ fn main() {
     let spots = arg("--spots", 20000) as u32;
     let blurs = arg("--blurs", 1);
     let classify = arg("--classify", 0);
-    let component = arg("--component", 0);
+    let module = arg("--module", 0);
     let source = arg("--source", 0);
     let shared = arg("--shared", 0);
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
@@ -163,11 +163,11 @@ fn main() {
                     ..Default::default()
                 }))
             }))
-            .chain((component > 0).then(|| PipelineStepSettings {
+            .chain((module > 0).then(|| PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
-                    evanalyzer_cfg::settings::components::ComponentInstance {
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(
+                    evanalyzer_cfg::settings::modules::ModuleInstance {
                         key: "INTERNAL".into(),
                         values: Default::default(),
                     },
@@ -175,8 +175,8 @@ fn main() {
             }))
             .collect(),
     });
-    if component > 0 {
-        project.components.push(internal_objects_component());
+    if module > 0 {
+        project.modules.push(internal_objects_module());
     }
     if shared > 0 {
         // The storing pipeline runs first.
@@ -237,9 +237,9 @@ fn main() {
     );
 }
 
-/// A component that reclassifies the larger objects into a local class and
+/// A module that reclassifies the larger objects into a local class and
 /// classifies those once more - internal objects only.
-fn internal_objects_component() -> evanalyzer_cfg::settings::components::ComponentDefinition {
+fn internal_objects_module() -> evanalyzer_cfg::settings::modules::ModuleDefinition {
     let classify = |id: u32, input: ObjectClass, handling, output: ObjectClass, min_area: f32| {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(id),
@@ -262,7 +262,7 @@ fn internal_objects_component() -> evanalyzer_cfg::settings::components::Compone
         name: format!("Local {id}"),
         notes: String::new(),
     };
-    evanalyzer_cfg::settings::components::ComponentDefinition {
+    evanalyzer_cfg::settings::modules::ModuleDefinition {
         key: "INTERNAL".into(),
         meta: Default::default(),
         classes: vec![local_class(1), local_class(2)],

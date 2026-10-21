@@ -272,7 +272,7 @@ impl Object {
             self.scope = class_scope;
         } else if self.scope != class_scope {
             return Err(InternalErrors::InvalidArgument(format!(
-                "object {} can't get class {} - an object can't have a component's \
+                "object {} can't get class {} - an object can't have a module's \
                  local classes and project classes at the same time",
                 self.id,
                 object_class.to_text()
@@ -1839,7 +1839,7 @@ mod tests {
         assert!(object.is_of(&ObjectClass::Global(5), Scope::Global));
         assert!(
             object.is_of(&ObjectClass::Global(5), scoped(3)),
-            "seen from inside a component"
+            "seen from inside a module"
         );
     }
 

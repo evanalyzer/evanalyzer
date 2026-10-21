@@ -22,7 +22,7 @@
 // `key-pressed` handlers above (Slint callbacks aren't values, so there's no
 // way to enumerate "every branch below" automatically) - it only stays
 // accurate if every new shortcut updates both places.
-import { ComponentSettingsState } from "api/create_component.slint";
+import { ModuleSettingsState } from "api/create_module.slint";
 import { LayoutState, WorkspaceMode } from "api/layout.slint";
 import { CommandPaletteState } from "api/command_palette.slint";
 import { AnalysisRunningCloseState, ConnectState, DialogType, GlobalAppState, UnsavedChangesState } from "api/state.slint";
@@ -396,10 +396,10 @@ export global DialogEscape {
             RunAnalysisState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.ai_learning) {
             AiLearningState.cancel_clicked();
-        } else if (GlobalAppState.active_dialog == DialogType.component_settings) {
-            // Like its Cancel: the component as it was when it opened.
-            ComponentSettingsState.parameter-edit-cancelled();
-            ComponentSettingsState.close();
+        } else if (GlobalAppState.active_dialog == DialogType.module_settings) {
+            // Like its Cancel: the module as it was when it opened.
+            ModuleSettingsState.parameter-edit-cancelled();
+            ModuleSettingsState.close();
         } else if (GlobalAppState.active_dialog == DialogType.none) {
             return false;
         }

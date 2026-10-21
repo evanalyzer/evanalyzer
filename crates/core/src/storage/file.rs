@@ -73,7 +73,7 @@ impl CsvExporter {
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
-            // Never stored: a component's scope ends before its objects are written.
+            // Never stored: a module's scope ends before its objects are written.
             ObjectClass::Local(n) => format!("local_{n}"),
             ObjectClass::Global(n) => {
                 if let Some(name) = self.class_names.get(class) {

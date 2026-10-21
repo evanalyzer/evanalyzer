@@ -333,7 +333,7 @@ mod tests {
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 
-    // ---- Component memory slots ----
+    // ---- Module memory slots ----
 
     fn gray(value: f32) -> Arc<ImageContainer> {
         let size = ImageSize {
@@ -352,15 +352,15 @@ mod tests {
         image.as_slice()[0]
     }
 
-    fn component_slot(mode: ImageCacheMode) -> ImageCache {
+    fn module_slot(mode: ImageCacheMode) -> ImageCache {
         ImageCache {
             mode,
-            address: ImageAddress::Memory(MemoryId::ComponentContext(1)),
+            address: ImageAddress::Memory(MemoryId::ModuleContext(1)),
         }
     }
 
     #[test]
-    fn two_component_instances_have_separate_memory_slots() {
+    fn two_module_instances_have_separate_memory_slots() {
         use crate::pipeline::scope::{Scope, ScopeId};
         let mut cache = GlobalPipelineCache::default();
         let mut ctx = PipelineContext::new_from_image_test(
@@ -374,30 +374,27 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        // Each instance stores its own image in its component slot 1.
+        // Each instance stores its own image in its module slot 1.
         for (scope, value) in [(1, 10.0), (2, 20.0)] {
             ctx.scope = Scope::Scoped(ScopeId(scope));
             ctx.image = gray(value);
-            component_slot(ImageCacheMode::Store)
+            module_slot(ImageCacheMode::Store)
                 .execute(&mut ctx, &mut cache)
                 .unwrap();
         }
         for (scope, value) in [(1, 10.0), (2, 20.0)] {
             ctx.scope = Scope::Scoped(ScopeId(scope));
-            component_slot(ImageCacheMode::Load)
+            module_slot(ImageCacheMode::Load)
                 .execute(&mut ctx, &mut cache)
                 .unwrap();
             assert_eq!(value_of(&ctx.image), value, "instance {scope}");
         }
 
         ctx.scope = Scope::Global;
-        let error = component_slot(ImageCacheMode::Load)
+        let error = module_slot(ImageCacheMode::Load)
             .execute(&mut ctx, &mut cache)
             .unwrap_err()
             .to_string();
-        assert!(
-            error.contains("only available inside a component"),
-            "{error}"
-        );
+        assert!(error.contains("only available inside a module"), "{error}");
     }
 }
