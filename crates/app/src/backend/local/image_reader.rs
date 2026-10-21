@@ -86,7 +86,7 @@ impl ReaderPool {
             vec![primary]
         };
 
-        log::info!(
+        log::debug!(
             "Built reader pool of {size} (channel count {channel_count}) for {} in {:?}",
             path.display(),
             start.elapsed()

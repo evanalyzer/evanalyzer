@@ -5,7 +5,7 @@ use crate::utils::converters::wavelength_to_rgb_float;
 use bioformats::common::reader::FormatReader;
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use kornia_image::{Image, ImageSize};
-use log::info;
+use log::debug;
 use rayon::prelude::*;
 use std::ops::RangeInclusive;
 use std::ops::{Deref, DerefMut};
@@ -309,7 +309,7 @@ impl ImageReader {
         let meta_duration = meta_start.elapsed();
 
         let total_duration = total_start.elapsed();
-        info!(
+        debug!(
             "Opened {} in {:?} (format parse: {:?}, metadata walk: {:?})",
             path.display(),
             total_duration,

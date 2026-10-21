@@ -209,7 +209,7 @@ impl Pipeline {
             let step_start = Instant::now();
             command.run(&mut ctx, &mut cache)?;
             let duration = step_start.elapsed();
-            info!("Executed {} in {:?}", command.name(), duration);
+            log::debug!("Executed {} in {:?}", command.name(), duration);
 
             // Only capture at the exact breakpoint step - `breakpoint_step`
             // is `None` whenever no breakpoint is set, so this never runs
@@ -258,7 +258,7 @@ impl Pipeline {
         }
 
         cache.clear_pipeline_context();
-        info!(
+        log::debug!(
             "Executed pipeline steps {} in {:?}",
             self.id,
             start.elapsed()

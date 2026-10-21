@@ -2,7 +2,7 @@ use super::spawn_job;
 use crate::api::{PreviewRequest, RunningJob, StartPreviewError};
 use crate::workspace::settings::ViewportMemorySettings;
 use evanalyzer_core::PreviewTileSettings;
-use log::{error, info};
+use log::{debug, error};
 
 /// Starts a preview run restricted to the tiles visible in `viewport`. The
 /// final merged objects are returned by [`RunningJob::wait`] in
@@ -34,7 +34,7 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
         .max(1) as usize;
     match job.count_preview_visible_tiles() {
         Ok(tiles) if tiles > max => {
-            info!("Preview rejected: viewport covers {tiles} tiles (max {max})");
+            debug!("Preview rejected: viewport covers {tiles} tiles (max {max})");
             return Err(StartPreviewError::TooManyTiles { tiles, max });
         }
         // Not being able to count is no reason to block the preview - the

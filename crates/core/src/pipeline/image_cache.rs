@@ -1,5 +1,5 @@
 use clru::{CLruCache, CLruCacheConfig, WeightScale};
-use log::{info, warn};
+use log::{debug, warn};
 
 use crate::image::Point2d;
 use crate::{ImageContainer, ImagePlane, ManagedImage, pipeline::pipeline_cache::CacheAddress};
@@ -382,7 +382,7 @@ impl ImageCache {
         let start = Instant::now();
         match Self::try_load_from_disk(path) {
             Ok(image) => {
-                info!(
+                debug!(
                     "Loaded image ({} bytes) from cache file {:?} in {:?}",
                     image.get_image_memory_usage(),
                     path,
@@ -542,7 +542,7 @@ fn spill_to_disk(
         warn!("Could not write image to cache file {:?}: {}", img_path, e);
         return;
     }
-    info!(
+    debug!(
         "Spilled image at {:?} ({} bytes) to cache file {:?} in {:?}",
         address,
         img.get_image_memory_usage(),

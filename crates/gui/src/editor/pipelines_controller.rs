@@ -2808,7 +2808,7 @@ impl PipelinesController {
             return;
         };
 
-        info!("Started preview for {:?}", current_image_path);
+        log::debug!("Started preview for {:?}", current_image_path);
 
         // Only the selected image is needed for a preview - build the settings
         // fresh instead of cloning every other image's settings (and their
