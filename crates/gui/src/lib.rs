@@ -91,6 +91,7 @@ pub struct UiState {
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
+    plane_listeners: Mutex<Vec<Box<dyn Fn(u32, u32) + Send + Sync>>>,
 }
 
 impl UiState {
@@ -118,6 +119,7 @@ impl UiState {
             local_backend,
             image_states_listener: Mutex::new(None),
             image_opened_listeners: Mutex::new(Vec::new()),
+            plane_listeners: Mutex::new(Vec::new()),
         }
     }
 
@@ -191,6 +193,21 @@ impl UiState {
             .lock()
             .expect("Poisoned")
             .push(Box::new(f));
+    }
+
+    /// Calls `f(z, t)` (too) when the viewer shows another plane.
+    pub fn on_plane_changed(&self, f: impl Fn(u32, u32) + Send + Sync + 'static) {
+        self.plane_listeners
+            .lock()
+            .expect("Poisoned")
+            .push(Box::new(f));
+    }
+
+    /// The viewer shows plane `(z, t)` of its image now.
+    pub fn plane_changed(&self, z: u32, t: u32) {
+        for listener in self.plane_listeners.lock().expect("Poisoned").iter() {
+            listener(z, t);
+        }
     }
 
     /// Another image (or series) is shown - e.g. the auto preview runs

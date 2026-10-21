@@ -136,6 +136,15 @@ pub struct ResultsSplitSettings {
     /// The image controls (channels, histogram, overlay) open over the
     /// image.
     pub image_panel: bool,
+    /// Tracks: how much of each track's path is drawn.
+    pub trail: TrailMode,
+    /// `TrailMode::Frames`: this many time points back.
+    pub trail_frames: u32,
+    /// Tracks: only the selected track's path.
+    pub only_selected_track: bool,
+    /// Tracks: paths in each track's own color (else its class's).
+    pub color_by_track: bool,
+    pub speed_unit: SpeedUnit,
 }
 
 impl Default for ResultsSplitSettings {
@@ -145,8 +154,34 @@ impl Default for ResultsSplitSettings {
             width_px: 640.0,
             image_panel: false,
             follow: true,
+            trail: TrailMode::Frames,
+            trail_frames: 10,
+            only_selected_track: false,
+            color_by_track: true,
+            speed_unit: SpeedUnit::PxPerFrame,
         }
     }
+}
+
+/// How much of a track's path is drawn on the image.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrailMode {
+    Off,
+    /// The last `trail_frames` time points.
+    #[default]
+    Frames,
+    Whole,
+}
+
+/// The unit a track's speed is shown in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpeedUnit {
+    #[default]
+    PxPerFrame,
+    UmPerMin,
+    UmPerS,
 }
 
 /// The colors of the GUI: light, dark, or a softer dark (`Dim`).

@@ -27,7 +27,7 @@ pub(super) struct SplitState {
     pub(super) image: Option<String>,
     pub(super) objects: Arc<Vec<ResultObject>>,
     /// Index into `objects`.
-    selected: Option<usize>,
+    pub(super) selected: Option<usize>,
     /// A region shown instead of an object (an image heatmap's tile), in
     /// image pixels: a yellow box, flown to.
     region: Option<[u32; 4]>,
@@ -38,7 +38,7 @@ pub(super) struct SplitState {
     /// The channel of the card's mean.
     channel: usize,
     /// The split view is on screen (Results, List or Plate, split).
-    shown: bool,
+    pub(super) shown: bool,
     /// Left with "Open in Images": its marker stays on the image (with the
     /// way back to the results) - else it goes with the split view.
     keep_marker: bool,
@@ -59,6 +59,15 @@ impl ResultsStateController {
         self._app_state.on_image_opened(move || {
             if let Some(manager) = weak.upgrade() {
                 manager.split_image_opened();
+            }
+        });
+
+        // The viewer on another plane (its T slider, play): the split's
+        // objects and the results of that plane - one time point for both.
+        let weak = Arc::downgrade(self);
+        self._app_state.on_plane_changed(move |z, t| {
+            if let Some(manager) = weak.upgrade() {
+                manager.split_plane_changed(z, t);
             }
         });
 
@@ -269,6 +278,10 @@ impl ResultsStateController {
     /// ‹ › and ↑ ↓: List the next row, Plate the next object of the image
     /// (round).
     fn split_step(self: &Arc<Self>, delta: i32) {
+        if self.in_tracks() {
+            self.tracks_step(delta);
+            return;
+        }
         if self.in_plate() {
             let index = {
                 let mut split = self.split.lock().expect("Poisoned");
@@ -317,14 +330,21 @@ impl ResultsStateController {
         let Some(index) = object_at(&overlay, x, y, zoom, off_x, off_y) else {
             return;
         };
-        let (rel_path, bbox) = {
+        let (rel_path, bbox, track_id) = {
             let mut split = self.split.lock().expect("Poisoned");
             split.selected = Some(index);
             (
                 split.image.clone().unwrap_or_default(),
                 split.objects[index].bbox_px,
+                split.objects[index].track_id,
             )
         };
+        if self.in_tracks() {
+            self.tracks_object_clicked(track_id);
+            self.split_push_selection(false);
+            self.split_push_overlay();
+            return;
+        }
         let row = self
             .list_row_locations
             .lock()
@@ -352,7 +372,7 @@ impl ResultsStateController {
     /// Shows `rel_path` in the image pane, and then selects the object
     /// with box `select` - or marks `region` (a heatmap tile): opened at
     /// that when following, its objects read off the UI thread.
-    fn split_show_image(
+    pub(super) fn split_show_image(
         self: &Arc<Self>,
         rel_path: String,
         select: Option<[u32; 4]>,
@@ -480,6 +500,7 @@ impl ResultsStateController {
                     select.and_then(|bbox| objects.iter().position(|o| o.bbox_px == bbox));
                 split.objects = Arc::new(objects);
             }
+            manager.tracks_objects_loaded();
             manager.split_push_channels(channels);
             // Already in the viewer: flown to (else opened there).
             manager.split_push_selection(in_viewer);
@@ -536,7 +557,9 @@ impl ResultsStateController {
             self.viewport().set_results_overlay(None);
             return;
         }
-        if objects.is_empty() {
+        let t = self.plane_filter.lock().expect("Poisoned").selected_t_stack;
+        let trails = self.tracks_trails(image.as_deref(), t);
+        if objects.is_empty() && trails.is_none() {
             self.viewport().set_results_overlay(None);
             return;
         }
@@ -585,13 +608,128 @@ impl ResultsStateController {
                 })
                 .collect(),
             selected,
+            trails,
         };
         self.viewport().set_results_overlay(Some(overlay));
     }
 
+    /// The viewer shows plane `(z, t)`: with the split on screen and its
+    /// image in the viewer, the results follow (the Results T / Z) and the
+    /// image's objects of that plane are read.
+    fn split_plane_changed(self: &Arc<Self>, z: u32, t: u32) {
+        let image = {
+            let split = self.split.lock().expect("Poisoned");
+            match split.shown {
+                true => split.image.clone(),
+                false => None,
+            }
+        };
+        let Some(image) = image.filter(|rel| self.split_in_viewer(rel)) else {
+            return;
+        };
+        let z_changed = {
+            let mut plane = self.plane_filter.lock().expect("Poisoned");
+            let changed = (plane.selected_z_stack, plane.selected_t_stack) != (z, t);
+            let z_changed = plane.selected_z_stack != z;
+            plane.selected_z_stack = z;
+            plane.selected_t_stack = t;
+            if changed {
+                let ui_weak = self.ui.clone();
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let state = ui.global::<ResultsState>();
+                        state.set_z_stack(z as i32);
+                        state.set_t_stack(t as i32);
+                    }
+                })
+                .ok();
+            }
+            changed.then_some(z_changed)
+        };
+        if let Some(z_changed) = z_changed {
+            self.refresh_list();
+            if z_changed && self.in_tracks() {
+                self.tracks_load(image.clone());
+            }
+        }
+        self.split_reload_objects(image);
+    }
+
+    /// The image's objects again (another plane): the selected track's, if
+    /// any, selected - else none.
+    fn split_reload_objects(self: &Arc<Self>, rel_path: String) {
+        let generation = {
+            let mut split = self.split.lock().expect("Poisoned");
+            split.generation += 1;
+            split.generation
+        };
+        let plane = {
+            let plane = self.plane_filter.lock().expect("Poisoned");
+            evanalyzer_app::results::PlaneFilter {
+                z_stack: plane.selected_z_stack,
+                t_stack: plane.selected_t_stack,
+            }
+        };
+        let value_column = self
+            .matrix_filter
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+            .map(|filter| filter.column.clone())
+            .filter(is_chartable_column);
+        let filter = ImageObjectsFilter {
+            image_rel_path: rel_path.clone(),
+            plane,
+            value_column,
+        };
+        self.run_db_job(move |manager| {
+            let objects = {
+                let guard = manager.result_generator.lock().expect("Poisoned");
+                match guard.as_ref() {
+                    None => return,
+                    Some(db) => db.image_objects(&filter),
+                }
+            };
+            let objects = objects.unwrap_or_else(|err| {
+                error!("Could not read the objects of {rel_path}: {err}");
+                Vec::new()
+            });
+            {
+                let mut split = manager.split.lock().expect("Poisoned");
+                if split.generation != generation {
+                    return;
+                }
+                split.selected = None;
+                split.objects = Arc::new(objects);
+            }
+            manager.tracks_objects_loaded();
+            manager.split_push_selection(false);
+            manager.split_push_overlay();
+        });
+    }
+
+    /// The viewer to time point `t` (the split's objects follow, see
+    /// `split_plane_changed`).
+    pub(super) fn split_show_time_point(&self, t: u32) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let channels = ui.global::<crate::ChannelState>();
+            let last = ui.global::<crate::ImageMetaData>().get_nr_t_stacks() - 1;
+            let t = (t as i32).clamp(0, last.max(0));
+            if channels.get_selected_t_stack() != t {
+                channels.set_selected_t_stack(t);
+                channels.invoke_trigger_channel_state_changed();
+            }
+        })
+        .ok();
+    }
+
     /// The selected object's ring and card, "n / total" - and, `fly`, the
     /// view to it.
-    fn split_push_selection(&self, fly: bool) {
+    pub(super) fn split_push_selection(&self, fly: bool) {
         let (title_image, object, total, index, channel, region) = {
             let split = self.split.lock().expect("Poisoned");
             let object = split.selected.and_then(|i| split.objects.get(i).cloned());
@@ -629,6 +767,8 @@ impl ResultsStateController {
             .collect();
         let rows = self.list_row_locations.lock().expect("Poisoned").len();
         let plate = self.in_plate();
+        // Tracks: the selected track of the image's tracks.
+        let track_pos = self.in_tracks().then(|| self.tracks_position());
         let image_name = title_image
             .as_deref()
             .map(|rel| {
@@ -707,7 +847,10 @@ impl ResultsStateController {
                 .into(),
             );
             state.set_split_image_key(well_image.into());
-            if plate {
+            if let Some((pos, total)) = track_pos {
+                state.set_split_pos(pos);
+                state.set_split_total(total);
+            } else if plate {
                 state.set_split_pos(index.map_or(0, |i| i as i32 + 1));
                 state.set_split_total(total as i32);
             } else {

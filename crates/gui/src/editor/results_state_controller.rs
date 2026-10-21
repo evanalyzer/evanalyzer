@@ -2,6 +2,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 
 mod split;
+mod tracks;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine,
     ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2,
@@ -487,6 +488,8 @@ pub struct ResultsStateController {
     plate_settings_written: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Results, split with the image - see [`split`].
     split: Mutex<split::SplitState>,
+    /// Results › Tracks - see [`tracks`].
+    tracks: Mutex<tracks::TracksState>,
 }
 
 impl ResultsStateController {
@@ -525,6 +528,7 @@ impl ResultsStateController {
             charts_stale: AtomicBool::new(false),
             plate_settings_written: Mutex::new(None),
             split: Mutex::new(split::SplitState::default()),
+            tracks: Mutex::new(tracks::TracksState::default()),
         }
     }
 
@@ -532,6 +536,7 @@ impl ResultsStateController {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             self.attach_split_callbacks(&ui);
+            self.attach_tracks_callbacks(&ui);
 
             // -------- ResultsState (api/results.slint) --------
             // Prototypes only for now - wire up the real behavior next.
@@ -577,6 +582,9 @@ impl ResultsStateController {
                     manager.show_view(mode);
                     if mode == ResultsRailMode::Matrix {
                         manager.update_matrix_view();
+                    }
+                    if mode == ResultsRailMode::Tracks {
+                        manager.tracks_show();
                     }
                 });
 
@@ -665,6 +673,11 @@ impl ResultsStateController {
                     .selected_t_stack = value as u32;
                 manager.refresh_list();
                 manager.refresh_charts();
+                // Split with the image: the image to that time point too
+                // (its objects follow).
+                if manager.split.lock().expect("Poisoned").shown {
+                    manager.split_show_time_point(value.max(0) as u32);
+                }
             });
 
             // -- List view --
@@ -2225,6 +2238,25 @@ impl ResultsStateController {
                 *self.export_populated.lock().expect("Poisened") = false;
                 // Another analysis: nothing of the last one's split.
                 *self.split.lock().expect("Poisoned") = split::SplitState::default();
+                *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
+                // Tracks only with tracked objects.
+                let has_tracks = results.has_tracks().unwrap_or_else(|err| {
+                    error!("Could not read whether the objects are tracked: {err}");
+                    false
+                });
+                let ui_weak = self.ui.clone();
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<ResultsState>();
+                    state.set_has_tracks(has_tracks);
+                    if !has_tracks && state.get_rail_mode() == ResultsRailMode::Tracks {
+                        state.set_rail_mode(ResultsRailMode::List);
+                        state.invoke_rail_mode_selected(ResultsRailMode::List);
+                    }
+                })
+                .ok();
                 let run_warning = match results.run_status() {
                     Ok(status) => status.warning().unwrap_or_default(),
                     Err(err) => {
@@ -6477,6 +6509,7 @@ mod tests {
         let overlay = crate::editor::results_overlay::ResultsOverlay {
             objects: objects.iter().map(|o| (o.bbox_px, [255, 0, 255])).collect(),
             selected: Some(0),
+            trails: None,
         };
         let (w, h) = (1920 + 512, 1080 + 512);
         let max_x = objects.iter().map(|o| o.bbox_px[2]).max().unwrap_or(1) as f32;

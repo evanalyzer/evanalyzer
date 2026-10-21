@@ -146,6 +146,50 @@ pub struct ResultObject {
     pub means: Vec<f32>,
     /// `ImageObjectsFilter::value_column`'s value.
     pub value: Option<f64>,
+    /// Its track - `None` when not tracked.
+    pub track_id: Option<u64>,
+}
+
+/// One image's tracks across its time points (Results › Tracks): their
+/// paths for the trails on the image and the tracks table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageTracksFilter {
+    pub image_rel_path: String,
+    pub z_stack: u32,
+    /// At most this many points: beyond, a repeatable sample of the tracks
+    /// (`ImageTracks::total_tracks` says how many there are).
+    pub max_points: usize,
+}
+
+/// A point of a track: where its object was at time point `t`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackPoint {
+    pub t: u32,
+    /// The object's centroid, in full-image pixels.
+    pub x: f32,
+    pub y: f32,
+    pub area_px: f32,
+}
+
+/// A track: its id, class (its first object's first) and points by time.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackPath {
+    pub track_id: u64,
+    pub class_id: i32,
+    pub points: Vec<TrackPoint>,
+}
+
+/// See [`ImageTracksFilter`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImageTracks {
+    /// By track id.
+    pub tracks: Vec<TrackPath>,
+    /// The image's tracks - more than `tracks` when sampled.
+    pub total_tracks: usize,
+    /// nm per pixel (x) - `None` when unknown.
+    pub pixel_size_nm: Option<f64>,
+    /// Seconds between time points - `None` when unknown.
+    pub frame_interval_s: Option<f64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

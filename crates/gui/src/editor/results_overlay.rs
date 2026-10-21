@@ -4,6 +4,11 @@
 //! selected one is drawn on top and bolder (the viewer's yellow crosshair
 //! points at it); the others are dimmed meanwhile. Drawn instead of the project's
 //! objects (see `ViewportController::sync_objects_to_slint_viewport`).
+//! With tracks (Results › Tracks) each track's path up to the time point
+//! shown goes under them as a trail, fading into the past.
+
+use evanalyzer_app::results::ImageTracks;
+use std::sync::Arc;
 
 /// The objects to draw, in image pixels.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -12,7 +17,31 @@ pub struct ResultsOverlay {
     pub objects: Vec<([u32; 4], [u8; 3])>,
     /// Index into `objects`.
     pub selected: Option<usize>,
+    /// The tracks' trails, under the objects.
+    pub trails: Option<Arc<TrailsOverlay>>,
 }
+
+/// The image's tracks as trails up to time point `t`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrailsOverlay {
+    pub tracks: Arc<ImageTracks>,
+    /// RGB per track (`tracks.tracks`' order).
+    pub colors: Vec<[u8; 3]>,
+    /// The time point shown: a trail ends there.
+    pub t: u32,
+    /// Time points back a trail reaches - `None`: from the track's start.
+    pub frames: Option<u32>,
+    /// Index into `tracks.tracks`: its whole path faint, its trail white.
+    pub selected: Option<usize>,
+    /// Only the selected track's.
+    pub only_selected: bool,
+}
+
+/// A trail's opacity at its newest end; its oldest end a quarter of it.
+const TRAIL_ALPHA: f32 = 0.9;
+/// The selected track's whole path, behind its trail.
+const GHOST_ALPHA: f32 = 0.22;
+const SELECTED_RGB: [u8; 3] = [255, 255, 255];
 
 /// Outline opacity; the inside gets a faint tint, dimmed objects a third.
 const OUTLINE_ALPHA: f32 = 0.95;
@@ -31,6 +60,9 @@ pub fn draw_results_overlay(
     off_y: f32,
 ) {
     let (w, h) = (buf_w as i64, buf_h as i64);
+    if let Some(trails) = &overlay.trails {
+        draw_trails(buffer, trails, buf_w, buf_h, zoom, off_x, off_y);
+    }
     // The selected one last: on top.
     let order = (0..overlay.objects.len())
         .filter(|i| Some(*i) != overlay.selected)
@@ -117,6 +149,124 @@ pub fn draw_results_overlay(
             for x in in1.max(in0).max(xs.start)..xs.end {
                 edge(x, row);
             }
+        }
+    }
+}
+
+/// The trails of `trails` into `buffer`, as `draw_results_overlay` places
+/// image pixels. Each segment from one time point to the next; the older
+/// it is, the fainter.
+fn draw_trails(
+    buffer: &mut [slint::Rgba8Pixel],
+    trails: &TrailsOverlay,
+    buf_w: u32,
+    buf_h: u32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) {
+    let screen = |p: &evanalyzer_app::results::TrackPoint| (p.x * zoom + off_x, p.y * zoom + off_y);
+    let from = trails.frames.map(|n| trails.t.saturating_sub(n));
+    let span = trails.frames.unwrap_or(trails.t).max(1) as f32;
+    let mut canvas = Canvas {
+        buffer,
+        w: buf_w as i64,
+        h: buf_h as i64,
+    };
+    // The selected one last: on top.
+    let order = (0..trails.tracks.tracks.len())
+        .filter(|i| Some(*i) != trails.selected && !trails.only_selected)
+        .chain(trails.selected.filter(|s| *s < trails.tracks.tracks.len()));
+    for i in order {
+        let track = &trails.tracks.tracks[i];
+        let selected = trails.selected == Some(i);
+        let rgb = match selected {
+            true => SELECTED_RGB,
+            false => trails.colors.get(i).copied().unwrap_or(SELECTED_RGB),
+        };
+        // Its whole path, faint: where it comes from and goes.
+        if selected {
+            for pair in track.points.windows(2) {
+                canvas.line(screen(&pair[0]), screen(&pair[1]), rgb, GHOST_ALPHA, false);
+            }
+        }
+        // Points are by time: the trail's from its first within reach to
+        // the time point shown.
+        let start = from.map_or(0, |from| track.points.partition_point(|p| p.t < from));
+        let end = track.points.partition_point(|p| p.t <= trails.t);
+        if end < start + 2 {
+            continue;
+        }
+        for pair in track.points[start..end].windows(2) {
+            let age = trails.t.saturating_sub(pair[1].t) as f32 / span;
+            let alpha = TRAIL_ALPHA * (1.0 - 0.75 * age.min(1.0));
+            canvas.line(screen(&pair[0]), screen(&pair[1]), rgb, alpha, selected);
+        }
+    }
+}
+
+/// A buffer to draw anti-aliased lines into.
+struct Canvas<'a> {
+    buffer: &'a mut [slint::Rgba8Pixel],
+    w: i64,
+    h: i64,
+}
+
+impl Canvas<'_> {
+    fn plot(&mut self, x: i64, y: i64, rgb: [u8; 3], alpha: f32) {
+        if x >= 0 && y >= 0 && x < self.w && y < self.h && alpha > 0.0 {
+            blend(&mut self.buffer[(y * self.w + x) as usize], rgb, alpha);
+        }
+    }
+
+    /// From `a` to `b` (screen pixels), anti-aliased (Xiaolin Wu) - `bold`:
+    /// a second line beside it, about 2 px wide. Off screen: skipped.
+    fn line(&mut self, a: (f32, f32), b: (f32, f32), rgb: [u8; 3], alpha: f32, bold: bool) {
+        let (w, h) = (self.w as f32, self.h as f32);
+        if a.0.max(b.0) < -1.0 || a.1.max(b.1) < -1.0 || a.0.min(b.0) > w || a.1.min(b.1) > h {
+            return;
+        }
+        self.wu(a, b, rgb, alpha);
+        if bold {
+            // Beside it, across its direction.
+            let steep = (b.1 - a.1).abs() > (b.0 - a.0).abs();
+            let (dx, dy) = if steep { (1.0, 0.0) } else { (0.0, 1.0) };
+            self.wu((a.0 + dx, a.1 + dy), (b.0 + dx, b.1 + dy), rgb, alpha);
+        }
+    }
+
+    fn wu(&mut self, a: (f32, f32), b: (f32, f32), rgb: [u8; 3], alpha: f32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (a.0, a.1, b.0, b.1);
+        let steep = (y1 - y0).abs() > (x1 - x0).abs();
+        if steep {
+            std::mem::swap(&mut x0, &mut y0);
+            std::mem::swap(&mut x1, &mut y1);
+        }
+        if x0 > x1 {
+            std::mem::swap(&mut x0, &mut x1);
+            std::mem::swap(&mut y0, &mut y1);
+        }
+        let gradient = match x1 - x0 {
+            d if d < 1e-6 => 0.0,
+            d => (y1 - y0) / d,
+        };
+        // Only the columns on screen (a long segment zoomed in).
+        let limit = if steep { self.h } else { self.w } as f32;
+        let first = x0.round().max(-1.0);
+        let last = x1.round().min(limit);
+        let mut x = first;
+        while x <= last {
+            let y = y0 + gradient * (x - x0);
+            let (yi, frac) = (y.floor(), y - y.floor());
+            let (xi, yi) = (x as i64, yi as i64);
+            if steep {
+                self.plot(yi, xi, rgb, alpha * (1.0 - frac));
+                self.plot(yi + 1, xi, rgb, alpha * frac);
+            } else {
+                self.plot(xi, yi, rgb, alpha * (1.0 - frac));
+                self.plot(xi, yi + 1, rgb, alpha * frac);
+            }
+            x += 1.0;
         }
     }
 }
@@ -227,11 +377,186 @@ mod tests {
         ]
     }
 
+    /// Two tracks along rows y = 10 and y = 30 of a 100 × 40 buffer, a
+    /// point every 10 px from t = 0 (x = 0) to t = 9 (x = 90).
+    fn trails(
+        t: u32,
+        frames: Option<u32>,
+        selected: Option<usize>,
+        only_selected: bool,
+    ) -> ResultsOverlay {
+        use evanalyzer_app::results::{TrackPath, TrackPoint};
+        let track = |id: u64, y: f32| TrackPath {
+            track_id: id,
+            class_id: 1,
+            points: (0..10)
+                .map(|t| TrackPoint {
+                    t,
+                    x: t as f32 * 10.0,
+                    y,
+                    area_px: 1.0,
+                })
+                .collect(),
+        };
+        ResultsOverlay {
+            objects: Vec::new(),
+            selected: None,
+            trails: Some(Arc::new(TrailsOverlay {
+                tracks: Arc::new(ImageTracks {
+                    tracks: vec![track(1, 10.0), track(2, 30.0)],
+                    total_tracks: 2,
+                    ..ImageTracks::default()
+                }),
+                colors: vec![[255, 0, 0], [0, 0, 255]],
+                t,
+                frames,
+                selected,
+                only_selected,
+            })),
+        }
+    }
+
+    fn alpha_at(buf: &[slint::Rgba8Pixel], x: u32, y: u32) -> u8 {
+        buf[(y * 100 + x) as usize].a
+    }
+
+    /// Benchmark (not run by default): 1500 tracks of 48 time points on a
+    /// 2000 × 1500 image, drawn at 1920 × 1080 - trails of 10 time points,
+    /// whole tracks, the selected one alone.
+    /// `cargo test --release -p evanalyzer_gui --lib bench_trails -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_trails() {
+        use evanalyzer_app::results::{TrackPath, TrackPoint};
+        let mut seed = 1u64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as f32 / (1u64 << 31) as f32
+        };
+        let tracks: Vec<TrackPath> = (0..1500)
+            .map(|id| {
+                let (mut x, mut y) = (rnd() * 2000.0, rnd() * 1500.0);
+                TrackPath {
+                    track_id: id + 1,
+                    class_id: 1,
+                    points: (0..48)
+                        .map(|t| {
+                            x += (rnd() - 0.5) * 12.0;
+                            y += (rnd() - 0.5) * 12.0;
+                            TrackPoint {
+                                t,
+                                x,
+                                y,
+                                area_px: 100.0,
+                            }
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        let tracks = Arc::new(ImageTracks {
+            total_tracks: tracks.len(),
+            tracks,
+            ..ImageTracks::default()
+        });
+        let overlay = |frames, selected, only_selected| ResultsOverlay {
+            objects: Vec::new(),
+            selected: None,
+            trails: Some(Arc::new(TrailsOverlay {
+                tracks: tracks.clone(),
+                colors: vec![[90, 160, 255]; 1500],
+                t: 30,
+                frames,
+                selected,
+                only_selected,
+            })),
+        };
+        for (label, overlay) in [
+            (
+                "trails of 10 time points",
+                overlay(Some(10), Some(5), false),
+            ),
+            ("whole tracks up to t", overlay(None, Some(5), false)),
+            ("the selected track only", overlay(Some(10), Some(5), true)),
+        ] {
+            let mut times = Vec::new();
+            for _ in 0..15 {
+                let mut buf = buffer(1920, 1080);
+                let start = std::time::Instant::now();
+                draw_results_overlay(&mut buf, &overlay, 1920, 1080, 0.9, 0.0, 0.0);
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            times.sort_by(f64::total_cmp);
+            println!("{label:<28} {:>7.2} ms", times[times.len() / 2]);
+        }
+    }
+
+    /// A trail ends at the time point shown; the older part is fainter.
+    #[test]
+    fn a_trail_reaches_the_time_point_shown_and_fades_back() {
+        let mut buf = buffer(100, 40);
+        draw_results_overlay(
+            &mut buf,
+            &trails(5, None, None, false),
+            100,
+            40,
+            1.0,
+            0.0,
+            0.0,
+        );
+        let (old, new) = (alpha_at(&buf, 5, 10), alpha_at(&buf, 45, 10));
+        assert!(old > 0 && new > old, "old {old}, new {new}");
+        assert_eq!(buf[(10 * 100 + 45) as usize].r, 255);
+        assert_eq!(alpha_at(&buf, 70, 10), 0, "not beyond t = 5");
+        assert!(alpha_at(&buf, 45, 30) > 0, "the other track too");
+    }
+
+    /// `frames`: only that many time points back.
+    #[test]
+    fn a_trail_of_n_frames_starts_n_back() {
+        let mut buf = buffer(100, 40);
+        draw_results_overlay(
+            &mut buf,
+            &trails(8, Some(3), None, false),
+            100,
+            40,
+            1.0,
+            0.0,
+            0.0,
+        );
+        assert_eq!(alpha_at(&buf, 35, 10), 0, "before t = 5");
+        assert!(alpha_at(&buf, 65, 10) > 0);
+    }
+
+    /// The selected track: white, its whole path faint behind - and alone
+    /// with "only selected".
+    #[test]
+    fn the_selected_track_is_white_with_its_whole_path() {
+        let mut buf = buffer(100, 40);
+        draw_results_overlay(
+            &mut buf,
+            &trails(5, None, Some(0), true),
+            100,
+            40,
+            1.0,
+            0.0,
+            0.0,
+        );
+        let pixel = buf[(10 * 100 + 45) as usize];
+        assert_eq!((pixel.r, pixel.g, pixel.b), (255, 255, 255));
+        assert!(alpha_at(&buf, 75, 10) > 0, "its path ahead, faint");
+        assert!(alpha_at(&buf, 75, 10) < alpha_at(&buf, 45, 10));
+        assert_eq!(alpha_at(&buf, 45, 30), 0, "the other track hidden");
+    }
+
     #[test]
     fn an_object_is_a_ring_with_a_faint_inside() {
         let overlay = ResultsOverlay {
             objects: vec![([10, 10, 29, 29], [255, 0, 0])],
             selected: None,
+            trails: None,
         };
         let mut buf = buffer(40, 40);
         draw_results_overlay(&mut buf, &overlay, 40, 40, 1.0, 0.0, 0.0);
@@ -251,6 +576,7 @@ mod tests {
                 ([10, 10, 13, 90], [0, 255, 0]),
             ],
             selected: None,
+            trails: None,
         };
         let mut buf = buffer(80, 100);
         draw_results_overlay(&mut buf, &overlay, 80, 100, 1.0, 0.0, 0.0);
@@ -293,6 +619,7 @@ mod tests {
         let overlay = ResultsOverlay {
             objects: vec![([0, 0, 9, 9], [255, 0, 0]), ([20, 0, 29, 9], [0, 255, 0])],
             selected: Some(1),
+            trails: None,
         };
         let mut buf = buffer(30, 10);
         draw_results_overlay(&mut buf, &overlay, 30, 10, 1.0, 0.0, 0.0);
@@ -316,6 +643,7 @@ mod tests {
                 ([5000, 5000, 5100, 5100], [0, 0, 255]),
             ],
             selected: None,
+            trails: None,
         };
         let mut buf = buffer(20, 20);
         draw_results_overlay(&mut buf, &overlay, 20, 20, 0.1, 0.0, 0.0);
@@ -351,6 +679,7 @@ mod tests {
                 ([200, 0, 209, 9], [0; 3]),
             ],
             selected: None,
+            trails: None,
         };
         assert_eq!(object_at(&overlay, 50.0, 50.0, 1.0, 0.0, 0.0), Some(1));
         assert_eq!(object_at(&overlay, 10.0, 50.0, 1.0, 0.0, 0.0), Some(0));

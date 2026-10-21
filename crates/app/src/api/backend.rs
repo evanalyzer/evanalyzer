@@ -207,6 +207,13 @@ pub trait ResultsSource: Send + Sync {
         &self,
         filter: &crate::api::ImageObjectsFilter,
     ) -> Result<Vec<crate::api::ResultObject>, InternalErrors>;
+    /// Some of the objects are tracked (Results › Tracks is offered).
+    fn has_tracks(&self) -> Result<bool, InternalErrors>;
+    /// One image's tracks, their points by time (Results › Tracks).
+    fn image_tracks(
+        &self,
+        filter: &crate::api::ImageTracksFilter,
+    ) -> Result<crate::api::ImageTracks, InternalErrors>;
     /// Writes the export's files into `export.output_dir` (on the backend's
     /// machine). Blocks; stops early with `Cancelled` once `cancel` is set.
     fn export(

@@ -56,15 +56,16 @@ export component ResultsBarNav inherits HorizontalLayout {
     VerticalLayout {
         alignment: center;
         InkSegmented {
-            width: 190px;
+            width: ResultsState.has-tracks ? 250px : 190px;
             label: "Results view";
             // Split works with List and Plate.
             disabled-index: ResultsState.split ? 2 : -1;
             disabled-why: "Split view works with List and Plate";
-            model: ["List", "Plate", "Charts"];
-            selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : 0;
+            // Tracks: only with tracked objects.
+            model: ResultsState.has-tracks ? ["List", "Plate", "Charts", "Tracks"] : ["List", "Plate", "Charts"];
+            selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : ResultsState.rail-mode == ResultsRailMode.tracks ? 3 : 0;
             picked(i) => {
-                ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : ResultsRailMode.list;
+                ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : i == 3 ? ResultsRailMode.tracks : ResultsRailMode.list;
                 ResultsState.rail-mode-selected(ResultsState.rail-mode);
             }
         }
@@ -76,8 +77,11 @@ export component ResultsBarNav inherits HorizontalLayout {
         InkSegmented {
             width: 200px;
             label: "Layout";
+            // Tracks are always beside their image.
+            disabled-index: ResultsState.rail-mode == ResultsRailMode.tracks ? 0 : -1;
+            disabled-why: "Tracks are shown beside their image";
             model: ["Full", "Split with image"];
-            selected: ResultsState.split ? 1 : 0;
+            selected: ResultsState.split || ResultsState.rail-mode == ResultsRailMode.tracks ? 1 : 0;
             picked(i) => {
                 ResultsState.split = i == 1;
                 ResultsState.split-changed(i == 1);

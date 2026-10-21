@@ -328,6 +328,33 @@ cases 11 and 12 of `bench_time_course`. It already wrote page by page
 The GUI's List uses the same query: open + first page of the 1.7 GB
 analysis 65-75 ms (was 75-79 ms, alternated), RAM unchanged (~200 MB).
 
+### Results › Tracks (2026-10-21)
+
+One image's tracks for the table and the trails: one query per image,
+read once (stepping through time only reads that time point's objects).
+Same dataset (1500 tracks per image, 48 time points).
+
+```sh
+./target/release/examples/bench_time_course tests/timeseries_96img_48t_tracked.evadb --iters 5 --case 13
+cargo test --release -p evanalyzer_gui --lib bench_trails -- --ignored --nocapture
+```
+
+| Step | Time | RAM |
+|---|---|---|
+| An image's tracks (1500 tracks, 68,511 points) | 15-17 ms | 57-63 MB peak (query process); ~1 MB kept |
+| Trails of 10 time points, 1500 tracks, 1920 × 1080 | 1.4 ms | - |
+| Whole tracks up to the time point | 5.3 ms | - |
+| The selected track only | 0.01 ms | - |
+
+At most 1,000,000 points of an image are read (~16 MB): beyond, a
+repeatable sample of whole tracks, and the table says "N of M tracks (a
+sample)". The table's rows are made only when shown (`ListView`), so
+100,000 tracks cost no more there than 100. The trails are drawn with the
+objects on the viewer's worker thread (the ellipses take 17-37 ms there).
+
+The window's generated UI code grew 52.49 → 53.33 MB (+1.6 %) with the
+Tracks view.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -344,6 +371,7 @@ graphics driver).
 | Over time chart, 6.6M objects | 180-470 MB (query process) | 2026-10-21 | Time course |
 | Time course export, 6.6M objects | 250-410 MB (query process) | 2026-10-21 | Time course |
 | List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |
+| Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |

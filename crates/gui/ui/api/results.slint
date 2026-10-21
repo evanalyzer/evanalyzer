@@ -3,7 +3,8 @@
 
 import { MultiSelectItem } from "../ink/ink.slint";
 
-export enum ResultsRailMode { list, matrix, charts }
+// Tracks: only with tracked objects - one image's tracks, beside it.
+export enum ResultsRailMode { list, matrix, charts, tracks }
 
 // Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
 // object (single image + detected objects).
@@ -29,6 +30,27 @@ export struct SplitObject {
     area: string,
     mean: string,
     position: string,
+}
+
+// Tracks: a row of the image's tracks table.
+export struct TrackRow {
+    id: string,
+    color: color,
+    // "0–41" and how many time points.
+    span: string,
+    frames: string,
+    speed: string,
+    // The area over its time points: path commands in 0 0 100 20.
+    curve: string,
+}
+
+// Tracks: the selected track's card facts.
+export struct TrackCard {
+    active: bool,
+    id: string,
+    span: string,
+    displacement: string,
+    speed: string,
 }
 
 // Split with image, Plate: one of the well's images under the image.
@@ -172,6 +194,37 @@ export global ResultsState {
     // The split is on screen (or not): its objects on the image (or the
     // project's).
     callback split-shown(bool);
+
+    // -- Tracks (with tracked objects): one image's tracks, beside it --
+    in-out property <bool> has-tracks: false;
+    // The image's tracks in the table's order, the selected row (-1 none).
+    in-out property <[TrackRow]> track-rows;
+    in-out property <int> track-selected: -1;
+    // The image, and "26 tracks" (or "400 of 12,000 tracks, a sample").
+    in-out property <string> tracks-image;
+    in-out property <string> tracks-summary;
+    // Sorted by 0 track, 1 time points, 2 speed (descending but the id).
+    in-out property <int> tracks-sort: 0;
+    // Speed in 0 px/frame, 1 µm/min, 2 µm/s - µm only with a pixel size
+    // and a frame interval.
+    in-out property <int> tracks-unit: 0;
+    in-out property <bool> tracks-um: false;
+    in-out property <string> tracks-speed-unit: "px/frame";
+    // On the image: 0 no trail, 1 the last `trail-frames`, 2 whole tracks.
+    in-out property <int> trail-mode: 1;
+    in-out property <int> trail-frames: 10;
+    in-out property <bool> tracks-only-selected: false;
+    // Paths in each track's color, else its class's.
+    in-out property <bool> tracks-by-track: true;
+    in-out property <TrackCard> track-card;
+    callback track-row-clicked(int);
+    // ‹ / ›: the previous / next image with tracks.
+    callback tracks-image-step(int);
+    callback tracks-sort-changed(int);
+    callback tracks-unit-changed(int);
+    callback trail-changed(int, int);
+    callback tracks-only-selected-changed(bool);
+    callback tracks-by-track-changed(bool);
 
     // Set when the analysis that wrote the open database didn't finish
     // (cancelled, failed, interrupted) - the results are incomplete.
