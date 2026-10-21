@@ -26,7 +26,11 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
     // As asked, else what this computer can take.
     let max = request
         .max_visible_tiles
-        .unwrap_or_else(|| ViewportMemorySettings::auto_preview_tiles(crate::backend::local::system::cpu_ram_diagnostics().1))
+        .unwrap_or_else(|| {
+            ViewportMemorySettings::auto_preview_tiles(
+                crate::backend::local::system::cpu_ram_diagnostics().1,
+            )
+        })
         .max(1) as usize;
     match job.count_preview_visible_tiles() {
         Ok(tiles) if tiles > max => {

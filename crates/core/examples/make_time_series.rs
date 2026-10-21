@@ -42,7 +42,11 @@ fn noise(seed: u64) -> f64 {
     (x % 1_000_000) as f64 / 1_000_000.0
 }
 
-const CLASSES: [(u32, &str, f64); 3] = [(1, "Nuclei", 120.0), (2, "Cells", 900.0), (3, "Spots in cells", 12.0)];
+const CLASSES: [(u32, &str, f64); 3] = [
+    (1, "Nuclei", 120.0),
+    (2, "Cells", 900.0),
+    (3, "Spots in cells", 12.0),
+];
 
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).expect(
@@ -59,9 +63,15 @@ fn main() {
 
     let class_names: HashMap<ObjectClass, (String, u32)> = CLASSES
         .iter()
-        .map(|(id, name, _)| (ObjectClass::Global(*id), (name.to_string(), 0x2A6BDF + id * 0x101010)))
+        .map(|(id, name, _)| {
+            (
+                ObjectClass::Global(*id),
+                (name.to_string(), 0x2A6BDF + id * 0x101010),
+            )
+        })
         .collect();
-    let exporter = DuckDbExporter::new(&out, class_names, &MetaData::default()).expect("create exporter");
+    let exporter =
+        DuckDbExporter::new(&out, class_names, &MetaData::default()).expect("create exporter");
 
     let start = Instant::now();
     let mut next_id: u128 = 1;
@@ -70,7 +80,12 @@ fn main() {
     for image in 0..wells * fields {
         let well = image / fields;
         let (row, col) = (well / 12, well % 12);
-        let name = format!("{}{:02}_{:02}.tif", (b'A' + row as u8) as char, col + 1, image % fields + 1);
+        let name = format!(
+            "{}{:02}_{:02}.tif",
+            (b'A' + row as u8) as char,
+            col + 1,
+            image % fields + 1
+        );
         // Each column grows at its own rate - something to see per well.
         let growth = 0.1 + col as f64 * 0.05;
         for t in 0..times {
@@ -80,26 +95,42 @@ fn main() {
             for k in 0..per_image {
                 let track = (image * per_image + k) as u64 + 1;
                 // 10 % of the tracks start late, 10 % end early.
-                let first = if noise(track) < 0.1 { (noise(track + 7) * times as f64 / 2.0) as usize } else { 0 };
-                let last = if noise(track + 3) < 0.1 { times / 2 + (noise(track + 11) * times as f64 / 2.0) as usize } else { times };
+                let first = if noise(track) < 0.1 {
+                    (noise(track + 7) * times as f64 / 2.0) as usize
+                } else {
+                    0
+                };
+                let last = if noise(track + 3) < 0.1 {
+                    times / 2 + (noise(track + 11) * times as f64 / 2.0) as usize
+                } else {
+                    times
+                };
                 if t < first || t >= last {
                     continue;
                 }
                 let (class_id, _, base) = CLASSES[(noise(track + 5) * 10.0) as usize % 5 / 2];
-                let mut object_class: HashSet<ObjectClass> = HashSet::from([ObjectClass::Global(class_id)]);
+                let mut object_class: HashSet<ObjectClass> =
+                    HashSet::from([ObjectClass::Global(class_id)]);
                 if class_id == 3 && noise(track + 13) < 0.2 {
                     object_class.insert(ObjectClass::Global(2));
                 }
                 let progress = t as f64 / times.max(2) as f64;
-                let area = (base * (1.0 + growth * progress) * (0.7 + 0.6 * noise(track * 31 + t as u64))).max(1.0) as usize;
+                let area =
+                    (base * (1.0 + growth * progress) * (0.7 + 0.6 * noise(track * 31 + t as u64)))
+                        .max(1.0) as usize;
                 let (cx, cy) = (
-                    (noise(track + 17) * 3800.0 + t as f64 * 2.0 * (noise(track + 19) - 0.5)) as u64 + 100,
-                    (noise(track + 23) * 3800.0 + t as f64 * 2.0 * (noise(track + 29) - 0.5)) as u64 + 100,
+                    (noise(track + 17) * 3800.0 + t as f64 * 2.0 * (noise(track + 19) - 0.5))
+                        as u64
+                        + 100,
+                    (noise(track + 23) * 3800.0 + t as f64 * 2.0 * (noise(track + 29) - 0.5))
+                        as u64
+                        + 100,
                 );
                 let brightness = 1.0 - 0.4 * progress * (class_id as f64 / 3.0);
                 let intensities: IndexMap<i32, Intensity> = (0..2)
                     .map(|channel| {
-                        let mean = (300.0 + 900.0 * noise(track + channel as u64 * 101)) * brightness;
+                        let mean =
+                            (300.0 + 900.0 * noise(track + channel as u64 * 101)) * brightness;
                         (
                             channel,
                             Intensity {
@@ -130,7 +161,11 @@ fn main() {
                         area,
                         sum_x: cx * area as u64,
                         sum_y: cy * area as u64,
-                        plane: ImagePlane { z: 0, c: 0, t: t as i32 },
+                        plane: ImagePlane {
+                            z: 0,
+                            c: 0,
+                            t: t as i32,
+                        },
                         ..Default::default()
                     }),
                 );

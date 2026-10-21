@@ -12,9 +12,9 @@ use crate::{
     ImportClassRow, WarningState,
 };
 use evanalyzer_app::project::{
-    AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, ProjectExt,
-    ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
-    PipelineObjects, image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
+    AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, PipelineObjects,
+    ProjectExt, ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
+    image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -381,7 +381,11 @@ impl AnnotationController {
         let project = self.app_state.get_project();
         let Some(rel_path) = project.get_current_relative_path() else {
             drop(project);
-            self.show_message("No image open", "Open the image whose annotations to export or import first.".into(), true);
+            self.show_message(
+                "No image open",
+                "Open the image whose annotations to export or import first.".into(),
+                true,
+            );
             return None;
         };
         let name = rel_path
@@ -394,16 +398,18 @@ impl AnnotationController {
     /// The export dialog: the open image's manual annotations by class,
     /// all ticked.
     fn open_export_dialog(self: &Arc<Self>) {
-        let Some((rel_path, _, name)) = self.open_image() else { return };
+        let Some((rel_path, _, name)) = self.open_image() else {
+            return;
+        };
         let Some(ui) = self.ui.upgrade() else { return };
         let rows = {
             let project = self.app_state.get_project();
             // Its manual annotations and the pipeline objects shown on it.
             let classes: Vec<(ObjectClass, usize)> =
                 image_annotation_classes(&project, &rel_path, project.get_preview_objects())
-                .into_iter()
-                .map(|(id, count)| (id.map_or(ObjectClass::Unset, ObjectClass::Global), count))
-                .collect();
+                    .into_iter()
+                    .map(|(id, count)| (id.map_or(ObjectClass::Unset, ObjectClass::Global), count))
+                    .collect();
             class_rows(&project, &classes)
         };
         let state = ui.global::<AnnotationState>();
@@ -417,7 +423,9 @@ impl AnnotationController {
     /// open image's annotations of the ticked classes there.
     fn export_geojson(self: &Arc<Self>) {
         let Some(ui) = self.ui.upgrade() else { return };
-        let Some((rel_path, series, name)) = self.open_image() else { return };
+        let Some((rel_path, series, name)) = self.open_image() else {
+            return;
+        };
         let classes: std::collections::HashSet<Option<u32>> =
             ticked(&ui.global::<AnnotationState>().get_export_classes())
                 .into_iter()
@@ -427,7 +435,11 @@ impl AnnotationController {
                 })
                 .collect();
         if classes.is_empty() {
-            return self.show_message("Nothing exported", "Tick the classes to export.".into(), true);
+            return self.show_message(
+                "Nothing exported",
+                "Tick the classes to export.".into(),
+                true,
+            );
         }
         let stem = Path::new(&name)
             .file_stem()
@@ -458,11 +470,25 @@ impl AnnotationController {
                         project.get_preview_objects().clone(),
                     )
                 };
-                let pipeline = PipelineObjects { objects: &pipeline, series };
-                match export_image_geojson(&project, backend.files(), &rel_path, &classes, &file, pipeline) {
+                let pipeline = PipelineObjects {
+                    objects: &pipeline,
+                    series,
+                };
+                match export_image_geojson(
+                    &project,
+                    backend.files(),
+                    &rel_path,
+                    &classes,
+                    &file,
+                    pipeline,
+                ) {
                     Ok(count) => m.show_message(
                         "Annotations exported",
-                        format!("{} written to {}.", plural(count, "object", "objects"), file.display()),
+                        format!(
+                            "{} written to {}.",
+                            plural(count, "object", "objects"),
+                            file.display()
+                        ),
                         true,
                     ),
                     Err(e) => m.show_message("Export failed", e, false),
@@ -475,7 +501,9 @@ impl AnnotationController {
     /// the import dialog: the file's classes, each mapped to its project
     /// class of the same name, else a new one.
     fn pick_import_file(self: &Arc<Self>) {
-        let Some((rel_path, series, name)) = self.open_image() else { return };
+        let Some((rel_path, series, name)) = self.open_image() else {
+            return;
+        };
         let mut request = FileRequest::open_file("Import annotations from")
             .filter("GeoJSON", &["geojson", "json"]);
         if let Some(dir) = self.project_folder() {
@@ -487,12 +515,23 @@ impl AnnotationController {
             let m = m.clone();
             crate::helper::ui_thread::spawn(move || {
                 let backend = m.app_state.backend();
-                let read = read_image_geojson(&m.app_state.get_project(), backend.files(), &file, &rel_path, series);
+                let read = read_image_geojson(
+                    &m.app_state.get_project(),
+                    backend.files(),
+                    &file,
+                    &rel_path,
+                    series,
+                );
                 let pending = match read {
                     Ok(pending) => pending,
                     Err(e) => return m.show_message("Import failed", e, false),
                 };
-                let ImportTargets { rows, targets, colors, classes } = {
+                let ImportTargets {
+                    rows,
+                    targets,
+                    colors,
+                    classes,
+                } = {
                     let project = m.app_state.get_project();
                     import_rows(&project, &pending)
                 };
@@ -524,7 +563,9 @@ impl AnnotationController {
     /// added - or replacing its manual annotations.
     fn apply_import(self: &Arc<Self>, replace: bool) {
         let Some(ui) = self.ui.upgrade() else { return };
-        let Some(read) = self.pending_import.lock().expect("Poisoned").take() else { return };
+        let Some(read) = self.pending_import.lock().expect("Poisoned").take() else {
+            return;
+        };
         let mapping: std::collections::HashMap<String, ClassTarget> = ui
             .global::<AnnotationState>()
             .get_import_classes()
@@ -623,10 +664,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 /// The import dialog's rows (the file's class names, each with its
 /// default target), its targets, the project classes behind them.
-fn import_rows(
-    project: &ProjectWithRuntime,
-    pending: &PendingImport,
-) -> ImportTargets {
+fn import_rows(project: &ProjectWithRuntime, pending: &PendingImport) -> ImportTargets {
     let classes: Vec<(u32, String, u32)> = project
         .settings
         .classification
@@ -637,7 +675,11 @@ fn import_rows(
         .collect();
     let mut targets: Vec<slint::SharedString> =
         vec!["New class".into(), "No class".into(), "Don't import".into()];
-    targets.extend(classes.iter().map(|(_, name, _)| slint::SharedString::from(name.as_str())));
+    targets.extend(
+        classes
+            .iter()
+            .map(|(_, name, _)| slint::SharedString::from(name.as_str())),
+    );
     // The project classes' colors beside their names; none for the first three.
     let mut colors = vec![slint::Color::from_argb_u8(0, 0, 0, 0); 3];
     colors.extend(classes.iter().map(|(_, _, color)| color_from_hex(*color)));
@@ -647,7 +689,10 @@ fn import_rows(
         .into_iter()
         .map(|class| {
             let target = match default_class_target(project, &class.name) {
-                ClassTarget::Class(id) => ids.iter().position(|i| *i == id).map_or(TARGET_NEW, |k| 3 + k as i32),
+                ClassTarget::Class(id) => ids
+                    .iter()
+                    .position(|i| *i == id)
+                    .map_or(TARGET_NEW, |k| 3 + k as i32),
                 ClassTarget::NoClass => TARGET_NONE,
                 ClassTarget::Skip => TARGET_SKIP,
                 ClassTarget::New => TARGET_NEW,
@@ -660,7 +705,12 @@ fn import_rows(
             }
         })
         .collect();
-    ImportTargets { rows, targets, colors, classes: ids }
+    ImportTargets {
+        rows,
+        targets,
+        colors,
+        classes: ids,
+    }
 }
 
 /// The import dialog's content: [`import_rows`].
@@ -831,8 +881,19 @@ mod tests {
         use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
         let mut project = ProjectWithRuntime::default();
         let mut entry = ImageEntry::default();
-        entry.series.insert(0, SeriesSettings { image_width: 20, image_height: 20, ..Default::default() });
-        project.settings.images.list.insert(PathBuf::from("a.tif"), entry);
+        entry.series.insert(
+            0,
+            SeriesSettings {
+                image_width: 20,
+                image_height: 20,
+                ..Default::default()
+            },
+        );
+        project
+            .settings
+            .images
+            .list
+            .insert(PathBuf::from("a.tif"), entry);
         let nuclei = 5;
         project.settings.classification.classes_mut().push(Class {
             id: nuclei,
@@ -853,7 +914,12 @@ mod tests {
                 "properties": properties
             })
         };
-        std::fs::write(&file, serde_json::json!([shape(Some("nuclei")), shape(Some("Tumor")), shape(None)]).to_string()).unwrap();
+        std::fs::write(
+            &file,
+            serde_json::json!([shape(Some("nuclei")), shape(Some("Tumor")), shape(None)])
+                .to_string(),
+        )
+        .unwrap();
         let pending = read_image_geojson(
             &project,
             &evanalyzer_app::fs::LocalFileSystem::default(),
@@ -863,14 +929,30 @@ mod tests {
         )
         .unwrap();
 
-        let ImportTargets { rows, targets, colors, classes } = import_rows(&project, &pending);
-        let names: Vec<(String, i32)> = rows.iter().map(|r| (r.name.to_string(), r.target)).collect();
+        let ImportTargets {
+            rows,
+            targets,
+            colors,
+            classes,
+        } = import_rows(&project, &pending);
+        let names: Vec<(String, i32)> = rows
+            .iter()
+            .map(|r| (r.name.to_string(), r.target))
+            .collect();
         assert_eq!(
             names,
-            vec![("nuclei".into(), 3), ("Tumor".into(), TARGET_NEW), (String::new(), TARGET_NONE)]
+            vec![
+                ("nuclei".into(), 3),
+                ("Tumor".into(), TARGET_NEW),
+                (String::new(), TARGET_NONE)
+            ]
         );
         assert_eq!(targets[3], "Nuclei");
-        assert_eq!(colors[3], color_from_hex(0x3080f0), "beside its name, its colour");
+        assert_eq!(
+            colors[3],
+            color_from_hex(0x3080f0),
+            "beside its name, its colour"
+        );
         assert_eq!(colors[0].alpha(), 0, "none for New class");
         assert_eq!(target_of(3, &classes), ClassTarget::Class(nuclei));
         assert_eq!(target_of(TARGET_SKIP, &classes), ClassTarget::Skip);
@@ -880,9 +962,18 @@ mod tests {
 
     #[test]
     fn a_typed_export_name_gets_the_geojson_extension() {
-        assert_eq!(with_geojson_extension("/d/cells".into()), PathBuf::from("/d/cells.geojson"));
-        assert_eq!(with_geojson_extension("/d/cells.GeoJSON".into()), PathBuf::from("/d/cells.GeoJSON"));
-        assert_eq!(with_geojson_extension("/d/a.tif".into()), PathBuf::from("/d/a.tif.geojson"));
+        assert_eq!(
+            with_geojson_extension("/d/cells".into()),
+            PathBuf::from("/d/cells.geojson")
+        );
+        assert_eq!(
+            with_geojson_extension("/d/cells.GeoJSON".into()),
+            PathBuf::from("/d/cells.GeoJSON")
+        );
+        assert_eq!(
+            with_geojson_extension("/d/a.tif".into()),
+            PathBuf::from("/d/a.tif.geojson")
+        );
     }
 
     #[test]

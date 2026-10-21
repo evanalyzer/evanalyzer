@@ -389,14 +389,21 @@ mod tests {
             &out,
         );
         let header = csv.lines().next().unwrap();
-        assert!(header.starts_with("T,Z,Class,N images,N objects,"), "{header}");
+        assert!(
+            header.starts_with("T,Z,Class,N images,N objects,"),
+            "{header}"
+        );
         assert!(header.contains("Area [px] mean,Area [px] SD"), "{header}");
         assert_eq!(csv.lines().count(), 1 + 2 * 2, "2 planes x 2 classes");
         let names: Vec<_> = std::fs::read_dir(out_dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["course.csv"], "only --out, the scratch folder is gone");
+        assert_eq!(
+            names,
+            ["course.csv"],
+            "only --out, the scratch folder is gone"
+        );
     }
 
     /// `--layout both` in CSV: the long table at `--out`, a file per value

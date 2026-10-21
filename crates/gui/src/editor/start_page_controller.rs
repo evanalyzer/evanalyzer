@@ -59,13 +59,15 @@ impl StartPageController {
         let ui_weak = self.ui.clone();
         start.on_open_images_folder(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<crate::ImagesListState>().invoke_open_images_folder_clicked();
+                ui.global::<crate::ImagesListState>()
+                    .invoke_open_images_folder_clicked();
             }
         });
         let ui_weak = self.ui.clone();
         start.on_open_project(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<crate::ToolbarState>().invoke_open_file_clicked();
+                ui.global::<crate::ToolbarState>()
+                    .invoke_open_file_clicked();
             }
         });
         let ui_weak = self.ui.clone();
@@ -75,7 +77,8 @@ impl StartPageController {
         let ui_weak = self.ui.clone();
         start.on_from_template(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<crate::ToolbarState>().invoke_new_from_project_template_clicked();
+                ui.global::<crate::ToolbarState>()
+                    .invoke_new_from_project_template_clicked();
             }
         });
         let ui_weak = self.ui.clone();
@@ -218,7 +221,11 @@ pub(crate) fn recent_path(app_state: &UiState, index: i32) -> Option<PathBuf> {
         .map(|p| p.path.clone())
 }
 
-fn row(project: &RecentProject, missing: bool, now: &chrono::DateTime<chrono::Local>) -> RecentProjectRow {
+fn row(
+    project: &RecentProject,
+    missing: bool,
+    now: &chrono::DateTime<chrono::Local>,
+) -> RecentProjectRow {
     let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     RecentProjectRow {
         name: project.name.clone().into(),
@@ -260,8 +267,15 @@ mod tests {
 
     #[test]
     fn when_says_today_yesterday_or_the_date() {
-        let now = chrono::Local.with_ymd_and_hms(2026, 10, 17, 15, 0, 0).unwrap();
-        let at = |y, m, d, h, min| chrono::Local.with_ymd_and_hms(y, m, d, h, min, 0).unwrap().timestamp();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 10, 17, 15, 0, 0)
+            .unwrap();
+        let at = |y, m, d, h, min| {
+            chrono::Local
+                .with_ymd_and_hms(y, m, d, h, min, 0)
+                .unwrap()
+                .timestamp()
+        };
         assert_eq!(when_text(at(2026, 10, 17, 9, 12), &now), "Today 09:12");
         assert_eq!(when_text(at(2026, 10, 16, 23, 0), &now), "Yesterday");
         assert_eq!(when_text(at(2026, 10, 2, 8, 0), &now), "2 Oct");

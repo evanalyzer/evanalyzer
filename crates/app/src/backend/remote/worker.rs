@@ -476,11 +476,11 @@ impl Session {
                 );
                 req.max_visible_tiles = req.max_visible_tiles.map(|n| n.min(cap));
                 match self.backend.start_preview(req) {
-                Ok(job) => self.stream_job(id, job),
-                Err(StartPreviewError::TooManyTiles { tiles, max }) => {
-                    self.reply(id, Reply::PreviewTooManyTiles { tiles, max }, Vec::new())
-                }
-                Err(StartPreviewError::Failed(e)) => self.fail(id, &e),
+                    Ok(job) => self.stream_job(id, job),
+                    Err(StartPreviewError::TooManyTiles { tiles, max }) => {
+                        self.reply(id, Reply::PreviewTooManyTiles { tiles, max }, Vec::new())
+                    }
+                    Err(StartPreviewError::Failed(e)) => self.fail(id, &e),
                 }
             }
             Request::StartTraining(req) => {
@@ -1274,7 +1274,13 @@ mod session_tests {
             preview_tiles: Some(1234),
         });
         let (_, reply) = reply_to(&session, &rx, preview());
-        assert!(matches!(reply, Reply::PreviewTooManyTiles { tiles: 1234, max: 4 }));
+        assert!(matches!(
+            reply,
+            Reply::PreviewTooManyTiles {
+                tiles: 1234,
+                max: 4
+            }
+        ));
 
         let (session, rx) = failing_session();
         let (_, reply) = reply_to(&session, &rx, preview());

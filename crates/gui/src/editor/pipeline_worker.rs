@@ -1,3 +1,4 @@
+use crate::editor::viewport_controller::BreakpointChannelData;
 use crate::{
     PipelineRunningState, PipelinesPanelState, PreviewRunState, UiState,
     editor::{
@@ -16,7 +17,6 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;
-use crate::editor::viewport_controller::BreakpointChannelData;
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Runs `$body` with `$state` the progress state of the job: the preview's
@@ -103,7 +103,10 @@ impl PipelineWorker {
     /// The image shown and its series - what a preview runs for.
     fn shown_image(&self) -> (Option<std::path::PathBuf>, i32) {
         let project = self.app_state.get_project();
-        (project.get_current_image_path_cloned(), project.get_selected_series_idx())
+        (
+            project.get_current_image_path_cloned(),
+            project.get_selected_series_idx(),
+        )
     }
 
     /// A job that could not start (e.g. a pipeline reads a channel the images
@@ -487,7 +490,9 @@ impl PipelineWorker {
                 Ok(output) => {
                     info!("Pipeline completed successfully");
                     if is_preview && self_handle.shown_image() != preview_of {
-                        info!("The preview's image isn't shown any more - its objects are left out");
+                        info!(
+                            "The preview's image isn't shown any more - its objects are left out"
+                        );
                     } else if is_preview {
                         // Replace the incrementally-streamed per-tile ROIs with
                         // the final, tile-merged result - otherwise cross-tile

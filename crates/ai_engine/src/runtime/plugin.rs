@@ -364,12 +364,24 @@ fn search_later_loads_in(dir: &Path) {
         fn SetDllDirectoryW(path: *const u16) -> i32;
         fn AddDllDirectory(path: *const u16) -> *mut core::ffi::c_void;
     }
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the
     // calls; both only copy it.
-    let (set, added) = unsafe { (SetDllDirectoryW(wide.as_ptr()), AddDllDirectory(wide.as_ptr())) };
+    let (set, added) = unsafe {
+        (
+            SetDllDirectoryW(wide.as_ptr()),
+            AddDllDirectory(wide.as_ptr()),
+        )
+    };
     if set == 0 || added.is_null() {
-        log::warn!("The DLL folder {} could not be added to the search", dir.display());
+        log::warn!(
+            "The DLL folder {} could not be added to the search",
+            dir.display()
+        );
     } else {
         log::info!("DLLs are also searched in {}", dir.display());
     }

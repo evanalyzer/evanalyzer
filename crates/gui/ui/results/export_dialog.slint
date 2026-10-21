@@ -113,6 +113,10 @@ export component ExportDialog inherits InkDialog {
                             current-index: ExportDialogState.time-lines;
                             selected(v) => {
                                 ExportDialogState.time-lines = self.current-index;
+                                // A wide table per track would have a column per track.
+                                if self.current-index == 3 {
+                                    ExportDialogState.time-layout = 0;
+                                }
                             }
                         }
                     }
@@ -132,7 +136,7 @@ export component ExportDialog inherits InkDialog {
                             }
                         }
                     }
-                    HorizontalLayout {
+                    if ExportDialogState.time-lines != 3: HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         InkLabel {

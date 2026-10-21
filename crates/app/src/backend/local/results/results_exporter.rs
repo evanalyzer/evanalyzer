@@ -1,4 +1,5 @@
 use super::results_generator::{ResultsGenerator, class_display_label};
+use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
 use crate::api::{
     Aggregation, Cell, CellValue, Column, ColumnEntry, DatabaseResult, GroupedByImageFilter,
     ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateFilterMulti, View,
@@ -132,73 +133,104 @@ enum Field {
 /// A table: its header, then its rows.
 type Fields = Vec<Vec<Field>>;
 
-/// The time column's unit: seconds, minutes or hours, by how long the
-/// series runs.
-fn time_unit(result: &TimeCourseResult) -> Option<(&'static str, f64)> {
-    let last = result
-        .points
-        .iter()
-        .filter_map(|p| p.time_s)
-        .fold(None, |max: Option<f64>, t| Some(max.map_or(t, |m| m.max(t))))?;
-    Some(match last {
-        l if l >= 7200.0 => ("Time [h]", 3600.0),
-        l if l >= 120.0 => ("Time [min]", 60.0),
-        _ => ("Time [s]", 1.0),
-    })
+/// The T, Z (several z-planes) and time (a frame interval) columns - the
+/// time unit (seconds, minutes or hours, by how long the series runs) found
+/// once per table.
+struct TimeAxis {
+    by_z: bool,
+    unit: Option<(&'static str, f64)>,
 }
 
-/// T, Z (several z-planes) and the time (a frame interval) of `point`.
-fn time_fields(result: &TimeCourseResult, point: &TimeCoursePoint) -> Vec<Field> {
-    let mut fields = vec![Field::Number(point.t as f64)];
-    if result.by_z {
-        fields.push(Field::Number(point.z as f64));
+impl TimeAxis {
+    fn new(head: &TimeCourseHead) -> Self {
+        let last = head
+            .frame_interval_s
+            .zip(head.last_t)
+            .map(|(interval, t)| interval * f64::from(t));
+        Self {
+            by_z: head.by_z,
+            unit: last.map(|last| match last {
+                l if l >= 7200.0 => ("Time [h]", 3600.0),
+                l if l >= 120.0 => ("Time [min]", 60.0),
+                _ => ("Time [s]", 1.0),
+            }),
+        }
     }
-    if let (Some((_, per)), Some(time)) = (time_unit(result), point.time_s) {
-        fields.push(Field::Number(time / per));
-    }
-    fields
-}
 
-fn time_header(result: &TimeCourseResult) -> Vec<Field> {
-    let mut header = vec![Field::Text("T".into())];
-    if result.by_z {
-        header.push(Field::Text("Z".into()));
+    fn header(&self) -> Vec<Field> {
+        let mut header = vec![Field::Text("T".into())];
+        if self.by_z {
+            header.push(Field::Text("Z".into()));
+        }
+        if let Some((label, _)) = self.unit {
+            header.push(Field::Text(label.into()));
+        }
+        header
     }
-    if let Some((label, _)) = time_unit(result) {
-        header.push(Field::Text(label.into()));
+
+    fn fields(&self, point: &TimeCoursePoint) -> Vec<Field> {
+        let mut fields = vec![Field::Number(point.t as f64)];
+        if self.by_z {
+            fields.push(Field::Number(point.z as f64));
+        }
+        if let (Some((_, per)), Some(time)) = (self.unit, point.time_s) {
+            fields.push(Field::Number(time / per));
+        }
+        fields
     }
-    header
 }
 
 fn optional(value: Option<f64>) -> Field {
     value.map_or(Field::Empty, Field::Number)
 }
 
+/// An XLSX sheet's rows, the header included.
+const XLSX_MAX_ROWS: usize = 1_048_576;
+
 /// The long table: a row per time point (z-plane) × line × class - the
-/// line's own columns, the counts, then the values.
-fn time_course_long(result: &TimeCourseResult, lines: TimeCourseLines) -> Fields {
-    let tracked = result.points.iter().any(|p| p.n_tracks > 0);
-    let mut header = time_header(result);
-    let line_columns: &[&str] = match lines {
-        TimeCourseLines::Class => &[],
-        TimeCourseLines::Image => &["Image"],
-        TimeCourseLines::Well => &["Well"],
-        TimeCourseLines::Group => &["Group"],
-        TimeCourseLines::Track => &["Track", "Image"],
-    };
-    header.extend(line_columns.iter().map(|c| Field::Text(c.to_string())));
-    header.extend(["Class", "N images", "N objects"].map(|c| Field::Text(c.into())));
-    if tracked {
-        header.push(Field::Text("N tracks".into()));
+/// line's own columns, the counts, then the values. Written a row at a time
+/// as the points come (a per-track time course has millions).
+struct TimeCourseLong<'a> {
+    head: &'a TimeCourseHead,
+    lines: TimeCourseLines,
+    axis: TimeAxis,
+}
+
+impl<'a> TimeCourseLong<'a> {
+    fn new(head: &'a TimeCourseHead, lines: TimeCourseLines) -> Self {
+        Self {
+            head,
+            lines,
+            axis: TimeAxis::new(head),
+        }
     }
-    header.extend(result.value_names.iter().map(|n| Field::Text(n.clone())));
-    let mut table = vec![header];
-    for point in &result.points {
-        let mut row = time_fields(result, point);
-        match lines {
+
+    fn header(&self) -> Vec<Field> {
+        let mut header = self.axis.header();
+        let line_columns: &[&str] = match self.lines {
+            TimeCourseLines::Class => &[],
+            TimeCourseLines::Image => &["Image"],
+            TimeCourseLines::Well => &["Well"],
+            TimeCourseLines::Group => &["Group"],
+            TimeCourseLines::Track => &["Track", "Image"],
+        };
+        header.extend(line_columns.iter().map(|c| Field::Text(c.to_string())));
+        header.extend(["Class", "N images", "N objects"].map(|c| Field::Text(c.into())));
+        if self.head.tracked {
+            header.push(Field::Text("N tracks".into()));
+        }
+        header.extend(self.head.value_names.iter().map(|n| Field::Text(n.clone())));
+        header
+    }
+
+    fn row(&self, point: &TimeCoursePoint) -> Vec<Field> {
+        let mut row = self.axis.fields(point);
+        match self.lines {
             TimeCourseLines::Class => {}
             TimeCourseLines::Image => row.push(Field::Text(point.image.clone())),
-            TimeCourseLines::Well | TimeCourseLines::Group => row.push(Field::Text(point.line.clone())),
+            TimeCourseLines::Well | TimeCourseLines::Group => {
+                row.push(Field::Text(point.line.clone()))
+            }
             TimeCourseLines::Track => {
                 row.push(Field::Text(point.line.clone()));
                 row.push(Field::Text(point.image.clone()));
@@ -207,19 +239,22 @@ fn time_course_long(result: &TimeCourseResult, lines: TimeCourseLines) -> Fields
         row.push(Field::Text(point.class_name.clone()));
         row.push(Field::Number(point.n_images as f64));
         row.push(Field::Number(point.n_objects as f64));
-        if tracked {
+        if self.head.tracked {
             row.push(Field::Number(point.n_tracks as f64));
         }
         row.extend(point.values.iter().map(|v| optional(*v)));
-        table.push(row);
+        row
     }
-    table
 }
 
 /// The wide tables, one per value and statistic (named like it): a row per
 /// time point (z-plane), a column per line ("A1 · Nuclei"; the class alone
 /// for class lines, without it when there's one class).
-fn time_course_wide(result: &TimeCourseResult, lines: TimeCourseLines) -> Vec<(String, Fields)> {
+fn time_course_wide(
+    result: &TimeCourseResult,
+    lines: TimeCourseLines,
+    axis: &TimeAxis,
+) -> Vec<(String, Fields)> {
     let one_class = result
         .points
         .iter()
@@ -231,41 +266,49 @@ fn time_course_wide(result: &TimeCourseResult, lines: TimeCourseLines) -> Vec<(S
             TimeCourseLines::Track => format!("{} {}", p.line, p.image),
             TimeCourseLines::Well | TimeCourseLines::Group => p.line.clone(),
         };
-        match (line.is_empty(), one_class && lines != TimeCourseLines::Class) {
+        match (
+            line.is_empty(),
+            one_class && lines != TimeCourseLines::Class,
+        ) {
             (true, _) => p.class_name.clone(),
             (false, true) => line,
             (false, false) => format!("{line} · {}", p.class_name),
         }
     };
+    // The columns and planes in order of first appearance - looked up in
+    // maps: a time course can have hundreds of thousands of points.
     let mut columns: Vec<String> = Vec::new();
+    let mut column_of: HashMap<String, usize> = HashMap::new();
     let mut planes: Vec<(u32, u32)> = Vec::new();
-    let mut at: HashMap<((u32, u32), String), &TimeCoursePoint> = HashMap::new();
+    let mut plane_of: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut at: HashMap<(usize, usize), &TimeCoursePoint> = HashMap::new();
     for point in &result.points {
         let name = label(point);
-        if !columns.contains(&name) {
-            columns.push(name.clone());
-        }
-        if !planes.contains(&(point.t, point.z)) {
+        let column = *column_of.entry(name.clone()).or_insert_with(|| {
+            columns.push(name);
+            columns.len() - 1
+        });
+        let plane = *plane_of.entry((point.t, point.z)).or_insert_with(|| {
             planes.push((point.t, point.z));
-        }
-        at.insert(((point.t, point.z), name), point);
+            planes.len() - 1
+        });
+        at.insert((plane, column), point);
     }
     result
         .value_names
         .iter()
         .enumerate()
         .map(|(v, value_name)| {
-            let mut header = time_header(result);
+            let mut header = axis.header();
             header.extend(columns.iter().map(|c| Field::Text(c.clone())));
             let mut table = vec![header];
-            for plane in &planes {
-                let first = columns
-                    .iter()
-                    .find_map(|c| at.get(&(*plane, c.clone())))
+            for plane in 0..planes.len() {
+                let first = (0..columns.len())
+                    .find_map(|c| at.get(&(plane, c)))
                     .expect("a point of this plane");
-                let mut row = time_fields(result, first);
-                row.extend(columns.iter().map(|c| {
-                    at.get(&(*plane, c.clone()))
+                let mut row = axis.fields(first);
+                row.extend((0..columns.len()).map(|c| {
+                    at.get(&(plane, c))
                         .map_or(Field::Empty, |p| optional(p.values[v]))
                 }));
                 table.push(row);
@@ -275,12 +318,29 @@ fn time_course_wide(result: &TimeCourseResult, lines: TimeCourseLines) -> Vec<(S
         .collect()
 }
 
-fn write_fields_csv(table: &Fields, path: &Path) -> Result<(), InternalErrors> {
-    let mut out = create_csv_writer(path)?;
-    let write_err = |e: std::io::Error| {
-        InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
-    };
-    for row in table {
+fn write_fields_csv(
+    table: impl Iterator<Item = Vec<Field>>,
+    path: &Path,
+) -> Result<(), InternalErrors> {
+    let mut out = FieldsCsv::create(path)?;
+    table.into_iter().try_for_each(|row| out.write(&row))
+}
+
+/// A CSV file written a row of fields at a time.
+struct FieldsCsv<'a> {
+    out: std::io::BufWriter<std::fs::File>,
+    path: &'a Path,
+}
+
+impl<'a> FieldsCsv<'a> {
+    fn create(path: &'a Path) -> Result<Self, InternalErrors> {
+        Ok(Self {
+            out: create_csv_writer(path)?,
+            path,
+        })
+    }
+
+    fn write(&mut self, row: &[Field]) -> Result<(), InternalErrors> {
         let cells: Vec<String> = row
             .iter()
             .map(|field| match field {
@@ -289,29 +349,68 @@ fn write_fields_csv(table: &Fields, path: &Path) -> Result<(), InternalErrors> {
                 Field::Empty => String::new(),
             })
             .collect();
-        write_csv_row(&mut out, &cells).map_err(write_err)?;
+        write_csv_row(&mut self.out, &cells).map_err(|e| {
+            InternalErrors::Internal(format!("could not write {}: {e}", self.path.display()))
+        })
     }
-    Ok(())
 }
 
-fn write_fields_sheet(worksheet: &mut Worksheet, table: &Fields) -> Result<(), InternalErrors> {
-    let header_format = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
-    let format = Format::new().set_font_size(EXPORT_FONT_SIZE);
-    for (r, row) in table.iter().enumerate() {
+fn write_fields_sheet(
+    worksheet: &mut Worksheet,
+    table: impl Iterator<Item = Vec<Field>>,
+) -> Result<(), InternalErrors> {
+    let mut sheet = FieldsSheet::new(worksheet);
+    table.into_iter().try_for_each(|row| sheet.write(&row))
+}
+
+/// A worksheet written a row of fields at a time, the first in bold.
+struct FieldsSheet<'a> {
+    worksheet: &'a mut Worksheet,
+    header_format: Format,
+    format: Format,
+    next_row: usize,
+}
+
+impl<'a> FieldsSheet<'a> {
+    fn new(worksheet: &'a mut Worksheet) -> Self {
+        Self {
+            worksheet,
+            header_format: Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE),
+            format: Format::new().set_font_size(EXPORT_FONT_SIZE),
+            next_row: 0,
+        }
+    }
+
+    fn write(&mut self, row: &[Field]) -> Result<(), InternalErrors> {
+        if self.next_row >= XLSX_MAX_ROWS {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "More than {} rows - more than an XLSX sheet holds: export it as CSV",
+                XLSX_MAX_ROWS - 1
+            )));
+        }
+        let r = self.next_row as u32;
         for (c, field) in row.iter().enumerate() {
-            let (r, c) = (r as u32, c as u16);
+            let c = c as u16;
             match (field, r) {
                 (Field::Text(text), 0) => {
-                    worksheet.write_with_format(r, c, text.as_str(), &header_format)
+                    self.worksheet
+                        .write_with_format(r, c, text.as_str(), &self.header_format)
                 }
-                (Field::Text(text), _) => worksheet.write_with_format(r, c, text.as_str(), &format),
-                (Field::Number(number), _) => worksheet.write_with_format(r, c, *number, &format),
+                (Field::Text(text), _) => {
+                    self.worksheet
+                        .write_with_format(r, c, text.as_str(), &self.format)
+                }
+                (Field::Number(number), _) => {
+                    self.worksheet
+                        .write_with_format(r, c, *number, &self.format)
+                }
                 (Field::Empty, _) => continue,
             }
             .map_err(xlsx_err)?;
         }
+        self.next_row += 1;
+        Ok(())
     }
-    Ok(())
 }
 
 /// A cell holding just `value`, no formatting.
@@ -707,6 +806,14 @@ impl ResultExport {
         check_cancelled(cancel)?;
         on_progress("Exporting Time course", 0, 1);
         let settings = &self.time_course;
+        let write_long = settings.layout != TimeCourseLayout::Wide;
+        let write_wide = settings.layout != TimeCourseLayout::Long;
+        if write_wide && settings.lines == TimeCourseLines::Track {
+            return Err(InternalErrors::InvalidArgument(
+                "A wide time course per track would have a column per track - export it long"
+                    .to_string(),
+            ));
+        }
         let filter = TimeCourseFilter {
             lines: settings.lines,
             grouping: self.grouping.clone(),
@@ -717,29 +824,64 @@ impl ResultExport {
             object_classes: (!self.object_classes.is_empty()).then(|| self.object_classes.clone()),
             t_stacks: self.t_stacks,
             z_stacks: self.z_stacks,
+            max_tracks: None,
         };
-        let result = super::results_time_course::time_course(database, &filter)?;
-        let long = time_course_long(&result, settings.lines);
-        let wide = time_course_wide(&result, settings.lines);
-        let write_long = settings.layout != TimeCourseLayout::Wide;
-        let write_wide = settings.layout != TimeCourseLayout::Long;
+        let query = TimeCourseQuery::prepare(database, &filter)?;
+        let long = TimeCourseLong::new(&query.head, settings.lines);
+        // The long table is written as the points come; they're only kept
+        // for the wide tables (never per track: refused above).
+        let mut kept = Vec::new();
+        let mut each_point = |write: &mut dyn FnMut(Vec<Field>) -> Result<(), InternalErrors>| {
+            if write_long {
+                write(long.header())?;
+            }
+            let mut n = 0usize;
+            query.for_each(|point| {
+                n += 1;
+                if n.is_multiple_of(65_536) {
+                    check_cancelled(cancel)?;
+                }
+                if write_long {
+                    write(long.row(&point))?;
+                }
+                if write_wide {
+                    kept.push(point);
+                }
+                Ok(())
+            })
+        };
+        let wide = |kept: Vec<TimeCoursePoint>| {
+            if !write_wide {
+                return Vec::new();
+            }
+            let result = TimeCourseResult {
+                value_names: query.head.value_names.clone(),
+                by_z: query.head.by_z,
+                frame_interval_s: query.head.frame_interval_s,
+                points: kept,
+            };
+            time_course_wide(&result, settings.lines, &long.axis)
+        };
         match self.format {
             ExportFormat::XLSX => {
                 let mut workbook = Workbook::new();
                 let mut names = SheetNamer::new();
                 if write_long {
-                    let sheet = workbook.add_worksheet();
-                    sheet.set_name(names.unique("Long")).map_err(xlsx_err)?;
-                    write_fields_sheet(sheet, &long)?;
+                    // Constant memory: rows go to a temporary file.
+                    let worksheet = workbook.add_worksheet_with_constant_memory();
+                    worksheet.set_name(names.unique("Long")).map_err(xlsx_err)?;
+                    let mut sheet = FieldsSheet::new(worksheet);
+                    each_point(&mut |row| sheet.write(&row))?;
+                } else {
+                    each_point(&mut |_| Ok(()))?;
                 }
-                if write_wide {
-                    for (name, table) in &wide {
-                        let sheet = workbook.add_worksheet();
-                        // Excel has no [ ] in tab names: "Area (px) mean".
-                        let name = name.replace('[', "(").replace(']', ")");
-                        sheet.set_name(names.unique(&name)).map_err(xlsx_err)?;
-                        write_fields_sheet(sheet, table)?;
-                    }
+                check_cancelled(cancel)?;
+                for (name, table) in wide(kept) {
+                    let sheet = workbook.add_worksheet();
+                    // Excel has no [ ] in tab names: "Area (px) mean".
+                    let name = name.replace('[', "(").replace(']', ")");
+                    sheet.set_name(names.unique(&name)).map_err(xlsx_err)?;
+                    write_fields_sheet(sheet, table.into_iter())?;
                 }
                 workbook
                     .save(self.output_path("time_course.xlsx"))
@@ -747,13 +889,19 @@ impl ResultExport {
             }
             ExportFormat::CSV => {
                 if write_long {
-                    write_fields_csv(&long, &self.output_path("time_course.csv"))?;
+                    let path = self.output_path("time_course.csv");
+                    let mut csv = FieldsCsv::create(&path)?;
+                    each_point(&mut |row| csv.write(&row))?;
+                } else {
+                    each_point(&mut |_| Ok(()))?;
                 }
-                if write_wide {
-                    for (name, table) in &wide {
-                        let file = format!("time_course_{}.csv", sanitize_filename_component(name));
-                        write_fields_csv(table, &self.output_path(&file))?;
-                    }
+                check_cancelled(cancel)?;
+                for (name, table) in wide(kept) {
+                    let file = format!(
+                        "time_course_{}.csv",
+                        sanitize_filename_component(name.as_str())
+                    );
+                    write_fields_csv(table.into_iter(), &self.output_path(&file))?;
                 }
             }
             ExportFormat::Parquet => {
@@ -2849,7 +2997,9 @@ mod tests {
         export
             .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("export");
-        let png = out_dir.join("images").join("multi-channel-4D-series.ome.png");
+        let png = out_dir
+            .join("images")
+            .join("multi-channel-4D-series.ome.png");
         let picture = image::open(&png).expect("a png").to_rgb8();
         assert!(picture.width() > 0 && picture.height() > 0);
     }
@@ -3034,7 +3184,11 @@ mod tests {
             .collect();
         assert_eq!(
             t_image_area,
-            [("0", "img1.tif", "100"), ("0", "img2.tif", "200"), ("1", "img1.tif", "300")]
+            [
+                ("0", "img1.tif", "100"),
+                ("0", "img2.tif", "200"),
+                ("1", "img1.tif", "300")
+            ]
         );
     }
 
@@ -3054,7 +3208,10 @@ mod tests {
         );
         assert_eq!(rows[0][0], "T");
         assert_eq!(rows.len(), 2, "the header and time point 1's object");
-        assert_eq!((rows[1][0].as_str(), rows[1].last().unwrap().as_str()), ("1", "300"));
+        assert_eq!(
+            (rows[1][0].as_str(), rows[1].last().unwrap().as_str()),
+            ("1", "300")
+        );
     }
 
     /// Results of one plane: no "T"/"Z" columns - exports as before.
@@ -3072,7 +3229,10 @@ mod tests {
         .unwrap();
         let csv = std::fs::read_to_string(out_dir.join("list.csv")).unwrap();
         let header = csv.lines().next().unwrap();
-        assert!(!header.starts_with("T,") && !header.starts_with("Z,"), "{header}");
+        assert!(
+            !header.starts_with("T,") && !header.starts_with("Z,"),
+            "{header}"
+        );
     }
 
     /// `open`, with the planes a run records analysing
@@ -3129,8 +3289,10 @@ mod tests {
         let csv = std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).unwrap();
         let rows: Vec<Vec<&str>> = csv.lines().map(|line| line.split(',').collect()).collect();
         assert_eq!(rows[0][..3], ["T", "image", "class"]);
-        let t_image_count: Vec<(&str, &str, &str)> =
-            rows[1..].iter().map(|row| (row[0], row[1], row[3])).collect();
+        let t_image_count: Vec<(&str, &str, &str)> = rows[1..]
+            .iter()
+            .map(|row| (row[0], row[1], row[3]))
+            .collect();
         assert_eq!(
             t_image_count,
             [
@@ -3185,7 +3347,10 @@ mod tests {
             ]
         );
         let wide = std::fs::read_to_string(out_dir.join("time_course_Area__px__mean.csv")).unwrap();
-        assert_eq!(wide.lines().collect::<Vec<_>>(), ["T,ClassA", "0,150", "1,300", "2,"]);
+        assert_eq!(
+            wide.lines().collect::<Vec<_>>(),
+            ["T,ClassA", "0,150", "1,300", "2,"]
+        );
         assert!(out_dir.join("time_course_Area__px__SD.csv").exists());
     }
 
@@ -3199,9 +3364,54 @@ mod tests {
                 calamine::open_workbook(out_dir.join("time_course.xlsx")).expect("open");
             workbook.sheet_names()
         };
-        assert_eq!(sheets(TimeCourseLayout::Both), ["Long", "Area (px) mean", "Area (px) SD"]);
+        assert_eq!(
+            sheets(TimeCourseLayout::Both),
+            ["Long", "Area (px) mean", "Area (px) SD"]
+        );
         assert_eq!(sheets(TimeCourseLayout::Long), ["Long"]);
-        assert_eq!(sheets(TimeCourseLayout::Wide), ["Area (px) mean", "Area (px) SD"]);
+        assert_eq!(
+            sheets(TimeCourseLayout::Wide),
+            ["Area (px) mean", "Area (px) SD"]
+        );
+    }
+
+    /// An XLSX sheet holds 1,048,576 rows: one more is refused with a hint
+    /// to export CSV - not cut off.
+    #[test]
+    fn an_xlsx_sheet_refuses_rows_beyond_its_limit() {
+        let mut workbook = Workbook::new();
+        let mut sheet = FieldsSheet::new(workbook.add_worksheet_with_constant_memory());
+        sheet.next_row = XLSX_MAX_ROWS - 1;
+        sheet.write(&[Field::Number(1.0)]).expect("the last row");
+        let error = sheet.write(&[Field::Number(2.0)]).expect_err("beyond");
+        assert!(error.to_string().contains("export it as CSV"), "{error}");
+    }
+
+    /// A wide table per track would have a column per track: refused with
+    /// a hint to export it long.
+    #[test]
+    fn a_wide_time_course_per_track_is_refused() {
+        let (database, out_dir) =
+            open_analysed(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)], 1);
+        let export = |layout| {
+            ResultExport {
+                output_dir: out_dir.clone(),
+                format: ExportFormat::CSV,
+                columns: vec![Column::AreaSizePx],
+                with_time_course: true,
+                time_course: TimeCourseExport {
+                    lines: TimeCourseLines::Track,
+                    layout,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+            .start_export(&database, &no_cancel(), &mut no_progress())
+        };
+        let error = export(TimeCourseLayout::Both).expect_err("wide per track");
+        assert!(error.to_string().contains("export it long"), "{error}");
+        export(TimeCourseLayout::Long).expect("long per track");
+        assert!(out_dir.join("time_course.csv").exists());
     }
 
     /// A plate grid for every analysed time point - the one where nothing

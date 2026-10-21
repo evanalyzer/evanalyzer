@@ -1,5 +1,5 @@
 {
-  "protocol_version": 21,
+  "protocol_version": 22,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1418,6 +1418,11 @@
                 "SIZE": 2
               }
             }
+          }
+        },
+        {
+          "max_tracks": {
+            "OPTION": "U64"
           }
         }
       ]

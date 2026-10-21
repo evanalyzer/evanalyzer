@@ -93,7 +93,6 @@ pub struct UiState {
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
 }
 
-
 impl UiState {
     pub fn new(app: AppHandle, handle: slint::Weak<AppWindow>) -> Self {
         let backend = app.backend();
@@ -622,7 +621,6 @@ fn choose_renderer() {
     }
 }
 
-
 /// Called first in `main`: the startup phases are logged (debug) from
 /// here on.
 pub fn mark_process_start() {
@@ -631,7 +629,9 @@ pub fn mark_process_start() {
 
 /// A startup phase done: logged with the time since `main` began.
 fn startup_phase(phase: &str) {
-    let ms = PROCESS_START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
+    let ms = PROCESS_START
+        .get()
+        .map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
     log::debug!("Startup: {phase} at {ms:.0} ms");
 }
 
@@ -1005,13 +1005,26 @@ mod ui_state_tests {
         ui_state.set_analysed([PathBuf::from("plate1/B02.tif")]);
 
         let project = ui_state.get_project();
-        assert_eq!(project.editor.previewed_images, [PathBuf::from("plate1/A01.tif")]);
-        assert_eq!(project.editor.analysed_images, [PathBuf::from("plate1/B02.tif")]);
+        assert_eq!(
+            project.editor.previewed_images,
+            [PathBuf::from("plate1/A01.tif")]
+        );
+        assert_eq!(
+            project.editor.analysed_images,
+            [PathBuf::from("plate1/B02.tif")]
+        );
         drop(project);
         assert!(!ui_state.is_dirty());
-        assert!(ui_state.undo_stack.lock().unwrap().is_empty(), "no undo step");
+        assert!(
+            ui_state.undo_stack.lock().unwrap().is_empty(),
+            "no undo step"
+        );
         let states = ui_state.image_states();
-        assert!(states.previewed.contains(&PathBuf::from("/data/plate1/A01.tif")));
+        assert!(
+            states
+                .previewed
+                .contains(&PathBuf::from("/data/plate1/A01.tif"))
+        );
         assert!(states.analysed.contains(&PathBuf::from("plate1/B02.tif")));
     }
 

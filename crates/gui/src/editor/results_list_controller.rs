@@ -66,13 +66,18 @@ impl ResultsListController {
             // The finished analysis' note: its results, not whichever
             // database the Results view had open before.
             let manager = self.clone();
-            ui.global::<PipelineRunningState>().on_open_results(move || {
-                let last = manager.last_analysis_results.lock().expect("Poisoned").clone();
-                match last {
-                    Some(path) => manager.results_state_controller.open_database(path),
-                    None => warn!("No finished analysis' results to open"),
-                }
-            });
+            ui.global::<PipelineRunningState>()
+                .on_open_results(move || {
+                    let last = manager
+                        .last_analysis_results
+                        .lock()
+                        .expect("Poisoned")
+                        .clone();
+                    match last {
+                        Some(path) => manager.results_state_controller.open_database(path),
+                        None => warn!("No finished analysis' results to open"),
+                    }
+                });
         }
     }
 

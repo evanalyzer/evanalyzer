@@ -465,6 +465,9 @@ pub struct TimeCourseFilter {
     pub t_stacks: Option<Range<u32>>,
     #[serde(with = "option_range_serde")]
     pub z_stacks: Option<Range<u32>>,
+    /// Track lines: at most this many tracks, a random but repeatable sample
+    /// (the chart's faint tracks); `None`: every track.
+    pub max_tracks: Option<usize>,
 }
 
 /// One point of a time course: a line at one time point (and z-plane).
@@ -716,7 +719,9 @@ mod option_range_serde {
         range: &Option<Range<u32>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        range.map(|range| (range.start, range.end)).serialize(serializer)
+        range
+            .map(|range| (range.start, range.end))
+            .serialize(serializer)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(

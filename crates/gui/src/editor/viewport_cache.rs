@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use crate::UiState;
 use crate::editor::view_channel::{Samples, ViewChannel};
 use crate::editor::viewport_controller::ViewportState;
@@ -23,6 +22,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 type InnerCache =

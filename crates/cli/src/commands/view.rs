@@ -326,7 +326,13 @@ mod tests {
         let rows = result
             .rows
             .iter()
-            .map(|row| (cell_text(&row[0]), cell_text(&row[1]), cell_text(row.last().unwrap())))
+            .map(|row| {
+                (
+                    cell_text(&row[0]),
+                    cell_text(&row[1]),
+                    cell_text(row.last().unwrap()),
+                )
+            })
             .collect();
         (result.column_names, rows)
     }

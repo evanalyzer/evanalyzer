@@ -71,26 +71,35 @@ impl ResultsStateController {
 
         let manager = self.clone();
         state.on_split_changed(move |on| {
-            manager._app_state.update_app_settings(|s| s.results_split.on = on);
+            manager
+                ._app_state
+                .update_app_settings(|s| s.results_split.on = on);
             // A row already selected: shown right away.
             if on && let Some(ui) = manager.ui.upgrade() {
                 let row = ui.global::<ResultsState>().get_list_selected_row();
-                if row >= 0 && *manager.rail_mode.lock().expect("Poisoned") == ResultsRailMode::List {
+                if row >= 0 && *manager.rail_mode.lock().expect("Poisoned") == ResultsRailMode::List
+                {
                     manager.split_select_row(row);
                 }
             }
         });
         let manager = self.clone();
         state.on_split_width_changed(move |w| {
-            manager._app_state.update_app_settings(|s| s.results_split.width_px = w);
+            manager
+                ._app_state
+                .update_app_settings(|s| s.results_split.width_px = w);
         });
         let manager = self.clone();
         state.on_split_follow_changed(move |follow| {
-            manager._app_state.update_app_settings(|s| s.results_split.follow = follow);
+            manager
+                ._app_state
+                .update_app_settings(|s| s.results_split.follow = follow);
         });
         let manager = self.clone();
         state.on_split_image_panel_changed(move |open| {
-            manager._app_state.update_app_settings(|s| s.results_split.image_panel = open);
+            manager
+                ._app_state
+                .update_app_settings(|s| s.results_split.image_panel = open);
         });
         // The split shown or not (mode, tab, Full/Split): its objects on
         // the image, or the project's again.
@@ -105,7 +114,12 @@ impl ResultsStateController {
                 manager.split_push_overlay();
             } else {
                 manager.viewport().set_results_overlay(None);
-                *manager.viewport().viewport_cache.focus.lock().expect("Poisoned") = None;
+                *manager
+                    .viewport()
+                    .viewport_cache
+                    .focus
+                    .lock()
+                    .expect("Poisoned") = None;
                 // Its marker goes with it (it stayed on the image after
                 // leaving the results) - unless it was opened in Images.
                 if !keep_marker && let Some(ui) = manager.ui.upgrade() {
@@ -176,7 +190,8 @@ impl ResultsStateController {
             state.set_peek_label(label.into());
             state.set_peek_can_step(!manager.in_plate() && row >= 0);
             state.set_peek(true);
-            ui.global::<crate::LayoutState>().set_mode(crate::WorkspaceMode::Images);
+            ui.global::<crate::LayoutState>()
+                .set_mode(crate::WorkspaceMode::Images);
         });
     }
 
@@ -195,7 +210,12 @@ impl ResultsStateController {
             .lock()
             .expect("Poisoned")
             .iter()
-            .map(|image| (image.name.clone(), image.rel_path.to_string_lossy().into_owned()))
+            .map(|image| {
+                (
+                    image.name.clone(),
+                    image.rel_path.to_string_lossy().into_owned(),
+                )
+            })
             .collect();
         let well_images: Vec<(String, String)> = image_names
             .into_iter()
@@ -300,7 +320,10 @@ impl ResultsStateController {
         let (rel_path, bbox) = {
             let mut split = self.split.lock().expect("Poisoned");
             split.selected = Some(index);
-            (split.image.clone().unwrap_or_default(), split.objects[index].bbox_px)
+            (
+                split.image.clone().unwrap_or_default(),
+                split.objects[index].bbox_px,
+            )
         };
         let row = self
             .list_row_locations
@@ -380,7 +403,12 @@ impl ResultsStateController {
         let in_viewer = self.split_in_viewer(&rel_path);
         let follow = self.split_follow();
         if !in_viewer {
-            *self.viewport().viewport_cache.focus.lock().expect("Poisoned") = match (&absolute, select.or(region)) {
+            *self
+                .viewport()
+                .viewport_cache
+                .focus
+                .lock()
+                .expect("Poisoned") = match (&absolute, select.or(region)) {
                 (Some(path), Some(bbox)) if follow => Some((path.clone(), bbox.map(|v| v as f32))),
                 _ => None,
             };
@@ -431,8 +459,16 @@ impl ResultsStateController {
                 .and_then(|path| manager._app_state.get_image_source(path).ok())
                 .and_then(|source| {
                     let meta = source.meta();
-                    let info = meta.series.get(&series).or_else(|| meta.series.values().next())?;
-                    Some(info.channels.values().map(|c| c.name.clone()).collect::<Vec<_>>())
+                    let info = meta
+                        .series
+                        .get(&series)
+                        .or_else(|| meta.series.values().next())?;
+                    Some(
+                        info.channels
+                            .values()
+                            .map(|c| c.name.clone())
+                            .collect::<Vec<_>>(),
+                    )
                 })
                 .unwrap_or_default();
             {
@@ -440,7 +476,8 @@ impl ResultsStateController {
                 if split.generation != generation {
                     return;
                 }
-                split.selected = select.and_then(|bbox| objects.iter().position(|o| o.bbox_px == bbox));
+                split.selected =
+                    select.and_then(|bbox| objects.iter().position(|o| o.bbox_px == bbox));
                 split.objects = Arc::new(objects);
             }
             manager.split_push_channels(channels);
@@ -457,7 +494,11 @@ impl ResultsStateController {
             let split = self.split.lock().expect("Poisoned");
             (split.shown, split.image.clone())
         };
-        if shown && image.as_deref().is_some_and(|rel| self.split_in_viewer(rel)) {
+        if shown
+            && image
+                .as_deref()
+                .is_some_and(|rel| self.split_in_viewer(rel))
+        {
             self.split_push_overlay();
             self.split_push_selection(false);
         }
@@ -487,7 +528,10 @@ impl ResultsStateController {
         // longer than reading its objects. They are kept and drawn once it
         // is open (`split_image_opened`) - not dropped, which left a row's
         // object unshown and the image unclickable.
-        if image.as_deref().is_some_and(|rel| !self.split_in_viewer(rel)) {
+        if image
+            .as_deref()
+            .is_some_and(|rel| !self.split_in_viewer(rel))
+        {
             log::debug!("Split view: {image:?} not open yet - its objects wait for it");
             self.viewport().set_results_overlay(None);
             return;
@@ -529,9 +573,15 @@ impl ResultsStateController {
                             gradient_at(stops, t)
                         }
                         (Some(_), None) => 0x8A8A93,
-                        _ => class_colors.get(&object.class_id).copied().unwrap_or(0xFFFFFF),
+                        _ => class_colors
+                            .get(&object.class_id)
+                            .copied()
+                            .unwrap_or(0xFFFFFF),
                     };
-                    (object.bbox_px, [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
+                    (
+                        object.bbox_px,
+                        [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8],
+                    )
                 })
                 .collect(),
             selected,
@@ -545,18 +595,26 @@ impl ResultsStateController {
         let (title_image, object, total, index, channel, region) = {
             let split = self.split.lock().expect("Poisoned");
             let object = split.selected.and_then(|i| split.objects.get(i).cloned());
-            (split.image.clone(), object, split.objects.len(), split.selected, split.channel, split.region)
+            (
+                split.image.clone(),
+                object,
+                split.objects.len(),
+                split.selected,
+                split.channel,
+                split.region,
+            )
         };
         // The selected object: the viewer's yellow crosshair, as a list row
         // opened in the full view; a tile (no object): its box.
-        let mark = |[x0, y0, x1, y1]: [u32; 4], paint_as_rectangle: bool| crate::ObjectHighlightBox {
-            x_px: x0 as f32,
-            y_px: y0 as f32,
-            w_px: (x1.saturating_sub(x0) + 1) as f32,
-            h_px: (y1.saturating_sub(y0) + 1) as f32,
-            active: true,
-            paint_as_rectangle,
-        };
+        let mark =
+            |[x0, y0, x1, y1]: [u32; 4], paint_as_rectangle: bool| crate::ObjectHighlightBox {
+                x_px: x0 as f32,
+                y_px: y0 as f32,
+                w_px: (x1.saturating_sub(x0) + 1) as f32,
+                h_px: (y1.saturating_sub(y0) + 1) as f32,
+                active: true,
+                paint_as_rectangle,
+            };
         let highlight = match (&object, region) {
             (Some(o), _) => mark(o.bbox_px, false),
             (None, Some(bbox)) => mark(bbox, true),
@@ -623,8 +681,15 @@ impl ResultsStateController {
         let reduce_motion = self.viewport().memory_settings().reduce_motion;
         let full = *self.viewport().full_image_size.lock().expect("Poisoned");
         let (_, _, _, v_w, v_h) = self.viewport().view();
-        let target = fly_to
-            .map(|bbox| focus_view(v_w, v_h, full.0 as f32, full.1 as f32, bbox.map(|v| v as f32)));
+        let target = fly_to.map(|bbox| {
+            focus_view(
+                v_w,
+                v_h,
+                full.0 as f32,
+                full.1 as f32,
+                bbox.map(|v| v as f32),
+            )
+        });
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -651,7 +716,8 @@ impl ResultsStateController {
                 state.set_split_total(rows as i32);
             }
             state.set_split_sel(sel);
-            ui.global::<crate::ViewportObjectState>().set_object_highlight(highlight);
+            ui.global::<crate::ViewportObjectState>()
+                .set_object_highlight(highlight);
             if let Some(target) = target
                 && full.0 > 0
             {
@@ -667,7 +733,8 @@ impl ResultsStateController {
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<ResultsState>();
-                let names: Vec<slint::SharedString> = channels.into_iter().map(Into::into).collect();
+                let names: Vec<slint::SharedString> =
+                    channels.into_iter().map(Into::into).collect();
                 state.set_split_channel(channel.min(names.len().saturating_sub(1)) as i32);
                 state.set_split_channels(ModelRc::from(Rc::new(VecModel::from(names))));
             }
@@ -707,7 +774,10 @@ impl ResultsStateController {
     fn split_make_thumbs(self: &Arc<Self>, rel_paths: Vec<String>) {
         let missing: Vec<String> = {
             let split = self.split.lock().expect("Poisoned");
-            rel_paths.into_iter().filter(|rel| !split.thumbs.contains_key(rel)).collect()
+            rel_paths
+                .into_iter()
+                .filter(|rel| !split.thumbs.contains_key(rel))
+                .collect()
         };
         if missing.is_empty() {
             return;
@@ -716,7 +786,10 @@ impl ResultsStateController {
             use evanalyzer_app::project::ProjectExt;
             let project = self._app_state.get_project();
             (
-                project.get_channel_display_colors().into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                project
+                    .get_channel_display_colors()
+                    .into_iter()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
                 project.images.settings.selected_series.unwrap_or(0),
                 project.images.root.clone().unwrap_or_default(),
             )
@@ -724,7 +797,9 @@ impl ResultsStateController {
         let manager = self.clone();
         std::thread::spawn(move || {
             for rel in missing {
-                let Some(buffer) = make_thumb(&manager._app_state, &root.join(&rel), series, &colors) else {
+                let Some(buffer) =
+                    make_thumb(&manager._app_state, &root.join(&rel), series, &colors)
+                else {
                     continue;
                 };
                 let wanted = {
@@ -799,8 +874,13 @@ fn make_thumb(
         })
         .ok()?;
     // Kept small: the strip's tile, cropped to its shape.
-    let picture = evanalyzer_app::results::colorize_thumbnail(&channels, colors, (width, height), THUMB_KEPT);
-    Some(SharedPixelBuffer::clone_from_slice(picture.as_raw(), picture.width(), picture.height()))
+    let picture =
+        evanalyzer_app::results::colorize_thumbnail(&channels, colors, (width, height), THUMB_KEPT);
+    Some(SharedPixelBuffer::clone_from_slice(
+        picture.as_raw(),
+        picture.width(),
+        picture.height(),
+    ))
 }
 
 thread_local! {
@@ -811,7 +891,12 @@ thread_local! {
 /// Moves the view to `(zoom, offset_x, offset_y)` in [`FLY_MS`] (eased),
 /// or at once with reduced motion; the image is rendered for the end.
 /// `(v_w, v_h)`: the viewport's size.
-fn fly_to_view(ui: &AppWindow, (zoom, off_x, off_y): (f32, f32, f32), (v_w, v_h): (f32, f32), reduce_motion: bool) {
+fn fly_to_view(
+    ui: &AppWindow,
+    (zoom, off_x, off_y): (f32, f32, f32),
+    (v_w, v_h): (f32, f32),
+    reduce_motion: bool,
+) {
     let land = move |view: &ViewportSlintState| {
         view.set_zoom_factor(zoom);
         view.set_offset_x(off_x);
@@ -820,7 +905,11 @@ fn fly_to_view(ui: &AppWindow, (zoom, off_x, off_y): (f32, f32, f32), (v_w, v_h)
     };
     FLY.with(|fly| fly.borrow_mut().take());
     let view = ui.global::<ViewportSlintState>();
-    let (z0, x0, y0) = (view.get_zoom_factor(), view.get_offset_x(), view.get_offset_y());
+    let (z0, x0, y0) = (
+        view.get_zoom_factor(),
+        view.get_offset_x(),
+        view.get_offset_y(),
+    );
     if reduce_motion || z0 <= 0.0 {
         land(&view);
         return;
@@ -832,25 +921,29 @@ fn fly_to_view(ui: &AppWindow, (zoom, off_x, off_y): (f32, f32, f32), (v_w, v_h)
     let start = std::time::Instant::now();
     let ui_weak = ui.as_weak();
     let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(16), move || {
-        let Some(ui) = ui_weak.upgrade() else {
-            return;
-        };
-        let view = ui.global::<ViewportSlintState>();
-        let t = (start.elapsed().as_secs_f32() * 1000.0 / FLY_MS).min(1.0);
-        if t >= 1.0 {
-            land(&view);
-            // Stops this timer (dropped after this tick).
-            FLY.with(|fly| fly.borrow_mut().take());
-            return;
-        }
-        let e = 1.0 - (1.0 - t).powi(3);
-        let z = z0 * (zoom / z0).powf(e);
-        let (cx, cy) = (cx0 + (cx1 - cx0) * e, cy0 + (cy1 - cy0) * e);
-        view.set_zoom_factor(z);
-        view.set_offset_x(v_w / 2.0 - cx * z);
-        view.set_offset_y(v_h / 2.0 - cy * z);
-    });
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(16),
+        move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let view = ui.global::<ViewportSlintState>();
+            let t = (start.elapsed().as_secs_f32() * 1000.0 / FLY_MS).min(1.0);
+            if t >= 1.0 {
+                land(&view);
+                // Stops this timer (dropped after this tick).
+                FLY.with(|fly| fly.borrow_mut().take());
+                return;
+            }
+            let e = 1.0 - (1.0 - t).powi(3);
+            let z = z0 * (zoom / z0).powf(e);
+            let (cx, cy) = (cx0 + (cx1 - cx0) * e, cy0 + (cy1 - cy0) * e);
+            view.set_zoom_factor(z);
+            view.set_offset_x(v_w / 2.0 - cx * z);
+            view.set_offset_y(v_h / 2.0 - cy * z);
+        },
+    );
     FLY.with(|fly| *fly.borrow_mut() = Some(timer));
 }
 

@@ -1,6 +1,6 @@
 use crate::ViewportState as ViewportSlintState;
-use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::results_overlay::{ResultsOverlay, draw_results_overlay};
+use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
 use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
@@ -807,7 +807,8 @@ impl ViewportController {
                 let view = ui.global::<ViewportSlintState>();
                 view.set_compare_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
                 view.set_compare_ready(false);
-                ui.global::<PipelinesPanelState>().set_has_breakpoint_image(false);
+                ui.global::<PipelinesPanelState>()
+                    .set_has_breakpoint_image(false);
             }
         })
         .ok();
@@ -862,7 +863,8 @@ impl ViewportController {
                 view.set_object_ready(false);
                 ui.global::<HistogramState>()
                     .set_histogram_svg_path(Rc::new(VecModel::<HistogramData>::default()).into());
-                ui.global::<PipelinesPanelState>().set_has_breakpoint_image(false);
+                ui.global::<PipelinesPanelState>()
+                    .set_has_breakpoint_image(false);
                 ui.global::<crate::ViewportObjectState>().set_compare(false);
             }
         })
@@ -944,7 +946,8 @@ impl ViewportController {
                 && px < (t.tile_offset_x + t.tile_width) as i64
                 && py < (t.tile_offset_y + t.tile_height) as i64
         })?;
-        let idx = (py as usize - bp.tile_offset_y) * bp.tile_width + (px as usize - bp.tile_offset_x);
+        let idx =
+            (py as usize - bp.tile_offset_y) * bp.tile_width + (px as usize - bp.tile_offset_x);
         let image = match self.breakpoint_view_mode() {
             BreakpointViewMode::Image => &bp.image,
             BreakpointViewMode::Segmentation => bp.segmentation.as_ref().unwrap_or(&bp.image),
@@ -1255,7 +1258,13 @@ impl ViewportController {
     /// The view now: `(zoom, offset_x, offset_y, viewport_w, viewport_h)`.
     pub fn view(&self) -> (f32, f32, f32, f32, f32) {
         let s = self.viewport_state.read().expect("Poisoned");
-        (s.zoom, s.offset_x, s.offset_y, s.viewport_width, s.viewport_height)
+        (
+            s.zoom,
+            s.offset_x,
+            s.offset_y,
+            s.viewport_width,
+            s.viewport_height,
+        )
     }
 
     /// Hands a rendered object overlay (covering `rect` of the image) to

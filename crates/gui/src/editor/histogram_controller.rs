@@ -63,14 +63,14 @@ impl HistogramController {
                         move || {
                             // Comparing, the breakpoint's side: its own window.
                             if manager_in.viewport_controller.histogram_side() == 1 {
-                                manager_in.viewport_controller.set_breakpoint_histogram(Some(
-                                    HistogramSettings {
+                                manager_in
+                                    .viewport_controller
+                                    .set_breakpoint_histogram(Some(HistogramSettings {
                                         min,
                                         max,
                                         min_limit,
                                         max_limit,
-                                    },
-                                ));
+                                    }));
                                 return;
                             }
                             manager_in.update_histogram_settings_in_project(
@@ -122,12 +122,13 @@ impl HistogramController {
             self.viewport_controller.set_histogram_log(log);
             ui.global::<HistogramState>().set_log_scale(log);
             let manager = Arc::clone(self);
-            ui.global::<HistogramState>().on_log_scale_changed(move |log| {
-                manager.viewport_controller.set_histogram_log(log);
-                manager
-                    .app_state
-                    .update_app_settings(|settings| settings.histogram_linear = !log);
-            });
+            ui.global::<HistogramState>()
+                .on_log_scale_changed(move |log| {
+                    manager.viewport_controller.set_histogram_log(log);
+                    manager
+                        .app_state
+                        .update_app_settings(|settings| settings.histogram_linear = !log);
+                });
 
             // Comparing: the original's or the breakpoint's histogram.
             let manager = Arc::clone(self);

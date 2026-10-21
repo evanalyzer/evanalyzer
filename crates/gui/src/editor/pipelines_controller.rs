@@ -8,11 +8,11 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CardTable, CardTableRow, ClassItemData, CommandDef, CommandParameter, CommandPickerState,
-    ComponentBindingRow, ComponentClassRow, ComponentClassesState,
-    ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState,
-    DefaultParamPreview, ExposeChoiceState, GlobalAppState, InPlaceCopyState, GroupItem, LeafParam, ParamType,
-    Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
-    ProblemItem, RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
+    ComponentBindingRow, ComponentClassRow, ComponentClassesState, ComponentParamRow,
+    ComponentSettingsState, ComponentUpdateState, CreateComponentState, DefaultParamPreview,
+    ExposeChoiceState, GlobalAppState, GroupItem, InPlaceCopyState, LeafParam, ParamType, Pipeline,
+    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, ProblemItem,
+    RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState, PreviewRunState};
 use crate::{ResultItemData, ResultsListState};
@@ -263,7 +263,6 @@ impl PipelinesController {
                     // Its images go too (up to ~190 MB a tile).
                     manager.viewport_controller.clear_breakpoint();
                 });
-
 
             // Compare the breakpoint image with the original (shown or not).
             let manager = self.clone();
@@ -1128,7 +1127,10 @@ impl PipelinesController {
                     if let Some(ui) = manager.ui.upgrade() {
                         let pipeline = ui.global::<PipelinesPanelState>().get_active_pipeline_id();
                         if pipeline >= 0 {
-                            manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline as u32), false);
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline as u32),
+                                false,
+                            );
                         }
                     }
                 }
@@ -1513,7 +1515,9 @@ impl PipelinesController {
                             ui.global::<GlobalAppState>()
                                 .set_active_dialog(DialogType::InPlaceCopy);
                         }
-                        Ok(None) => manager.edit_in_place(&ui, pipeline_id, step_idx as usize, None),
+                        Ok(None) => {
+                            manager.edit_in_place(&ui, pipeline_id, step_idx as usize, None)
+                        }
                         Err(e) => show_in_place_failure(&ui, &e),
                     }
                 });
@@ -2891,7 +2895,9 @@ impl PipelinesController {
                 setting,
             })
             .collect();
-        pins.sort_by(|a, b| (a.pipeline, &a.step, &a.setting).cmp(&(b.pipeline, &b.step, &b.setting)));
+        pins.sort_by(|a, b| {
+            (a.pipeline, &a.step, &a.setting).cmp(&(b.pipeline, &b.step, &b.setting))
+        });
         self.app_state.get_project_write().editor.pins = pins;
         self.app_state.mark_dirty();
     }
@@ -3443,7 +3449,12 @@ impl PipelinesController {
     /// with the components `base` opened (empty: the pipeline's): opens the
     /// component itself to edit - every step using it follows. Changing one
     /// use only is "Edit in place".
-    fn edit_component(self: &Arc<Self>, pipeline_id: u32, base: Vec<OpenComponent>, step_idx: usize) {
+    fn edit_component(
+        self: &Arc<Self>,
+        pipeline_id: u32,
+        base: Vec<OpenComponent>,
+        step_idx: usize,
+    ) {
         let shown = self.open_component_path(pipeline_id);
         self.set_open_path(pipeline_id, base);
         let is_component = {
@@ -4581,80 +4592,77 @@ impl PipelinesController {
             return;
         }
 
-        let new_steps: Vec<PipelineStepSettings> =
-            if command_id >= LIBRARY_COMPONENT_PICKER_ID_BASE {
-                // A library component: copied into the project, then used.
-                let idx = (command_id - LIBRARY_COMPONENT_PICKER_ID_BASE) as usize;
-                let Some((path, template)) = manager
-                    .component_library
-                    .lock()
-                    .expect("Poisoned")
-                    .get(idx)
-                    .cloned()
-                else {
-                    warn!(
-                        "picker confirm: unknown library component id {}",
-                        command_id
-                    );
+        let new_steps: Vec<PipelineStepSettings> = if command_id >= LIBRARY_COMPONENT_PICKER_ID_BASE
+        {
+            // A library component: copied into the project, then used.
+            let idx = (command_id - LIBRARY_COMPONENT_PICKER_ID_BASE) as usize;
+            let Some((path, template)) = manager
+                .component_library
+                .lock()
+                .expect("Poisoned")
+                .get(idx)
+                .cloned()
+            else {
+                warn!(
+                    "picker confirm: unknown library component id {}",
+                    command_id
+                );
+                return;
+            };
+            let inserted = {
+                let mut project = manager.app_state.get_project_write();
+                evanalyzer_app::components::insert_component_template(
+                    &mut project,
+                    &template,
+                    &evanalyzer_app::components::library_name(&path),
+                )
+            };
+            let key = match inserted {
+                Ok(key) => key,
+                Err(e) => {
+                    warn!("Could not insert the library component: {e}");
                     return;
-                };
-                let inserted = {
-                    let mut project = manager.app_state.get_project_write();
-                    evanalyzer_app::components::insert_component_template(
-                        &mut project,
-                        &template,
-                        &evanalyzer_app::components::library_name(&path),
-                    )
-                };
-                let key = match inserted {
-                    Ok(key) => key,
-                    Err(e) => {
-                        warn!("Could not insert the library component: {e}");
-                        return;
-                    }
-                };
-                vec![PipelineStepSettings {
-                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                    enabled: true,
-                    content: StepContent::Component(
-                        evanalyzer_cfg::settings::components::ComponentInstance {
-                            key,
-                            values: Default::default(),
-                        },
-                    ),
-                }]
-            } else if command_id >= COMPONENT_PICKER_ID_BASE {
-                // A component: one step using it, at its defaults.
-                let project = manager.app_state.get_project();
-                let idx = (command_id - COMPONENT_PICKER_ID_BASE) as usize;
-                let Some(definition) = project.components.get(idx) else {
-                    warn!("picker confirm: unknown component id {}", command_id);
-                    return;
-                };
-                vec![PipelineStepSettings {
-                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                    enabled: true,
-                    content: StepContent::Component(
-                        evanalyzer_cfg::settings::components::ComponentInstance {
-                            key: definition.key.clone(),
-                            values: Default::default(),
-                        },
-                    ),
-                }]
-            } else {
-                let Some(cmd) = default_command(command_id) else {
-                    warn!("picker confirm: unknown command id {}", command_id);
-                    return;
-                };
-                vec![PipelineStepSettings {
+                }
+            };
+            vec![PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                content:
-                    evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
-                        cmd,
-                    ),
+                content: StepContent::Component(
+                    evanalyzer_cfg::settings::components::ComponentInstance {
+                        key,
+                        values: Default::default(),
+                    },
+                ),
             }]
+        } else if command_id >= COMPONENT_PICKER_ID_BASE {
+            // A component: one step using it, at its defaults.
+            let project = manager.app_state.get_project();
+            let idx = (command_id - COMPONENT_PICKER_ID_BASE) as usize;
+            let Some(definition) = project.components.get(idx) else {
+                warn!("picker confirm: unknown component id {}", command_id);
+                return;
             };
+            vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content: StepContent::Component(
+                    evanalyzer_cfg::settings::components::ComponentInstance {
+                        key: definition.key.clone(),
+                        values: Default::default(),
+                    },
+                ),
+            }]
+        } else {
+            let Some(cmd) = default_command(command_id) else {
+                warn!("picker confirm: unknown command id {}", command_id);
+                return;
+            };
+            vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(cmd),
+            }]
+        };
 
         // A component can't contain itself - also not through the
         // components it contains (e.g. a library component's).
@@ -4763,8 +4771,7 @@ impl PipelinesController {
                 .set_selected_step_id(last as i32);
         }
         manager.pipeline_settings_changed();
-        manager
-            .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+        manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
     }
 
     /// Reloads the component library from the user and app templates folders in the
@@ -5211,7 +5218,7 @@ impl PipelinesController {
                                         })
                                         .unwrap_or_default(),
                                     problems: step_problems,
-                                changed,
+                                    changed,
                                     notes,
                                 }
                             }
@@ -6036,9 +6043,12 @@ fn shown_in_pipelines(
 }
 
 /// Every step of every pipeline, as text: two that differ were changed.
-pub(crate) type StepFingerprints = std::collections::HashMap<(PipelineId, evanalyzer_cfg::core_types::StepId), String>;
+pub(crate) type StepFingerprints =
+    std::collections::HashMap<(PipelineId, evanalyzer_cfg::core_types::StepId), String>;
 
-pub(crate) fn step_fingerprints(pipelines: &[evanalyzer_cfg::settings::pipeline_settings::PipelineSettings]) -> StepFingerprints {
+pub(crate) fn step_fingerprints(
+    pipelines: &[evanalyzer_cfg::settings::pipeline_settings::PipelineSettings],
+) -> StepFingerprints {
     pipelines
         .iter()
         .flat_map(|pipeline| {
@@ -6054,7 +6064,9 @@ pub(crate) fn step_fingerprints(pipelines: &[evanalyzer_cfg::settings::pipeline_
 
 /// Steps changed, added or removed since `before`.
 pub(crate) fn changed_steps(before: &StepFingerprints, now: &StepFingerprints) -> usize {
-    now.iter().filter(|(key, text)| before.get(*key) != Some(*text)).count()
+    now.iter()
+        .filter(|(key, text)| before.get(*key) != Some(*text))
+        .count()
         + before.keys().filter(|key| !now.contains_key(*key)).count()
 }
 
@@ -6832,7 +6844,6 @@ fn move_step<T>(steps: &mut [T], idx: i32, delta: i32) -> bool {
     steps.swap(idx as usize, to as usize);
     true
 }
-
 
 /// The step picker's suggestion for a step inserted after step
 /// `after_idx` of `steps` (-1: at the start; past the end: the last one):
@@ -8697,11 +8708,20 @@ mod tests {
         let (ui, ui_state, _controller) = with_a_component();
         // Threshold, ◆ Smooth: used once - no copy, it opens to edit.
         let before = ui_state.get_project().components.len();
-        ui.global::<PipelinesPanelState>().invoke_edit_component_in_place(1);
+        ui.global::<PipelinesPanelState>()
+            .invoke_edit_component_in_place(1);
         drain_ui_queue();
         let panel = ui.global::<PipelinesPanelState>();
-        assert_eq!(ui_state.get_project().components.len(), before, "used once: no copy");
-        assert_eq!(active_dialog(&ui), DialogType::None, "nothing to name - not asked");
+        assert_eq!(
+            ui_state.get_project().components.len(),
+            before,
+            "used once: no copy"
+        );
+        assert_eq!(
+            active_dialog(&ui),
+            DialogType::None,
+            "nothing to name - not asked"
+        );
         assert!(panel.get_open_component_name().contains("Smooth"));
         assert!(!panel.get_open_component_read_only(), "to edit");
         assert_eq!(
@@ -8755,7 +8775,11 @@ mod tests {
             assert_ne!(dialog.get_error(), "", "{taken:?}");
             dialog.invoke_confirm();
             drain_ui_queue();
-            assert_eq!(active_dialog(&ui), DialogType::InPlaceCopy, "{taken:?} refused");
+            assert_eq!(
+                active_dialog(&ui),
+                DialogType::InPlaceCopy,
+                "{taken:?} refused"
+            );
         }
         assert_eq!(snapshot(), before);
 
@@ -8777,7 +8801,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(keys[0], project.components[1].key, "this step uses the copy");
+        assert_eq!(
+            keys[0], project.components[1].key,
+            "this step uses the copy"
+        );
         assert_eq!(keys[1], "SMOOTH", "the other keeps the original");
     }
 
@@ -8798,9 +8825,16 @@ mod tests {
         assert_eq!(steps.len(), 4, "Threshold, Blur, Blur, ◆ Smooth");
         assert!(matches!(steps[1].content, StepContent::Command(_)));
         assert!(matches!(steps[2].content, StepContent::Command(_)));
-        assert!(matches!(steps[3].content, StepContent::Component(_)), "the one there before");
+        assert!(
+            matches!(steps[3].content, StepContent::Component(_)),
+            "the one there before"
+        );
         drop(project);
-        assert_eq!(picker.get_insert_after_idx(), 2, "after the last added step");
+        assert_eq!(
+            picker.get_insert_after_idx(),
+            2,
+            "after the last added step"
+        );
         assert_eq!(card_names(&ui)[1], card_names(&ui)[2], "the two Blur steps");
 
         // One undo takes both away.
@@ -10317,16 +10351,26 @@ mod tests {
             fits(label);
         }
         // What a step does is in ⋯ › About, not an ⓘ on every row.
-        for label in ["About Threshold", "This step's values…", "View steps", "Edit in place…", "Edit component (all uses)…"] {
+        for label in [
+            "About Threshold",
+            "This step's values…",
+            "View steps",
+            "Edit in place…",
+            "Edit component (all uses)…",
+        ] {
             assert!(
-                ElementHandle::find_by_accessible_label(&ui, label).next().is_none(),
+                ElementHandle::find_by_accessible_label(&ui, label)
+                    .next()
+                    .is_none(),
                 "{label:?} is on the card - it belongs in ⋯"
             );
         }
 
         ui.global::<PipelinesPanelState>().invoke_open_component(1);
         drain_ui_queue();
-        fits("Editing the component: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting");
+        fits(
+            "Editing the component: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting",
+        );
         fits("Settings");
 
         ui.global::<PipelinesPanelState>().invoke_close_component();
@@ -11050,7 +11094,11 @@ mod tests {
         picker.invoke_confirm(threshold);
         drain_ui_queue();
         assert_eq!(step_names(&ui_state, 1), ["GaussianBlur", "Threshold"]);
-        assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog, "still open");
+        assert_eq!(
+            active_dialog(&ui),
+            DialogType::CommandSelectionDialog,
+            "still open"
+        );
         // After the threshold: no image processing - instance segmentation.
         assert!(!picker.get_fcat_pre() && !picker.get_fcat_seg());
         assert!(picker.get_fcat_obj());
@@ -11534,7 +11582,13 @@ mod tests {
         running.invoke_close();
         drain_ui_queue();
         assert_eq!(panel.get_run_changes(), 0);
-        assert!(!panel.get_active_commands().row_data(1).unwrap().changed_since_run);
+        assert!(
+            !panel
+                .get_active_commands()
+                .row_data(1)
+                .unwrap()
+                .changed_since_run
+        );
     }
 
     /// A pinned setting is marked on its card and listed in the Tuning
@@ -12162,9 +12216,10 @@ mod tests {
 
     /// The texts showing `text`, top to bottom.
     fn texts(ui: &AppWindow, text: &str) -> Vec<i_slint_backend_testing::ElementHandle> {
-        let mut found: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_type_name(ui, "Text")
-            .filter(|t| t.accessible_label().is_some_and(|l| l == text) && t.size().width > 0.0)
-            .collect();
+        let mut found: Vec<_> =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(ui, "Text")
+                .filter(|t| t.accessible_label().is_some_and(|l| l == text) && t.size().width > 0.0)
+                .collect();
         found.sort_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y));
         found
     }
@@ -12235,7 +12290,10 @@ mod tests {
         let bead_tab = texts(&ui, "Bead").into_iter().next().expect("the Bead tab");
         click_at(&ui, center_of(&bead_tab));
         let on_bead = first_setting_y();
-        assert_eq!(on_bead, on_spot, "the Bead tab's setting starts where the Spot tab's did");
+        assert_eq!(
+            on_bead, on_spot,
+            "the Bead tab's setting starts where the Spot tab's did"
+        );
     }
 
     #[test]

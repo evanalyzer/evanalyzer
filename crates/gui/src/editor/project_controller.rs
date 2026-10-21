@@ -13,11 +13,11 @@ use crate::UiState;
 use crate::UnsavedChangesState;
 use crate::WarningState;
 use crate::editor::classification_controller::ClassificationController;
-use crate::editor::start_page_controller as start_page;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
+use crate::editor::start_page_controller as start_page;
 use crate::editor::template_controller::TemplateController;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::exporter::cite_project;
@@ -1878,11 +1878,13 @@ pub(crate) mod tests {
         let (ui_state, controller) = make_controller_on(ui.as_weak(), ui_state);
         controller.attach_callbacks();
         controller.template_controller.attach_callbacks();
-        let start = Arc::new(crate::editor::start_page_controller::StartPageController::new(
-            ui.as_weak(),
-            ui_state.clone(),
-            controller.clone(),
-        ));
+        let start = Arc::new(
+            crate::editor::start_page_controller::StartPageController::new(
+                ui.as_weak(),
+                ui_state.clone(),
+                controller.clone(),
+            ),
+        );
         start.attach_callbacks();
         Window {
             ui,
@@ -1982,7 +1984,10 @@ pub(crate) mod tests {
         choose_file(&w.ui, &path);
         drain_ui_queue();
         assert!(!start().get_active());
-        assert_eq!(w.ui.global::<crate::LayoutState>().get_mode(), crate::WorkspaceMode::Images);
+        assert_eq!(
+            w.ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Images
+        );
 
         // Remembered, first; listed when the page shows again.
         let recent = w.ui_state.load_app_settings().recent_projects;
@@ -1991,7 +1996,10 @@ pub(crate) mod tests {
         w.toolbar().invoke_new_file_clicked();
         drain_ui_queue();
         let rows = start().get_recent();
-        assert_eq!(slint::Model::row_data(&rows, 0).unwrap().path, path.to_string_lossy().as_ref());
+        assert_eq!(
+            slint::Model::row_data(&rows, 0).unwrap().path,
+            path.to_string_lossy().as_ref()
+        );
         assert!(!slint::Model::row_data(&rows, 0).unwrap().missing);
 
         // A recent one opens with a click; ✕ takes it off the list.
@@ -2021,7 +2029,11 @@ pub(crate) mod tests {
         w.ui.global::<crate::StartState>().invoke_open_recent(0);
         drain_ui_queue();
         assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
-        assert_eq!(w.pipeline_names(), ["Mine"], "not replaced before the answer");
+        assert_eq!(
+            w.pipeline_names(),
+            ["Mine"],
+            "not replaced before the answer"
+        );
     }
 
     #[test]
@@ -2030,11 +2042,17 @@ pub(crate) mod tests {
         w.start.show_start();
         drain_ui_queue();
         let start = w.ui.global::<crate::StartState>();
-        assert!(start.get_active(), "nothing to open at startup: the start page");
+        assert!(
+            start.get_active(),
+            "nothing to open at startup: the start page"
+        );
         start.invoke_empty_project();
         drain_ui_queue();
         assert!(!start.get_active());
-        assert_eq!(w.ui.global::<crate::LayoutState>().get_mode(), crate::WorkspaceMode::Pipelines);
+        assert_eq!(
+            w.ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Pipelines
+        );
     }
 
     #[test]
@@ -2059,11 +2077,16 @@ pub(crate) mod tests {
         drain_ui_queue();
         let start = w.ui.global::<crate::StartState>();
         assert!(start.get_active());
-        assert!(slint::Model::row_data(&start.get_recent(), 0).unwrap().missing);
+        assert!(
+            slint::Model::row_data(&start.get_recent(), 0)
+                .unwrap()
+                .missing
+        );
         assert!(start.get_open_last());
 
         // There: opened right away.
-        w.ui_state.update_app_settings(|s| s.remember_project(entry(&path)));
+        w.ui_state
+            .update_app_settings(|s| s.remember_project(entry(&path)));
         w.start.show_start();
         drain_ui_queue();
         assert!(!start.get_active());

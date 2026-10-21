@@ -37,11 +37,10 @@ pub mod components {
         check_project, problems_at, step_problem,
     };
     pub use crate::workspace::component_editing::{
-        ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,
-        bindable_settings, bound_setting_edited, clone_component_for_step, component_in_place_for_step,
-        copy_name_problem, in_place_copy, InPlaceCopy,
-        compatible_parameters,
-        component_uses, create_component, edit_parameter, expand_component, exposed_settings,
+        ClassRole, ComponentPlan, ComponentPlanClass, InPlaceCopy, StepList, add_binding,
+        apply_defaults, bindable_settings, bound_setting_edited, clone_component_for_step,
+        compatible_parameters, component_in_place_for_step, component_uses, copy_name_problem,
+        create_component, edit_parameter, expand_component, exposed_settings, in_place_copy,
         list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,
         plan_component, prune_component_values, remove_binding, remove_component,
         remove_component_step, remove_parameter, remove_unused_components, set_parameter_section,
@@ -68,27 +67,20 @@ pub mod global {
     pub use crate::workspace::crash_log;
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::ColorScheme;
-    pub use crate::workspace::settings::RecentServer;
+    pub use crate::workspace::settings::NavigatorMode;
+    pub use crate::workspace::settings::PanelSettings;
     pub use crate::workspace::settings::RecentProject;
+    pub use crate::workspace::settings::RecentServer;
+    pub use crate::workspace::settings::ResultsSplitSettings;
     pub use crate::workspace::settings::UserInformation;
     pub use crate::workspace::settings::ViewportMemorySettings;
-    pub use crate::workspace::settings::ResultsSplitSettings;
-    pub use crate::workspace::settings::PanelSettings;
-    pub use crate::workspace::settings::NavigatorMode;
 }
 
 pub mod results {
     pub use crate::api::Aggregation;
-    pub use crate::api::{
-        TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-        TimeCoursePoint, TimeCourseResult, TimeCourseStat,
-    };
     pub use crate::api::BoxplotBox;
     pub use crate::api::BoxplotFilter;
     pub use crate::api::BoxplotGroup;
-    pub use crate::api::DrawnImages;
-    pub use crate::backend::local::results::{colorize, colorize_thumbnail};
-    pub use crate::api::{ImageObjectsFilter, ResultObject};
     pub use crate::api::COLOR_SCALE_GRADIENT_STOPS;
     pub use crate::api::Cell;
     pub use crate::api::CellValue;
@@ -97,6 +89,7 @@ pub mod results {
     pub use crate::api::Column;
     pub use crate::api::ColumnEntry;
     pub use crate::api::DatabaseResult;
+    pub use crate::api::DrawnImages;
     pub use crate::api::ExportFormat;
     pub use crate::api::GroupedByImageFilter;
     pub use crate::api::Grouping;
@@ -121,6 +114,12 @@ pub mod results {
     pub use crate::api::WellsBatchFilter;
     pub use crate::api::WellsBatchFilterMulti;
     pub use crate::api::color_scale_gradient;
+    pub use crate::api::{ImageObjectsFilter, ResultObject};
+    pub use crate::api::{
+        TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
+        TimeCoursePoint, TimeCourseResult, TimeCourseStat,
+    };
+    pub use crate::backend::local::results::{colorize, colorize_thumbnail};
 
     pub use crate::backend::local::ResultsGenerator as LocalResultsGenerator;
 }
@@ -144,9 +143,9 @@ pub mod project {
     pub use crate::workspace::ProjectWithRuntime;
     pub use crate::workspace::annotation_measure::measure_on_source;
     pub use crate::workspace::annotations_geojson::{
-        ClassTarget, FileClass, ImportReport, PendingImport, apply_import, default_class_target,
-        export_image_geojson, image_annotation_classes, measure_pending, read_image_geojson,
-        PipelineObjects,
+        ClassTarget, FileClass, ImportReport, PendingImport, PipelineObjects, apply_import,
+        default_class_target, export_image_geojson, image_annotation_classes, measure_pending,
+        read_image_geojson,
     };
     pub use crate::workspace::class_ids::{
         ClassIdChange, change_class_id, free_class_ids, next_class_id,
@@ -236,7 +235,9 @@ pub mod images {
     pub use crate::api::PyramidInfo;
     pub use crate::api::TileRequest;
     pub use crate::workspace::images::{
-        Erased, erase_mask, annotation_from_mask, stroke_mask, union_mask,
+        Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask,
     };
-    pub use crate::workspace::plate_layout::{PlateLayout, WellImages, plate_layout, texts_in_group};
+    pub use crate::workspace::plate_layout::{
+        PlateLayout, WellImages, plate_layout, texts_in_group,
+    };
 }

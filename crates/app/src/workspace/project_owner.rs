@@ -367,7 +367,12 @@ impl ProjectWithRuntime {
             .tmp_settings
             .selected_object
             .as_ref()
-            .is_some_and(|id| self.tmp_settings.preview_objects.iter().any(|o| &o.id == id));
+            .is_some_and(|id| {
+                self.tmp_settings
+                    .preview_objects
+                    .iter()
+                    .any(|o| &o.id == id)
+            });
         if selected_is_preview {
             self.tmp_settings.selected_object = None;
         }

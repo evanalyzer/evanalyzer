@@ -633,7 +633,9 @@ impl<'a> JobExecutor {
                     .as_ref()
                     .and_then(|t| t.frame_interval)
                     .filter(|s| s.is_finite() && *s > 0.0)
-                    .or(series_info.frame_interval.filter(|s| s.is_finite() && *s > 0.0))
+                    .or(series_info
+                        .frame_interval
+                        .filter(|s| s.is_finite() && *s > 0.0))
                     .map(f64::from),
             )
         };
@@ -801,8 +803,7 @@ impl<'a> JobExecutor {
                         return Err(InternalErrors::Cancelled);
                     }
 
-                    let is_bp_target = breakpoint_targets
-                        .contains(&(tile.offset_x, tile.offset_y));
+                    let is_bp_target = breakpoint_targets.contains(&(tile.offset_x, tile.offset_y));
 
                     // A fresh reader per tile, not pooled: measured to be
                     // faster in practice than sharing a small mutex-guarded
@@ -1349,7 +1350,11 @@ impl<'a> JobExecutor {
             .pipelines_pre_process
             .values()
             .chain(self.pipelines_post_process.values())
-            .flat_map(|p| p.commands.iter().filter_map(|(_, _, c)| c.channel_variant()))
+            .flat_map(|p| {
+                p.commands
+                    .iter()
+                    .filter_map(|(_, _, c)| c.channel_variant())
+            })
         {
             if !variants.contains(&variant) {
                 variants.push(variant);
@@ -1390,8 +1395,9 @@ impl<'a> JobExecutor {
                         && t.offset_y == tile.offset_y
                 });
                 if let Some((channel, loaded_tile)) = read
-                    && let Some(image) =
-                        cache.image_cache.get(&CacheAddress::Channel((channel, loaded_tile)))
+                    && let Some(image) = cache
+                        .image_cache
+                        .get(&CacheAddress::Channel((channel, loaded_tile)))
                 {
                     cache
                         .image_cache
@@ -1591,8 +1597,10 @@ impl<'a> JobExecutor {
         let count = count.max(1);
         let candidates: Vec<&ImageTile> = match settings {
             Some(settings) => {
-                let visible: Vec<&ImageTile> =
-                    tiles.iter().filter(|t| settings.is_tile_visible(t)).collect();
+                let visible: Vec<&ImageTile> = tiles
+                    .iter()
+                    .filter(|t| settings.is_tile_visible(t))
+                    .collect();
                 if visible.is_empty() {
                     tiles.iter().collect()
                 } else {
@@ -2733,7 +2741,11 @@ mod full_run_integration_tests {
         };
         assert_eq!(interval(Some(30.0)), Some(30.0));
         let from_the_image = interval(None);
-        assert_eq!(interval(Some(0.0)), from_the_image, "0 is unset: the image's own");
+        assert_eq!(
+            interval(Some(0.0)),
+            from_the_image,
+            "0 is unset: the image's own"
+        );
         assert_eq!(interval(Some(f32::NAN)), from_the_image);
     }
 
@@ -2750,11 +2762,22 @@ mod full_run_integration_tests {
             z_range: None,
         }));
         let z_planes: HashSet<i32> = one_by_one.iter().map(|(_, z)| *z).collect();
-        assert!(z_planes.len() > 2, "the fixture has several z-planes: {one_by_one:?}");
+        assert!(
+            z_planes.len() > 2,
+            "the fixture has several z-planes: {one_by_one:?}"
+        );
         assert!(projected.iter().all(|(_, z)| *z == 0), "{projected:?}");
         let times = |planes: &[(i32, i32)]| planes.iter().map(|(t, _)| *t).collect::<HashSet<_>>();
-        assert_eq!(times(&projected), times(&one_by_one), "the same time points");
-        assert_eq!(projected.len(), times(&projected).len(), "one plane per time point");
+        assert_eq!(
+            times(&projected),
+            times(&one_by_one),
+            "the same time points"
+        );
+        assert_eq!(
+            projected.len(),
+            times(&projected).len(),
+            "one plane per time point"
+        );
     }
 
     fn make_single_image_job(out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>>) -> JobExecutor {
@@ -2937,7 +2960,10 @@ mod full_run_integration_tests {
             z_range: None,
         });
         for z_stack in [None, all_planes] {
-            for step in [load(ChannelZProjection::MaxIntensity, 0), load(ChannelZProjection::None, 1)] {
+            for step in [
+                load(ChannelZProjection::MaxIntensity, 0),
+                load(ChannelZProjection::None, 1),
+            ] {
                 let areas = run_loading(step, z_stack.clone()).unwrap();
                 assert!(!areas.is_empty(), "the fixture image has objects");
             }
@@ -2950,7 +2976,10 @@ mod full_run_integration_tests {
     fn a_load_channel_step_with_a_plane_the_image_lacks_fails_clearly() {
         let err = run_loading(load(crate::algos::ChannelZProjection::None, 999), None).unwrap_err();
         let message = format!("{err}");
-        assert!(message.contains("loads z-plane 999 of channel 0"), "{message}");
+        assert!(
+            message.contains("loads z-plane 999 of channel 0"),
+            "{message}"
+        );
         assert!(message.contains("z-planes 0–"), "{message}");
     }
 
@@ -3033,11 +3062,27 @@ mod full_run_integration_tests {
         .unwrap();
         let images = variant_images(&cache);
         let image_of = |v: ChannelVariant| {
-            pixels(&images.iter().find(|(variant, _)| *variant == v).expect("read").1)
+            pixels(
+                &images
+                    .iter()
+                    .find(|(variant, _)| *variant == v)
+                    .expect("read")
+                    .1,
+            )
         };
-        assert_eq!(image_of(max), pixels(&read(ZProjection::MaxIntensity, None)));
-        assert_eq!(image_of(plane), pixels(&read(ZProjection::None, Some(1..=1))));
-        assert_ne!(image_of(max), image_of(plane), "the fixture's planes differ");
+        assert_eq!(
+            image_of(max),
+            pixels(&read(ZProjection::MaxIntensity, None))
+        );
+        assert_eq!(
+            image_of(plane),
+            pixels(&read(ZProjection::None, Some(1..=1)))
+        );
+        assert_ne!(
+            image_of(max),
+            image_of(plane),
+            "the fixture's planes differ"
+        );
     }
 
     /// Not read again: a variant already read for this tile on an earlier
@@ -3071,8 +3116,16 @@ mod full_run_integration_tests {
         store.lock().unwrap().insert((max, 0, 0), marker(42.0));
         let mut cache = GlobalPipelineCache::default();
         job.add_channel_variants(
-            &mut cache, &reader, &entry, &tile, 0, ZProjection::None, 0, &[max],
-            channels as u32, Some(&store),
+            &mut cache,
+            &reader,
+            &entry,
+            &tile,
+            0,
+            ZProjection::None,
+            0,
+            &[max],
+            channels as u32,
+            Some(&store),
         )
         .unwrap();
         assert_eq!(pixels(&variant_images(&cache)[0].1), [42.0]);
@@ -3080,10 +3133,26 @@ mod full_run_integration_tests {
         // The channels are max projections already: the variant is theirs.
         let mut cache = GlobalPipelineCache::default();
         let channel = marker(7.0);
-        cache.add_to_channel_cache(channel.clone(), 0, ImageTile { width: 1, height: 1, ..tile });
+        cache.add_to_channel_cache(
+            channel.clone(),
+            0,
+            ImageTile {
+                width: 1,
+                height: 1,
+                ..tile
+            },
+        );
         job.add_channel_variants(
-            &mut cache, &reader, &entry, &tile, 0, ZProjection::MaxIntensity, 0, &[max],
-            channels as u32, None,
+            &mut cache,
+            &reader,
+            &entry,
+            &tile,
+            0,
+            ZProjection::MaxIntensity,
+            0,
+            &[max],
+            channels as u32,
+            None,
         )
         .unwrap();
         assert!(Arc::ptr_eq(&variant_images(&cache)[0].1, &channel));
@@ -3092,8 +3161,16 @@ mod full_run_integration_tests {
         let store: VariantStore = Mutex::new(HashMap::new());
         let mut cache = GlobalPipelineCache::default();
         job.add_channel_variants(
-            &mut cache, &reader, &entry, &tile, 0, ZProjection::None, 0, &[max],
-            channels as u32, Some(&store),
+            &mut cache,
+            &reader,
+            &entry,
+            &tile,
+            0,
+            ZProjection::None,
+            0,
+            &[max],
+            channels as u32,
+            Some(&store),
         )
         .unwrap();
         assert!(store.lock().unwrap().contains_key(&(max, 0, 0)));
@@ -3110,7 +3187,8 @@ mod full_run_integration_tests {
         assert!(check_channel_variant_planes(&[variant(ZProjection::MaxIntensity, 0)], 1).is_ok());
         let err = check_channel_variant_planes(&[variant(ZProjection::None, 5)], 5).unwrap_err();
         assert!(
-            format!("{err}").contains("loads z-plane 5 of channel 2, but this image has z-planes 0–4"),
+            format!("{err}")
+                .contains("loads z-plane 5 of channel 2, but this image has z-planes 0–4"),
             "{err}"
         );
         let err = check_channel_variant_planes(&[variant(ZProjection::None, 1)], 1).unwrap_err();
@@ -3419,9 +3497,15 @@ mod full_run_integration_tests {
             [(512, 512), (512, 0), (0, 512)]
         );
         // More wanted than there are: all of them, once.
-        assert_eq!(JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 9).len(), 4);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 9).len(),
+            4
+        );
         // 0 means 1.
-        assert_eq!(JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 0).len(), 1);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 0).len(),
+            1
+        );
     }
 
     #[test]
@@ -3431,7 +3515,9 @@ mod full_run_integration_tests {
         // pixel (700, 650): over the bottom-right tile, with others visible too.
         let settings = viewport(200.0 - 700.0, 200.0 - 650.0);
         assert_eq!(
-            JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 1).first().copied(),
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&settings), 1)
+                .first()
+                .copied(),
             Some((512, 512))
         );
     }
@@ -3441,22 +3527,33 @@ mod full_run_integration_tests {
         let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
         // No viewport settings: the middle tile of the list.
         assert_eq!(
-            JobExecutor::breakpoint_target_tiles(&tiles, None, 1).first().copied(),
+            JobExecutor::breakpoint_target_tiles(&tiles, None, 1)
+                .first()
+                .copied(),
             Some((0, 512))
         );
         // Viewport far away from the image: the closest of all tiles.
         let away = viewport(-5000.0, -5000.0);
         assert_eq!(
-            JobExecutor::breakpoint_target_tiles(&tiles, Some(&away), 1).first().copied(),
+            JobExecutor::breakpoint_target_tiles(&tiles, Some(&away), 1)
+                .first()
+                .copied(),
             Some((512, 512))
         );
         // A single visible tile is taken as is.
         let only_first = viewport(0.0, 0.0);
         assert_eq!(
-            JobExecutor::breakpoint_target_tiles(&tiles[..1], Some(&only_first), 1).first().copied(),
+            JobExecutor::breakpoint_target_tiles(&tiles[..1], Some(&only_first), 1)
+                .first()
+                .copied(),
             Some((0, 0))
         );
-        assert_eq!(JobExecutor::breakpoint_target_tiles(&[], None, 1).first().copied(), None);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tiles(&[], None, 1)
+                .first()
+                .copied(),
+            None
+        );
     }
 
     /// The id of pipeline 1's first step (the Threshold of
