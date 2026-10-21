@@ -7,6 +7,7 @@ mod results_charts;
 mod results_exporter;
 mod results_generator;
 mod results_time_course;
+mod results_tracks;
 #[cfg(test)]
 mod test_support;
 
@@ -142,6 +143,13 @@ impl ResultsSource for LocalResults {
         filter: &crate::api::ImageObjectsFilter,
     ) -> Result<Vec<crate::api::ResultObject>, InternalErrors> {
         self.with(|db| ResultCharts {}.image_objects(db, filter))
+    }
+
+    fn track_summary(
+        &self,
+        filter: &crate::api::TrackSummaryFilter,
+    ) -> Result<Vec<crate::api::TrackSummary>, InternalErrors> {
+        self.with(|db| db.track_summary(filter))
     }
 
     fn has_tracks(&self) -> Result<bool, InternalErrors> {

@@ -4,6 +4,7 @@
 // Filter - one labelled line per setting.
 import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkProgressBar, InkTone } from "../ink/ink.slint";
 import { ExportDialogState } from "../api/export.slint";
+import { ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, CheckBox, ComboBox } from "../ink/std_compat.slint";
@@ -154,6 +155,58 @@ export component ExportDialog inherits InkDialog {
                     CheckBox {
                         text: "Relative to the first time point (%)";
                         checked <=> ExportDialogState.time-relative;
+                    }
+                }
+                // With tracked objects: a row per track.
+                if ResultsState.has-tracks: CheckBox {
+                    text: "Tracks - one row per track";
+                    checked <=> ExportDialogState.with-tracks;
+                }
+                if ResultsState.has-tracks && ExportDialogState.with-tracks: VerticalLayout {
+                    padding-left: 24px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "Statistics";
+                        }
+                        InkMultiSelect {
+                            summary-text: ExportDialogState.track-stat-summary;
+                            items <=> ExportDialogState.track-stat-items;
+                            multi-select: true;
+                            pill-width: root.field-w - 24px;
+                            item-selected(key, value, selected) => {
+                                ExportDialogState.track-stat-item-selected(key, selected);
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "At least";
+                        }
+                        LineEdit {
+                            width: 64px;
+                            horizontal-alignment: center;
+                            input-type: number;
+                            text <=> ExportDialogState.track-min-points;
+                        }
+                        Text {
+                            text: "time points";
+                            vertical-alignment: center;
+                            color: Ink.text-mute;
+                            font-size: Ink.fs-secondary;
+                        }
+                    }
+                    CheckBox {
+                        text: "Only tracks from the first time point";
+                        checked <=> ExportDialogState.track-from-start;
+                    }
+                    CheckBox {
+                        text: "Leave out tracks touching the image edge";
+                        checked <=> ExportDialogState.track-no-edge;
                     }
                 }
                 CheckBox {

@@ -5,7 +5,8 @@
 // Peak RSS at the end (`VmHWM`, Linux). `--case N` runs only the N-th query
 // or export (in the order printed, from 0): its own peak RSS. The last two
 // exports are the List (a row per object, CSV and XLSX); case 13 is
-// Results › Tracks' query: one image's tracks (median of `--iters`).
+// Results › Tracks' query: one image's tracks (median of `--iters`); case
+// 14 the tracks export (a row per track).
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N]
 
@@ -250,5 +251,35 @@ fn main() {
             tracks.tracks.len()
         );
     }
+
+    // Case 14: a row per track, every image - CSV, the 3 values' means.
+    if runs(n_export + 1) {
+        let out_dir = out_root.join("tracks");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let settings = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![
+                Column::AreaSizePx,
+                Column::IntensityAvg(0),
+                Column::IntensityAvg(1),
+            ],
+            with_track_summary: true,
+            ..Default::default()
+        };
+        let start = Instant::now();
+        settings
+            .start_export(&database, &AtomicBool::new(false), &mut |_, _, _| {})
+            .expect("tracks export");
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        let csv = std::fs::read_to_string(out_dir.join("tracks.csv")).unwrap();
+        println!(
+            "\n{:<42} {elapsed:>10.1} {:>8} tracks {:>8.2} MB",
+            "Tracks CSV, a row per track",
+            csv.lines().count() - 1,
+            csv.len() as f64 / 1e6
+        );
+    }
+    let _ = std::fs::remove_dir_all(&out_root);
     println!("\npeak RSS {:.0} MB", peak_rss_mb());
 }

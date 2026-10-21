@@ -345,6 +345,11 @@ cargo test --release -p evanalyzer_gui --lib bench_trails -- --ignored --nocaptu
 | Trails of 10 time points, 1500 tracks, 1920 × 1080 | 1.4 ms | - |
 | Whole tracks up to the time point | 5.3 ms | - |
 | The selected track only | 0.01 ms | - |
+| Export: a row per track, 144,000 tracks, 3 values (CSV, 25.6 MB) | 1.27-1.50 s | 406-410 MB peak (query process) |
+
+The track export (case 14 of `bench_time_course`) reads one image at a
+time - a track never leaves its image - and writes each track's row as it
+comes, so its RAM doesn't grow with the number of tracks.
 
 At most 1,000,000 points of an image are read (~16 MB): beyond, a
 repeatable sample of whole tracks, and the table says "N of M tracks (a
@@ -372,6 +377,7 @@ graphics driver).
 | Time course export, 6.6M objects | 250-410 MB (query process) | 2026-10-21 | Time course |
 | List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |
 | Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
+| Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |

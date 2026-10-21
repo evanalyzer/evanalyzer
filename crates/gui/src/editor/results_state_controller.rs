@@ -1918,6 +1918,25 @@ impl ResultsStateController {
                     ));
                 });
 
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_track_stat_item_selected(move |_key, _selected| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let selected = state
+                        .get_track_stat_items()
+                        .iter()
+                        .filter(|i| i.selected)
+                        .count();
+                    state.set_track_stat_summary(list_summary(
+                        selected,
+                        TIME_STATS.len(),
+                        "Statistics",
+                    ));
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ExportDialogState>().on_start_clicked(move || {
@@ -4307,6 +4326,14 @@ impl ResultsStateController {
         ));
         state.set_time_relative(false);
         state.set_time_layout(2);
+        state.set_with_tracks(false);
+        state.set_track_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(&[
+            TimeCourseStat::Mean,
+        ])))));
+        state.set_track_stat_summary(list_summary(1, TIME_STATS.len(), "Statistics"));
+        state.set_track_min_points("1".into());
+        state.set_track_from_start(false);
+        state.set_track_no_edge(false);
 
         state.set_is_exporting(false);
         state.set_done(false);
@@ -4539,6 +4566,29 @@ impl ResultsStateController {
                     1 => TimeCourseLayout::Wide,
                     _ => TimeCourseLayout::Both,
                 },
+            },
+            with_track_summary: state.get_with_tracks(),
+            track_summary: evanalyzer_app::results::TrackSummaryExport {
+                statistics: TIME_STATS
+                    .iter()
+                    .copied()
+                    .filter(|stat| {
+                        state
+                            .get_track_stat_items()
+                            .iter()
+                            .any(|item| item.selected && item.key == stat.label())
+                    })
+                    .collect(),
+                min_points: state
+                    .get_track_min_points()
+                    .trim()
+                    .parse()
+                    .unwrap_or(1)
+                    .max(1),
+                from_start: state.get_track_from_start(),
+                no_edge: state.get_track_no_edge(),
+                // As the Tracks view shows it.
+                speed_unit: self._app_state.load_app_settings().results_split.speed_unit,
             },
             with_plate_view_heatmap: state.get_with_plate_heatmap_view(),
             with_well_view_heatmap: state.get_with_well_heatmap_view(),
@@ -7466,6 +7516,37 @@ mod tests {
             TimeCourseNormalize::RelativeToStart
         );
         assert_eq!(settings.time_course.layout, TimeCourseLayout::Both);
+    }
+
+    /// Tracks in the export dialog: off by default; on, with its
+    /// statistics, minimum time points and filters - the speed in the
+    /// Tracks view's unit.
+    #[test]
+    fn the_export_dialog_exports_tracks() {
+        use evanalyzer_app::global::SpeedUnit;
+        let o = opened_time_series();
+        let export = o.export();
+        o.controller.populate_export_defaults(&o.ui);
+        export.set_output_dir("/tmp".into());
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(!settings.with_track_summary);
+
+        export.set_with_tracks(true);
+        export.set_track_min_points(" 5 ".into());
+        export.set_track_from_start(true);
+        export.set_track_no_edge(true);
+        o.controller
+            ._app_state
+            .update_app_settings(|s| s.results_split.speed_unit = SpeedUnit::UmPerS);
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(settings.with_track_summary);
+        let tracks = &settings.track_summary;
+        assert_eq!(tracks.statistics, [TimeCourseStat::Mean]);
+        assert_eq!(
+            (tracks.min_points, tracks.from_start, tracks.no_edge),
+            (5, true, true)
+        );
+        assert_eq!(tracks.speed_unit, SpeedUnit::UmPerS);
     }
 
     #[test]
