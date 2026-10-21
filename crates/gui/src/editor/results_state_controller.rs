@@ -7300,6 +7300,41 @@ mod tests {
         }
     }
 
+    /// Opened, the List shows the first time point only - not every time
+    /// point's objects until T is first changed - and T 1 its own.
+    #[test]
+    fn the_list_shows_one_time_point_from_the_start() {
+        let o = opened_time_series();
+        let s = o.state();
+        let per_time_point = o.controller.list_row_locations.lock().unwrap().len();
+        let rows = s.get_list_rows().row_count();
+        let at_t0: usize = {
+            let db = o.controller.result_generator.lock().unwrap();
+            let db = db.as_ref().unwrap();
+            let all = db
+                .get_object_list(&evanalyzer_app::results::ListFilter {
+                    plane: evanalyzer_app::results::PlaneFilter { z_stack: 0, t_stack: 0 },
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::AreaSizePx],
+                    with_coloc_details: false,
+                    page: evanalyzer_app::results::Pagination { limit: 10_000, after: None },
+                    transpond_table: false,
+                })
+                .unwrap();
+            all.rows.len()
+        };
+        assert!(rows > 0, "the List is filled when opened");
+        assert_eq!(rows, at_t0.min(LIST_PAGE_SIZE as usize), "only T 0's objects");
+        assert_eq!(s.get_t_stack(), 0);
+        s.set_t_stack(1);
+        s.invoke_t_changed(1);
+        drain_ui_queue();
+        let at_t1 = s.get_list_rows().row_count();
+        assert_eq!(rows, at_t1, "the same objects at T 0 and T 1");
+        assert_eq!(per_time_point, rows);
+    }
+
     /// Over time: a line per class with its legend label, a band where
     /// there's an SD (ClassA's two objects; not ClassB's one), the time
     /// points on the x axis; a line per image when asked.

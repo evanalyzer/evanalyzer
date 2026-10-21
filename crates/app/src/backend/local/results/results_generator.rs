@@ -4141,6 +4141,53 @@ mod tests {
         assert_eq!(result.source_object_count, 1);
     }
 
+    /// The List shows one time point: objects of the others are not on
+    /// it - by object and per image.
+    #[test]
+    fn the_list_shows_only_the_time_point_asked_for() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 200).at_plane(0, 1),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 300).at_plane(0, 2),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 400).at_plane(0, 2),
+        ]);
+        for (t, objects) in [(0, 1), (1, 1), (2, 2)] {
+            let plane = PlaneFilter { z_stack: 0, t_stack: t };
+            let result = generator
+                .get_object_list(&ListFilter {
+                    plane,
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::AreaSizePx],
+                    with_coloc_details: false,
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap();
+            assert_eq!(result.rows.len(), objects, "objects at T {t}");
+            let grouped = generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane,
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::Count],
+                    aggregation: vec![Aggregation::Sum],
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap();
+            let count = grouped.rows[0]
+                .iter()
+                .find_map(|cell| match cell.value {
+                    CellValue::Integer(n) => Some(n as usize),
+                    CellValue::Float(n) => Some(n as usize),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(count, objects, "count per image at T {t}");
+        }
+    }
+
     #[test]
     fn get_object_list_pagination_cursor_returns_the_next_page() {
         let objects: Vec<ObjectSpec> = (0..5)
