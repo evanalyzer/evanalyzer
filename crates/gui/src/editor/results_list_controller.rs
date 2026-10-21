@@ -1,17 +1,20 @@
 use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
-use crate::{ResultItemData, ResultsListState, UiState};
+use crate::{PipelineRunningState, ResultItemData, ResultsListState, UiState};
 use evanalyzer_app::fs::FileSystem;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
 use slint::ComponentHandle;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct ResultsListController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
     pub(crate) results_state_controller: Arc<ResultsStateController>,
+    /// The results database of the analysis that finished last - what its
+    /// note's "Open results" opens.
+    last_analysis_results: Mutex<Option<PathBuf>>,
 }
 
 impl ResultsListController {
@@ -24,7 +27,20 @@ impl ResultsListController {
             ui,
             app_state: app_state.clone(),
             results_state_controller,
+            last_analysis_results: Mutex::new(None),
         }
+    }
+
+    /// An analysis finished, writing into `output_dir`: its results database
+    /// is the one "Open results" opens, and the list shows it.
+    pub fn analysis_finished(&self, output_dir: &Path) {
+        let backend = self.app_state.backend();
+        let found = results_database_in(backend.files(), output_dir);
+        if found.is_none() {
+            warn!("No results database in {output_dir:?}");
+        }
+        *self.last_analysis_results.lock().expect("Poisoned") = found;
+        self.sync_results_files_to_slint();
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
@@ -46,6 +62,17 @@ impl ResultsListController {
                 .on_open_folder_clicked(move || {
                     manager.open_results_folder();
                 });
+
+            // The finished analysis' note: its results, not whichever
+            // database the Results view had open before.
+            let manager = self.clone();
+            ui.global::<PipelineRunningState>().on_open_results(move || {
+                let last = manager.last_analysis_results.lock().expect("Poisoned").clone();
+                match last {
+                    Some(path) => manager.results_state_controller.open_database(path),
+                    None => warn!("No finished analysis' results to open"),
+                }
+            });
         }
     }
 
@@ -132,6 +159,23 @@ impl ResultsListController {
         #[cfg(target_os = "windows")]
         let _ = std::process::Command::new("explorer").arg(&path).spawn();
     }
+}
+
+/// The results database an analysis wrote into `dir` (its own results
+/// folder: `<job name>.evadb`), through the backend's file system.
+fn results_database_in(files: &dyn FileSystem, dir: &Path) -> Option<PathBuf> {
+    let entries = match files.list_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!("Could not read results directory {dir:?}: {e}");
+            return None;
+        }
+    };
+    entries
+        .into_iter()
+        .filter(|entry| !entry.is_dir)
+        .map(|entry| entry.path)
+        .find(|path| path.extension().and_then(|e| e.to_str()) == Some(RESULTS_FILE_EXTENSION))
 }
 
 /// Recursively walks `dir` through the backend's file system, appending

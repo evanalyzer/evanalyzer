@@ -418,6 +418,7 @@ export component Workspace inherits Rectangle {
                     kind: InkButtonKind.primary;
                     text: "Open results";
                     clicked => {
+                        PipelineRunningState.open-results();
                         LayoutState.mode = WorkspaceMode.results;
                         PipelineRunningState.close();
                     }
