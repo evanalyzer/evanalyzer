@@ -1,5 +1,8 @@
-use crate::args::{AggKind, GroupArgs, GroupByKind};
-use evanalyzer_app::results::Aggregation;
+use crate::args::{AggKind, GroupArgs, GroupByKind, LayoutKind, NormalizeKind};
+use evanalyzer_app::results::{
+    Aggregation, Grouping, TimeCourseExport, TimeCourseLayout, TimeCourseLines,
+    TimeCourseNormalize, TimeCourseStat,
+};
 use evanalyzer_app::results::Cell;
 use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::PlaneFilter;
@@ -54,71 +57,116 @@ pub fn resolve_object_classes(
         .collect()
 }
 
-pub fn to_aggregation(kind: AggKind) -> Aggregation {
+/// The aggregation of `kind` for a per-image export - none for the
+/// quartiles, which only a time course has.
+pub fn to_aggregation(kind: AggKind) -> Option<Aggregation> {
     match kind {
-        AggKind::Min => Aggregation::Min,
-        AggKind::Max => Aggregation::Max,
-        AggKind::Avg => Aggregation::Avg,
-        AggKind::Median => Aggregation::Median,
-        AggKind::Stdev => Aggregation::Stddev,
-        AggKind::Sum => Aggregation::Sum,
+        AggKind::Min => Some(Aggregation::Min),
+        AggKind::Max => Some(Aggregation::Max),
+        AggKind::Avg => Some(Aggregation::Avg),
+        AggKind::Median => Some(Aggregation::Median),
+        AggKind::Stdev => Some(Aggregation::Stddev),
+        AggKind::Sum => Some(Aggregation::Sum),
+        AggKind::Q1 | AggKind::Q3 => None,
     }
 }
 
-/// What `GroupArgs` resolves to against the current results backend — only
-/// "group by image" (`ResultsGenerator::get_grouped_by_image`) has a real
-/// equivalent today. `--group-by folder`/`--group-by regex` and
-/// `--split-colocalized` don't (the Plate/Well grid views' own grouping
-/// regex is a coordinate-extracting concept, not a generic group-by key;
-/// there's no "is this object colocalized with anything at all" row filter
-/// in the current schema-level API), so those return a clear error instead
-/// of silently doing something else.
-pub struct ResolvedGrouping {
-    pub group_by_image: bool,
-    pub aggregations: Vec<Aggregation>,
+pub fn to_time_course_stat(kind: AggKind) -> TimeCourseStat {
+    match kind {
+        AggKind::Min => TimeCourseStat::Min,
+        AggKind::Max => TimeCourseStat::Max,
+        AggKind::Avg => TimeCourseStat::Mean,
+        AggKind::Median => TimeCourseStat::Median,
+        AggKind::Stdev => TimeCourseStat::Sd,
+        AggKind::Sum => TimeCourseStat::Sum,
+        AggKind::Q1 => TimeCourseStat::Q1,
+        AggKind::Q3 => TimeCourseStat::Q3,
+    }
+}
+
+/// What `GroupArgs` asks for.
+#[derive(Debug, PartialEq)]
+pub enum ResolvedGrouping {
+    /// A row per object.
+    List,
+    /// A row per image and class, per time point, with these aggregations.
+    PerImage(Vec<Aggregation>),
+    /// The time course - its lines' wells / groups by `grouping`.
+    TimeCourse {
+        grouping: Grouping,
+        settings: TimeCourseExport,
+    },
 }
 
 pub fn resolve_grouping(args: &GroupArgs) -> Result<ResolvedGrouping, InternalErrors> {
-    let group_by_image = match args.group_by {
-        None => false,
-        Some(GroupByKind::Image) => true,
-        Some(GroupByKind::Folder) => {
-            return Err(InternalErrors::InvalidArgument(
-                "--group-by folder isn't supported by the current results backend (only \
-                 --group-by image has a matching query — ResultsGenerator::get_grouped_by_image)"
-                    .to_string(),
-            ));
-        }
-        Some(GroupByKind::Regex) => {
-            return Err(InternalErrors::InvalidArgument(
-                "--group-by regex isn't supported for table export (that's the Plate/Well grid \
-                 views' own well-coordinate regex, not a generic group-by key) — use \
-                 --group-by image, or omit --group-by for a flat per-object table"
-                    .to_string(),
-            ));
-        }
-    };
     if args.split_colocalized {
         return Err(InternalErrors::InvalidArgument(
             "--split-colocalized isn't supported by the current results backend".to_string(),
         ));
     }
-    // `--group-by-class` is a no-op when grouping by image:
-    // `get_grouped_by_image` always splits by class (an object's class is
-    // part of what it groups by, not an optional extra split), so there's
-    // nothing to opt into or out of here.
-    let aggregations: Vec<Aggregation> = args.agg.iter().copied().map(to_aggregation).collect();
-    Ok(ResolvedGrouping {
-        group_by_image,
-        // clap's own `default_value = "avg"` only applies when parsing real
-        // CLI args — `GroupArgs::default()` (e.g. in tests, or a caller
-        // building one directly) gives an empty `Vec` instead, so this
-        // covers that case the same way the flag's own default would.
-        aggregations: if aggregations.is_empty() {
-            vec![Aggregation::Avg]
-        } else {
-            aggregations
-        },
+    let time_course = |lines: TimeCourseLines, grouping: Grouping| {
+        let statistics: Vec<TimeCourseStat> = match args.agg.is_empty() {
+            true => TimeCourseStat::DEFAULT.to_vec(),
+            false => args.agg.iter().copied().map(to_time_course_stat).collect(),
+        };
+        ResolvedGrouping::TimeCourse {
+            grouping,
+            settings: TimeCourseExport {
+                lines,
+                statistics,
+                normalize: match args.normalize {
+                    Some(NormalizeKind::T0) => TimeCourseNormalize::RelativeToStart,
+                    Some(NormalizeKind::None) | None => TimeCourseNormalize::None,
+                },
+                layout: match args.layout {
+                    LayoutKind::Long => TimeCourseLayout::Long,
+                    LayoutKind::Wide => TimeCourseLayout::Wide,
+                    LayoutKind::Both => TimeCourseLayout::Both,
+                },
+            },
+        }
+    };
+    let regex = || {
+        args.group_regex
+            .clone()
+            .filter(|regex| !regex.is_empty())
+            .map(Grouping::Regex)
+            .ok_or_else(|| {
+                InvalidArgument(
+                    "--group-by group / regex needs --group-regex (its first capture group is \
+                     the group), or use --group-by folder"
+                        .to_string(),
+                )
+            })
+    };
+    use InternalErrors::InvalidArgument;
+    // `--group-by-class` changes nothing: every grouping splits by class.
+    Ok(match args.group_by {
+        None => ResolvedGrouping::List,
+        Some(GroupByKind::Image) => {
+            let aggregations = args
+                .agg
+                .iter()
+                .map(|kind| {
+                    to_aggregation(*kind).ok_or_else(|| {
+                        InvalidArgument(
+                            "q1/q3 are only for a time course (--group-by class, well, group, \
+                             folder, regex or track)"
+                                .to_string(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            ResolvedGrouping::PerImage(match aggregations.is_empty() {
+                true => vec![Aggregation::Avg],
+                false => aggregations,
+            })
+        }
+        Some(GroupByKind::Class) => time_course(TimeCourseLines::Class, Grouping::Auto),
+        Some(GroupByKind::Well) => time_course(TimeCourseLines::Well, Grouping::Auto),
+        Some(GroupByKind::Group | GroupByKind::Regex) => time_course(TimeCourseLines::Group, regex()?),
+        Some(GroupByKind::Folder) => time_course(TimeCourseLines::Group, Grouping::Folder),
+        Some(GroupByKind::Track) => time_course(TimeCourseLines::Track, Grouping::Auto),
     })
 }
 
@@ -141,42 +189,100 @@ mod tests {
     use crate::args::GroupArgs;
 
     #[test]
-    fn resolve_grouping_defaults_to_flat_with_avg_aggregation() {
+    fn resolve_grouping_defaults_to_a_list() {
         let resolved = resolve_grouping(&GroupArgs::default()).expect("resolve_grouping");
-        assert!(!resolved.group_by_image);
-        assert!(resolved.aggregations == vec![Aggregation::Avg]);
+        assert_eq!(resolved, ResolvedGrouping::List);
     }
 
     #[test]
-    fn resolve_grouping_maps_image_group_by_and_every_agg_kind() {
+    fn resolve_grouping_maps_image_group_by_and_its_aggregations() {
         let args = GroupArgs {
             group_by: Some(GroupByKind::Image),
             agg: vec![AggKind::Min, AggKind::Max, AggKind::Sum],
             ..Default::default()
         };
-        let resolved = resolve_grouping(&args).expect("resolve_grouping");
-        assert!(resolved.group_by_image);
-        assert!(
-            resolved.aggregations == vec![Aggregation::Min, Aggregation::Max, Aggregation::Sum]
+        assert_eq!(
+            resolve_grouping(&args).unwrap(),
+            ResolvedGrouping::PerImage(vec![Aggregation::Min, Aggregation::Max, Aggregation::Sum])
         );
+        let default = GroupArgs {
+            group_by: Some(GroupByKind::Image),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_grouping(&default).unwrap(),
+            ResolvedGrouping::PerImage(vec![Aggregation::Avg])
+        );
+        let quartiles = GroupArgs {
+            group_by: Some(GroupByKind::Image),
+            agg: vec![AggKind::Q1],
+            ..Default::default()
+        };
+        assert!(resolve_grouping(&quartiles).is_err(), "q1 only for a time course");
     }
 
+    /// class / well / group / folder / regex / track: the time course -
+    /// mean and SD unless asked otherwise.
     #[test]
-    fn resolve_grouping_rejects_folder_and_regex_and_split_colocalized() {
-        assert!(
+    fn resolve_grouping_maps_the_time_course_groupings() {
+        let resolve = |group_by, group_regex: Option<&str>| {
             resolve_grouping(&GroupArgs {
-                group_by: Some(GroupByKind::Folder),
+                group_by: Some(group_by),
+                group_regex: group_regex.map(str::to_string),
                 ..Default::default()
             })
-            .is_err()
+        };
+        let lines_and_grouping = |resolved: ResolvedGrouping| match resolved {
+            ResolvedGrouping::TimeCourse { grouping, settings } => (settings.lines, grouping),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            lines_and_grouping(resolve(GroupByKind::Class, None).unwrap()),
+            (TimeCourseLines::Class, Grouping::Auto)
         );
-        assert!(
-            resolve_grouping(&GroupArgs {
-                group_by: Some(GroupByKind::Regex),
-                ..Default::default()
-            })
-            .is_err()
+        assert_eq!(
+            lines_and_grouping(resolve(GroupByKind::Well, None).unwrap()),
+            (TimeCourseLines::Well, Grouping::Auto)
         );
+        assert_eq!(
+            lines_and_grouping(resolve(GroupByKind::Folder, None).unwrap()),
+            (TimeCourseLines::Group, Grouping::Folder)
+        );
+        assert_eq!(
+            lines_and_grouping(resolve(GroupByKind::Group, Some("^(.*)_")).unwrap()),
+            (TimeCourseLines::Group, Grouping::Regex("^(.*)_".into()))
+        );
+        assert_eq!(
+            lines_and_grouping(resolve(GroupByKind::Track, None).unwrap()),
+            (TimeCourseLines::Track, Grouping::Auto)
+        );
+        assert!(resolve(GroupByKind::Group, None).is_err(), "needs --group-regex");
+        assert!(resolve(GroupByKind::Regex, Some("")).is_err());
+
+        let ResolvedGrouping::TimeCourse { settings, .. } = resolve(GroupByKind::Class, None).unwrap()
+        else {
+            panic!("a time course")
+        };
+        assert_eq!(settings.statistics, TimeCourseStat::DEFAULT);
+        assert_eq!(settings.normalize, TimeCourseNormalize::None);
+        assert_eq!(settings.layout, TimeCourseLayout::Long);
+
+        let ResolvedGrouping::TimeCourse { settings, .. } = resolve_grouping(&GroupArgs {
+            group_by: Some(GroupByKind::Class),
+            agg: vec![AggKind::Median, AggKind::Q1, AggKind::Q3],
+            normalize: Some(NormalizeKind::T0),
+            layout: LayoutKind::Both,
+            ..Default::default()
+        })
+        .unwrap() else {
+            panic!("a time course")
+        };
+        assert_eq!(
+            settings.statistics,
+            [TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3]
+        );
+        assert_eq!(settings.normalize, TimeCourseNormalize::RelativeToStart);
+        assert_eq!(settings.layout, TimeCourseLayout::Both);
         assert!(
             resolve_grouping(&GroupArgs {
                 split_colocalized: true,

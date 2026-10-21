@@ -139,7 +139,20 @@ fn main() {
         let start = Instant::now();
         exporter.export(&cache).expect("export");
         exporter
-            .finalize_image(Path::new(&cache.image_rel_path), 4096, 4096, 3, 1, 1, &[0], &[0], None)
+            .finalize_image(
+                Path::new(&cache.image_rel_path),
+                &evanalyzer_core::ImageSummary {
+                    width: 4096,
+                    height: 4096,
+                    nr_c_stacks: 3,
+                    nr_z_stacks: 1,
+                    nr_t_stacks: 1,
+                    t_stacks_analyzed: &[0],
+                    z_stacks_analyzed: &[0],
+                    frame_interval_s: None,
+                },
+                None,
+            )
             .expect("finalize");
         write_time += start.elapsed();
     }

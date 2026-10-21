@@ -9,7 +9,7 @@ export enum ResultsRailMode { list, matrix, charts }
 // object (single image + detected objects).
 export enum MatrixLevel { plate, well, object }
 
-export enum ResultsChartKind2 { histogram, scatter, boxplot }
+export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time }
 
 export struct BreadcrumbItem {
     label: string,
@@ -103,6 +103,16 @@ export struct ResultRow {
 export struct ChartScatterPoint {
     x: float,
     y: float,
+}
+
+// One line of the "Over time" chart: its legend label, color, and its line
+// and spread band (mean ± SD / IQR) as path commands in a 1000 x 1000 box
+// (y down; "" none).
+export struct ChartTimeLine {
+    label: string,
+    color: color,
+    line: string,
+    band: string,
 }
 
 export struct ChartBoxplotBox {
@@ -495,6 +505,27 @@ export global ResultsState {
     // normalized the same way, rendered as individual dots above/below the
     // whiskers.
     in-out property <[ChartBoxplotBox]> chart-boxplot-boxes: [];
+
+    // -- Over time: a line per class / image / well / track (0..3), mean ±
+    // SD or median + IQR (summary 0 / 1), relative to the first time point,
+    // the individual tracks faint behind --
+    in-out property <int> chart-time-lines: 0;
+    in-out property <int> chart-time-summary: 0;
+    in-out property <bool> chart-time-relative: false;
+    in-out property <bool> chart-time-tracks: false;
+    in property <[ChartTimeLine]> chart-time-data: [];
+    // The faint tracks' paths (same box).
+    in property <[string]> chart-time-faint: [];
+    in property <string> chart-time-y-min: "";
+    in property <string> chart-time-y-max: "";
+    in property <string> chart-time-x-min: "";
+    in property <string> chart-time-x-max: "";
+    in property <string> chart-time-y-title: "";
+    // "24 of 80 lines shown", else "".
+    in property <string> chart-time-note: "";
+    callback chart-time-changed();
+    // "Export data…": the export dialog, set to the chart's time course.
+    callback chart-time-export();
 
     // Set whenever the selected column(s) can't be charted yet (identity
     // columns, per-channel intensity — see `chart_value_expr` in

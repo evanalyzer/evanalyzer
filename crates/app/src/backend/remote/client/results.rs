@@ -227,6 +227,16 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn time_course(
+        &self,
+        filter: &crate::api::TimeCourseFilter,
+    ) -> Result<crate::api::TimeCourseResult, InternalErrors> {
+        match self.query(ResultsQuery::TimeCourse(filter.clone()))? {
+            ResultsAnswer::TimeCourse(result) => Ok(result),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn image_objects(
         &self,
         filter: &crate::api::ImageObjectsFilter,

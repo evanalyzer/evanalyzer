@@ -6,6 +6,7 @@ pub use drawn_images::{colorize, colorize_thumbnail};
 mod results_charts;
 mod results_exporter;
 mod results_generator;
+mod results_time_course;
 #[cfg(test)]
 mod test_support;
 
@@ -21,7 +22,8 @@ pub(crate) use results_generator::{
 use crate::api::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, ExportProgressFn,
     GroupedByImageFilter, HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter,
-    ListFilter, PlateFilter, ResultExport, ResultsSource, ScatterFilter, ScatterResult, View,
+    ListFilter, PlateFilter, ResultExport, ResultsSource, ScatterFilter, ScatterResult,
+    TimeCourseFilter, TimeCourseResult, View,
     WellFilter,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -130,6 +132,10 @@ impl ResultsSource for LocalResults {
 
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors> {
         self.with(|db| ResultCharts {}.paint_scatter(db, filter))
+    }
+
+    fn time_course(&self, filter: &TimeCourseFilter) -> Result<TimeCourseResult, InternalErrors> {
+        self.with(|db| results_time_course::time_course(db, filter))
     }
 
     fn image_objects(

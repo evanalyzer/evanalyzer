@@ -1,5 +1,7 @@
 use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, TableExportArgs};
-use crate::commands::common::{resolve_grouping, resolve_image_rel_paths, resolve_object_classes};
+use crate::commands::common::{
+    ResolvedGrouping, resolve_grouping, resolve_image_rel_paths, resolve_object_classes,
+};
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::results::Column;
 use evanalyzer_app::results::ExportFormat;
@@ -112,10 +114,11 @@ fn export_table(
         .map(|entry| entry.key)
         .collect();
 
-    // `ResultExport` writes `list.{ext}`/`grouped_by_image.{ext}` into a
-    // directory it owns - see `scratch_dir_next_to`.
+    // `ResultExport` writes `list.{ext}`/`grouped_by_image.{ext}`/
+    // `time_course*.{ext}` into a directory it owns - see
+    // `scratch_dir_next_to`.
     let scratch_dir = scratch_dir_next_to(&args.out);
-    let export = ResultExport {
+    let mut export = ResultExport {
         output_dir: scratch_dir.clone(),
         format,
         // `None`: every plane - the export adds "T"/"Z" columns when the
@@ -125,10 +128,24 @@ fn export_table(
         image_rel_paths,
         columns,
         object_classes,
-        with_list_view: !grouping.group_by_image,
-        with_grouped_by_image_list: grouping.group_by_image,
-        aggregations: grouping.aggregations,
         ..Default::default()
+    };
+    let document = match grouping {
+        ResolvedGrouping::List => {
+            export.with_list_view = true;
+            "list"
+        }
+        ResolvedGrouping::PerImage(aggregations) => {
+            export.with_grouped_by_image_list = true;
+            export.aggregations = aggregations;
+            "grouped_by_image"
+        }
+        ResolvedGrouping::TimeCourse { grouping, settings } => {
+            export.with_time_course = true;
+            export.grouping = grouping;
+            export.time_course = settings;
+            "time_course"
+        }
     };
 
     // `export_table` is only ever called with CSV/XLSX from `run()` above -
@@ -146,13 +163,54 @@ fn export_table(
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
     let cancel = AtomicBool::new(false);
     let outcome = db.export(&export, &cancel, &mut no_progress);
-    let produced = scratch_dir.join(if grouping.group_by_image {
-        format!("grouped_by_image.{extension}")
-    } else {
-        format!("list.{extension}")
-    });
+    // A wide time course in CSV: a file per value next to `--out`
+    // (`<name>_<value>.csv`), the long table (if any) at `--out`.
+    if document == "time_course" && matches!(format, ExportFormat::CSV) {
+        return move_time_course_csv_into_place(backend, &args.out, &scratch_dir, outcome);
+    }
+    let produced = scratch_dir.join(format!("{document}.{extension}"));
     move_into_place(backend, &produced, &args.out, &scratch_dir, outcome)?;
     println!("Exported to {}", args.out.display());
+    Ok(())
+}
+
+/// The time course's CSV files to their places: `time_course.csv` to `out`,
+/// each `time_course_<value>.csv` next to it as `<out's name>_<value>.csv` -
+/// then the scratch folder goes.
+fn move_time_course_csv_into_place(
+    backend: &dyn Backend,
+    out: &Path,
+    scratch_dir: &Path,
+    outcome: Result<(), InternalErrors>,
+) -> Result<(), InternalErrors> {
+    let files = backend.files();
+    let stem = out
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "time_course".to_string());
+    let moved = outcome.and_then(|_| {
+        let mut moved = Vec::new();
+        for entry in files.list_dir(scratch_dir)? {
+            let to = match entry.name.as_str() {
+                "time_course.csv" => out.to_path_buf(),
+                name => match name.strip_prefix("time_course_") {
+                    Some(value) => out.with_file_name(format!("{stem}_{value}")),
+                    None => continue,
+                },
+            };
+            files.rename(&entry.path, &to).map_err(|e| {
+                InternalErrors::Internal(format!("could not move export output into place: {e}"))
+            })?;
+            moved.push(to);
+        }
+        Ok(moved)
+    });
+    let _ = files.remove_all(scratch_dir);
+    let mut moved = moved?;
+    moved.sort();
+    for path in moved {
+        println!("Exported to {}", path.display());
+    }
     Ok(())
 }
 
@@ -281,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn export_table_rejects_unsupported_group_by_folder() {
+    fn export_table_rejects_group_by_group_without_its_regex() {
         let db = TempResultsDb::seeded();
         let out_dir = tempfile::tempdir().expect("tempdir");
         let out = out_dir.path().join("out.csv");
@@ -292,7 +350,7 @@ mod tests {
                 out,
                 filter: FilterArgs::default(),
                 group: GroupArgs {
-                    group_by: Some(crate::args::GroupByKind::Folder),
+                    group_by: Some(crate::args::GroupByKind::Group),
                     ..Default::default()
                 },
             },
@@ -300,6 +358,70 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    fn time_course(group: GroupArgs, out: &std::path::Path) -> String {
+        let db = TempResultsDb::seeded();
+        export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out: out.to_path_buf(),
+                filter: FilterArgs::default(),
+                group,
+            },
+            ExportFormat::CSV,
+        )
+        .expect("time course export");
+        std::fs::read_to_string(out).unwrap_or_default()
+    }
+
+    /// `--group-by class`: the time course's long table at `--out` - a row
+    /// per plane and class, mean and SD.
+    #[test]
+    fn export_table_group_by_class_writes_the_time_course() {
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("course.csv");
+        let csv = time_course(
+            GroupArgs {
+                group_by: Some(crate::args::GroupByKind::Class),
+                ..Default::default()
+            },
+            &out,
+        );
+        let header = csv.lines().next().unwrap();
+        assert!(header.starts_with("T,Z,Class,N images,N objects,"), "{header}");
+        assert!(header.contains("Area [px] mean,Area [px] SD"), "{header}");
+        assert_eq!(csv.lines().count(), 1 + 2 * 2, "2 planes x 2 classes");
+        let names: Vec<_> = std::fs::read_dir(out_dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["course.csv"], "only --out, the scratch folder is gone");
+    }
+
+    /// `--layout both` in CSV: the long table at `--out`, a file per value
+    /// next to it.
+    #[test]
+    fn export_table_time_course_wide_csv_goes_next_to_out() {
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("course.csv");
+        time_course(
+            GroupArgs {
+                group_by: Some(crate::args::GroupByKind::Well),
+                agg: vec![crate::args::AggKind::Avg],
+                layout: crate::args::LayoutKind::Both,
+                ..Default::default()
+            },
+            &out,
+        );
+        assert!(out.exists());
+        assert!(out_dir.path().join("course_Area__px__mean.csv").exists());
+        let leftovers: Vec<_> = std::fs::read_dir(out_dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".evanalyzer_cli_export"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]

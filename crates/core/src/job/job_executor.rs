@@ -10,7 +10,7 @@ use crate::{
         pipeline::{Pipeline, PipelineImageMeta},
         pipeline_cache::{CacheAddress, ChannelVariant, GlobalImageMeta, GlobalPipelineCache},
     },
-    storage::PipelineResultExporter,
+    storage::{ImageSummary, PipelineResultExporter},
     utils::resources::MAX_TILE_SIZE,
 };
 use evanalyzer_cfg::{
@@ -580,6 +580,7 @@ impl<'a> JobExecutor {
             nr_c_stacks,
             nr_z_stacks,
             nr_t_stacks,
+            frame_interval_s,
         ) = {
             let start = Instant::now();
             let reader = ImageReader::new(image_path, ReadMode::Default)?;
@@ -626,6 +627,14 @@ impl<'a> JobExecutor {
                 series_info.nr_c_stacks.max(0) as u32,
                 series_info.nr_z_stacks.max(0) as u32,
                 series_info.nr_t_stacks.max(0) as u32,
+                // The project's frame interval, else the image's own.
+                self.global_image_settings
+                    .t_stack
+                    .as_ref()
+                    .and_then(|t| t.frame_interval)
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .or(series_info.frame_interval.filter(|s| s.is_finite() && *s > 0.0))
+                    .map(f64::from),
             )
         };
 
@@ -1077,13 +1086,16 @@ impl<'a> JobExecutor {
         // as analysed - also where nothing was found.
         let finalize_result = exporter.finalize_image(
             image_rel_path,
-            full_size.width as u32,
-            full_size.height as u32,
-            nr_c_stacks,
-            nr_z_stacks,
-            nr_t_stacks,
-            &t_stacks,
-            &z_stacks,
+            &ImageSummary {
+                width: full_size.width as u32,
+                height: full_size.height as u32,
+                nr_c_stacks,
+                nr_z_stacks,
+                nr_t_stacks,
+                t_stacks_analyzed: &t_stacks,
+                z_stacks_analyzed: &z_stacks,
+                frame_interval_s,
+            },
             combined_error.as_deref(),
         );
 
@@ -2628,7 +2640,7 @@ mod full_run_integration_tests {
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, PixelUnits, SegmentationClass};
-    use evanalyzer_cfg::settings::images_settings::SeriesSettings;
+    use evanalyzer_cfg::settings::images_settings::{SeriesSettings, TStackSettings};
     use std::collections::BTreeMap;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
@@ -2668,9 +2680,9 @@ mod full_run_integration_tests {
     }
 
     /// Remembers the planes the run reports analysed (`finalize_image`),
-    /// as (t, z) pairs.
+    /// as (t, z) pairs, and the frame interval.
     #[derive(Default)]
-    struct PlanesRecorder(Mutex<Vec<(i32, i32)>>);
+    struct PlanesRecorder(Mutex<Vec<(i32, i32)>>, Mutex<Option<f64>>);
 
     impl PipelineResultExporter for PlanesRecorder {
         fn export(&self, _cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
@@ -2680,19 +2692,14 @@ mod full_run_integration_tests {
         fn finalize_image(
             &self,
             _image_rel_path: &std::path::Path,
-            _width: u32,
-            _height: u32,
-            _nr_c_stacks: u32,
-            _nr_z_stacks: u32,
-            _nr_t_stacks: u32,
-            t_stacks_analyzed: &[i32],
-            z_stacks_analyzed: &[i32],
+            summary: &ImageSummary,
             _error: Option<&str>,
         ) -> Result<(), InternalErrors> {
             let mut planes = self.0.lock().unwrap();
-            for &t in t_stacks_analyzed {
-                planes.extend(z_stacks_analyzed.iter().map(|&z| (t, z)));
+            for &t in summary.t_stacks_analyzed {
+                planes.extend(summary.z_stacks_analyzed.iter().map(|&z| (t, z)));
             }
+            *self.1.lock().unwrap() = summary.frame_interval_s;
             Ok(())
         }
     }
@@ -2706,6 +2713,28 @@ mod full_run_integration_tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
         recorder.0.lock().unwrap().clone()
+    }
+
+    /// The project's frame interval is recorded with the image - over the
+    /// image's own; an invalid one counts as unset.
+    #[test]
+    fn the_run_records_the_projects_frame_interval() {
+        let interval = |seconds: Option<f32>| {
+            let recorder = Arc::new(PlanesRecorder::default());
+            let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+            job.result_storage = recorder.clone();
+            job.global_image_settings.t_stack = Some(TStackSettings {
+                frame_interval: seconds,
+                ..Default::default()
+            });
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            *recorder.1.lock().unwrap()
+        };
+        assert_eq!(interval(Some(30.0)), Some(30.0));
+        let from_the_image = interval(None);
+        assert_eq!(interval(Some(0.0)), from_the_image, "0 is unset: the image's own");
+        assert_eq!(interval(Some(f32::NAN)), from_the_image);
     }
 
     /// Every analysed plane is reported - each z-plane analysed one by one,

@@ -226,15 +226,28 @@ pub struct GroupArgs {
     #[arg(long, value_enum)]
     pub group_by: Option<GroupByKind>,
 
-    /// Regex pattern used when --group-by regex; the first capture group (or the
-    /// whole match if there is none) becomes the group key
+    /// Regex on the image name for --group-by group / regex: its first
+    /// capture group is the group
     #[arg(long)]
     pub group_regex: Option<String>,
 
-    /// Aggregate function(s) applied to every numeric column when grouping
-    /// (comma-separated, e.g. "min,max,avg")
-    #[arg(long, value_enum, value_delimiter = ',', default_value = "avg")]
+    /// Statistic(s) of every numeric column when grouping (comma-separated,
+    /// e.g. "avg,stdev,median"). Default: avg; for a time course (class,
+    /// well, group, folder, regex, track) avg,stdev. q1/q3 only for a time
+    /// course
+    #[arg(long, value_enum, value_delimiter = ',')]
     pub agg: Vec<AggKind>,
+
+    /// Time course values relative to each line's first time point (t0: in
+    /// % of it)
+    #[arg(long, value_enum)]
+    pub normalize: Option<NormalizeKind>,
+
+    /// Time course tables: long (a row per time point × line), wide (per
+    /// value and statistic: a row per time point, a column per line; CSV:
+    /// one file each, next to --out as <name>_<value>.csv) or both
+    #[arg(long, value_enum, default_value = "long")]
+    pub layout: LayoutKind,
 
     /// Additionally split each group into a colocalizing / non-colocalizing row
     #[arg(long)]
@@ -247,9 +260,34 @@ pub struct GroupArgs {
 
 #[derive(Copy, Clone, ValueEnum)]
 pub enum GroupByKind {
+    /// A row per image and class, per time point
     Image,
+    /// Time course: a line per class, every image pooled
+    Class,
+    /// Time course: a line per well (from the image names)
+    Well,
+    /// Time course: a line per group - --group-regex's first capture group
+    Group,
+    /// Time course: a line per folder
     Folder,
+    /// Time course: same as group
     Regex,
+    /// Time course: a line per track
+    Track,
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+pub enum NormalizeKind {
+    None,
+    T0,
+}
+
+#[derive(Copy, Clone, Default, ValueEnum)]
+pub enum LayoutKind {
+    #[default]
+    Long,
+    Wide,
+    Both,
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -260,6 +298,8 @@ pub enum AggKind {
     Median,
     Stdev,
     Sum,
+    Q1,
+    Q3,
 }
 
 #[derive(Args)]

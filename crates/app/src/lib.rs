@@ -79,6 +79,10 @@ pub mod global {
 
 pub mod results {
     pub use crate::api::Aggregation;
+    pub use crate::api::{
+        TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
+        TimeCoursePoint, TimeCourseResult, TimeCourseStat,
+    };
     pub use crate::api::BoxplotBox;
     pub use crate::api::BoxplotFilter;
     pub use crate::api::BoxplotGroup;

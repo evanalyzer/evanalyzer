@@ -3,7 +3,8 @@ use crate::editor::viewport_controller::ViewportController;
 
 mod split;
 use crate::{
-    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell,
+    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine, ExportDialogState,
+    MatrixCell,
     MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsRailMode,
     ResultsState, UiState,
 };
@@ -27,6 +28,10 @@ use evanalyzer_app::results::{Aggregation, HistogramResult};
 use evanalyzer_app::results::{BoxplotBox, Cell};
 use evanalyzer_app::results::{BoxplotFilter, BoxplotGroup, ScatterResult};
 use evanalyzer_app::results::{Grouping, PlateSize};
+use evanalyzer_app::results::{
+    TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
+    TimeCourseResult, TimeCourseStat,
+};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
@@ -146,6 +151,7 @@ enum ChartKind {
     Histogram,
     Scatter,
     Boxplot,
+    OverTime,
 }
 
 #[derive(Clone)]
@@ -165,6 +171,13 @@ struct ChartFilter {
     pub log_counts: bool,
     /// Scatter: at most this many points drawn (`None`: all).
     pub max_points: Option<usize>,
+    /// Over time: a line per class / image / well / track; median + IQR
+    /// (else mean ± SD); in % of the first time point; the tracks faint
+    /// behind.
+    pub time_lines: TimeCourseLines,
+    pub time_median: bool,
+    pub time_relative: bool,
+    pub time_tracks: bool,
 }
 
 impl Default for ChartFilter {
@@ -178,8 +191,165 @@ impl Default for ChartFilter {
             bins: CHART_HISTOGRAM_BINS,
             log_counts: false,
             max_points: Some(CHART_SCATTER_MAX_POINTS),
+            time_lines: TimeCourseLines::Class,
+            time_median: false,
+            time_relative: false,
+            time_tracks: false,
         }
     }
+}
+
+/// The chart's / export dialog's "A line per" (0..3).
+fn time_lines_of(index: i32) -> TimeCourseLines {
+    match index {
+        1 => TimeCourseLines::Image,
+        2 => TimeCourseLines::Well,
+        3 => TimeCourseLines::Track,
+        _ => TimeCourseLines::Class,
+    }
+}
+
+fn time_lines_index(lines: TimeCourseLines) -> i32 {
+    match lines {
+        TimeCourseLines::Image => 1,
+        TimeCourseLines::Well | TimeCourseLines::Group => 2,
+        TimeCourseLines::Track => 3,
+        TimeCourseLines::Class => 0,
+    }
+}
+
+/// The time course statistics the export dialog offers, in this order.
+const TIME_STATS: [TimeCourseStat; 8] = [
+    TimeCourseStat::Mean,
+    TimeCourseStat::Sd,
+    TimeCourseStat::Median,
+    TimeCourseStat::Q1,
+    TimeCourseStat::Q3,
+    TimeCourseStat::Min,
+    TimeCourseStat::Max,
+    TimeCourseStat::Sum,
+];
+
+fn time_stat_items(selected: &[TimeCourseStat]) -> Vec<MultiSelectItem> {
+    TIME_STATS
+        .iter()
+        .map(|stat| MultiSelectItem {
+            key: stat.label().into(),
+            value: stat.label().into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: selected.contains(stat),
+        })
+        .collect()
+}
+
+/// At most this many lines are drawn (a legend entry each).
+const CHART_TIME_MAX_LINES: usize = 24;
+/// At most this many faint tracks.
+const CHART_TIME_MAX_TRACKS: usize = 400;
+
+/// Colors of lines that aren't a class's.
+const CHART_TIME_PALETTE: [u32; 10] = [
+    0x2A6BDF, 0xC2410C, 0x0F9D8A, 0x9333EA, 0xCA8A04, 0xDB2777, 0x0891B2, 0x4D7C0F, 0x7C3AED,
+    0xB45309,
+];
+
+/// A line of the "Over time" chart before it's a `ChartTimeLine`: label,
+/// color, its values per time point (center, low, high).
+type TimeSeries = (String, u32, Vec<(u32, Option<f64>, Option<f64>, Option<f64>)>);
+
+/// The time course's lines: a series per line (and class) of `result`, in
+/// their order - center and spread from the statistics `median` asks for
+/// (median, Q1, Q3 - else mean, mean ∓ SD). Lines without any value (no
+/// objects of that class at any time point) are left out; with several
+/// classes left, an image's / well's / track's label names its class.
+fn time_series(result: &TimeCourseResult, median: bool, classes: &[Class]) -> Vec<TimeSeries> {
+    let mut series: Vec<((String, String, u32), TimeSeries)> = Vec::new();
+    for point in &result.points {
+        let key = (point.line.clone(), point.image.clone(), point.class_id);
+        let (center, low, high) = match median {
+            true => (point.values.first().copied().flatten(), point.values.get(1).copied().flatten(), point.values.get(2).copied().flatten()),
+            false => {
+                let mean = point.values.first().copied().flatten();
+                let sd = point.values.get(1).copied().flatten();
+                (mean, mean.zip(sd).map(|(m, s)| m - s), mean.zip(sd).map(|(m, s)| m + s))
+            }
+        };
+        if let Some((_, (_, _, values))) = series.iter_mut().find(|(k, _)| *k == key) {
+            values.push((point.t, center, low, high));
+            continue;
+        }
+        let label = match (point.line.is_empty(), point.image.is_empty()) {
+            (true, true) => point.class_name.clone(),
+            (true, false) => point.image.clone(),
+            (false, true) => point.line.clone(),
+            (false, false) => format!("{} {}", point.line, point.image),
+        };
+        let color = match point.line.is_empty() && point.image.is_empty() {
+            true => classes
+                .iter()
+                .find(|class| class.id == point.class_id)
+                .map(|class| class.color)
+                .filter(|color| *color != 0)
+                .unwrap_or(CHART_TIME_PALETTE[0]),
+            false => CHART_TIME_PALETTE[series.len() % CHART_TIME_PALETTE.len()],
+        };
+        series.push((key, (label, color, vec![(point.t, center, low, high)])));
+    }
+    series.retain(|(_, (_, _, points))| points.iter().any(|(_, center, _, _)| center.is_some()));
+    let class_of = |key: &(String, String, u32)| key.2;
+    let several_classes = series.iter().any(|(key, _)| class_of(key) != series.first().map_or(0, |(k, _)| class_of(k)));
+    series
+        .into_iter()
+        .map(|(key, (label, color, points))| {
+            let of_class = key.0.is_empty() && key.1.is_empty();
+            let label = match (several_classes && !of_class, classes.iter().find(|c| c.id == key.2)) {
+                (true, Some(class)) => format!("{label} · {}", class.name),
+                _ => label,
+            };
+            (label, color, points)
+        })
+        .collect()
+}
+
+/// Path commands through `points` (x, y; `None` a gap), in the chart's
+/// 1000 x 1000 box.
+fn chart_path(points: impl Iterator<Item = Option<(f64, f64)>>) -> String {
+    let mut path = String::new();
+    let mut pen_down = false;
+    for point in points {
+        match point {
+            Some((x, y)) => {
+                path.push_str(&format!("{}{x:.1} {y:.1} ", if pen_down { "L " } else { "M " }));
+                pen_down = true;
+            }
+            None => pen_down = false,
+        }
+    }
+    path.trim_end().to_string()
+}
+
+/// The band between `low` and `high` - a closed shape per run of points
+/// that have both.
+fn chart_band(points: &[(f64, Option<f64>, Option<f64>)]) -> String {
+    let mut band = String::new();
+    let mut run: Vec<(f64, f64, f64)> = Vec::new();
+    let close = |run: &mut Vec<(f64, f64, f64)>, band: &mut String| {
+        if run.len() >= 2 {
+            let up: Vec<String> = run.iter().map(|(x, _, hi)| format!("{x:.1} {hi:.1}")).collect();
+            let down: Vec<String> = run.iter().rev().map(|(x, lo, _)| format!("{x:.1} {lo:.1}")).collect();
+            band.push_str(&format!("M {} L {} Z ", up.join(" L "), down.join(" L ")));
+        }
+        run.clear();
+    };
+    for (x, low, high) in points {
+        match (low, high) {
+            (Some(low), Some(high)) => run.push((*x, *low, *high)),
+            _ => close(&mut run, &mut band),
+        }
+    }
+    close(&mut run, &mut band);
+    band.trim_end().to_string()
 }
 
 /// "Points drawn" (500 / 2 000 / 10 000 / all) as the scatter's limit.
@@ -1331,6 +1501,7 @@ impl ResultsStateController {
                         ResultsChartKind2::Histogram => ChartKind::Histogram,
                         ResultsChartKind2::Scatter => ChartKind::Scatter,
                         ResultsChartKind2::Boxplot => ChartKind::Boxplot,
+                        ResultsChartKind2::OverTime => ChartKind::OverTime,
                     };
                     manager.chart_filter.lock().expect("Poisened").kind = kind;
                     manager.refresh_charts();
@@ -1351,6 +1522,27 @@ impl ResultsStateController {
                     }
                     manager.refresh_charts();
                 });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_time_changed(move || {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<ResultsState>();
+                    {
+                        let mut filter = manager.chart_filter.lock().expect("Poisened");
+                        filter.time_lines = time_lines_of(state.get_chart_time_lines());
+                        filter.time_median = state.get_chart_time_summary() == 1;
+                        filter.time_relative = state.get_chart_time_relative();
+                        filter.time_tracks = state.get_chart_time_tracks();
+                    }
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_time_export(move || manager.export_chart_time_course());
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -1656,6 +1848,17 @@ impl ResultsStateController {
                         AGGREGATIONS.len(),
                         "Aggregations",
                     ));
+                });
+
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_time_stat_item_selected(move |_key, _selected| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let selected = state.get_time_stat_items().iter().filter(|i| i.selected).count();
+                    state.set_time_stat_summary(list_summary(selected, TIME_STATS.len(), "Statistics"));
                 });
 
             let manager = self.clone();
@@ -2265,7 +2468,217 @@ impl ResultsStateController {
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
+            ChartKind::OverTime => {
+                // The z-plane shown; every time point. A line per class:
+                // every class - else the class picked.
+                let filter = |lines, statistics: Vec<TimeCourseStat>| TimeCourseFilter {
+                    lines,
+                    grouping: self.current_grouping(),
+                    columns: vec![chart_filter.column.clone()],
+                    statistics,
+                    normalize: match chart_filter.time_relative {
+                        true => TimeCourseNormalize::RelativeToStart,
+                        false => TimeCourseNormalize::None,
+                    },
+                    images: None,
+                    object_classes: match lines {
+                        TimeCourseLines::Class => None,
+                        _ => object_classes.clone(),
+                    },
+                    t_stacks: None,
+                    z_stacks: Some(std::range::Range {
+                        start: plane.z_stack,
+                        end: plane.z_stack + 1,
+                    }),
+                };
+                let statistics = match chart_filter.time_median {
+                    true => vec![TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3],
+                    false => TimeCourseStat::DEFAULT.to_vec(),
+                };
+                let result = db.time_course(&filter(chart_filter.time_lines, statistics));
+                let tracks = match chart_filter.time_tracks {
+                    true => db
+                        .time_course(&TimeCourseFilter {
+                            // The tracks of the lines' class(es).
+                            object_classes: object_classes.clone(),
+                            ..filter(TimeCourseLines::Track, vec![TimeCourseStat::Mean])
+                        })
+                        .ok(),
+                    false => None,
+                };
+                match result {
+                    Ok(result) => self.push_time_course_in_slint(&result, tracks.as_ref(), &chart_filter),
+                    Err(err) => self.push_chart_error(err.to_string()),
+                }
+            }
         }
+    }
+
+    /// The "Over time" chart: lines, bands, faint tracks as paths in a
+    /// 1000 x 1000 box, the axes' ends, the legend.
+    fn push_time_course_in_slint(
+        &self,
+        result: &TimeCourseResult,
+        tracks: Option<&TimeCourseResult>,
+        filter: &ChartFilter,
+    ) {
+        let classes = self.classes.lock().expect("Poisened").clone();
+        let series = time_series(result, filter.time_median, &classes);
+        let faint = tracks.map(|tracks| time_series(tracks, false, &classes)).unwrap_or_default();
+        let times: Vec<u32> = result.points.iter().map(|p| p.t).collect();
+        let (Some(t_min), Some(t_max)) = (times.iter().min().copied(), times.iter().max().copied()) else {
+            self.push_chart_error("Nothing to show over time: no objects of this class.".to_string());
+            return;
+        };
+        if t_min == t_max {
+            self.push_chart_error(
+                "Over time needs results with several time points - these have one.".to_string(),
+            );
+            return;
+        }
+        let shown = &series[..series.len().min(CHART_TIME_MAX_LINES)];
+        let faint = &faint[..faint.len().min(CHART_TIME_MAX_TRACKS)];
+        let values = shown
+            .iter()
+            .flat_map(|(_, _, points)| points.iter().flat_map(|(_, c, l, h)| [*c, *l, *h]))
+            .chain(faint.iter().flat_map(|(_, _, points)| points.iter().map(|(_, c, _, _)| *c)))
+            .flatten();
+        let (mut low, mut high) = values.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+        if !low.is_finite() {
+            (low, high) = (0.0, 1.0);
+        }
+        if high <= low {
+            (low, high) = (low - 1.0, high + 1.0);
+        }
+        let pad = (high - low) * 0.05;
+        let (low, high) = (low - pad, high + pad);
+        let x = |t: u32| (t - t_min) as f64 / (t_max - t_min) as f64 * 1000.0;
+        let y = |v: f64| 1000.0 - (v - low) / (high - low) * 1000.0;
+        let lines: Vec<(String, u32, String, String)> = shown
+            .iter()
+            .map(|(label, color, points)| {
+                let line = chart_path(points.iter().map(|(t, c, _, _)| c.map(|c| (x(*t), y(c)))));
+                let band = chart_band(
+                    &points
+                        .iter()
+                        .map(|(t, _, l, h)| (x(*t), l.map(y), h.map(y)))
+                        .collect::<Vec<_>>(),
+                );
+                (label.clone(), *color, line, band)
+            })
+            .collect();
+        let faint_paths: Vec<String> = faint
+            .iter()
+            .map(|(_, _, points)| chart_path(points.iter().map(|(t, c, _, _)| c.map(|c| (x(*t), y(c))))))
+            .collect();
+        let unit = if filter.time_relative { " %" } else { "" };
+        let (x_min, x_max) = match result.frame_interval_s {
+            Some(interval) => {
+                let (name, per) = match f64::from(t_max) * interval {
+                    span if span >= 7200.0 => ("h", 3600.0),
+                    span if span >= 120.0 => ("min", 60.0),
+                    _ => ("s", 1.0),
+                };
+                (
+                    format!("{} {name}", format_chart_value(f64::from(t_min) * interval / per)),
+                    format!("{} {name}", format_chart_value(f64::from(t_max) * interval / per)),
+                )
+            }
+            None => (format!("T {t_min}"), format!("T {t_max}")),
+        };
+        let column = filter.column.display_label(&classes);
+        let title = format!(
+            "{column} · {}{}",
+            if filter.time_median { "median + IQR" } else { "mean ± SD" },
+            if filter.time_relative { " · % of the first time point" } else { "" }
+        );
+        let note = match series.len() > shown.len() {
+            true => format!("{} of {} lines shown", shown.len(), series.len()),
+            false => String::new(),
+        };
+        let (y_min, y_max) = (
+            format!("{}{unit}", format_chart_value(low)),
+            format!("{}{unit}", format_chart_value(high)),
+        );
+
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                let data: Vec<ChartTimeLine> = lines
+                    .into_iter()
+                    .map(|(label, color, line, band)| ChartTimeLine {
+                        label: label.into(),
+                        color: bg_color_to_slint(color),
+                        line: line.into(),
+                        band: band.into(),
+                    })
+                    .collect();
+                state.set_chart_error("".into());
+                state.set_chart_time_data(ModelRc::from(Rc::new(VecModel::from(data))));
+                state.set_chart_time_faint(ModelRc::from(Rc::new(VecModel::from(
+                    faint_paths
+                        .into_iter()
+                        .map(slint::SharedString::from)
+                        .collect::<Vec<_>>(),
+                ))));
+                state.set_chart_time_y_min(y_min.into());
+                state.set_chart_time_y_max(y_max.into());
+                state.set_chart_time_x_min(x_min.into());
+                state.set_chart_time_x_max(x_max.into());
+                state.set_chart_time_y_title(title.into());
+                state.set_chart_time_note(note.into());
+            }
+        })
+        .ok();
+    }
+
+    /// "Export data…" of the "Over time" chart: the export dialog with only
+    /// the time course, as the chart has it - its value, lines, summary.
+    fn export_chart_time_course(&self) {
+        let Some(ui_ready) = self.ui.upgrade() else {
+            return;
+        };
+        let populated = std::mem::replace(&mut *self.export_populated.lock().expect("Poisened"), true);
+        if !populated {
+            self.populate_export_defaults(&ui_ready);
+        }
+        let filter = self.chart_filter.lock().expect("Poisened").clone();
+        let classes = self.classes.lock().expect("Poisened").clone();
+        let state = ui_ready.global::<ExportDialogState>();
+        state.set_with_list_view(false);
+        state.set_with_grouped_by_image_list(false);
+        state.set_with_plate_heatmap_view(false);
+        state.set_with_well_heatmap_view(false);
+        state.set_with_plate_list(false);
+        state.set_with_well_list(false);
+        state.set_with_heatmap(false);
+        state.set_with_drawn_images(false);
+        state.set_with_time_course(true);
+        state.set_time_lines(time_lines_index(filter.time_lines));
+        let statistics = match filter.time_median {
+            true => vec![TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3],
+            false => TimeCourseStat::DEFAULT.to_vec(),
+        };
+        state.set_time_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(&statistics)))));
+        state.set_time_stat_summary(list_summary(statistics.len(), TIME_STATS.len(), "Statistics"));
+        state.set_time_relative(filter.time_relative);
+        // The chart's value only.
+        let key = filter.column.as_key(&classes);
+        let items: Vec<MultiSelectItem> = state
+            .get_column_items()
+            .iter()
+            .map(|item| MultiSelectItem {
+                selected: item.key == key.as_str(),
+                ..item
+            })
+            .collect();
+        let total = items.len();
+        state.set_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
+        state.set_column_summary(list_summary(1, total, "Columns"));
+        state.set_active(true);
     }
 
     /// How images are put into wells now (the project's plate settings, as
@@ -2391,6 +2804,10 @@ impl ResultsStateController {
                 )))));
                 state.set_chart_boxplot_boxes(ModelRc::from(Rc::new(VecModel::from(Vec::<
                     ChartBoxplotBox,
+                >::new(
+                )))));
+                state.set_chart_time_data(ModelRc::from(Rc::new(VecModel::from(Vec::<
+                    ChartTimeLine,
                 >::new(
                 )))));
             } else {
@@ -3754,6 +4171,18 @@ impl ResultsStateController {
         state.set_with_plate_list(false);
         state.set_with_well_list(false);
         state.set_with_heatmap(false);
+        state.set_with_time_course(false);
+        state.set_time_lines(0);
+        state.set_time_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(
+            &TimeCourseStat::DEFAULT,
+        )))));
+        state.set_time_stat_summary(list_summary(
+            TimeCourseStat::DEFAULT.len(),
+            TIME_STATS.len(),
+            "Statistics",
+        ));
+        state.set_time_relative(false);
+        state.set_time_layout(2);
 
         state.set_is_exporting(false);
         state.set_done(false);
@@ -3953,6 +4382,29 @@ impl ResultsStateController {
             with_list_coloc_details: state.get_with_list_coloc_details(),
             with_list_one_file_per_image: state.get_with_list_one_file_per_image(),
             with_grouped_by_image_list: state.get_with_grouped_by_image_list(),
+            with_time_course: state.get_with_time_course(),
+            time_course: TimeCourseExport {
+                lines: time_lines_of(state.get_time_lines()),
+                statistics: TIME_STATS
+                    .iter()
+                    .copied()
+                    .filter(|stat| {
+                        state
+                            .get_time_stat_items()
+                            .iter()
+                            .any(|item| item.selected && item.key == stat.label())
+                    })
+                    .collect(),
+                normalize: match state.get_time_relative() {
+                    true => TimeCourseNormalize::RelativeToStart,
+                    false => TimeCourseNormalize::None,
+                },
+                layout: match state.get_time_layout() {
+                    0 => TimeCourseLayout::Long,
+                    1 => TimeCourseLayout::Wide,
+                    _ => TimeCourseLayout::Both,
+                },
+            },
             with_plate_view_heatmap: state.get_with_plate_heatmap_view(),
             with_well_view_heatmap: state.get_with_well_heatmap_view(),
             with_plate_view_list: state.get_with_plate_list(),
@@ -6618,6 +7070,124 @@ mod tests {
         drain_ui_queue();
         assert!(o.controller.current_well.lock().unwrap().is_none());
         assert!(s.get_plate_cells().row_count() > 0);
+    }
+
+    /// `opened()`'s database as a time series: every object again at T1,
+    /// twice as large.
+    fn opened_time_series() -> Opened {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        {
+            let conn = duckdb::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "INSERT INTO objects SELECT * REPLACE (1 AS t_stack, gen_random_uuid() AS object_id, \
+                     area_px * 2 AS area_px) FROM objects;
+                 UPDATE images SET t_stacks = 2;",
+            )
+            .unwrap();
+        }
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        Opened {
+            ui,
+            controller,
+            _dir: dir,
+        }
+    }
+
+    /// Over time: a line per class with its legend label, a band where
+    /// there's an SD (ClassA's two objects; not ClassB's one), the time
+    /// points on the x axis; a line per image when asked.
+    #[test]
+    fn the_over_time_chart_draws_a_line_per_class_or_image() {
+        let o = opened_time_series();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.set_chart_kind(ResultsChartKind2::OverTime);
+        s.invoke_chart_kind_selected(ResultsChartKind2::OverTime);
+        s.invoke_chart_column_selected("area_px".into());
+        drain_ui_queue();
+        assert_eq!(s.get_chart_error(), "");
+        let lines: Vec<ChartTimeLine> = s.get_chart_time_data().iter().collect();
+        let labels: Vec<String> = lines.iter().map(|l| l.label.to_string()).collect();
+        assert_eq!(labels, ["ClassA", "ClassB"]);
+        assert!(lines[0].line.starts_with("M 0.0 ") && lines[0].line.contains(" L 1000.0 "), "{}", lines[0].line);
+        assert!(lines[0].band.starts_with('M') && lines[0].band.ends_with('Z'), "{}", lines[0].band);
+        assert_eq!(lines[1].band, "", "one object: no SD");
+        assert_eq!(s.get_chart_time_x_min(), "T 0");
+        assert_eq!(s.get_chart_time_x_max(), "T 1");
+        assert!(s.get_chart_time_y_title().contains("mean ± SD"));
+
+        s.set_chart_time_lines(1);
+        s.invoke_chart_time_changed();
+        drain_ui_queue();
+        // Only the image × class lines with objects, named with their class.
+        let images: Vec<String> = s.get_chart_time_data().iter().map(|l| l.label.to_string()).collect();
+        assert_eq!(images, ["A1_01.tif · ClassA", "A1_02.tif · ClassA", "A2_01.tif · ClassB"]);
+
+        s.invoke_chart_class_selected("ClassA".into(), true);
+        drain_ui_queue();
+        let images: Vec<String> = s.get_chart_time_data().iter().map(|l| l.label.to_string()).collect();
+        assert_eq!(images, ["A1_01.tif", "A1_02.tif"], "the class picked");
+    }
+
+    /// One time point: nothing to draw over time - it says so.
+    #[test]
+    fn the_over_time_chart_needs_several_time_points() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.set_chart_kind(ResultsChartKind2::OverTime);
+        s.invoke_chart_kind_selected(ResultsChartKind2::OverTime);
+        drain_ui_queue();
+        assert!(s.get_chart_error().contains("several time points"), "{}", s.get_chart_error());
+        assert_eq!(s.get_chart_time_data().row_count(), 0);
+    }
+
+    /// "Export data…": the export dialog with only the time course - the
+    /// chart's value, lines, summary and normalization.
+    #[test]
+    fn exporting_the_over_time_chart_presets_the_dialog() {
+        let o = opened_time_series();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_chart_kind_selected(ResultsChartKind2::OverTime);
+        s.invoke_chart_column_selected("area_px".into());
+        s.set_chart_time_lines(2);
+        s.set_chart_time_summary(1);
+        s.set_chart_time_relative(true);
+        s.invoke_chart_time_changed();
+        drain_ui_queue();
+
+        s.invoke_chart_time_export();
+        let export = o.export();
+        assert!(export.get_active());
+        assert!(export.get_with_time_course());
+        assert!(!export.get_with_list_view() && !export.get_with_grouped_by_image_list());
+        let selected: Vec<String> = export
+            .get_column_items()
+            .iter()
+            .filter(|item| item.selected)
+            .map(|item| item.key.to_string())
+            .collect();
+        assert_eq!(selected, ["area_px"]);
+
+        export.set_output_dir("/tmp".into());
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(settings.with_time_course);
+        assert_eq!(settings.columns, [Column::AreaSizePx]);
+        assert_eq!(settings.time_course.lines, TimeCourseLines::Well);
+        assert_eq!(
+            settings.time_course.statistics,
+            [TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3]
+        );
+        assert_eq!(settings.time_course.normalize, TimeCourseNormalize::RelativeToStart);
+        assert_eq!(settings.time_course.layout, TimeCourseLayout::Both);
     }
 
     #[test]

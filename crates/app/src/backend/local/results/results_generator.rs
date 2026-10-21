@@ -118,7 +118,7 @@ impl ResultsGenerator {
     /// Whether the run recorded which planes of each image it analysed
     /// (`images.t_stacks_analyzed`/`z_stacks_analyzed`) - results written before that
     /// don't have them.
-    fn analysed_planes_recorded(&self) -> bool {
+    pub(super) fn analysed_planes_recorded(&self) -> bool {
         self.database
             .query_row(
                 "SELECT COUNT(*) FROM images WHERE t_stacks_analyzed IS NOT NULL",
@@ -2677,7 +2677,7 @@ pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> Stri
 
 /// The classes a transposed view puts side by side, in id order: the
 /// selected ones (`selected`, already validated), or every registered class.
-fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
+pub(super) fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
     let mut ids: Vec<u32> = match selected {
         Some(ids) => ids.to_vec(),
         None => classes.iter().map(|class| class.id).collect(),

@@ -6,7 +6,8 @@ use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, FileSystem, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageChannel, ImageEntry, ImageHeatmapFilter, ImageMeta,
     JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport, RunStatus,
-    RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError,
+    RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError, TimeCourseFilter,
+    TimeCourseResult,
     StartTrainingError, View, WellFilter,
 };
 use crate::workspace::settings::AppSettings;
@@ -200,6 +201,8 @@ pub trait ResultsSource: Send + Sync {
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors>;
     fn histogram(&self, filter: &HistogramFilter) -> Result<HistogramResult, InternalErrors>;
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors>;
+    /// Per time point, statistics over each line's objects (`TimeCourseFilter`).
+    fn time_course(&self, filter: &TimeCourseFilter) -> Result<TimeCourseResult, InternalErrors>;
     /// The objects of one image (Results › Split with image).
     fn image_objects(
         &self,

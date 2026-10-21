@@ -60,7 +60,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -181,6 +181,7 @@ pub(crate) enum ResultsQuery {
     Boxplot(BoxplotFilter),
     Histogram(HistogramFilter),
     Scatter(ScatterFilter),
+    TimeCourse(crate::api::TimeCourseFilter),
     GroupingRegex(crate::api::Grouping),
     ImageObjects(crate::api::ImageObjectsFilter),
 }
@@ -202,6 +203,7 @@ pub(crate) enum ResultsAnswer {
     Text(String),
     Objects(Vec<crate::api::ResultObject>),
     Planes(Vec<crate::api::PlaneFilter>),
+    TimeCourse(crate::api::TimeCourseResult),
 }
 
 pub(crate) fn to_postcard<T: Serialize>(value: &T) -> Result<Vec<u8>, InternalErrors> {
@@ -600,6 +602,18 @@ mod tests {
         tracer.trace_simple_type::<crate::api::Grouping>().unwrap();
         tracer.trace_simple_type::<crate::api::RunStatus>().unwrap();
         tracer.trace_simple_type::<crate::api::View>().unwrap();
+        tracer
+            .trace_simple_type::<crate::api::TimeCourseLines>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::TimeCourseNormalize>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::TimeCourseStat>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::TimeCourseLayout>()
+            .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();
         tracer
