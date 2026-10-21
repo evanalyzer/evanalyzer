@@ -39,6 +39,7 @@ pub mod components {
     pub use crate::workspace::component_editing::{
         ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,
         bindable_settings, bound_setting_edited, clone_component_for_step, component_in_place_for_step,
+        copy_name_problem, in_place_copy, InPlaceCopy,
         compatible_parameters,
         component_uses, create_component, edit_parameter, expand_component, exposed_settings,
         list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,

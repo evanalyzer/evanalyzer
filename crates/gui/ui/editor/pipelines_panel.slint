@@ -3222,13 +3222,6 @@ export component PipelinesPanel inherits Rectangle {
                                 PipelinesPanelState.open-component-settings();
                             }
                         }
-                        if PipelinesPanelState.open-component-read-only: InkButton {
-                            small: true;
-                            text: "Edit";
-                            clicked => {
-                                PipelinesPanelState.edit-open-component();
-                            }
-                        }
                     }
                 }
             }

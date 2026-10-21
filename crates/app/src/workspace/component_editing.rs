@@ -945,14 +945,85 @@ impl StepList {
     }
 }
 
-/// "Only this step": gives step `step_index` of `list` (a component step) a
-/// copy of its component - "Name (2)" with a key of its own - so changes to it
-/// don't affect the component's other uses. Returns the copy's key. In a
-/// component's steps that's a change of that component - so of all its uses.
+/// What "Edit in place" copies: the component used by other steps too.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InPlaceCopy {
+    /// The component's name.
+    pub component: String,
+    /// The other steps using it - they keep it.
+    pub other_uses: usize,
+    /// It came from the library: the copy gets no library updates.
+    pub from_library: bool,
+    /// The copy's name unless one is chosen: "Name (2)", the next free one.
+    pub suggested_name: String,
+}
+
+/// What "Edit in place" on step `step_index` of `list` (a component step)
+/// does: `None` when no other step uses its component - edited directly -
+/// else the copy it makes ([`component_in_place_for_step`] decides the same).
+pub fn in_place_copy(
+    project: &mut ProjectSettings,
+    list: &StepList,
+    step_index: usize,
+) -> Result<Option<InPlaceCopy>, InternalErrors> {
+    let key = match &list.step_mut(project, step_index)?.content {
+        StepContent::Component(instance) => instance.key.clone(),
+        StepContent::Command(_) => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "step {} isn't a component",
+                step_index + 1
+            )));
+        }
+    };
+    let uses = component_uses(project, &key);
+    if uses <= 1 {
+        return Ok(None);
+    }
+    let definition = project
+        .components
+        .iter()
+        .find(|d| d.key == key)
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no component {key}")))?;
+    Ok(Some(InPlaceCopy {
+        component: definition.meta.name.clone(),
+        other_uses: uses - 1,
+        from_library: definition.origin.is_some(),
+        suggested_name: next_copy_name(project, &definition.meta.name),
+    }))
+}
+
+/// "Name (2)" - the first "Name (n)" no component of `project` is called.
+fn next_copy_name(project: &ProjectSettings, base: &str) -> String {
+    (2..)
+        .map(|n| format!("{base} ({n})"))
+        .find(|name| copy_name_problem(project, name).is_none())
+        .expect("some number is free")
+}
+
+/// Why `name` can't name a new component of `project` - empty, or another
+/// component's (ignoring case and surrounding spaces) - or `None`.
+pub fn copy_name_problem(project: &ProjectSettings, name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Some("Give the copy a name".to_string());
+    }
+    project
+        .components
+        .iter()
+        .any(|d| d.meta.name.trim().to_lowercase() == name.to_lowercase())
+        .then(|| format!("A component is called “{name}” already"))
+}
+
+/// Gives step `step_index` of `list` (a component step) a copy of its
+/// component - named `name`, else "Name (2)", with a key of its own - so
+/// changes to it don't affect the component's other uses. Returns the copy's
+/// key. In a component's steps that's a change of that component - so of all
+/// its uses.
 pub fn clone_component_for_step(
     project: &mut ProjectSettings,
     list: &StepList,
     step_index: usize,
+    name: Option<&str>,
 ) -> Result<String, InternalErrors> {
     let key = match &list.step_mut(project, step_index)?.content {
         StepContent::Component(instance) => instance.key.clone(),
@@ -969,11 +1040,15 @@ pub fn clone_component_for_step(
         .find(|d| d.key == key)
         .cloned()
         .ok_or_else(|| InternalErrors::InvalidArgument(format!("no component {key}")))?;
-    let base = copy.meta.name.clone();
-    let name = (2..)
-        .map(|n| format!("{base} ({n})"))
-        .find(|name| !project.components.iter().any(|d| d.meta.name == *name))
-        .expect("some number is free");
+    let name = match name {
+        Some(name) => {
+            if let Some(problem) = copy_name_problem(project, name) {
+                return Err(InternalErrors::InvalidArgument(problem));
+            }
+            name.trim().to_string()
+        }
+        None => next_copy_name(project, &copy.meta.name),
+    };
     copy.key = unique_key(project, &name);
     copy.meta.name = name;
     copy.meta.creation_time = Utc::now();
@@ -991,14 +1066,16 @@ pub fn clone_component_for_step(
 /// component of its own that holds its current values - the inner steps
 /// with the step's values applied, each parameter's default the step's
 /// value - so opened it shows what this step runs, and changes reach no
-/// other step. Used by other steps too: a copy ("Name (2)", a key of its
-/// own, no library origin); used only here: the definition itself. The
-/// step's own values are cleared (its definition holds them now - kept,
-/// they would override every edit made inside). Returns the key.
+/// other step. Used by other steps too: a copy (named `copy_name`, else
+/// "Name (2)"; a key of its own, no library origin); used only here: the
+/// definition itself, `copy_name` unused. The step's own values are cleared
+/// (its definition holds them now - kept, they would override every edit
+/// made inside). Returns the key.
 pub fn component_in_place_for_step(
     project: &mut ProjectSettings,
     list: &StepList,
     step_index: usize,
+    copy_name: Option<&str>,
 ) -> Result<String, InternalErrors> {
     let instance = match &list.step_mut(project, step_index)?.content {
         StepContent::Component(instance) => instance.clone(),
@@ -1011,7 +1088,7 @@ pub fn component_in_place_for_step(
     };
     let steps = evanalyzer_core::component_steps_with_values(&instance, &project.components)?;
     let key = if component_uses(project, &instance.key) > 1 {
-        clone_component_for_step(project, list, step_index)?
+        clone_component_for_step(project, list, step_index, copy_name)?
     } else {
         instance.key.clone()
     };
@@ -2684,7 +2761,7 @@ mod tests {
         assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
 
         let key =
-            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1).unwrap();
+            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1, None).unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION_2");
         assert_eq!(project.components[1].meta.name, "Cell reconstruction (2)");
         assert_eq!(
@@ -2725,7 +2802,7 @@ mod tests {
         let before = runs(&project, 0, 2);
         let other_before = runs(&project, 1, 1);
 
-        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2).unwrap();
+        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2, None).unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION_2", "used twice: a copy");
         assert_eq!(runs(&project, 0, 2), before, "the step runs as before");
         assert_eq!(runs(&project, 1, 1), other_before, "the other use is untouched");
@@ -2737,10 +2814,72 @@ mod tests {
 
         // The other use, now alone with its component: no copy.
         let count = project.components.len();
-        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1).unwrap();
+        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1, None).unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION");
         assert_eq!(project.components.len(), count, "no copy");
         assert_eq!(runs(&project, 1, 1), other_before);
+    }
+
+    /// "Edit in place" twice on the same step: the first makes its copy, the
+    /// second finds the step alone with it - no second copy, nothing changes.
+    #[test]
+    fn edit_in_place_twice_makes_one_copy() {
+        let mut project = with_component();
+        let mut second_use = project.pipelines[0].steps[2].clone();
+        second_use.id = StepId(1);
+        project.pipelines[1].steps.push(second_use);
+        let list = StepList::Pipeline(PipelineId(1));
+
+        let first = component_in_place_for_step(&mut project, &list, 2, None).unwrap();
+        let after_first = serde_json::to_value((&project.pipelines, &project.components)).unwrap();
+        let second = component_in_place_for_step(&mut project, &list, 2, None).unwrap();
+
+        assert_eq!(first, "CELL_RECONSTRUCTION_2");
+        assert_eq!(second, first, "the step's own copy again");
+        assert_eq!(project.components.len(), 2, "the original and one copy");
+        assert_eq!(
+            serde_json::to_value((&project.pipelines, &project.components)).unwrap(),
+            after_first,
+            "nothing changed"
+        );
+    }
+
+    /// "Edit in place" asks before copying: whether it copies (another step
+    /// uses the component), what the copy is called unless renamed, and
+    /// which names it can't have.
+    #[test]
+    fn edit_in_place_says_when_it_copies_and_takes_the_chosen_name() {
+        let mut project = with_component();
+        let list = StepList::Pipeline(PipelineId(1));
+        let name = project.components[0].meta.name.clone();
+        assert_eq!(in_place_copy(&mut project, &list, 2).unwrap(), None, "the only use");
+        assert!(in_place_copy(&mut project, &list, 0).is_err(), "not a component step");
+
+        let mut second_use = project.pipelines[0].steps[2].clone();
+        second_use.id = StepId(1);
+        project.pipelines[1].steps.push(second_use);
+        let copy = in_place_copy(&mut project, &list, 2).unwrap().expect("a copy");
+        assert_eq!(copy.component, name);
+        assert_eq!(copy.other_uses, 1);
+        assert!(!copy.from_library);
+        assert_eq!(copy.suggested_name, format!("{name} (2)"));
+
+        assert!(copy_name_problem(&project, "  ").is_some(), "empty");
+        assert!(
+            copy_name_problem(&project, &format!(" {} ", name.to_uppercase())).is_some(),
+            "taken, ignoring case and spaces"
+        );
+        assert_eq!(copy_name_problem(&project, "Strict nuclei"), None);
+        assert!(
+            component_in_place_for_step(&mut project, &list, 2, Some(&name)).is_err(),
+            "a taken name is refused"
+        );
+        assert_eq!(project.components.len(), 1, "nothing made");
+
+        component_in_place_for_step(&mut project, &list, 2, Some(" Strict nuclei ")).unwrap();
+        assert_eq!(project.components.len(), 2);
+        assert_eq!(project.components[1].meta.name, "Strict nuclei");
+        assert_eq!(in_place_copy(&mut project, &list, 2).unwrap(), None, "alone with its copy");
     }
 
     /// Pipeline 1 made the component "Outer": local Nuclei (L1, extracted in
@@ -3303,7 +3442,7 @@ mod tests {
         project.components.push(outer);
         assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
 
-        let key = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 0)
+        let key = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 0, None)
             .unwrap();
         let outer = project
             .components
@@ -3317,7 +3456,7 @@ mod tests {
             "the pipeline keeps it"
         );
 
-        let error = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 5)
+        let error = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 5, None)
             .unwrap_err()
             .to_string();
         assert!(error.contains("component OUTER has no step 6"), "{error}");
@@ -3795,7 +3934,7 @@ mod tests {
         let expand = expand_component(&mut project, PipelineId(1), 0)
             .unwrap_err()
             .to_string();
-        let copy = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 0)
+        let copy = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 0, None)
             .unwrap_err()
             .to_string();
 
@@ -3823,7 +3962,7 @@ mod tests {
         let mut project = with_component();
         project.components.clear();
 
-        let error = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2)
+        let error = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2, None)
             .unwrap_err()
             .to_string();
 

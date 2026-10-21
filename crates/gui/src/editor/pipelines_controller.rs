@@ -8,9 +8,9 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CardTable, CardTableRow, ClassItemData, CommandDef, CommandParameter, CommandPickerState,
-    ComponentBindingRow, ComponentClassRow, ComponentClassesState, ComponentEditChoiceState,
+    ComponentBindingRow, ComponentClassRow, ComponentClassesState,
     ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState,
-    DefaultParamPreview, ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType,
+    DefaultParamPreview, ExposeChoiceState, GlobalAppState, InPlaceCopyState, GroupItem, LeafParam, ParamType,
     Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
     ProblemItem, RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
 };
@@ -121,9 +121,8 @@ pub struct PipelinesController {
     /// one level up.
     open_component: Mutex<Option<(u32, Vec<OpenComponent>)>>,
 
-    /// While "Edit for all / Only this step" asks: the opened components the
-    /// asked-about card's step index refers to (see [`Self::edit_component`]).
-    pending_edit_base: Mutex<Option<Vec<OpenComponent>>>,
+    /// While "Edit in place" asks for the copy's name: (pipeline id, step index).
+    pending_in_place: Mutex<Option<(u32, usize)>>,
 
     /// A setting waiting for "Expose setting": (pipeline id, step index,
     /// setting path, the parameters it could be added to).
@@ -186,8 +185,8 @@ impl PipelinesController {
             auto_preview_enabled: Mutex::new(false),
             focus_controller,
             open_component: Mutex::new(None),
-            pending_edit_base: Mutex::new(None),
             pending_expose: Mutex::new(None),
+            pending_in_place: Mutex::new(None),
             component_library: Mutex::new(Vec::new()),
             pending_update: Mutex::new(None),
             parameter_edit_snapshot: Mutex::new(None),
@@ -1071,66 +1070,8 @@ impl PipelinesController {
                         return;
                     }
                     let shown = manager.open_component_path(pipeline_id);
-                    manager.edit_component(&ui, pipeline_id, shown, step_idx as usize);
+                    manager.edit_component(pipeline_id, shown, step_idx as usize);
                 });
-
-            // "Edit for all": the component itself.
-            let manager = self.clone();
-            ui.global::<ComponentEditChoiceState>()
-                .on_edit_all(move || {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let choice = ui.global::<ComponentEditChoiceState>();
-                    let pipeline_id = choice.get_pipeline_id() as u32;
-                    ui.global::<GlobalAppState>()
-                        .set_active_dialog(DialogType::None);
-                    manager.take_pending_edit_base(pipeline_id);
-                    manager.open_component_in_panel(
-                        pipeline_id,
-                        choice.get_step_idx() as usize,
-                        false,
-                    );
-                });
-
-            // "Only this step": a copy of the component for it.
-            let manager = self.clone();
-            ui.global::<ComponentEditChoiceState>()
-                .on_only_this(move || {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let choice = ui.global::<ComponentEditChoiceState>();
-                    let pipeline_id = choice.get_pipeline_id() as u32;
-                    let step_idx = choice.get_step_idx() as usize;
-                    ui.global::<GlobalAppState>()
-                        .set_active_dialog(DialogType::None);
-                    manager.take_pending_edit_base(pipeline_id);
-                    let copied = {
-                        let mut project = manager.app_state.get_project_write();
-                        evanalyzer_app::components::clone_component_for_step(
-                            &mut project,
-                            &manager.shown_list(pipeline_id),
-                            step_idx,
-                        )
-                    };
-                    match copied {
-                        Ok(_) => {
-                            manager.pipeline_settings_changed();
-                            manager.open_component_in_panel(pipeline_id, step_idx, false);
-                        }
-                        Err(e) => warn!("Could not copy the component: {e}"),
-                    }
-                });
-
-            let manager = self.clone();
-            ui.global::<ComponentEditChoiceState>().on_cancel(move || {
-                if let Some(ui) = manager.ui.upgrade() {
-                    *manager.pending_edit_base.lock().expect("Poisoned") = None;
-                    ui.global::<GlobalAppState>()
-                        .set_active_dialog(DialogType::None);
-                }
-            });
 
             // "‹ Back" from an opened component: the steps it was opened from
             // again - the component's it's nested in, or the pipeline's.
@@ -1229,31 +1170,7 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>()
                 .on_fix_problem(move |index| manager.fix_problem(index as usize));
 
-            // "Edit" in the bar of a viewed component: as "Edit" on its card. In
-            // a component opened inside a viewed one, the first viewed one is
-            // opened to edit - the ones inside it can then be opened to edit.
-            let manager = self.clone();
-            ui.global::<PipelinesPanelState>()
-                .on_edit_open_component(move || {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let pipeline_id =
-                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
-                    let mut path = manager.open_component_path(pipeline_id);
-                    let Some(first_viewed) =
-                        path.iter().position(|level| level.viewing_from.is_some())
-                    else {
-                        return;
-                    };
-                    let Some(step_idx) = path[first_viewed].viewing_from else {
-                        return;
-                    };
-                    path.truncate(first_viewed);
-                    manager.edit_component(&ui, pipeline_id, path, step_idx);
-                });
-
-            // "Settings…" in the opened component's bar: the component settings dialog.
+            // "Settings" in the opened component's bar: the component settings dialog.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_open_component_settings(move || {
@@ -1561,7 +1478,9 @@ impl PipelinesController {
             });
 
             // "Edit in place" on a component card: a component of its own
-            // with the step's values, opened - other uses untouched.
+            // with the step's values, opened - other uses untouched. A copy
+            // (others use the component) is named first; the only use is
+            // edited at once.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_edit_component_in_place(move |step_idx| {
@@ -1573,30 +1492,80 @@ impl PipelinesController {
                     if manager.viewing(pipeline_id) {
                         return;
                     }
-                    manager.app_state.begin_undo_step();
-                    let result = {
+                    let copy = {
                         let mut project = manager.app_state.get_project_write();
-                        evanalyzer_app::components::component_in_place_for_step(
+                        evanalyzer_app::components::in_place_copy(
                             &mut project,
                             &manager.shown_list(pipeline_id),
                             step_idx as usize,
                         )
                     };
-                    match result {
-                        Ok(_) => {
-                            manager.pipeline_settings_changed();
-                            manager.open_component_in_panel(pipeline_id, step_idx as usize, false);
-                        }
-                        Err(e) => {
-                            let warning = ui.global::<WarningState>();
-                            warning.set_info(false);
-                            warning.set_title("Cannot edit the component in place".into());
-                            warning.set_message(e.to_string().into());
+                    match copy {
+                        Ok(Some(copy)) => {
+                            *manager.pending_in_place.lock().expect("Poisoned") =
+                                Some((pipeline_id, step_idx as usize));
+                            let state = ui.global::<InPlaceCopyState>();
+                            state.set_component_name(copy.component.into());
+                            state.set_other_uses(copy.other_uses as i32);
+                            state.set_from_library(copy.from_library);
+                            state.set_name(copy.suggested_name.into());
+                            state.set_error("".into());
                             ui.global::<GlobalAppState>()
-                                .set_active_dialog(DialogType::Warning);
+                                .set_active_dialog(DialogType::InPlaceCopy);
                         }
+                        Ok(None) => manager.edit_in_place(&ui, pipeline_id, step_idx as usize, None),
+                        Err(e) => show_in_place_failure(&ui, &e),
                     }
                 });
+
+            // The copy's name typed: whether it can be taken.
+            let manager = self.clone();
+            ui.global::<InPlaceCopyState>().on_name_edited(move |name| {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let problem = evanalyzer_app::components::copy_name_problem(
+                    &manager.app_state.get_project(),
+                    &name,
+                );
+                ui.global::<InPlaceCopyState>()
+                    .set_error(problem.unwrap_or_default().into());
+            });
+
+            // "Create copy and edit".
+            let manager = self.clone();
+            ui.global::<InPlaceCopyState>().on_confirm(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let state = ui.global::<InPlaceCopyState>();
+                let name = state.get_name().to_string();
+                if let Some(problem) = evanalyzer_app::components::copy_name_problem(
+                    &manager.app_state.get_project(),
+                    &name,
+                ) {
+                    state.set_error(problem.into());
+                    return;
+                }
+                let Some((pipeline_id, step_idx)) =
+                    manager.pending_in_place.lock().expect("Poisoned").take()
+                else {
+                    return;
+                };
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+                manager.edit_in_place(&ui, pipeline_id, step_idx, Some(&name));
+            });
+
+            let manager = self.clone();
+            ui.global::<InPlaceCopyState>().on_cancel(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                *manager.pending_in_place.lock().expect("Poisoned") = None;
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+            });
 
             // "Expand" on a component card: its steps in its place.
             let manager = self.clone();
@@ -3470,53 +3439,52 @@ impl PipelinesController {
             (!path.is_empty()).then_some((pipeline_id, path));
     }
 
-    /// "Edit" on component card `step_idx` of the steps shown with the
-    /// components `base` opened (empty: the pipeline's): opens it to edit -
-    /// asking first if other steps use the component too. Until that's
-    /// answered the panel stays as it is.
-    fn edit_component(
-        self: &Arc<Self>,
-        ui: &AppWindow,
-        pipeline_id: u32,
-        base: Vec<OpenComponent>,
-        step_idx: usize,
-    ) {
+    /// "Edit component" on component card `step_idx` of the steps shown
+    /// with the components `base` opened (empty: the pipeline's): opens the
+    /// component itself to edit - every step using it follows. Changing one
+    /// use only is "Edit in place".
+    fn edit_component(self: &Arc<Self>, pipeline_id: u32, base: Vec<OpenComponent>, step_idx: usize) {
         let shown = self.open_component_path(pipeline_id);
-        self.set_open_path(pipeline_id, base.clone());
-        let found = {
+        self.set_open_path(pipeline_id, base);
+        let is_component = {
             let project = self.app_state.get_project();
             self.shown_steps(&project, pipeline_id)
                 .and_then(|steps| steps.get(step_idx))
-                .and_then(|step| match &step.content {
-                    StepContent::Component(instance) => Some((
-                        step_label(&project, step),
-                        evanalyzer_app::components::component_uses(&project, &instance.key),
-                    )),
-                    StepContent::Command(_) => None,
-                })
+                .is_some_and(|step| matches!(step.content, StepContent::Component(_)))
         };
-        match found {
-            Some((name, uses)) if uses > 1 => {
-                self.set_open_path(pipeline_id, shown);
-                *self.pending_edit_base.lock().expect("Poisoned") = Some(base);
-                let choice = ui.global::<ComponentEditChoiceState>();
-                choice.set_pipeline_id(pipeline_id as i32);
-                choice.set_step_idx(step_idx as i32);
-                choice.set_component_name(name.into());
-                choice.set_uses(uses as i32);
-                ui.global::<GlobalAppState>()
-                    .set_active_dialog(DialogType::ComponentEditChoice);
-            }
-            Some(_) => self.open_component_in_panel(pipeline_id, step_idx, false),
-            None => self.set_open_path(pipeline_id, shown),
+        if is_component {
+            self.open_component_in_panel(pipeline_id, step_idx, false);
+        } else {
+            self.set_open_path(pipeline_id, shown);
         }
     }
 
-    /// "Edit for all"/"Only this step" answered: the opened components the
-    /// card was shown with (see [`Self::edit_component`]).
-    fn take_pending_edit_base(&self, pipeline_id: u32) {
-        if let Some(base) = self.pending_edit_base.lock().expect("Poisoned").take() {
-            self.set_open_path(pipeline_id, base);
+    /// "Edit in place" on component card `step_idx` (asked first if it
+    /// copies - `copy_name` the copy's name): the step gets a component of
+    /// its own with its values, opened.
+    fn edit_in_place(
+        self: &Arc<Self>,
+        ui: &AppWindow,
+        pipeline_id: u32,
+        step_idx: usize,
+        copy_name: Option<&str>,
+    ) {
+        self.app_state.begin_undo_step();
+        let result = {
+            let mut project = self.app_state.get_project_write();
+            evanalyzer_app::components::component_in_place_for_step(
+                &mut project,
+                &self.shown_list(pipeline_id),
+                step_idx,
+                copy_name,
+            )
+        };
+        match result {
+            Ok(_) => {
+                self.pipeline_settings_changed();
+                self.open_component_in_panel(pipeline_id, step_idx, false);
+            }
+            Err(e) => show_in_place_failure(ui, &e),
         }
     }
 
@@ -4982,14 +4950,27 @@ impl PipelinesController {
         let viewed_steps = self.viewed_steps(&self.app_state.get_project(), pipeline_id.0);
         // The pipeline step it's looked at from - whose problems mark its settings.
         let viewed_from = self.viewed_from(pipeline_id);
+        let read_only = open_component.is_some() && self.viewing(pipeline_id.0);
         let open_component_values: String = match (&viewed_steps, path.first()) {
             (Some(_), Some(level)) => level
                 .viewing_from
                 .map(|idx| format!("Shown with the values of step {} in this pipeline", idx + 1))
                 .unwrap_or_default(),
-            _ => String::new(),
+            // Edited, used by one step alone: changes reach no other (as
+            // after "Edit in place").
+            _ => match &open_component {
+                Some(key)
+                    if !read_only
+                        && evanalyzer_app::components::component_uses(
+                            &self.app_state.get_project(),
+                            key,
+                        ) == 1 =>
+                {
+                    "Only this step uses this component - changes reach no other step".to_string()
+                }
+                _ => String::new(),
+            },
         };
-        let read_only = open_component.is_some() && self.viewing(pipeline_id.0);
         // "Outer › ◆ Inner" for a component opened inside another.
         let open_component_name: String = {
             let project = self.app_state.get_project();
@@ -6889,6 +6870,16 @@ fn set_picker_suggestion(picker: &CommandPickerState<'_>, context_cat: i32, flag
     picker.set_fcat_dat(flags[5]);
 }
 
+/// "Edit in place" couldn't be done: why, in a warning.
+fn show_in_place_failure(ui: &AppWindow, error: &evanalyzer_cfg::core_types::InternalErrors) {
+    let warning = ui.global::<WarningState>();
+    warning.set_info(false);
+    warning.set_title("Cannot edit the component in place".into());
+    warning.set_message(error.to_string().into());
+    ui.global::<GlobalAppState>()
+        .set_active_dialog(DialogType::Warning);
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -8710,8 +8701,84 @@ mod tests {
         drain_ui_queue();
         let panel = ui.global::<PipelinesPanelState>();
         assert_eq!(ui_state.get_project().components.len(), before, "used once: no copy");
+        assert_eq!(active_dialog(&ui), DialogType::None, "nothing to name - not asked");
         assert!(panel.get_open_component_name().contains("Smooth"));
         assert!(!panel.get_open_component_read_only(), "to edit");
+        assert_eq!(
+            panel.get_open_component_values(),
+            "Only this step uses this component - changes reach no other step"
+        );
+    }
+
+    /// "Edit in place" on a component another step uses too asks for the
+    /// copy's name first ("Name (2)" suggested): a taken or empty name can't
+    /// be confirmed, Cancel makes nothing, the chosen name is the copy's.
+    #[test]
+    fn edit_in_place_on_a_shared_component_asks_for_the_copys_name() {
+        let (ui, ui_state, controller) = with_a_component();
+        {
+            let mut project = ui_state.get_project_write();
+            let mut second = project.pipelines[0].steps[1].clone();
+            second.id = evanalyzer_cfg::core_types::StepId(99);
+            project.pipelines[0].steps.push(second);
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        let dialog = ui.global::<InPlaceCopyState>();
+        let snapshot = || {
+            let p = ui_state.get_project();
+            serde_json::to_value((&p.pipelines, &p.components)).unwrap()
+        };
+        let before = snapshot();
+
+        panel.invoke_edit_component_in_place(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::InPlaceCopy);
+        assert_eq!(dialog.get_component_name(), "Smooth");
+        assert_eq!(dialog.get_other_uses(), 1);
+        assert_eq!(dialog.get_name(), "Smooth (2)");
+        assert_eq!(dialog.get_error(), "");
+        assert_eq!(snapshot(), before, "nothing made while asking");
+
+        dialog.invoke_cancel();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert_eq!(snapshot(), before, "cancelled: nothing made");
+        assert_eq!(panel.get_open_component_name(), "");
+
+        panel.invoke_edit_component_in_place(1);
+        drain_ui_queue();
+        for taken in ["Smooth", " smooth ", ""] {
+            dialog.set_name(taken.into());
+            dialog.invoke_name_edited(taken.into());
+            assert_ne!(dialog.get_error(), "", "{taken:?}");
+            dialog.invoke_confirm();
+            drain_ui_queue();
+            assert_eq!(active_dialog(&ui), DialogType::InPlaceCopy, "{taken:?} refused");
+        }
+        assert_eq!(snapshot(), before);
+
+        dialog.set_name("Strict smooth".into());
+        dialog.invoke_name_edited("Strict smooth".into());
+        assert_eq!(dialog.get_error(), "");
+        dialog.invoke_confirm();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert_eq!(panel.get_open_component_name(), "Strict smooth");
+        assert!(!panel.get_open_component_read_only());
+        let project = ui_state.get_project();
+        assert_eq!(project.components.len(), 2);
+        let keys: Vec<String> = project.pipelines[0]
+            .steps
+            .iter()
+            .filter_map(|s| match &s.content {
+                StepContent::Component(g) => Some(g.key.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keys[0], project.components[1].key, "this step uses the copy");
+        assert_eq!(keys[1], "SMOOTH", "the other keeps the original");
     }
 
     /// The picker's "Add its steps": the component's steps in its place -
@@ -9157,14 +9224,14 @@ mod tests {
     }
 
     #[test]
-    fn inside_a_viewed_component_a_nested_one_is_only_viewed_and_edit_opens_the_viewed_one() {
+    fn inside_a_viewed_component_a_nested_one_is_only_viewed() {
         let (ui, _ui_state, _controller) = with_a_nested_component();
         let panel = ui.global::<PipelinesPanelState>();
         panel.invoke_view_component(0);
         drain_ui_queue();
         assert!(panel.get_open_component_read_only());
 
-        // "Edit" on a card isn't offered while viewing - and does nothing.
+        // "Edit component" on a card isn't offered while viewing - and does nothing.
         panel.invoke_open_component(1);
         drain_ui_queue();
         assert_eq!(panel.get_open_component_name(), "Outer");
@@ -9173,17 +9240,13 @@ mod tests {
         drain_ui_queue();
         assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth");
         assert!(panel.get_open_component_read_only());
-
-        // "Edit" in the bar: the first viewed component, to edit.
-        panel.invoke_edit_open_component();
-        drain_ui_queue();
-        assert_eq!(panel.get_open_component_name(), "Outer");
-        assert!(!panel.get_open_component_read_only());
-        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
     }
 
+    /// Inside an opened component, "Edit in place" on a nested component
+    /// used elsewhere too gives that step a copy - the other use keeps the
+    /// original; "Edit component" opens the nested one itself, unasked.
     #[test]
-    fn only_this_step_inside_an_opened_component_gives_its_step_a_copy() {
+    fn inside_an_opened_component_edit_in_place_gives_its_step_a_copy() {
         let (ui, ui_state, controller) = with_a_nested_component();
         // "Smooth" is used in the pipeline too.
         {
@@ -9205,17 +9268,19 @@ mod tests {
         panel.invoke_open_component(0);
         drain_ui_queue();
 
-        // Asked - cancelling leaves the panel as it was.
         panel.invoke_open_component(1);
         drain_ui_queue();
-        assert_eq!(active_dialog(&ui), DialogType::ComponentEditChoice);
-        ui.global::<ComponentEditChoiceState>().invoke_cancel();
+        assert_eq!(active_dialog(&ui), DialogType::None, "nothing asked");
+        assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth");
+        panel.invoke_close_component();
         drain_ui_queue();
         assert_eq!(panel.get_open_component_name(), "Outer");
 
-        panel.invoke_open_component(1);
+        panel.invoke_edit_component_in_place(1);
         drain_ui_queue();
-        ui.global::<ComponentEditChoiceState>().invoke_only_this();
+        // Used elsewhere too: the copy is named first.
+        assert_eq!(active_dialog(&ui), DialogType::InPlaceCopy);
+        ui.global::<InPlaceCopyState>().invoke_confirm();
         drain_ui_queue();
         assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth (2)");
         panel.invoke_param_changed(0, "kernel_size".into(), "9".into());
@@ -9235,40 +9300,6 @@ mod tests {
         assert!(
             matches!(&outer.steps[1].content, StepContent::Component(i) if i.key == "SMOOTH_2")
         );
-    }
-
-    #[test]
-    fn edit_from_the_bar_asks_and_cancelling_keeps_viewing() {
-        let (ui, ui_state, controller) = with_a_nested_component();
-        // "Outer" used twice: "Edit" asks.
-        {
-            let mut project = ui_state.get_project_write();
-            let mut outer = project.pipelines[0].steps[0].clone();
-            outer.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
-            project.pipelines[0].steps.push(outer);
-            evanalyzer_app::utils::assign_step_ids(&mut project.pipelines[0].steps);
-        }
-        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
-        drain_ui_queue();
-        let panel = ui.global::<PipelinesPanelState>();
-        panel.invoke_view_component(0);
-        panel.invoke_view_component(1);
-        drain_ui_queue();
-
-        panel.invoke_edit_open_component();
-        drain_ui_queue();
-        assert_eq!(active_dialog(&ui), DialogType::ComponentEditChoice);
-        ui.global::<ComponentEditChoiceState>().invoke_cancel();
-        drain_ui_queue();
-        assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth");
-        assert!(panel.get_open_component_read_only());
-
-        panel.invoke_edit_open_component();
-        drain_ui_queue();
-        ui.global::<ComponentEditChoiceState>().invoke_edit_all();
-        drain_ui_queue();
-        assert_eq!(panel.get_open_component_name(), "Outer");
-        assert!(!panel.get_open_component_read_only());
     }
 
     #[test]
@@ -9600,10 +9631,7 @@ mod tests {
     fn the_component_dialogs_cancel_buttons_just_close_their_dialog() {
         let (ui, ui_state, _controller) = with_a_component();
         let before = serde_json::to_value(&ui_state.get_project().components).unwrap();
-        let cancels: [(DialogType, &dyn Fn(&AppWindow)); 4] = [
-            (DialogType::ComponentEditChoice, &|ui| {
-                ui.global::<ComponentEditChoiceState>().invoke_cancel()
-            }),
+        let cancels: [(DialogType, &dyn Fn(&AppWindow)); 3] = [
             (DialogType::ExposeChoice, &|ui| {
                 ui.global::<ExposeChoiceState>().invoke_cancel()
             }),
@@ -10299,23 +10327,26 @@ mod tests {
         ui.global::<PipelinesPanelState>().invoke_open_component(1);
         drain_ui_queue();
         fits("Editing the component: its steps and the defaults of every step that uses it - their own values are kept · ◇ exposes a setting");
-        fits("Settings…");
+        fits("Settings");
 
         ui.global::<PipelinesPanelState>().invoke_close_component();
         ui.global::<PipelinesPanelState>().invoke_view_component(1);
         drain_ui_queue();
         fits("Viewing · read only");
-        fits("Edit");
-        assert!(
-            ElementHandle::find_by_accessible_label(&ui, "Settings…")
-                .next()
-                .is_none(),
-            "no component settings while only viewing"
-        );
+        // Only viewing: no way to edit from the bar - editing is the card's
+        // ⋯ (Edit component / Edit in place).
+        for label in ["Settings", "Edit"] {
+            assert!(
+                ElementHandle::find_by_accessible_label(&ui, label)
+                    .next()
+                    .is_none(),
+                "{label:?} while only viewing"
+            );
+        }
     }
 
     #[test]
-    fn a_viewed_component_shows_its_steps_but_changes_nothing_until_edit() {
+    fn a_viewed_component_shows_its_steps_but_changes_nothing() {
         let (ui, ui_state, _controller) = with_a_component();
         let panel = ui.global::<PipelinesPanelState>();
         let before = {
@@ -10346,19 +10377,6 @@ mod tests {
         );
         assert_eq!(card_names(&ui), ["Blur", "Blur"]);
         assert_eq!(active_dialog(&ui), DialogType::None);
-
-        // "Edit" in the bar: the same component, now editable.
-        panel.invoke_edit_open_component();
-        drain_ui_queue();
-        assert!(!panel.get_open_component_read_only());
-        assert_eq!(panel.get_open_component_name(), "Smooth");
-        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
-        drain_ui_queue();
-        let project = ui_state.get_project();
-        let PipelineCommand::Blur(blur) = project.components[0].steps[0].command().unwrap() else {
-            panic!("blur")
-        };
-        assert_eq!(blur.kernel_size, 7);
     }
 
     #[test]
@@ -10802,8 +10820,10 @@ mod tests {
         }
     }
 
+    /// "Edit component" on a component two steps use opens the component
+    /// itself, unasked: a change reaches both uses.
     #[test]
-    fn opening_a_component_used_twice_asks_and_can_copy_it_for_this_step() {
+    fn edit_component_used_twice_edits_it_for_both_uses() {
         let (ui, ui_state, controller) = with_a_component();
         {
             let mut project = ui_state.get_project_write();
@@ -10814,21 +10834,21 @@ mod tests {
         controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
         drain_ui_queue();
 
-        ui.global::<PipelinesPanelState>().invoke_open_component(1);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(1);
         drain_ui_queue();
-        assert_eq!(active_dialog(&ui), DialogType::ComponentEditChoice);
-        let choice = ui.global::<ComponentEditChoiceState>();
-        assert_eq!(choice.get_uses(), 2);
+        assert_eq!(active_dialog(&ui), DialogType::None, "nothing asked");
+        assert_eq!(panel.get_open_component_name(), "Smooth");
+        assert!(!panel.get_open_component_read_only());
 
-        choice.invoke_only_this();
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
         drain_ui_queue();
-        assert_eq!(active_dialog(&ui), DialogType::None);
-        assert_eq!(
-            ui.global::<PipelinesPanelState>().get_open_component_name(),
-            "Smooth (2)"
-        );
         let project = ui_state.get_project();
-        assert_eq!(project.components.len(), 2);
+        assert_eq!(project.components.len(), 1, "no copy");
+        let PipelineCommand::Blur(blur) = project.components[0].steps[0].command().unwrap() else {
+            panic!("blur")
+        };
+        assert_eq!(blur.kernel_size, 7);
         let keys: Vec<String> = project.pipelines[0]
             .steps
             .iter()
@@ -10837,7 +10857,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(keys, ["SMOOTH_2", "SMOOTH"], "only this step uses the copy");
+        assert_eq!(keys, ["SMOOTH", "SMOOTH"], "both use the component");
     }
 
     #[test]
@@ -11970,12 +11990,16 @@ mod tests {
             mapping.wiring
         );
 
-        // Opened to edit: the defaults.
+        // Opened to edit: the defaults - not a step's values; this step is
+        // the only use.
         panel.invoke_close_component();
         drain_ui_queue();
         panel.invoke_open_component(0);
         drain_ui_queue();
-        assert_eq!(panel.get_open_component_values(), "");
+        assert_eq!(
+            panel.get_open_component_values(),
+            "Only this step uses this component - changes reach no other step"
+        );
         assert_eq!(class_of(1), "2");
     }
 

@@ -30,14 +30,19 @@ export global CreateComponentState {
     callback cancel();
 }
 
-/// Asked when opening a component that other steps use too.
-export global ComponentEditChoiceState {
-    in property <int> pipeline-id: 0;
-    in property <int> step-idx: 0;
+/// "Edit in place" on a component other steps use too: the name of the copy
+/// this step gets.
+export global InPlaceCopyState {
     in property <string> component-name: "";
-    in property <int> uses: 0;
-    callback edit-all();
-    callback only-this();
+    /// The other steps using the component - they keep it.
+    in property <int> other-uses: 0;
+    /// From the library: the copy gets no library updates.
+    in property <bool> from-library: false;
+    in-out property <string> name: "";
+    /// Why `name` can't be the copy's, or empty.
+    in property <string> error: "";
+    callback name-edited(string);
+    callback confirm();
     callback cancel();
 }
 

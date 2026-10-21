@@ -1,6 +1,6 @@
 import { Places } from "../api/layout.slint";
-import { InkButton, InkButtonKind, InkBanner, InkCaption, InkChip, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
-import { ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "../api/create_component.slint";
+import { InkTextField, InkButton, InkButtonKind, InkBanner, InkCaption, InkChip, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
+import { ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState, InPlaceCopyState } from "../api/create_component.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
 import { InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock, InkTab } from "../ink/ink.slint";
@@ -162,44 +162,81 @@ export component CreateComponentDialog inherits InkDialog {
     }
 }
 
-// -- "Edit for all" or "Only this step" -------------------------
-export component ComponentEditChoiceDialog inherits InkDialog {
+// -- "Edit in place": the copy's name ---------------------------
+// Shown only when a copy is made - other steps use the component; the only
+// use is edited without asking.
+export component InPlaceCopyDialog inherits InkDialog {
     // Next to the steps panel.
     anchor-x: Places.beside-left;
-    title: "Open \{ComponentEditChoiceState.component-name}";
+    title: "Edit in place";
     card-width: 420px;
     close-on-backdrop: true;
     close => {
-        ComponentEditChoiceState.cancel();
+        InPlaceCopyState.cancel();
     }
 
     Text {
-        text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
+        text: "A copy of “\{InPlaceCopyState.component-name}” just for this step, with its values. "
+            + (InPlaceCopyState.other-uses == 1 ? "The other step using it stays unchanged."
+                : "The \{InPlaceCopyState.other-uses} other steps using it stay unchanged.")
+            + (InPlaceCopyState.from-library ? " The copy doesn't get library updates." : "");
         font-size: Ink.fs-body;
         color: Ink.text;
         wrap: word-wrap;
+    }
+
+    VerticalLayout {
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 8px;
+            InkLabel {
+                text: "Name";
+            }
+
+            InkTextField {
+                horizontal-stretch: 1;
+                label: "Name of the copy";
+                value: InPlaceCopyState.name;
+                autofocus: true;
+                // Typed over at once.
+                init => {
+                    self.select-all();
+                }
+                edited(t) => {
+                    InPlaceCopyState.name = t;
+                    InPlaceCopyState.name-edited(t);
+                }
+                accepted(t) => {
+                    if InPlaceCopyState.error == "" {
+                        InPlaceCopyState.confirm();
+                    }
+                }
+            }
+        }
+
+        if InPlaceCopyState.error != "": Text {
+            text: InPlaceCopyState.error;
+            font-size: Ink.fs-secondary;
+            color: Ink.err;
+            wrap: word-wrap;
+        }
     }
 
     InkDialogFooter {
         InkButton {
             text: "Cancel";
             clicked => {
-                ComponentEditChoiceState.cancel();
-            }
-        }
-
-        InkButton {
-            text: "Only this step";
-            clicked => {
-                ComponentEditChoiceState.only-this();
+                InPlaceCopyState.cancel();
             }
         }
 
         InkButton {
             kind: InkButtonKind.primary;
-            text: "Edit for all";
+            text: "Create copy and edit";
+            enabled: InPlaceCopyState.error == "";
+            disabled-reason: InPlaceCopyState.error;
             clicked => {
-                ComponentEditChoiceState.edit-all();
+                InPlaceCopyState.confirm();
             }
         }
     }
