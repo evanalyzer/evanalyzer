@@ -4,7 +4,7 @@
 // `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ResultsChartKind2, ResultsState } from "../api/results.slint";
-import { InkSegmented, InkHint, InkNumberField, InkSwitch } from "../ink/ink.slint";
+import { InkSegmented, InkHint, InkNumberField, InkSwitch, InkButton, InkButtonKind } from "../ink/ink.slint";
 import { SettingsGroup } from "results_common.slint";
 import { ComboBox } from "../ink/std_compat.slint";
 
@@ -300,6 +300,152 @@ component ChartTile inherits Rectangle {
     }
 }
 
+// Over time: a line per class / image / well / track, its spread as a band,
+// the individual tracks faint behind (all paths from Rust, in a 1000 x 1000
+// box), the axes' ends as labels.
+component OverTimeChart inherits Rectangle {
+    if ResultsState.chart-error != "": ChartErrorOrEmpty { }
+
+    if ResultsState.chart-error == "": VerticalLayout {
+        padding: 20px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                horizontal-stretch: 1;
+                text: ResultsState.chart-time-y-title;
+                font-size: Ink.fs-body;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if ResultsState.chart-time-note != "": Text {
+                text: ResultsState.chart-time-note;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+            }
+            InkButton {
+                small: true;
+                kind: InkButtonKind.secondary;
+                text: "Export data…";
+                tip: "The time course as CSV or XLSX - long and/or wide tables";
+                clicked => {
+                    ResultsState.chart-time-export();
+                }
+            }
+        }
+
+        // The legend.
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: start;
+            for line in ResultsState.chart-time-data: HorizontalLayout {
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 14px;
+                        height: 3px;
+                        background: line.color;
+                    }
+                }
+                Text {
+                    text: line.label;
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-dim;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 6px;
+            VerticalLayout {
+                width: 64px;
+                Text {
+                    text: ResultsState.chart-time-y-max;
+                    font-size: Ink.fs-caption;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    horizontal-alignment: right;
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+                Text {
+                    text: ResultsState.chart-time-y-min;
+                    font-size: Ink.fs-caption;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    horizontal-alignment: right;
+                }
+            }
+            plot := Rectangle {
+                border-width: 1px;
+                border-color: Ink.border-soft;
+                accessible-role: image;
+                accessible-label: ResultsState.chart-time-y-title;
+                for faint in ResultsState.chart-time-faint: Path {
+                    width: plot.width;
+                    height: plot.height;
+                    viewbox-width: 1000;
+                    viewbox-height: 1000;
+                    // Stretched to the plot (the box isn't square).
+                    fit: fill;
+                    commands: faint;
+                    stroke: Ink.text-mute;
+                    stroke-width: 1px;
+                    opacity: 0.25;
+                }
+                for line in ResultsState.chart-time-data: Path {
+                    width: plot.width;
+                    height: plot.height;
+                    viewbox-width: 1000;
+                    viewbox-height: 1000;
+                    // Stretched to the plot (the box isn't square).
+                    fit: fill;
+                    commands: line.band != "" ? line.band : "M 0 0";
+                    fill: line.color;
+                    opacity: line.band != "" ? 0.16 : 0;
+                }
+                for line in ResultsState.chart-time-data: Path {
+                    width: plot.width;
+                    height: plot.height;
+                    viewbox-width: 1000;
+                    viewbox-height: 1000;
+                    // Stretched to the plot (the box isn't square).
+                    fit: fill;
+                    commands: line.line != "" ? line.line : "M 0 0";
+                    stroke: line.color;
+                    stroke-width: 2px;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 70px;
+            Text {
+                text: ResultsState.chart-time-x-min;
+                font-size: Ink.fs-caption;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: ResultsState.chart-time-x-max;
+                font-size: Ink.fs-caption;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+            }
+        }
+    }
+}
+
 export component ResultsChartsView inherits Rectangle {
     property <length> side-w: 280px;
     property <length> field-w: root.side-w - 2 * Ink.pad-panel;
@@ -330,6 +476,8 @@ export component ResultsChartsView inherits Rectangle {
                 SettingsGroup {
                     title: "CHART";
                     // The kinds as tiles, each with a picture of it (board M).
+                    VerticalLayout {
+                    spacing: 6px;
                     HorizontalLayout {
                         spacing: 6px;
                         ChartTile {
@@ -350,6 +498,9 @@ export component ResultsChartsView inherits Rectangle {
                                 ResultsState.chart-kind-selected(ResultsState.chart-kind);
                             }
                         }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
                         ChartTile {
                             glyph: "∴ ∵";
                             text: "Scatter";
@@ -359,6 +510,16 @@ export component ResultsChartsView inherits Rectangle {
                                 ResultsState.chart-kind-selected(ResultsState.chart-kind);
                             }
                         }
+                        ChartTile {
+                            glyph: "╱╲╱";
+                            text: "Over time";
+                            selected: ResultsState.chart-kind == ResultsChartKind2.over-time;
+                            clicked => {
+                                ResultsState.chart-kind = ResultsChartKind2.over-time;
+                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                            }
+                        }
+                    }
                     }
                 }
 
@@ -402,7 +563,25 @@ export component ResultsChartsView inherits Rectangle {
                             }
                         }
                     }
-                    if ResultsState.chart-kind != ResultsChartKind2.boxplot: InkMultiSelect {
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "A line per";
+                            font-size: Ink.fs-caption;
+                            color: Ink.text-dim;
+                        }
+                        ComboBox {
+                            model: ["Class", "Image", "Well", "Track"];
+                            current-index: ResultsState.chart-time-lines;
+                            selected(v) => {
+                                ResultsState.chart-time-lines = self.current-index;
+                                ResultsState.chart-time-changed();
+                            }
+                        }
+                    }
+                    // A line per class: every class - else the class picked.
+                    if ResultsState.chart-kind != ResultsChartKind2.boxplot
+                        && !(ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0): InkMultiSelect {
                         label: "Class";
                         summary-text: ResultsState.chart-class-summary;
                         items <=> ResultsState.chart-class-items;
@@ -460,6 +639,31 @@ export component ResultsChartsView inherits Rectangle {
                     if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
                         text: "Click a point to see its object on its image.";
                     }
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSegmented {
+                        label: "Summary";
+                        model: ["Mean ± SD", "Median + IQR"];
+                        selected: ResultsState.chart-time-summary;
+                        picked(i) => {
+                            ResultsState.chart-time-summary = i;
+                            ResultsState.chart-time-changed();
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
+                        text: "Relative to the first time point";
+                        checked: ResultsState.chart-time-relative;
+                        toggled(on) => {
+                            ResultsState.chart-time-relative = on;
+                            ResultsState.chart-time-changed();
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
+                        text: "Individual tracks, faint";
+                        checked: ResultsState.chart-time-tracks;
+                        toggled(on) => {
+                            ResultsState.chart-time-tracks = on;
+                            ResultsState.chart-time-changed();
+                        }
+                    }
                 }
 
                 if ResultsState.chart-kind == ResultsChartKind2.boxplot: InkHint {
@@ -485,6 +689,9 @@ export component ResultsChartsView inherits Rectangle {
                     vertical-stretch: 1;
                 }
                 if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
+                    vertical-stretch: 1;
+                }
+                if ResultsState.chart-kind == ResultsChartKind2.over-time: OverTimeChart {
                     vertical-stretch: 1;
                 }
             }

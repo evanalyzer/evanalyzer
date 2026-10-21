@@ -1,7 +1,7 @@
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::stored_object::{ObjectFilter, StoredObject};
-use crate::storage::{DatasetStore, PipelineResultExporter};
+use crate::storage::{DatasetStore, ImageSummary, PipelineResultExporter};
 use duckdb::arrow::array::{
     ArrayBuilder, ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, ListBuilder, MapBuilder,
     StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
@@ -668,7 +668,8 @@ CREATE TABLE IF NOT EXISTS images (
     z_stacks        UINTEGER NOT NULL,
     t_stacks        UINTEGER NOT NULL,
     t_stacks_analyzed INTEGER[],
-    z_stacks_analyzed INTEGER[]
+    z_stacks_analyzed INTEGER[],
+    frame_interval_s  DOUBLE
 );
 
 CREATE TABLE IF NOT EXISTS classes (
@@ -942,13 +943,7 @@ impl PipelineResultExporter for DuckDbExporter {
     fn finalize_image(
         &self,
         image_rel_path: &Path,
-        width: u32,
-        height: u32,
-        nr_c_stacks: u32,
-        nr_z_stacks: u32,
-        nr_t_stacks: u32,
-        t_stacks_analyzed: &[i32],
-        z_stacks_analyzed: &[i32],
+        summary: &ImageSummary,
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         let conn = self.lock_conn();
@@ -959,8 +954,21 @@ impl PipelineResultExporter for DuckDbExporter {
         let list = |values: &[i32]| format!("{values:?}");
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]))",
-            params![image_name, image_rel, successful, error, width, height, nr_c_stacks, nr_z_stacks, nr_t_stacks, list(t_stacks_analyzed), list(z_stacks_analyzed)],
+            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed, frame_interval_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]), ?)",
+            params![
+                image_name,
+                image_rel,
+                successful,
+                error,
+                summary.width,
+                summary.height,
+                summary.nr_c_stacks,
+                summary.nr_z_stacks,
+                summary.nr_t_stacks,
+                list(summary.t_stacks_analyzed),
+                list(summary.z_stacks_analyzed),
+                summary.frame_interval_s
+            ],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
@@ -1352,6 +1360,20 @@ mod tests {
         assert_eq!(object_count(&path), 8 * 500);
     }
 
+    /// An image analysed on `t_stacks` x `z_stacks`.
+    fn summary<'a>(t_stacks: &'a [i32], z_stacks: &'a [i32]) -> ImageSummary<'a> {
+        ImageSummary {
+            width: 1,
+            height: 1,
+            nr_c_stacks: 1,
+            nr_z_stacks: 30,
+            nr_t_stacks: 3,
+            t_stacks_analyzed: t_stacks,
+            z_stacks_analyzed: z_stacks,
+            frame_interval_s: None,
+        }
+    }
+
     /// Each image's analysed time points and z-planes are kept - also ones
     /// without objects.
     #[test]
@@ -1360,34 +1382,40 @@ mod tests {
         let path = dir.path().join("results.evadb");
         let exporter = DuckDbExporter::new(&path, HashMap::new(), &MetaData::default()).unwrap();
         exporter
-            .finalize_image(Path::new("a.tif"), 1, 1, 1, 30, 3, &[0, 1, 2], &[0], None)
+            .finalize_image(Path::new("a.tif"), &summary(&[0, 1, 2], &[0]), None)
             .unwrap();
         exporter
-            .finalize_image(Path::new("b.tif"), 1, 1, 1, 30, 3, &[2], &[4, 5], None)
+            .finalize_image(
+                Path::new("b.tif"),
+                &ImageSummary {
+                    frame_interval_s: Some(30.0),
+                    ..summary(&[2], &[4, 5])
+                },
+                None,
+            )
             .unwrap();
         drop(exporter);
 
         let conn = shared_connection(&path).unwrap();
         let mut statement = conn
             .prepare(
-                "SELECT image_rel_path, CAST(t_stacks_analyzed AS VARCHAR), CAST(z_stacks_analyzed AS VARCHAR) \
-                 FROM images ORDER BY 1",
+                "SELECT image_rel_path, CAST(t_stacks_analyzed AS VARCHAR), \
+                 CAST(z_stacks_analyzed AS VARCHAR), frame_interval_s FROM images ORDER BY 1",
             )
             .unwrap();
-        let rows: Vec<(String, String, String)> = statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        let rows: Vec<(String, String, String, Option<f64>)> = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
+        let text = |s: &str| s.to_string();
         assert_eq!(
             rows,
             [
-                (
-                    "a.tif".to_string(),
-                    "[0, 1, 2]".to_string(),
-                    "[0]".to_string()
-                ),
-                ("b.tif".to_string(), "[2]".to_string(), "[4, 5]".to_string()),
+                (text("a.tif"), text("[0, 1, 2]"), text("[0]"), None),
+                (text("b.tif"), text("[2]"), text("[4, 5]"), Some(30.0)),
             ]
         );
     }
@@ -1423,7 +1451,7 @@ mod tests {
 
         exporter.export(&cache_with_objects("a.tif", 3)).unwrap();
         exporter
-            .finalize_image(Path::new("a.tif"), 1, 1, 1, 1, 1, &[0], &[0], None)
+            .finalize_image(Path::new("a.tif"), &summary(&[0], &[0]), None)
             .unwrap();
 
         assert_eq!(object_count(&path), 3);

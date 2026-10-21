@@ -1,5 +1,5 @@
 {
-  "protocol_version": 20,
+  "protocol_version": 21,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -908,6 +908,14 @@
           "with_grouped_by_image_list": "BOOL"
         },
         {
+          "with_time_course": "BOOL"
+        },
+        {
+          "time_course": {
+            "TYPENAME": "TimeCourseExport"
+          }
+        },
+        {
           "with_plate_view_heatmap": "BOOL"
         },
         {
@@ -1067,6 +1075,13 @@
               }
             }
           }
+        },
+        "13": {
+          "TimeCourse": {
+            "NEWTYPE": {
+              "TYPENAME": "TimeCourseResult"
+            }
+          }
         }
       }
     },
@@ -1177,13 +1192,20 @@
           }
         },
         "16": {
+          "TimeCourse": {
+            "NEWTYPE": {
+              "TYPENAME": "TimeCourseFilter"
+            }
+          }
+        },
+        "17": {
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
             }
           }
         },
-        "17": {
+        "18": {
           "ImageObjects": {
             "NEWTYPE": {
               "TYPENAME": "ImageObjectsFilter"
@@ -1304,6 +1326,238 @@
           "total_object_count": "U64"
         }
       ]
+    },
+    "TimeCourseExport": {
+      "STRUCT": [
+        {
+          "lines": {
+            "TYPENAME": "TimeCourseLines"
+          }
+        },
+        {
+          "statistics": {
+            "SEQ": {
+              "TYPENAME": "TimeCourseStat"
+            }
+          }
+        },
+        {
+          "normalize": {
+            "TYPENAME": "TimeCourseNormalize"
+          }
+        },
+        {
+          "layout": {
+            "TYPENAME": "TimeCourseLayout"
+          }
+        }
+      ]
+    },
+    "TimeCourseFilter": {
+      "STRUCT": [
+        {
+          "lines": {
+            "TYPENAME": "TimeCourseLines"
+          }
+        },
+        {
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
+        },
+        {
+          "columns": {
+            "SEQ": {
+              "TYPENAME": "Column"
+            }
+          }
+        },
+        {
+          "statistics": {
+            "SEQ": {
+              "TYPENAME": "TimeCourseStat"
+            }
+          }
+        },
+        {
+          "normalize": {
+            "TYPENAME": "TimeCourseNormalize"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "t_stacks": {
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "U32",
+                "SIZE": 2
+              }
+            }
+          }
+        },
+        {
+          "z_stacks": {
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "U32",
+                "SIZE": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TimeCourseLayout": {
+      "ENUM": {
+        "0": {
+          "Long": "UNIT"
+        },
+        "1": {
+          "Wide": "UNIT"
+        },
+        "2": {
+          "Both": "UNIT"
+        }
+      }
+    },
+    "TimeCourseLines": {
+      "ENUM": {
+        "0": {
+          "Class": "UNIT"
+        },
+        "1": {
+          "Image": "UNIT"
+        },
+        "2": {
+          "Well": "UNIT"
+        },
+        "3": {
+          "Group": "UNIT"
+        },
+        "4": {
+          "Track": "UNIT"
+        }
+      }
+    },
+    "TimeCourseNormalize": {
+      "ENUM": {
+        "0": {
+          "None": "UNIT"
+        },
+        "1": {
+          "RelativeToStart": "UNIT"
+        }
+      }
+    },
+    "TimeCoursePoint": {
+      "STRUCT": [
+        {
+          "t": "U32"
+        },
+        {
+          "z": "U32"
+        },
+        {
+          "time_s": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "line": "STR"
+        },
+        {
+          "image": "STR"
+        },
+        {
+          "class_id": "U32"
+        },
+        {
+          "class_name": "STR"
+        },
+        {
+          "n_images": "U32"
+        },
+        {
+          "n_objects": "U64"
+        },
+        {
+          "n_tracks": "U64"
+        },
+        {
+          "values": {
+            "SEQ": {
+              "OPTION": "F64"
+            }
+          }
+        }
+      ]
+    },
+    "TimeCourseResult": {
+      "STRUCT": [
+        {
+          "value_names": {
+            "SEQ": "STR"
+          }
+        },
+        {
+          "by_z": "BOOL"
+        },
+        {
+          "frame_interval_s": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "points": {
+            "SEQ": {
+              "TYPENAME": "TimeCoursePoint"
+            }
+          }
+        }
+      ]
+    },
+    "TimeCourseStat": {
+      "ENUM": {
+        "0": {
+          "Mean": "UNIT"
+        },
+        "1": {
+          "Sd": "UNIT"
+        },
+        "2": {
+          "Median": "UNIT"
+        },
+        "3": {
+          "Q1": "UNIT"
+        },
+        "4": {
+          "Q3": "UNIT"
+        },
+        "5": {
+          "Min": "UNIT"
+        },
+        "6": {
+          "Max": "UNIT"
+        },
+        "7": {
+          "Sum": "UNIT"
+        }
+      }
     },
     "View": {
       "ENUM": {

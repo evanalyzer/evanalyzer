@@ -8,6 +8,26 @@ pub mod file;
 pub mod memory;
 pub mod stored_object;
 
+/// What an analysed image was, as [`PipelineResultExporter::finalize_image`]
+/// records it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImageSummary<'a> {
+    pub width: u32,
+    pub height: u32,
+    /// The image's own sizes.
+    pub nr_c_stacks: u32,
+    pub nr_z_stacks: u32,
+    pub nr_t_stacks: u32,
+    /// The time points and z-planes the run analysed of it (every time
+    /// point × every z-plane) - also those where nothing was found, so the
+    /// results tell an empty plane from one never analysed.
+    pub t_stacks_analyzed: &'a [i32],
+    pub z_stacks_analyzed: &'a [i32],
+    /// Seconds between two time points: the project's frame interval, else
+    /// the image's own (its metadata); `None` unknown.
+    pub frame_interval_s: Option<f64>,
+}
+
 pub trait PipelineResultExporter: Send + Sync {
     fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors>;
 
@@ -24,22 +44,10 @@ pub trait PipelineResultExporter: Send + Sync {
     /// there are no objects). Default no-op: only exporters that keep a
     /// separate per-image summary (e.g. `DuckDbExporter`'s `images` table)
     /// need to override this.
-    ///
-    /// `t_stacks_analyzed`/`z_stacks_analyzed`: the time points and z-planes the run
-    /// analysed of it (every time point × every z-plane) - also those where
-    /// nothing was found, so the results tell an empty plane from one never
-    /// analysed. The `nr_*` are the image's own sizes.
-    #[allow(clippy::too_many_arguments)]
     fn finalize_image(
         &self,
         _image_rel_path: &std::path::Path,
-        _width: u32,
-        _height: u32,
-        _nr_c_stacks: u32,
-        _nr_z_stacks: u32,
-        _nr_t_stacks: u32,
-        _t_stacks_analyzed: &[i32],
-        _z_stacks_analyzed: &[i32],
+        _summary: &ImageSummary,
         _error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         Ok(())

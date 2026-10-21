@@ -52,6 +52,15 @@ export global ExportDialogState {
     in-out property <bool> with-grouped-by-image-list: true;
     in-out property <bool> transpond-output-table: false;
     in-out property <bool> with-heatmap: false;
+    // The time course: a line per class / image / well / track (0..3), its
+    // statistics, relative to the first time point, its tables long / wide /
+    // both (0..2).
+    in-out property <bool> with-time-course: false;
+    in-out property <int> time-lines: 0;
+    in-out property <[MultiSelectItem]> time-stat-items: [];
+    in-out property <string> time-stat-summary: "";
+    in-out property <bool> time-relative: false;
+    in-out property <int> time-layout: 2;
     // A PNG per image with its objects drawn (boxes in their class colors).
     in-out property <bool> with-drawn-images: false;
 
@@ -80,6 +89,7 @@ export global ExportDialogState {
     callback column-select-all();
     callback column-select-none();
     callback aggregation-item-selected(string, bool);
+    callback time-stat-item-selected(string, bool);
 
     callback start-clicked();
     callback close-clicked();

@@ -6,7 +6,7 @@ import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkHi
 import { ExportDialogState } from "../api/export.slint";
 
 import { ScrollView } from "std-widgets.slint";
-import { LineEdit, CheckBox } from "../ink/std_compat.slint";
+import { LineEdit, CheckBox, ComboBox } from "../ink/std_compat.slint";
 import { Ink } from "../ink/palette.slint";
 import { InkMultiSelect, MultiSelectItem, InkSegmented } from "../ink/ink.slint";
 
@@ -91,6 +91,66 @@ export component ExportDialog inherits InkDialog {
                 CheckBox {
                     text: "Per image";
                     checked <=> ExportDialogState.with-grouped-by-image-list;
+                }
+                CheckBox {
+                    text: "Time course - per time point";
+                    checked <=> ExportDialogState.with-time-course;
+                }
+                // Its lines, statistics and tables.
+                if ExportDialogState.with-time-course: VerticalLayout {
+                    padding-left: 24px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "A line per";
+                        }
+                        ComboBox {
+                            // In by the indent: ends with the fields below.
+                            width: root.field-w - 24px;
+                            model: ["Class", "Image", "Well", "Track"];
+                            current-index: ExportDialogState.time-lines;
+                            selected(v) => {
+                                ExportDialogState.time-lines = self.current-index;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "Statistics";
+                        }
+                        InkMultiSelect {
+                            summary-text: ExportDialogState.time-stat-summary;
+                            items <=> ExportDialogState.time-stat-items;
+                            multi-select: true;
+                            pill-width: root.field-w - 24px;
+                            item-selected(key, value, selected) => {
+                                ExportDialogState.time-stat-item-selected(key, selected);
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "Tables";
+                        }
+                        InkSegmented {
+                            label: "Tables";
+                            model: ["Long", "Wide", "Both"];
+                            selected: ExportDialogState.time-layout;
+                            picked(i) => {
+                                ExportDialogState.time-layout = i;
+                            }
+                        }
+                    }
+                    CheckBox {
+                        text: "Relative to the first time point (%)";
+                        checked <=> ExportDialogState.time-relative;
+                    }
                 }
                 CheckBox {
                     text: "Per well - plate layout (XLSX)";

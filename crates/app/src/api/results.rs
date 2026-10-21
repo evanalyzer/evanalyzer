@@ -356,6 +356,154 @@ pub struct HistogramFilter {
     pub bins: usize,
 }
 
+/// How the time course is exported (`ResultExport::with_time_course`); the
+/// values are `ResultExport::columns`, wells and groups from
+/// `ResultExport::grouping`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TimeCourseExport {
+    pub lines: TimeCourseLines,
+    pub statistics: Vec<TimeCourseStat>,
+    pub normalize: TimeCourseNormalize,
+    pub layout: TimeCourseLayout,
+}
+
+impl Default for TimeCourseExport {
+    fn default() -> Self {
+        Self {
+            lines: TimeCourseLines::default(),
+            statistics: TimeCourseStat::DEFAULT.to_vec(),
+            normalize: TimeCourseNormalize::default(),
+            layout: TimeCourseLayout::default(),
+        }
+    }
+}
+
+/// The time course's tables: long - a row per time point × line - and/or
+/// wide - per value and statistic, a row per time point, a column per line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseLayout {
+    Long,
+    Wide,
+    #[default]
+    Both,
+}
+
+/// What one line of a time course follows: the objects of a class, of an
+/// image, of a well, of a group (both by `TimeCourseFilter::grouping`'s first
+/// capture group) or one track.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseLines {
+    #[default]
+    Class,
+    Image,
+    Well,
+    Group,
+    Track,
+}
+
+/// A statistic of a time course point, over the line's objects there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseStat {
+    Mean,
+    Sd,
+    Median,
+    Q1,
+    Q3,
+    Min,
+    Max,
+    Sum,
+}
+
+impl TimeCourseStat {
+    /// Mean and SD - median and the quartiles only when asked for.
+    pub const DEFAULT: [TimeCourseStat; 2] = [TimeCourseStat::Mean, TimeCourseStat::Sd];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeCourseStat::Mean => "mean",
+            TimeCourseStat::Sd => "SD",
+            TimeCourseStat::Median => "median",
+            TimeCourseStat::Q1 => "Q1",
+            TimeCourseStat::Q3 => "Q3",
+            TimeCourseStat::Min => "min",
+            TimeCourseStat::Max => "max",
+            TimeCourseStat::Sum => "sum",
+        }
+    }
+}
+
+/// How a time course's values are shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseNormalize {
+    #[default]
+    None,
+    /// In % of the line's value at its first time point with objects: each
+    /// statistic of the same statistic there - SD of the mean, Q1/Q3 of the
+    /// median.
+    RelativeToStart,
+}
+
+/// A time course: per time point (and z-plane), the statistics of a value
+/// over each line's objects - the "Over time" chart and its export.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TimeCourseFilter {
+    pub lines: TimeCourseLines,
+    /// Which part of the image name is the well / group: capture group 1.
+    pub grouping: Grouping,
+    /// The values - aggregable columns (not `Count`: every point has its
+    /// object count anyway).
+    pub columns: Vec<Column>,
+    /// The statistics of each value, in this order.
+    pub statistics: Vec<TimeCourseStat>,
+    pub normalize: TimeCourseNormalize,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// The time points / z-planes; `None`: all the run analysed.
+    #[serde(with = "option_range_serde")]
+    pub t_stacks: Option<Range<u32>>,
+    #[serde(with = "option_range_serde")]
+    pub z_stacks: Option<Range<u32>>,
+}
+
+/// One point of a time course: a line at one time point (and z-plane).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TimeCoursePoint {
+    pub t: u32,
+    pub z: u32,
+    /// Seconds since the first time point (`t` × the frame interval) - when
+    /// the images have one, the same.
+    pub time_s: Option<f64>,
+    /// The well / group / track ("#12"); empty for class lines.
+    pub line: String,
+    /// The image - of an image or a track line.
+    pub image: String,
+    pub class_id: u32,
+    pub class_name: String,
+    /// Images analysed on this plane that belong to the line.
+    pub n_images: u32,
+    pub n_objects: u64,
+    /// Distinct tracks among the objects (0 without tracking).
+    pub n_tracks: u64,
+    /// Per column, per statistic (`TimeCourseFilter` order); `None` where
+    /// there's no value (no objects, or an SD of one object).
+    pub values: Vec<Option<f64>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimeCourseResult {
+    /// "Value statistic" per entry of `TimeCoursePoint::values`
+    /// ("Area [px] mean").
+    pub value_names: Vec<String>,
+    /// The results have several z-planes: points are per z-plane too.
+    pub by_z: bool,
+    /// The images share one frame interval: `TimeCoursePoint::time_s` is set.
+    pub frame_interval_s: Option<f64>,
+    /// Time point by time point, then z-plane, line and class.
+    pub points: Vec<TimeCoursePoint>,
+}
+
 /// One scatter plot: every matched object's `(x_column, y_column)` pair,
 /// one point per object.
 #[derive(Clone, Serialize, Deserialize)]
@@ -528,6 +676,10 @@ pub struct ResultExport {
     /// `export_grouped_by_image`. Independent of `with_list_view`: it's a
     /// separate document, not a variant of the per-object list.
     pub with_grouped_by_image_list: bool,
+    /// `time_course.{csv,xlsx}`: per time point, statistics of the columns
+    /// over each line's objects (see `TimeCourseExport`).
+    pub with_time_course: bool,
+    pub time_course: TimeCourseExport,
     pub with_plate_view_heatmap: bool,
     pub with_well_view_heatmap: bool,
     pub with_plate_view_list: bool,
