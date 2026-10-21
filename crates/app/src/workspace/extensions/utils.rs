@@ -1,5 +1,5 @@
 use evanalyzer_cfg::core_types::{InternalErrors, StepId};
-use evanalyzer_cfg::settings::components::ComponentDefinition;
+use evanalyzer_cfg::settings::modules::ModuleDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
@@ -69,15 +69,15 @@ pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &P
     }
 }
 
-/// [`relativize_file_paths`] for the steps of `components`' definitions.
-pub fn relativize_component_file_paths(components: &mut [ComponentDefinition], project_dir: &Path) {
-    for component in components {
-        relativize_step_paths(&mut component.steps, project_dir);
+/// [`relativize_file_paths`] for the steps of `modules`' definitions.
+pub fn relativize_module_file_paths(modules: &mut [ModuleDefinition], project_dir: &Path) {
+    for module in modules {
+        relativize_step_paths(&mut module.steps, project_dir);
     }
 }
 
 fn relativize_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
-    // A component instance holds no paths itself - its definition's steps do.
+    // A module instance holds no paths itself - its definition's steps do.
     for command in steps.iter_mut().filter_map(|step| step.command_mut()) {
         let changes = file_path_changes(
             command,
@@ -101,10 +101,10 @@ pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path
     }
 }
 
-/// [`resolve_file_paths`] for the steps of `components`' definitions.
-pub fn resolve_component_file_paths(components: &mut [ComponentDefinition], project_dir: &Path) {
-    for component in components {
-        resolve_step_paths(&mut component.steps, project_dir);
+/// [`resolve_file_paths`] for the steps of `modules`' definitions.
+pub fn resolve_module_file_paths(modules: &mut [ModuleDefinition], project_dir: &Path) {
+    for module in modules {
+        resolve_step_paths(&mut module.steps, project_dir);
     }
 }
 
@@ -121,7 +121,7 @@ fn resolve_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
     }
 }
 
-/// Gives every step of one list (a pipeline, or a component definition) that has
+/// Gives every step of one list (a pipeline, or a module definition) that has
 /// no id yet - or one an earlier step of the list already has - the next
 /// number after the list's highest. The first of two equal ids keeps it.
 /// Call it after adding steps to a list. Returns how many got a new id.
@@ -140,24 +140,22 @@ pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
     assigned
 }
 
-/// Numbers the steps of a component definition that have no id yet, like
+/// Numbers the steps of a module definition that have no id yet, like
 /// [`assign_step_ids`] - but two steps with the same id are an error, not
-/// renumbered: the component's bindings refer to steps by id, so which of the
+/// renumbered: the module's bindings refer to steps by id, so which of the
 /// two one means can't be known. Returns how many got an id.
-pub fn assign_component_step_ids(
-    component: &mut ComponentDefinition,
-) -> Result<usize, InternalErrors> {
+pub fn assign_module_step_ids(module: &mut ModuleDefinition) -> Result<usize, InternalErrors> {
     let mut seen = std::collections::HashSet::new();
-    for step in &component.steps {
+    for step in &module.steps {
         if step.id != StepId::UNASSIGNED && !seen.insert(step.id) {
             return Err(InternalErrors::ParseError(format!(
-                "Component {}: two steps have the id {} - its parameters can't tell \
+                "Module {}: two steps have the id {} - its parameters can't tell \
                  which one they set",
-                component.key, step.id
+                module.key, step.id
             )));
         }
     }
-    Ok(assign_step_ids(&mut component.steps))
+    Ok(assign_step_ids(&mut module.steps))
 }
 
 /// `steps` without their ids - copies to add to another list (a template's
@@ -569,11 +567,11 @@ mod tests {
     }
 
     #[test]
-    fn model_paths_in_component_definitions_are_stored_relative_too() {
+    fn model_paths_in_module_definitions_are_stored_relative_too() {
         use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
 
         let original = PathBuf::from("/data/project/models/cyto.pt");
-        let mut components = vec![ComponentDefinition {
+        let mut modules = vec![ModuleDefinition {
             key: "SEGMENT".into(),
             meta: Default::default(),
             classes: vec![],
@@ -587,14 +585,14 @@ mod tests {
         }];
         let project_dir = Path::new("/data/project");
 
-        relativize_component_file_paths(&mut components, project_dir);
-        let Some(PipelineCommand::Cellpose(stored)) = components[0].steps[0].command() else {
+        relativize_module_file_paths(&mut modules, project_dir);
+        let Some(PipelineCommand::Cellpose(stored)) = modules[0].steps[0].command() else {
             panic!("expected Cellpose");
         };
         assert_eq!(stored.model_path, PathBuf::from("models/cyto.pt"));
 
-        resolve_component_file_paths(&mut components, project_dir);
-        let Some(PipelineCommand::Cellpose(loaded)) = components[0].steps[0].command() else {
+        resolve_module_file_paths(&mut modules, project_dir);
+        let Some(PipelineCommand::Cellpose(loaded)) = modules[0].steps[0].command() else {
             panic!("expected Cellpose");
         };
         assert_eq!(loaded.model_path, original);
@@ -751,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn a_components_missing_step_ids_are_assigned_but_a_duplicate_is_an_error() {
+    fn a_modules_missing_step_ids_are_assigned_but_a_duplicate_is_an_error() {
         use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
         let step = |id| PipelineStepSettings {
             id: StepId(id),
@@ -760,7 +758,7 @@ mod tests {
                 PipelineCommand::Blur(BlurSettings::default()),
             ),
         };
-        let mut component = ComponentDefinition {
+        let mut module = ModuleDefinition {
             key: "CELL_RECONSTRUCTION".into(),
             meta: Default::default(),
             classes: vec![],
@@ -768,11 +766,11 @@ mod tests {
             parameters: Vec::new(),
             origin: None,
         };
-        assert_eq!(super::assign_component_step_ids(&mut component).unwrap(), 1);
-        assert_eq!(component.steps[1].id, StepId(3));
+        assert_eq!(super::assign_module_step_ids(&mut module).unwrap(), 1);
+        assert_eq!(module.steps[1].id, StepId(3));
 
-        component.steps.push(step(2));
-        let err = super::assign_component_step_ids(&mut component)
+        module.steps.push(step(2));
+        let err = super::assign_module_step_ids(&mut module)
             .unwrap_err()
             .to_string();
         assert!(

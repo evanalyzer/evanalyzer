@@ -4,12 +4,12 @@ use crate::FileRequest;
 use crate::UiState;
 use crate::{GlobalAppState, TemplateMetaSlint, TemplateMetaState};
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_app::templates::load_component_templates;
+use evanalyzer_app::templates::load_module_templates;
 use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::settings::meta_data::AuthorInformation;
 use evanalyzer_cfg::settings::meta_data::MetaData;
-use evanalyzer_cfg::{COMPONENT_TEMPLATE_EXTENSION, PROJECT_FILE_TEMPLATE_EXTENSIONS};
+use evanalyzer_cfg::{MODULE_TEMPLATE_EXTENSION, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use log::warn;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::collections::BTreeSet;
@@ -19,22 +19,22 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 enum TemplateTarget {
     Project,
-    /// A pipeline's steps, saved to the component library (`.evacomp`).
+    /// A pipeline's steps, saved to the module library (`.evamodule`).
     Pipeline(PipelineId),
-    /// A component, by key - saved to the component library (`.evacomp`).
-    Component(String),
+    /// A module, by key - saved to the module library (`.evamodule`).
+    Module(String),
 }
 
-/// Drives the "Save as Template" flow shared by projects, components and
-/// pipelines saved as components.
+/// Drives the "Save as Template" flow shared by projects, modules and
+/// pipelines saved as modules.
 ///
 /// 1. The caller (pipelines or project controller) starts the flow, which opens
 ///    the metadata dialog (`TemplateMetaState`/`TemplateMetaDialog`).
 /// 2. On confirm, a native "Save File" dialog is shown, defaulting to the
 ///    user's templates folder.
 /// 3. The selected metadata + path are handed off to
-///    `ProjectExt::save_project_as_template`, `components::save_component_template`
-///    or `components::save_pipeline_as_component`.
+///    `ProjectExt::save_project_as_template`, `modules::save_module_template`
+///    or `modules::save_pipeline_as_module`.
 pub struct TemplateController {
     ui: slint::Weak<AppWindow>,
     app_state: Arc<UiState>,
@@ -70,10 +70,10 @@ impl TemplateController {
     }
 
     /// Opens the metadata dialog to save pipeline `pipeline_id` to the
-    /// component library, named after the pipeline.
-    pub fn start_pipeline_component_save(self: &Arc<Self>, pipeline_id: PipelineId, name: String) {
+    /// module library, named after the pipeline.
+    pub fn start_pipeline_module_save(self: &Arc<Self>, pipeline_id: PipelineId, name: String) {
         *self.target.lock().expect("Poisoned") = Some(TemplateTarget::Pipeline(pipeline_id));
-        self.open_dialog("Save pipeline as component", name);
+        self.open_dialog("Save pipeline as module", name);
     }
 
     /// Opens the metadata dialog to save the current project as a project template.
@@ -82,12 +82,12 @@ impl TemplateController {
         self.open_dialog("Save project as template", name);
     }
 
-    /// Opens the metadata dialog to save component `key` to the component
-    /// library, filled in from the component (`meta`) - its version one up, if
+    /// Opens the metadata dialog to save module `key` to the module
+    /// library, filled in from the module (`meta`) - its version one up, if
     /// it has one.
-    pub fn start_component_template_save(self: &Arc<Self>, key: String, meta: MetaData) {
-        *self.target.lock().expect("Poisoned") = Some(TemplateTarget::Component(key));
-        self.open_dialog_with("Save Component to Library", &meta);
+    pub fn start_module_template_save(self: &Arc<Self>, key: String, meta: MetaData) {
+        *self.target.lock().expect("Poisoned") = Some(TemplateTarget::Module(key));
+        self.open_dialog_with("Save Module to Library", &meta);
         if let Some(ui) = self.ui.upgrade() {
             let state = ui.global::<TemplateMetaState>();
             let mut shown = state.get_meta();
@@ -153,9 +153,9 @@ impl TemplateController {
                     categories.insert(template.meta.category);
                 }
             }
-            for (_path, template) in load_component_templates(backend.as_ref()) {
-                if !template.component.meta.category.is_empty() {
-                    categories.insert(template.component.meta.category);
+            for (_path, template) in load_module_templates(backend.as_ref()) {
+                if !template.module.meta.category.is_empty() {
+                    categories.insert(template.module.meta.category);
                 }
             }
             let categories: Vec<SharedString> = categories.into_iter().map(Into::into).collect();
@@ -207,7 +207,7 @@ impl TemplateController {
             category: meta_slint.category.to_string(),
             tags,
             // Stamped for real by `save_project_as_template`/
-            // `save_component_template` right before writing - left empty
+            // `save_module_template` right before writing - left empty
             // here since this value never reaches disk as-is.
             app_version: String::new(),
         };
@@ -228,9 +228,8 @@ impl TemplateController {
         let request = match &target {
             TemplateTarget::Project => FileRequest::save_file("Save project template")
                 .filter("Project template", &[PROJECT_FILE_TEMPLATE_EXTENSIONS]),
-            TemplateTarget::Component(_) | TemplateTarget::Pipeline(_) => {
-                FileRequest::save_file("Save component")
-                    .filter("Component", &[COMPONENT_TEMPLATE_EXTENSION])
+            TemplateTarget::Module(_) | TemplateTarget::Pipeline(_) => {
+                FileRequest::save_file("Save module").filter("Module", &[MODULE_TEMPLATE_EXTENSION])
             }
         }
         .start_in(&templates_folder)
@@ -258,7 +257,7 @@ impl TemplateController {
                         .get_project_write()
                         .save_project_as_template(app_state.backend().files(), meta, &path),
                     TemplateTarget::Pipeline(pipeline_id) => {
-                        evanalyzer_app::components::save_pipeline_as_component(
+                        evanalyzer_app::modules::save_pipeline_as_module(
                             &app_state.get_project(),
                             app_state.backend().files(),
                             meta,
@@ -266,15 +265,13 @@ impl TemplateController {
                             &path,
                         )
                     }
-                    TemplateTarget::Component(key) => {
-                        evanalyzer_app::components::save_component_template(
-                            &mut app_state.get_project_write(),
-                            app_state.backend().files(),
-                            meta,
-                            &key,
-                            &path,
-                        )
-                    }
+                    TemplateTarget::Module(key) => evanalyzer_app::modules::save_module_template(
+                        &mut app_state.get_project_write(),
+                        app_state.backend().files(),
+                        meta,
+                        &key,
+                        &path,
+                    ),
                 };
 
             match result {
@@ -380,29 +377,26 @@ mod tests {
     }
 
     #[test]
-    fn saving_a_component_to_the_library_writes_an_evacomp_file() {
-        use evanalyzer_cfg::settings::components::ComponentDefinition;
+    fn saving_a_module_to_the_library_writes_an_evamodule_file() {
+        use evanalyzer_cfg::settings::modules::ModuleDefinition;
         let (ui, ui_state, controller) = controller();
-        ui_state
-            .get_project_write()
-            .components
-            .push(ComponentDefinition {
-                key: "SMOOTH".into(),
-                meta: MetaData {
-                    name: "Smooth".into(),
-                    short_description: "Blurs twice".into(),
-                    version: Some(2),
-                    ..Default::default()
-                },
-                classes: vec![],
-                steps: vec![],
-                parameters: vec![],
-                origin: None,
-            });
-        let meta = ui_state.get_project().components[0].meta.clone();
+        ui_state.get_project_write().modules.push(ModuleDefinition {
+            key: "SMOOTH".into(),
+            meta: MetaData {
+                name: "Smooth".into(),
+                short_description: "Blurs twice".into(),
+                version: Some(2),
+                ..Default::default()
+            },
+            classes: vec![],
+            steps: vec![],
+            parameters: vec![],
+            origin: None,
+        });
+        let meta = ui_state.get_project().modules[0].meta.clone();
         let dir = tempfile::tempdir().unwrap();
 
-        controller.start_component_template_save("SMOOTH".into(), meta);
+        controller.start_module_template_save("SMOOTH".into(), meta);
         drain_ui_queue();
         let state = ui.global::<TemplateMetaState>();
         assert_eq!(state.get_meta().name, "Smooth");
@@ -410,26 +404,26 @@ mod tests {
         assert_eq!(state.get_meta().version, "3", "one up");
 
         state.invoke_confirm();
-        let target = dir.path().join("smooth.evacomp");
+        let target = dir.path().join("smooth.evamodule");
         choose_file(&ui, &target);
 
-        let written = std::fs::read_to_string(&target).expect("component written");
+        let written = std::fs::read_to_string(&target).expect("module written");
         let json: serde_json::Value = serde_json::from_str(&written).unwrap();
         assert_eq!(json["key"], "SMOOTH");
         assert_eq!(json["meta"]["version"], 3);
         let project = ui_state.get_project();
-        let origin = project.components[0]
+        let origin = project.modules[0]
             .origin
             .as_ref()
             .expect("linked to the file");
         assert_eq!(
             (origin.library.as_str(), origin.version),
-            ("smooth.evacomp", 3)
+            ("smooth.evamodule", 3)
         );
     }
 
     #[test]
-    fn saving_a_pipeline_as_component_writes_an_evacomp_file_and_leaves_the_project() {
+    fn saving_a_pipeline_as_module_writes_an_evamodule_file_and_leaves_the_project() {
         use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
         use evanalyzer_cfg::settings::pipeline_settings::{PipelineStepSettings, StepContent};
         let (ui, ui_state, controller) = controller();
@@ -440,25 +434,22 @@ mod tests {
         }];
         let dir = tempfile::tempdir().unwrap();
 
-        controller.start_pipeline_component_save(PipelineId(1), "Nuclei".into());
+        controller.start_pipeline_module_save(PipelineId(1), "Nuclei".into());
         drain_ui_queue();
         let state = ui.global::<TemplateMetaState>();
-        assert_eq!(state.get_dialog_title(), "Save pipeline as component");
+        assert_eq!(state.get_dialog_title(), "Save pipeline as module");
         assert_eq!(state.get_meta().name, "Nuclei");
 
         state.invoke_confirm();
-        let target = dir.path().join("nuclei.evacomp");
+        let target = dir.path().join("nuclei.evamodule");
         choose_file(&ui, &target);
 
-        let written = std::fs::read_to_string(&target).expect("component written");
+        let written = std::fs::read_to_string(&target).expect("module written");
         let json: serde_json::Value = serde_json::from_str(&written).unwrap();
         assert_eq!(json["meta"]["name"], "Nuclei");
         assert_eq!(json["steps"].as_array().unwrap().len(), 1);
         let project = ui_state.get_project();
-        assert!(
-            project.components.is_empty(),
-            "the project gets no component"
-        );
+        assert!(project.modules.is_empty(), "the project gets no module");
         assert_eq!(project.pipelines[0].steps.len(), 1, "nor loses its steps");
     }
 

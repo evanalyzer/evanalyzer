@@ -9,7 +9,7 @@
 //! JSON never has to successfully deserialize into the *current* struct shape
 //! on its own.
 //!
-//! Deliberately not `include!()`-d by `build.rs` (unlike `modules::*`) - it
+//! Deliberately not `include!()`-d by `build.rs` (unlike `settings::*`) - it
 //! only needs to exist in the real library build, not the build-script's
 //! schema-generation copy.
 

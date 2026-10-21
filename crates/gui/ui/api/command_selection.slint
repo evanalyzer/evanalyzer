@@ -23,8 +23,8 @@ export struct CommandDef {
     favorite: bool,
     recent: bool,
     default-params: [DefaultParamPreview],
-    // Component entries (ids from 1 000 000).
-    is-component: bool,
+    // Module entries (ids from 1 000 000).
+    is-module: bool,
     authors: [CommandAuthor],
     creation-time: string,
     // The publications of the method a command implements, formatted, one
@@ -46,8 +46,8 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-classify;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-components;
-    in property <[CommandDef]> shown-library-components;
+    in property <[CommandDef]> shown-modules;
+    in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;
     in property <bool> has-detail;
     in property <int> total-shown;
@@ -58,9 +58,9 @@ export global CommandPickerState {
     in property <int> cat-count-dat;
     in property <int> cat-count-mea;
     in property <int> cat-count-grp;
-    /// The project's components no pipeline uses ("Remove N unused").
-    in property <int> unused-component-count;
-    /// The selected entry is a project component no pipeline uses.
+    /// The project's modules no pipeline uses ("Remove N unused").
+    in property <int> unused-module-count;
+    /// The selected entry is a project module no pipeline uses.
     in property <bool> detail-removable;
     /// -1 = no context (empty pipeline); 0..4 = display_order of the last step's category.
     /// Used to auto-pre-select the filter chip for "what comes next".
@@ -77,19 +77,19 @@ export global CommandPickerState {
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
     in-out property <bool> fcat-dat: false;
-    in-out property <bool> filter-components: false;
+    in-out property <bool> filter-modules: false;
     in-out property <int> selected-id: -1;
 
     callback query-changed(string);
     callback select(int);
     callback confirm(int);
-    // A component added as its steps (expanded in its place).
+    // A module added as its steps (expanded in its place).
     callback confirm-steps(int);
     // Commands matching the search, whatever chips are on (the Commands
     // tab's count; without a search: all commands).
     in property <int> commands-matching;
-    callback remove-component(int);
-    callback remove-unused-components();
+    callback remove-module(int);
+    callback remove-unused-modules();
     callback cancel();
     callback import-bioimageio();
 }
@@ -116,8 +116,8 @@ export global PickerStyle {
         if c == StepCategory.dataset {
             return Ink.cat-dataset;
         }
-        if c == StepCategory.component {
-            return Ink.cat-component;
+        if c == StepCategory.module {
+            return Ink.cat-module;
         }
         return Ink.cat-classify;
     }
@@ -140,8 +140,8 @@ export global PickerStyle {
         if c == StepCategory.dataset {
             return "Dataset";
         }
-        if c == StepCategory.component {
-            return "Component";
+        if c == StepCategory.module {
+            return "Module";
         }
         return "Object";
     }

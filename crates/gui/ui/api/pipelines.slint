@@ -4,7 +4,7 @@
 import { Ink } from "../ink/palette.slint";
 import { ClassItemData } from "classification.slint";
 
-export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, component }
+export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, module }
 
 export enum PipelineStatus { idle, queued, running, done, error }
 
@@ -38,7 +38,7 @@ export struct LeafParam {
         min: float,
         max: float,
         step: float,
-        // Inside an opened component: this setting is a component parameter.
+        // Inside an opened module: this setting is a module parameter.
         exposed: bool,
         // Pinned into the Tuning panel.
         pinned: bool,
@@ -65,10 +65,10 @@ export struct CommandParameter {
         // Computed in Rust rather than matched on `name`/`display-name` here,
         // so this is the one place that knows which commands these are.
         has-model-info: bool,
-        // Inside an opened component: this setting is a component parameter.
+        // Inside an opened module: this setting is a module parameter.
         exposed: bool,
         // The header shown above the setting where its section (`#[cmdsmeta(section)]`
-        // or a component parameter's) starts. Empty otherwise - also for the
+        // or a module parameter's) starts. Empty otherwise - also for the
         // settings without a section, which come first.
         section-header: string,
         // The setting's section; empty: none.
@@ -78,8 +78,8 @@ export struct CommandParameter {
         short-description: string,
         // `description` says more than `short-description`.
         more-help: bool,
-        // A component parameter: what it sets ("Sets ExtractObjects › …"); a
-        // setting of an opened component: the parameter setting it. Else empty.
+        // A module parameter: what it sets ("Sets ExtractObjects › …"); a
+        // setting of an opened module: the parameter setting it. Else empty.
         wiring: string,
         // What a check found about this setting, or empty.
         problem: string,
@@ -105,7 +105,7 @@ export struct ProblemItem {
         text: string,
         // A run fails (else: works, but probably isn't meant).
         error: bool,
-        // Where it is: "Channel1 · step 1", "Component Coloc 3CH".
+        // Where it is: "Channel1 · step 1", "Module Coloc 3CH".
         where: string,
         // The one-click fix's button ("Add class 1"), or empty.
         fix-label: string,
@@ -113,7 +113,7 @@ export struct ProblemItem {
         index: int,
     }
 
-// A section of a component card (see `PipelineCommand.section-views`).
+// A section of a module card (see `PipelineCommand.section-views`).
 export struct SectionView {
         name: string,
         // Its settings' values on one line ("CY7 · 200 · ch1@coloc_ch3").
@@ -162,7 +162,7 @@ export struct PipelineCommand {
         name: string,
         category: StepCategory,
         summary: string,        // "σ = 2.0 · per channel"
-        // What the command or component does - behind the card's "?" (empty: no "?").
+        // What the command or module does - behind the card's "?" (empty: no "?").
         help: string,
         enabled: bool,
         expanded: bool,
@@ -177,12 +177,12 @@ export struct PipelineCommand {
         // values never go unnoticed).
         advanced-count: int,
         advanced-changed: int,
-        // A component card: the component library has a newer version ("3"), or empty.
+        // A module card: the module library has a newer version ("3"), or empty.
         update-version: string,
         // The sections of `parameters`, in order - "" (no section) first
         // when there are such settings. The settings dialog's sections.
         sections: [string],
-        // A component card with sections: how they're shown - collapsed to a
+        // A module card with sections: how they're shown - collapsed to a
         // summary, open, or as a table when several have the same settings.
         // Empty otherwise (the settings one below the other).
         section-views: [SectionView],
@@ -221,8 +221,8 @@ export global Cat {
             if c == StepCategory.dataset {
                 return Ink.cat-dataset;
             }
-            if c == StepCategory.component {
-                return Ink.cat-component;
+            if c == StepCategory.module {
+                return Ink.cat-module;
             }
             return Ink.cat-classify;
         }
@@ -245,8 +245,8 @@ export global Cat {
             if c == StepCategory.dataset {
                 return "Dataset";
             }
-            if c == StepCategory.component {
-                return "Component";
+            if c == StepCategory.module {
+                return "Module";
             }
             return "Object";
         }
@@ -285,9 +285,9 @@ export global Status {
         }
     }
 
-/// The classes of the component opened in the pipelines panel ("L1", ...) -
+/// The classes of the module opened in the pipelines panel ("L1", ...) -
 /// its class dropdowns offer them besides the project's.
-export global ComponentClassesState {
+export global ModuleClassesState {
     in property <[ClassItemData]> classes: [];
 }
 
@@ -296,7 +296,7 @@ export global ClassHelper {
             n < 10 ? "0\{n}" : "\{n}"
         }
         pure public function label(val: string, prefix: string) -> string {
-            val == "-1" ? "Unset" : val == "4294967295" ? "Manual annotation" : val == "0" ? "Background" : !val.is-float() ? "◆ Component class " + val : prefix + " class " + ClassHelper.zeropad2(round(val.to-float()))
+            val == "-1" ? "Unset" : val == "4294967295" ? "Manual annotation" : val == "0" ? "Background" : !val.is-float() ? "◆ Module class " + val : prefix + " class " + ClassHelper.zeropad2(round(val.to-float()))
         }
     }
 
@@ -361,55 +361,55 @@ export global PipelinesPanelState {
         callback duplicate-step(int);
         // Moves the step at this index by -1 (up) or +1 (down).
         callback move-step(int, int);
-        /// Opens "Create component" starting at this step (its index).
-        callback create-component(int);
-        /// The component opened in the panel (its steps are shown), or
+        /// Opens "Create module" starting at this step (its index).
+        callback create-module(int);
+        /// The module opened in the panel (its steps are shown), or
         /// empty.
-        in property <string> open-component-name: "";
-        /// What's wrong with the opened component (its checks), or empty.
-        in property <string> open-component-problem: "";
-        // A component only looked at from a pipeline step: that it shows the
+        in property <string> open-module-name: "";
+        /// What's wrong with the opened module (its checks), or empty.
+        in property <string> open-module-problem: "";
+        // A module only looked at from a pipeline step: that it shows the
         // step's values ("Shown with the values of step 1 …"), else empty.
-        in property <string> open-component-values: "";
+        in property <string> open-module-values: "";
         // What the checks found in the whole project (`check_project`).
         in property <[ProblemItem]> project-problems: [];
         // How many of `project-problems` are errors.
         in property <int> project-problem-errors: 0;
         in-out property <bool> problems-expanded: false;
-        // Opens or closes a section of a component card (step index, section).
+        // Opens or closes a section of a module card (step index, section).
         callback toggle-section(int, string);
         // Shows the step a problem is about (its `index`).
         callback show-problem(int);
         // Makes a problem's fix (its `index`).
         callback fix-problem(int);
-        /// The opened component is only being looked at ("View"): nothing can be
+        /// The opened module is only being looked at ("View"): nothing can be
         /// changed.
-        in property <bool> open-component-read-only: false;
+        in property <bool> open-module-read-only: false;
         // An analysis runs with the steps locked (the Steps panel's strip
         // switches it; it starts as "edit during an analysis" says).
         in-out property <bool> run-locked: false;
         // Steps edited since the running analysis started.
         in property <int> run-changes: 0;
-        // Nothing to edit: a component only viewed, or the run's lock.
-        out property <bool> steps-read-only: self.open-component-read-only || self.run-locked;
-        callback view-component(int);
-        /// "Settings…" in the opened component's bar: its name, description and
+        // Nothing to edit: a module only viewed, or the run's lock.
+        out property <bool> steps-read-only: self.open-module-read-only || self.run-locked;
+        callback view-module(int);
+        /// "Settings…" in the opened module's bar: its name, description and
         /// parameters, in a dialog.
-        callback open-component-settings();
+        callback open-module-settings();
         /// ✎ next to an exposed setting (step index, setting path): the
         /// settings dialog at its parameter.
         callback edit-exposed(int, string);
-        callback open-component(int);
-        // "Edit in place": the step gets a component of its own holding its
-        // current values (a copy when others use the component too), opened.
-        callback edit-component-in-place(int);
-        callback close-component();
-        callback expand-component(int);
-        /// "Save to library…" on a component card (step index).
-        callback save-component-to-library(int);
-        /// "Update to vN" on a component card (step index).
-        callback update-component(int);
-        /// Exposes a setting of an opened component's step as a component parameter,
+        callback open-module(int);
+        // "Edit in place": the step gets a module of its own holding its
+        // current values (a copy when others use the module too), opened.
+        callback edit-module-in-place(int);
+        callback close-module();
+        callback expand-module(int);
+        /// "Save to library…" on a module card (step index).
+        callback save-module-to-library(int);
+        /// "Update to vN" on a module card (step index).
+        callback update-module(int);
+        /// Exposes a setting of an opened module's step as a module parameter,
         /// or hides it again: step index, setting path ("min_area",
         /// "thresholds.1.min_threshold").
         callback toggle-exposed(int, string);
@@ -433,7 +433,7 @@ export global PipelinesPanelState {
         // Expands/collapses a step's advanced settings (step-id).
         callback toggle-advanced(int);
         // Debug mode (user preference, toolbar): settings show what they're
-        // wired to inside components.
+        // wired to inside modules.
         in-out property <bool> debug-mode: false;
         callback debug-mode-toggled(bool);
         // "Always show advanced settings" (user preference, every step).
@@ -451,8 +451,8 @@ export global PipelinesPanelState {
         callback run-all();
         callback dry-run();
         callback auto-preview(bool);
-        // Saves the pipeline's (id) steps to the library as one component.
-        callback save-as-component(int);
+        // Saves the pipeline's (id) steps to the library as one module.
+        callback save-as-module(int);
 
         // Opens the file browser for a file-path parameter, filtered to the given
     // comma-separated extensions (empty = any file), starting from the

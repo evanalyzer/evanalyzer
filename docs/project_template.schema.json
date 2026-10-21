@@ -7,17 +7,17 @@
       "description": "Defined classes, labels, names and measurements",
       "$ref": "#/$defs/ClassificationSettings"
     },
-    "components": {
-      "description": "The component definitions the pipelines use. Absent in templates\nsaved before components existed.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ComponentDefinition"
-      }
-    },
     "meta": {
       "description": "Metadata of this project template",
       "$ref": "#/$defs/MetaData"
+    },
+    "modules": {
+      "description": "The module definitions the pipelines use. Absent in templates\nsaved before modules existed.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ModuleDefinition"
+      }
     },
     "pipelines": {
       "description": "Pipelines to execute",
@@ -31,7 +31,7 @@
       "$ref": "#/$defs/PlateSettings"
     },
     "schemaVersion": {
-      "description": "On-disk format version of this project template (`.evapt`). Absent on\nfiles written before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike\n`ProjectSettings.schema_version`, nothing currently rejects a too-new\nversion or migrates an old one forward on load - this field only\nreserves the seam for that.",
+      "description": "On-disk format version of this project template (`.evatemplate`). Absent on\nfiles written before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike\n`ProjectSettings.schema_version`, nothing currently rejects a too-new\nversion or migrates an old one forward on load - this field only\nreserves the seam for that.",
       "type": "integer",
       "format": "uint32",
       "default": 0,
@@ -485,154 +485,6 @@
         "range"
       ]
     },
-    "ComponentDefinition": {
-      "description": "A component as defined in the project: its steps and the parameters it shows.",
-      "type": "object",
-      "properties": {
-        "classes": {
-          "description": "Local classes used by the component. These classes are scoped to the component only",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/Class"
-          }
-        },
-        "key": {
-          "description": "Unique component key, prefere SCREAMING_SNAKE_CASE",
-          "type": "string"
-        },
-        "meta": {
-          "description": "Metadata of this component",
-          "$ref": "#/$defs/MetaData"
-        },
-        "origin": {
-          "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evacomp`) never carry it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ComponentOrigin"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "parameters": {
-          "description": "The component's parameters, shown on the component card.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ComponentParameterDef"
-          }
-        },
-        "steps": {
-          "description": "The steps which are executed in the given order",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PipelineStepSettings"
-          }
-        }
-      },
-      "required": [
-        "key",
-        "meta",
-        "steps",
-        "parameters"
-      ]
-    },
-    "ComponentInstance": {
-      "description": "A use of a component in a pipeline: which definition, with which values.",
-      "type": "object",
-      "properties": {
-        "key": {
-          "description": "The component's key in the project.",
-          "type": "string"
-        },
-        "values": {
-          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/ParamValue"
-          },
-          "default": {}
-        }
-      },
-      "required": [
-        "key"
-      ]
-    },
-    "ComponentOrigin": {
-      "description": "Where a definition came from: a component library file.",
-      "type": "object",
-      "properties": {
-        "contentHash": {
-          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the component, and an update from the library would\nreplace those changes. Empty in files written before.",
-          "type": "string",
-          "default": ""
-        },
-        "library": {
-          "description": "The library file's name (`.evacomp`).",
-          "type": "string"
-        },
-        "originComponentKey": {
-          "description": "If this is a copy form an existing component, this is the origin component key.\nThis allows to reset the component default settings.",
-          "type": "string"
-        },
-        "version": {
-          "description": "The definition's version in that file when it was inserted.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "originComponentKey",
-        "library",
-        "version"
-      ]
-    },
-    "ComponentParamKey": {
-      "description": "A component parameter's key, unique within its component definition and\nreadable in the file (`\"min_size\"`). The values a component instance holds\nare keyed by it, so they survive reordering and relabelling the\ndefinition's parameters, and updating it from the library. Made from the\nlabel when the parameter is made, then kept.",
-      "type": "string"
-    },
-    "ComponentParameterDef": {
-      "description": "One parameter of a component: what it sets inside the component, and its default.",
-      "type": "object",
-      "properties": {
-        "bindings": {
-          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ParamBinding"
-          }
-        },
-        "default": {
-          "description": "The value an instance starts with.",
-          "$ref": "#/$defs/ParamValue"
-        },
-        "description": {
-          "description": "Explanation shown to the user.",
-          "type": "string",
-          "default": ""
-        },
-        "key": {
-          "description": "Unique within the component definition, made from its section and\nlabel (`\"tetraspeck_output_class\"`) so a project file says what a\nvalue is; the instances' values are keyed by it.",
-          "$ref": "#/$defs/ComponentParamKey"
-        },
-        "label": {
-          "description": "Name shown to the user, e.g. \"Cell class\".",
-          "type": "string"
-        },
-        "section": {
-          "description": "Section the parameter is shown in on the component card, e.g.\n\"Detection\"; empty: the unnamed first section.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "label",
-        "default",
-        "bindings"
-      ]
-    },
     "ConnectedComponentsSettings": {
       "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]",
       "type": "object",
@@ -736,7 +588,7 @@
       "type": "object",
       "properties": {
         "objectClass": {
-          "description": "The object class its objects get: a project class, or inside a\ncomponent one of the component's own classes.",
+          "description": "The object class its objects get: a project class, or inside a\nmodule one of the module's own classes.",
           "$ref": "#/$defs/ObjectClass"
         },
         "segmentationClass": {
@@ -754,7 +606,7 @@
       "type": "object",
       "properties": {
         "classMapping": {
-          "description": "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na component, map to one of the component's own classes to keep the\nobjects internal to the component.",
+          "description": "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na module, map to one of the module's own classes to keep the\nobjects internal to the module.",
           "type": "array",
           "default": [],
           "items": {
@@ -1322,7 +1174,7 @@
       }
     },
     "LoadChannelSettings": {
-      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na component that detects nuclei in one channel and cells in another.\n\nProjection: Auto loads the channel as the project's z-stack setting does.\nAny other choice loads it with its own z-projection, or one z-plane (None).\nUse it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.\nObjects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.",
+      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na module that detects nuclei in one channel and cells in another.\n\nProjection: Auto loads the channel as the project's z-stack setting does.\nAny other choice loads it with its own z-projection, or one z-plane (None).\nUse it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.\nObjects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.",
       "type": "object",
       "properties": {
         "channel": {
@@ -1496,7 +1348,7 @@
         {
           "type": "object",
           "properties": {
-            "componentContext": {
+            "moduleContext": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1504,7 +1356,7 @@
           },
           "additionalProperties": false,
           "required": [
-            "componentContext"
+            "moduleContext"
           ]
         }
       ]
@@ -1556,7 +1408,7 @@
           }
         },
         "version": {
-          "description": "The author's version of this component or template",
+          "description": "The author's version of this module or template",
           "type": [
             "integer",
             "null"
@@ -1570,6 +1422,154 @@
         "shortDescription",
         "description",
         "creationTime"
+      ]
+    },
+    "ModuleDefinition": {
+      "description": "A module as defined in the project: its steps and the parameters it shows.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "description": "Local classes used by the module. These classes are scoped to the module only",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Class"
+          }
+        },
+        "key": {
+          "description": "Unique module key, prefere SCREAMING_SNAKE_CASE",
+          "type": "string"
+        },
+        "meta": {
+          "description": "Metadata of this module",
+          "$ref": "#/$defs/MetaData"
+        },
+        "origin": {
+          "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evamodule`) never carry it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModuleOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parameters": {
+          "description": "The module's parameters, shown on the module card.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ModuleParameterDef"
+          }
+        },
+        "steps": {
+          "description": "The steps which are executed in the given order",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "meta",
+        "steps",
+        "parameters"
+      ]
+    },
+    "ModuleInstance": {
+      "description": "A use of a module in a pipeline: which definition, with which values.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The module's key in the project.",
+          "type": "string"
+        },
+        "values": {
+          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ParamValue"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "ModuleOrigin": {
+      "description": "Where a definition came from: a module library file.",
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the module, and an update from the library would\nreplace those changes. Empty in files written before.",
+          "type": "string",
+          "default": ""
+        },
+        "library": {
+          "description": "The library file's name (`.evamodule`).",
+          "type": "string"
+        },
+        "originModuleKey": {
+          "description": "If this is a copy form an existing module, this is the origin module key.\nThis allows to reset the module default settings.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The definition's version in that file when it was inserted.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "originModuleKey",
+        "library",
+        "version"
+      ]
+    },
+    "ModuleParamKey": {
+      "description": "A module parameter's key, unique within its module definition and\nreadable in the file (`\"min_size\"`). The values a module instance holds\nare keyed by it, so they survive reordering and relabelling the\ndefinition's parameters, and updating it from the library. Made from the\nlabel when the parameter is made, then kept.",
+      "type": "string"
+    },
+    "ModuleParameterDef": {
+      "description": "One parameter of a module: what it sets inside the module, and its default.",
+      "type": "object",
+      "properties": {
+        "bindings": {
+          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamBinding"
+          }
+        },
+        "default": {
+          "description": "The value an instance starts with.",
+          "$ref": "#/$defs/ParamValue"
+        },
+        "description": {
+          "description": "Explanation shown to the user.",
+          "type": "string",
+          "default": ""
+        },
+        "key": {
+          "description": "Unique within the module definition, made from its section and\nlabel (`\"tetraspeck_output_class\"`) so a project file says what a\nvalue is; the instances' values are keyed by it.",
+          "$ref": "#/$defs/ModuleParamKey"
+        },
+        "label": {
+          "description": "Name shown to the user, e.g. \"Cell class\".",
+          "type": "string"
+        },
+        "section": {
+          "description": "Section the parameter is shown in on the module card, e.g.\n\"Detection\"; empty: the unnamed first section.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "default",
+        "bindings"
       ]
     },
     "MorphologicalCommandSettings": {
@@ -1678,7 +1678,7 @@
           ]
         },
         {
-          "description": "A class of a component (`ComponentDefinition::classes`): only valid\ninside the component, each instance has its own.",
+          "description": "A class of a module (`ModuleDefinition::classes`): only valid\ninside the module, each instance has its own.",
           "type": "object",
           "properties": {
             "LOCAL": {
@@ -2033,7 +2033,7 @@
       ]
     },
     "ParamBinding": {
-      "description": "An inner parameter a component parameter sets.",
+      "description": "An inner parameter a module parameter sets.",
       "type": "object",
       "properties": {
         "param": {
@@ -2041,7 +2041,7 @@
           "type": "string"
         },
         "step": {
-          "description": "The step of the component that owns the parameter.",
+          "description": "The step of the module that owns the parameter.",
           "$ref": "#/$defs/StepId"
         }
       },
@@ -2051,7 +2051,7 @@
       ]
     },
     "ParamValue": {
-      "description": "A component parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
+      "description": "A module parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
       "anyOf": [
         {
           "type": "boolean"
@@ -2662,7 +2662,7 @@
       ]
     },
     "PipelineStepSettings": {
-      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\ncomponents existed) or `\"component\": {...}`.",
+      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\nmodules existed) or `\"module\": {...}`.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -2689,12 +2689,12 @@
         {
           "type": "object",
           "properties": {
-            "component": {
-              "$ref": "#/$defs/ComponentInstance"
+            "module": {
+              "$ref": "#/$defs/ModuleInstance"
             }
           },
           "required": [
-            "component"
+            "module"
           ]
         }
       ],
@@ -3325,7 +3325,7 @@
       }
     },
     "StepId": {
-      "description": "A pipeline step's id: a small number, unique within its list of steps\n(a pipeline, or a component definition), so it reads well in a hand-written\nproject file (`\"id\": 7`) and in references to the step. Assigned by\nwhoever adds a step - the next number after the list's highest, never\nreused within the list. `0` ([`StepId::UNASSIGNED`]) means \"not\nassigned yet\": a step written without an id gets one when the project is\nloaded.",
+      "description": "A pipeline step's id: a small number, unique within its list of steps\n(a pipeline, or a module definition), so it reads well in a hand-written\nproject file (`\"id\": 7`) and in references to the step. Assigned by\nwhoever adds a step - the next number after the list's highest, never\nreused within the list. `0` ([`StepId::UNASSIGNED`]) means \"not\nassigned yet\": a step written without an id gets one when the project is\nloaded.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0

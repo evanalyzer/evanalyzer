@@ -10,11 +10,11 @@ import { ObjectItemDataSlint, ObjectListState } from "api/object_list.slint";
 import { AnnotationState, AnnotationClassRow } from "api/annotations.slint";
 import { CommandAuthor, CommandDef, CommandPickerState, DefaultParamPreview } from "api/command_selection.slint";
 import { PipelineDeleteConfirmState, PipelineEditState } from "api/pipeline_edit.slint";
-import { ComponentBindingRow, ComponentClassRow, ComponentParamRow, InPlaceCopyState, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "api/create_component.slint";
+import { ModuleBindingRow, ModuleClassRow, ModuleParamRow, InPlaceCopyState, ModuleSettingsState, ModuleUpdateState, CreateModuleState, ExposeChoiceState } from "api/create_module.slint";
 import { PipelineRunningState, PreviewRunState } from "api/pipeline_running.slint";
 import { TemplateMetaSlint, TemplateMetaState } from "api/template_meta.slint";
 import { ProjectAuthor, ProjectTemplateDef, ProjectTemplateState } from "api/project_template.slint";
-import { ComponentClassesState, PipelinesPanelState } from "api/pipelines.slint";
+import { ModuleClassesState, PipelinesPanelState } from "api/pipelines.slint";
 import { ScriptCommandDoc, ScriptDiagnostic, ScriptEdit, ScriptEditorState, ScriptHighlight } from "api/script_editor.slint";
 import { PipelineFocusState } from "api/pipeline_focus.slint";
 import { AiLearningState, AiTrainingSettingsSlint, ClassSelectionRowSlint, FeatureRowSlint, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint } from "api/ai_learning.slint";
@@ -58,8 +58,8 @@ import {
 } from "dialogs/object_list_confirm_delete_dialog.slint";
 import { CommandSelectionDialog } from "dialogs/command_selection_dialog.slint";
 import { PipelineEditDialog, PipelineDeleteConfirmDialog } from "dialogs/pipeline_edit_dialog.slint";
-import { ComponentUpdateDialog, ComponentSettingsDialog } from "dialogs/create_component_dialog.slint";
-import { CreateComponentDialog, ExposeChoiceDialog, InPlaceCopyDialog } from "dialogs/create_component_dialog.slint";
+import { ModuleUpdateDialog, ModuleSettingsDialog } from "dialogs/create_module_dialog.slint";
+import { CreateModuleDialog, ExposeChoiceDialog, InPlaceCopyDialog } from "dialogs/create_module_dialog.slint";
 import { TemplateMetaDialog } from "dialogs/template_meta_dialog.slint";
 import { ProjectTemplateDialog } from "dialogs/project_template_dialog.slint";
 import { StepSettingsDialog } from "editor/pipelines_panel.slint";
@@ -115,7 +115,7 @@ export {
     ToolState,
     ViewportObjectState,
     PipelinesPanelState,
-    ComponentClassesState,
+    ModuleClassesState,
     ScriptEditorState,
     ScriptHighlight,
     ScriptEdit,
@@ -127,14 +127,14 @@ export {
     CommandAuthor,
     DefaultParamPreview,
     PipelineEditState,
-    CreateComponentState,
-    ComponentClassRow,
+    CreateModuleState,
+    ModuleClassRow,
     ExposeChoiceState,
     InPlaceCopyState,
-    ComponentUpdateState,
-    ComponentSettingsState,
-    ComponentParamRow,
-    ComponentBindingRow,
+    ModuleUpdateState,
+    ModuleSettingsState,
+    ModuleParamRow,
+    ModuleBindingRow,
     PipelineDeleteConfirmState,
     PipelineRunningState,
     PreviewRunState,
@@ -297,8 +297,8 @@ export component AppWindow inherits Window {
                 shown-classify: CommandPickerState.shown-classify;
                 shown-dataset: CommandPickerState.shown-dataset;
                 shown-measure: CommandPickerState.shown-measure;
-                shown-components: CommandPickerState.shown-components;
-                shown-library-components: CommandPickerState.shown-library-components;
+                shown-modules: CommandPickerState.shown-modules;
+                shown-library-modules: CommandPickerState.shown-library-modules;
                 detail: CommandPickerState.detail;
                 has-detail: CommandPickerState.has-detail;
                 total-shown: CommandPickerState.total-shown;
@@ -310,7 +310,7 @@ export component AppWindow inherits Window {
                 cat-count-mea: CommandPickerState.cat-count-mea;
                 cat-count-grp: CommandPickerState.cat-count-grp;
                 commands-matching: CommandPickerState.commands-matching;
-                unused-component-count: CommandPickerState.unused-component-count;
+                unused-module-count: CommandPickerState.unused-module-count;
                 detail-removable: CommandPickerState.detail-removable;
                 query <=> CommandPickerState.query;
                 fcat-pre <=> CommandPickerState.fcat-pre;
@@ -319,7 +319,7 @@ export component AppWindow inherits Window {
                 fcat-mea <=> CommandPickerState.fcat-mea;
                 fcat-cls <=> CommandPickerState.fcat-cls;
                 fcat-dat <=> CommandPickerState.fcat-dat;
-                filter-components <=> CommandPickerState.filter-components;
+                filter-modules <=> CommandPickerState.filter-modules;
                 selected-id <=> CommandPickerState.selected-id;
                 query-changed(t) => {
                     CommandPickerState.query-changed(t);
@@ -333,11 +333,11 @@ export component AppWindow inherits Window {
                 confirm-steps(id) => {
                     CommandPickerState.confirm-steps(id);
                 }
-                remove-component(id) => {
-                    CommandPickerState.remove-component(id);
+                remove-module(id) => {
+                    CommandPickerState.remove-module(id);
                 }
-                remove-unused-components => {
-                    CommandPickerState.remove-unused-components();
+                remove-unused-modules => {
+                    CommandPickerState.remove-unused-modules();
                 }
                 cancel => {
                     CommandPickerState.cancel();
@@ -354,7 +354,7 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.create-component): CreateComponentDialog {
+            if (GlobalAppState.active_dialog == DialogType.create-module): CreateModuleDialog {
                 width: 100%;
                 height: 100%;
             }
@@ -366,11 +366,11 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.component-update): ComponentUpdateDialog {
+            if (GlobalAppState.active_dialog == DialogType.module-update): ModuleUpdateDialog {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.component-settings): ComponentSettingsDialog {
+            if (GlobalAppState.active_dialog == DialogType.module-settings): ModuleSettingsDialog {
                 width: 100%;
                 height: 100%;
             }

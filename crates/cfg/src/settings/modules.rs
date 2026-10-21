@@ -1,26 +1,26 @@
-// Components: a reusable command made of other commands (e.g. "Cell
+// Modules: a reusable command made of other commands (e.g. "Cell
 // reconstruction"), showing only its own parameters.
 //
-// A component is defined once in the project ([`ComponentDefinition`]) and used in
-// pipelines as instances ([`ComponentInstance`]) - changing the definition
+// A module is defined once in the project ([`ModuleDefinition`]) and used in
+// pipelines as instances ([`ModuleInstance`]) - changing the definition
 // changes every instance. An instance only holds what differs per use: its
 // parameter values. Classes, objects and memory slots of an instance live
-// in its own scope (`ObjectClass::Local`, `MemoryId::ComponentContext`),
+// in its own scope (`ObjectClass::Local`, `MemoryId::ModuleContext`),
 // dropped when the instance's last step ran.
 // (Plain comments: build.rs include!s this file, where `//!` isn't allowed.)
 
 use crate::{
-    modules::{
+    settings::{
         classification_settings::Class, meta_data::MetaData,
         pipeline_settings::PipelineStepSettings,
     },
-    types::ids::{ComponentParamKey, StepId},
+    types::ids::{ModuleParamKey, StepId},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// A component parameter's value - written as plain JSON (`4`, `4.5`, `true`,
+/// A module parameter's value - written as plain JSON (`4`, `4.5`, `true`,
 /// `"PARABOLOID"`, `[1, 2]`). Typed by JSON kind only: what it means (a
 /// class, a channel, a dropdown option) and which values are valid come
 /// from the bound inner parameters.
@@ -36,40 +36,40 @@ pub enum ParamValue {
     List(Vec<ParamValue>),
 }
 
-/// A component as defined in the project: its steps and the parameters it shows.
+/// A module as defined in the project: its steps and the parameters it shows.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentDefinition {
-    /// Unique component key, prefere SCREAMING_SNAKE_CASE
+pub struct ModuleDefinition {
+    /// Unique module key, prefere SCREAMING_SNAKE_CASE
     pub key: String,
 
-    /// Metadata of this component
+    /// Metadata of this module
     pub meta: MetaData,
 
-    /// Local classes used by the component. These classes are scoped to the component only
+    /// Local classes used by the module. These classes are scoped to the module only
     #[serde(default)]
     pub classes: Vec<Class>,
 
     /// The steps which are executed in the given order
     pub steps: Vec<PipelineStepSettings>,
 
-    /// The component's parameters, shown on the component card.
-    pub parameters: Vec<ComponentParameterDef>,
+    /// The module's parameters, shown on the module card.
+    pub parameters: Vec<ModuleParameterDef>,
 
     /// The library file this definition was inserted from, if any. Not
-    /// written when absent, so library files (`.evacomp`) never carry it.
+    /// written when absent, so library files (`.evamodule`) never carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<ComponentOrigin>,
+    pub origin: Option<ModuleOrigin>,
 }
 
-/// One parameter of a component: what it sets inside the component, and its default.
+/// One parameter of a module: what it sets inside the module, and its default.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentParameterDef {
-    /// Unique within the component definition, made from its section and
+pub struct ModuleParameterDef {
+    /// Unique within the module definition, made from its section and
     /// label (`"tetraspeck_output_class"`) so a project file says what a
     /// value is; the instances' values are keyed by it.
-    pub key: ComponentParamKey,
+    pub key: ModuleParamKey,
 
     /// Name shown to the user, e.g. "Cell class".
     pub label: String,
@@ -78,7 +78,7 @@ pub struct ComponentParameterDef {
     #[serde(default)]
     pub description: String,
 
-    /// Section the parameter is shown in on the component card, e.g.
+    /// Section the parameter is shown in on the module card, e.g.
     /// "Detection"; empty: the unnamed first section.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub section: String,
@@ -92,11 +92,11 @@ pub struct ComponentParameterDef {
     pub bindings: Vec<ParamBinding>,
 }
 
-/// An inner parameter a component parameter sets.
+/// An inner parameter a module parameter sets.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamBinding {
-    /// The step of the component that owns the parameter.
+    /// The step of the module that owns the parameter.
     pub step: StepId,
 
     /// The parameter's path in that step's command, as `ParameterDef::name`
@@ -105,38 +105,38 @@ pub struct ParamBinding {
     pub param: String,
 }
 
-/// Where a definition came from: a component library file.
+/// Where a definition came from: a module library file.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentOrigin {
-    /// If this is a copy form an existing component, this is the origin component key.
-    /// This allows to reset the component default settings.
-    pub origin_component_key: String,
+pub struct ModuleOrigin {
+    /// If this is a copy form an existing module, this is the origin module key.
+    /// This allows to reset the module default settings.
+    pub origin_module_key: String,
 
-    /// The library file's name (`.evacomp`).
+    /// The library file's name (`.evamodule`).
     pub library: String,
 
     /// The definition's version in that file when it was inserted.
     pub version: u32,
 
     /// A fingerprint of the definition as inserted - if it differs now, the
-    /// project changed the component, and an update from the library would
+    /// project changed the module, and an update from the library would
     /// replace those changes. Empty in files written before.
     #[serde(default)]
     pub content_hash: String,
 }
 
-/// A use of a component in a pipeline: which definition, with which values.
+/// A use of a module in a pipeline: which definition, with which values.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentInstance {
-    /// The component's key in the project.
+pub struct ModuleInstance {
+    /// The module's key in the project.
     pub key: String,
 
     /// This instance's parameter values. A parameter missing here has its
     /// definition's default (e.g. one the definition gained later).
     #[serde(default)]
-    pub values: BTreeMap<ComponentParamKey, ParamValue>,
+    pub values: BTreeMap<ModuleParamKey, ParamValue>,
 }
 
 #[cfg(test)]
@@ -172,7 +172,7 @@ mod tests {
         let json = r#"{"key":"CELL_RECONSTRUCTION","values":{"cell_class":3,"method":"PARABOLOID","radius":4.5}}"#;
         // Projects load through `serde_json::Value`.
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
-        let instance: ComponentInstance = serde_json::from_value(raw).unwrap();
+        let instance: ModuleInstance = serde_json::from_value(raw).unwrap();
         assert_eq!(instance.values[&"cell_class".into()], ParamValue::Int(3));
         assert_eq!(
             instance.values[&"method".into()],
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(instance.values[&"radius".into()], ParamValue::Float(4.5));
         assert_eq!(serde_json::to_string(&instance).unwrap(), json);
 
-        let no_values: ComponentInstance = serde_json::from_str(r#"{"key":"X"}"#).unwrap();
+        let no_values: ModuleInstance = serde_json::from_str(r#"{"key":"X"}"#).unwrap();
         assert!(
             no_values.values.is_empty(),
             "every parameter at its default"
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn a_parameter_definition_has_a_typed_default() {
-        let parameter: ComponentParameterDef = serde_json::from_str(
+        let parameter: ModuleParameterDef = serde_json::from_str(
             r#"{"key":"blur_size","label":"Blur size","default":3,
                 "bindings":[{"step":2,"param":"kernel_size"}]}"#,
         )
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn a_definition_without_classes_needs_no_classes_entry() {
-        let definition = ComponentDefinition {
+        let definition = ModuleDefinition {
             key: "BLUR".into(),
             meta: MetaData::default(),
             classes: vec![],
@@ -217,14 +217,14 @@ mod tests {
         };
         let mut json = serde_json::to_value(&definition).unwrap();
         json.as_object_mut().unwrap().remove("classes");
-        let loaded: ComponentDefinition = serde_json::from_value(json).unwrap();
+        let loaded: ModuleDefinition = serde_json::from_value(json).unwrap();
         assert!(loaded.classes.is_empty());
     }
 
     #[test]
-    fn a_library_file_holds_the_component_flat_and_without_origin() {
-        use crate::modules::templates::ComponentTemplate;
-        let definition = |key: &str| ComponentDefinition {
+    fn a_library_file_holds_the_module_flat_and_without_origin() {
+        use crate::settings::templates::ModuleTemplate;
+        let definition = |key: &str| ModuleDefinition {
             key: key.into(),
             meta: MetaData::default(),
             classes: vec![],
@@ -232,24 +232,24 @@ mod tests {
             parameters: vec![],
             origin: None,
         };
-        let template = ComponentTemplate {
+        let template = ModuleTemplate {
             schema_version: 1,
-            component: definition("SMOOTH"),
+            module: definition("SMOOTH"),
             uses: vec![definition("BLUR")],
         };
         let json = serde_json::to_value(&template).unwrap();
         let file = json.as_object().unwrap();
-        assert!(!file.contains_key("component"), "no wrapper: {json}");
+        assert!(!file.contains_key("module"), "no wrapper: {json}");
         assert_eq!(file["key"], "SMOOTH");
         assert!(file.contains_key("meta") && file.contains_key("steps"));
         assert!(!file.contains_key("origin"));
         assert!(!file["uses"][0].as_object().unwrap().contains_key("origin"));
 
         // Projects load through `serde_json::Value`, library files the same.
-        let loaded: ComponentTemplate = serde_json::from_value(json).unwrap();
+        let loaded: ModuleTemplate = serde_json::from_value(json).unwrap();
         assert_eq!(loaded.schema_version, 1);
-        assert_eq!(loaded.component.key, "SMOOTH");
-        assert!(loaded.component.origin.is_none());
+        assert_eq!(loaded.module.key, "SMOOTH");
+        assert!(loaded.module.origin.is_none());
         assert_eq!(loaded.uses[0].key, "BLUR");
     }
 }

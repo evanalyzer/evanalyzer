@@ -100,22 +100,22 @@ export component ChannelPicker inherits Rectangle {
 
 // Editor for an `ImageAddress` command parameter. `kind`/`number` are the
 // current value pre-split by Rust (`ImageAddress::param_parts`: "channel",
-// "memory", "cache", "component" or "scratchpad"); `changed` reports the new value
+// "memory", "cache", "module" or "scratchpad"); `changed` reports the new value
 // in `ImageAddress::to_param_value`'s format ("channel:2", "memory:1",
-// "scratchpad"). Inside a component (`in-component`) "Component memory" - slots
-// of each use of the component alone ("component:1") - comes first; outside one a
-// component slot (only possible in an old file) shows as "Memory" and stays a
-// component slot when its number changes.
+// "scratchpad"). Inside a module (`in-module`) "Module memory" - slots
+// of each use of the module alone ("module:1") - comes first; outside one a
+// module slot (only possible in an old file) shows as "Memory" and stays a
+// module slot when its number changes.
 export component ImageAddressPicker inherits HorizontalLayout {
     in property <string> kind;
     in property <int> number;
-    in property <bool> in-component: false;
+    in property <bool> in-module: false;
     in property <bool> enabled: true;
     callback changed(string);
 
     // The kinds offered, and which one `kind` is.
-    property <[string]> kinds: root.in-component ? ["Channel", "Component memory", "Memory", "Shared", "Scratchpad"] : ["Channel", "Memory", "Shared", "Scratchpad"];
-    property <int> component-offset: root.in-component ? 1 : 0;
+    property <[string]> kinds: root.in-module ? ["Channel", "Module memory", "Memory", "Shared", "Scratchpad"] : ["Channel", "Memory", "Shared", "Scratchpad"];
+    property <int> module-offset: root.in-module ? 1 : 0;
 
     spacing: 4px;
 
@@ -123,14 +123,14 @@ export component ImageAddressPicker inherits HorizontalLayout {
         enabled: root.enabled;
         horizontal-stretch: 1;
         // "Memory": this pipeline's slots; "Shared": slots every pipeline
-        // after this one can read (a component's slots show as "Memory").
+        // after this one can read (a module's slots show as "Memory").
         model: root.kinds;
-        current-index: root.kind == "channel" ? 0 : root.kind == "component" && root.in-component ? 1 : root.kind == "cache" ? 2 + root.component-offset : root.kind == "scratchpad" ? 3 + root.component-offset : 1 + root.component-offset;
+        current-index: root.kind == "channel" ? 0 : root.kind == "module" && root.in-module ? 1 : root.kind == "cache" ? 2 + root.module-offset : root.kind == "scratchpad" ? 3 + root.module-offset : 1 + root.module-offset;
         selected(v) => {
             if v == "Channel" {
                 root.changed("channel:" + (root.kind == "channel" ? root.number : 0));
-            } else if v == "Component memory" {
-                root.changed("component:" + (root.kind == "component" ? root.number : 1));
+            } else if v == "Module memory" {
+                root.changed("module:" + (root.kind == "module" ? root.number : 1));
             } else if v == "Memory" {
                 root.changed("memory:" + (root.kind == "memory" ? root.number : 1));
             } else if v == "Shared" {
@@ -151,13 +151,13 @@ export component ImageAddressPicker inherits HorizontalLayout {
         }
     }
 
-    if root.kind == "memory" || root.kind == "cache" || root.kind == "component": ComboBox {
+    if root.kind == "memory" || root.kind == "cache" || root.kind == "module": ComboBox {
         enabled: root.enabled;
         horizontal-stretch: 2;
         model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
         current-value: root.number;
         selected(v) => {
-            root.changed((root.kind == "component" ? "component:" : root.kind == "cache" ? "cache:" : "memory:") + v);
+            root.changed((root.kind == "module" ? "module:" : root.kind == "cache" ? "cache:" : "memory:") + v);
         }
     }
 }

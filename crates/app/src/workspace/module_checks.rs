@@ -1,26 +1,26 @@
-//! Checking a project's components - on load and in the editor, so
+//! Checking a project's modules - on load and in the editor, so
 //! mistakes show where they are instead of only when a run starts.
 //!
 //! Most checks are the expansion itself (`evanalyzer_core::expand_step`):
-//! what a run would refuse, reported per component and per step using it. The
+//! what a run would refuse, reported per module and per step using it. The
 //! rest are things expansion can't see: duplicate keys, parameters binding
 //! settings of different kinds, and warnings for what works but probably
 //! isn't meant. [`check_project`] adds what only the whole project shows: a
 //! step's commands with its values against the images' channels, the
 //! classification and the other steps.
 
-use crate::workspace::component_editing::{remove_binding, same_kind, setting_at};
-use crate::workspace::component_insights::{
+use crate::workspace::extensions::classification_ext::ClassificationExt;
+use crate::workspace::module_editing::{remove_binding, same_kind, setting_at};
+use crate::workspace::module_insights::{
     ResolvedCommand, assigned_classes, channels_read, classes_in, created_classes, creates_objects,
     image_channels, parameters_setting, read_classes, resolved_commands,
 };
-use crate::workspace::extensions::classification_ext::ClassificationExt;
 use evanalyzer_cfg::{
-    core_types::{ComponentParamKey, ImageAddress, ObjectClass, PipelineId, StepId},
+    core_types::{ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId},
     settings::{
         classification_settings::Class,
-        components::{ComponentDefinition, ComponentInstance},
         images_settings::{ZStackHandling, ZStackSettings},
+        modules::{ModuleDefinition, ModuleInstance},
         pipeline_command::PipelineCommand,
         pipeline_command_settings::MathLoadChannelChannelZProjectionSettings,
         pipeline_settings::{PipelineStepSettings, StepContent},
@@ -37,23 +37,23 @@ pub enum Severity {
     Warning,
 }
 
-/// One problem found by [`check_components`].
+/// One problem found by [`check_modules`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct ComponentProblem {
+pub struct ModuleProblem {
     pub severity: Severity,
-    /// The component it's about, if any.
-    pub component: Option<String>,
+    /// The module it's about, if any.
+    pub module: Option<String>,
     /// The pipeline step it's about, if any: (pipeline, step id) - the step
     /// id [`StepId::UNASSIGNED`] for the pipeline itself (its image source).
     pub step: Option<(PipelineId, StepId)>,
     pub message: String,
-    /// The component parameters it's about: of the step's component for a
-    /// problem at a step, else of `component`.
-    pub parameters: Vec<ComponentParamKey>,
+    /// The module parameters it's about: of the step's module for a
+    /// problem at a step, else of `module`.
+    pub parameters: Vec<ModuleParamKey>,
     /// What fixes it with one click, if anything does.
     pub fix: Option<ProblemFix>,
-    /// Where inside the step's component it is ("LoadChannel (its step
-    /// 9)"), for those who look into components (debug mode); empty if
+    /// Where inside the step's module it is ("LoadChannel (its step
+    /// 9)"), for those who look into modules (debug mode); empty if
     /// the message says it all.
     pub detail: String,
 }
@@ -63,11 +63,11 @@ pub struct ComponentProblem {
 pub enum ProblemFix {
     /// Adds project class `id` to the classification.
     AddClass(u32),
-    /// Parameter `parameter` of component `component` stops setting `path`
+    /// Parameter `parameter` of module `module` stops setting `path`
     /// of step `step` (labelled `label`).
     RemoveBinding {
-        component: String,
-        parameter: ComponentParamKey,
+        module: String,
+        parameter: ModuleParamKey,
         step: StepId,
         path: String,
         label: String,
@@ -97,15 +97,15 @@ pub fn apply_fix(project: &mut ProjectSettings, fix: &ProblemFix) -> bool {
             })
             .is_ok(),
         ProblemFix::RemoveBinding {
-            component,
+            module,
             parameter,
             step,
             path,
             ..
         } => project
-            .components
+            .modules
             .iter_mut()
-            .find(|d| &d.key == component)
+            .find(|d| &d.key == module)
             .is_some_and(|d| remove_binding(d, parameter, *step, path)),
     }
 }
@@ -118,11 +118,11 @@ fn class_color(id: u32) -> u32 {
     COLORS[id as usize % COLORS.len()]
 }
 
-impl ComponentProblem {
-    fn error(component: Option<&str>, step: Option<(PipelineId, StepId)>, message: String) -> Self {
+impl ModuleProblem {
+    fn error(module: Option<&str>, step: Option<(PipelineId, StepId)>, message: String) -> Self {
         Self {
             severity: Severity::Error,
-            component: component.map(str::to_string),
+            module: module.map(str::to_string),
             step,
             message,
             parameters: Vec::new(),
@@ -136,7 +136,7 @@ impl ComponentProblem {
         self
     }
 
-    fn about(mut self, parameters: Vec<ComponentParamKey>) -> Self {
+    fn about(mut self, parameters: Vec<ModuleParamKey>) -> Self {
         self.parameters = parameters;
         self
     }
@@ -146,30 +146,26 @@ impl ComponentProblem {
         self
     }
 
-    fn warning(
-        component: Option<&str>,
-        step: Option<(PipelineId, StepId)>,
-        message: String,
-    ) -> Self {
+    fn warning(module: Option<&str>, step: Option<(PipelineId, StepId)>, message: String) -> Self {
         Self {
             severity: Severity::Warning,
-            ..Self::error(component, step, message)
+            ..Self::error(module, step, message)
         }
     }
 }
 
-/// Every problem of the project's components and the steps using them.
-pub fn check_components(project: &ProjectSettings) -> Vec<ComponentProblem> {
+/// Every problem of the project's modules and the steps using them.
+pub fn check_modules(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = Vec::new();
 
     let mut seen: Vec<&str> = Vec::new();
-    for definition in &project.components {
+    for definition in &project.modules {
         if seen.contains(&definition.key.as_str()) {
-            problems.push(ComponentProblem::error(
+            problems.push(ModuleProblem::error(
                 Some(&definition.key),
                 None,
                 format!(
-                    "Two components have the key {} - steps can't tell which they use",
+                    "Two modules have the key {} - steps can't tell which they use",
                     definition.key
                 ),
             ));
@@ -178,7 +174,7 @@ pub fn check_components(project: &ProjectSettings) -> Vec<ComponentProblem> {
     }
 
     let mut broken: Vec<&str> = Vec::new();
-    for definition in &project.components {
+    for definition in &project.modules {
         let found = check_definition(project, definition);
         if found.iter().any(|p| p.severity == Severity::Error) {
             broken.push(&definition.key);
@@ -190,20 +186,20 @@ pub fn check_components(project: &ProjectSettings) -> Vec<ComponentProblem> {
         for step in &pipeline.steps {
             let at = Some((pipeline.id, step.id));
             match &step.content {
-                StepContent::Component(instance) => {
-                    if !project.components.iter().any(|d| d.key == instance.key) {
-                        problems.push(ComponentProblem::error(
+                StepContent::Module(instance) => {
+                    if !project.modules.iter().any(|d| d.key == instance.key) {
+                        problems.push(ModuleProblem::error(
                             Some(&instance.key),
                             at,
-                            format!("Component {} isn't defined in this project", instance.key),
+                            format!("Module {} isn't defined in this project", instance.key),
                         ));
                     } else if !broken.contains(&instance.key.as_str()) {
-                        // The component itself is fine: what's wrong are this
+                        // The module itself is fine: what's wrong are this
                         // step's values.
                         if let Err(e) =
-                            expand_step(step, &project.components, &mut ScopeCounter::default())
+                            expand_step(step, &project.modules, &mut ScopeCounter::default())
                         {
-                            problems.push(ComponentProblem::error(
+                            problems.push(ModuleProblem::error(
                                 Some(&instance.key),
                                 at,
                                 e.to_string(),
@@ -213,13 +209,13 @@ pub fn check_components(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 }
                 StepContent::Command(command) => {
                     if let Err(e) =
-                        expand_step(step, &project.components, &mut ScopeCounter::default())
+                        expand_step(step, &project.modules, &mut ScopeCounter::default())
                     {
-                        problems.push(ComponentProblem::error(None, at, e.to_string()));
+                        problems.push(ModuleProblem::error(None, at, e.to_string()));
                     }
                     problems.extend(missing_created_classes(project, command).into_iter().map(
                         |(message, id, _)| {
-                            ComponentProblem::warning(None, at, message)
+                            ModuleProblem::warning(None, at, message)
                                 .fixed_by(ProblemFix::AddClass(id))
                         },
                     ));
@@ -230,37 +226,37 @@ pub fn check_components(project: &ProjectSettings) -> Vec<ComponentProblem> {
     problems
 }
 
-/// The problems of component `key` alone (the component, not the steps using it).
-pub fn check_component(project: &ProjectSettings, key: &str) -> Vec<ComponentProblem> {
+/// The problems of module `key` alone (the module, not the steps using it).
+pub fn check_module(project: &ProjectSettings, key: &str) -> Vec<ModuleProblem> {
     project
-        .components
+        .modules
         .iter()
         .find(|d| d.key == key)
         .map(|definition| check_definition(project, definition))
         .unwrap_or_default()
 }
 
-/// What's wrong with pipeline step `step` - a component step whose component or
+/// What's wrong with pipeline step `step` - a module step whose module or
 /// values don't work, a command a run would refuse - or `None`.
 pub fn step_problem(project: &ProjectSettings, step: &PipelineStepSettings) -> Option<String> {
-    if let StepContent::Component(instance) = &step.content
-        && let Some(problem) = check_component(project, &instance.key)
+    if let StepContent::Module(instance) = &step.content
+        && let Some(problem) = check_module(project, &instance.key)
             .into_iter()
             .find(|p| p.severity == Severity::Error)
     {
         return Some(problem.message);
     }
-    expand_step(step, &project.components, &mut ScopeCounter::default())
+    expand_step(step, &project.modules, &mut ScopeCounter::default())
         .err()
         .map(|e| e.to_string())
 }
 
-/// Every problem of the project: [`check_components`]'s, and what the
+/// Every problem of the project: [`check_modules`]'s, and what the
 /// steps of the enabled pipelines do with their values - the classes they create (of the
-/// classification, twice, by two parameters of one component step), the
+/// classification, twice, by two parameters of one module step), the
 /// channels they read (of the images), an overlap with the class itself.
-pub fn check_project(project: &ProjectSettings) -> Vec<ComponentProblem> {
-    let mut problems = check_components(project);
+pub fn check_project(project: &ProjectSettings) -> Vec<ModuleProblem> {
+    let mut problems = check_modules(project);
     problems.extend(check_steps(project));
     problems
 }
@@ -268,10 +264,10 @@ pub fn check_project(project: &ProjectSettings) -> Vec<ComponentProblem> {
 /// The problems at pipeline step `step_id` of pipeline `pipeline` among
 /// `problems` (as [`check_project`] finds them).
 pub fn problems_at(
-    problems: &[ComponentProblem],
+    problems: &[ModuleProblem],
     pipeline: PipelineId,
     step_id: StepId,
-) -> Vec<&ComponentProblem> {
+) -> Vec<&ModuleProblem> {
     problems
         .iter()
         .filter(|p| p.step == Some((pipeline, step_id)))
@@ -293,8 +289,8 @@ fn class_label(project: &ProjectSettings, class: ObjectClass) -> String {
     }
 }
 
-/// A component parameter as a message names it: “Output class” (Tetraspeck).
-fn parameter_label(definition: &ComponentDefinition, key: &ComponentParamKey) -> String {
+/// A module parameter as a message names it: “Output class” (Tetraspeck).
+fn parameter_label(definition: &ModuleDefinition, key: &ModuleParamKey) -> String {
     definition
         .parameters
         .iter()
@@ -340,14 +336,14 @@ fn joined(names: Vec<String>) -> String {
 }
 
 /// Who a message about a command of a pipeline step says does something:
-/// the parameters of the step's component setting it (“Channel” (Bead)),
-/// else the command (a command step) or the component ("“Spots” … inside").
+/// the parameters of the step's module setting it (“Channel” (Bead)),
+/// else the command (a command step) or the module ("“Spots” … inside").
 struct Subject {
     /// The parameters, named - empty if none sets it.
     parameters: String,
-    /// The command's or component's name.
+    /// The command's or module's name.
     name: String,
-    /// The command is inside a component.
+    /// The command is inside a module.
     inside: bool,
 }
 
@@ -369,9 +365,9 @@ impl Subject {
     }
 }
 
-/// What [`check_project`] adds to [`check_components`] - for the enabled
+/// What [`check_project`] adds to [`check_modules`] - for the enabled
 /// pipelines, the ones a run runs.
-fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
+fn check_steps(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = Vec::new();
     let channels = image_channels(project);
     let planes_one_by_one = analyzes_planes_one_by_one(project);
@@ -383,7 +379,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
     let mut assigned: Option<Vec<u32>> = Some(Vec::new());
     for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
         for step in &pipeline.steps {
-            for command in resolved_commands(step, &project.components) {
+            for command in resolved_commands(step, &project.modules) {
                 let (classes, any) = assigned_classes(&command.command);
                 if any {
                     assigned = None;
@@ -403,7 +399,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
         if let (Some(channels), ImageAddress::Channel(channel)) = (&channels, pipeline.image_source)
             && channel as usize >= channels.fewest
         {
-            problems.push(ComponentProblem::error(
+            problems.push(ModuleProblem::error(
                 None,
                 Some((pipeline.id, StepId::UNASSIGNED)),
                 format!(
@@ -422,7 +418,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
             steps: Vec<Option<(PipelineId, StepId)>>,
             /// "ClassifyObjects works on class 15" - as the first step says it.
             says: String,
-            keys: Vec<ComponentParamKey>,
+            keys: Vec<ModuleParamKey>,
             detail: String,
         }
         let mut unmade: Vec<Unmade> = Vec::new();
@@ -430,20 +426,19 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
         for step in &pipeline.steps {
             let at = Some((pipeline.id, step.id));
             let instance = match &step.content {
-                StepContent::Component(instance) => Some(instance),
+                StepContent::Module(instance) => Some(instance),
                 StepContent::Command(_) => None,
             };
-            let definition =
-                instance.and_then(|i| project.components.iter().find(|d| d.key == i.key));
-            let resolved = resolved_commands(step, &project.components);
+            let definition = instance.and_then(|i| project.modules.iter().find(|d| d.key == i.key));
+            let resolved = resolved_commands(step, &project.modules);
             // The step's parameters setting `path` of `command`.
             let setting = |command: &ResolvedCommand, path: &str| match definition {
                 Some(definition) => {
-                    parameters_setting(definition, &project.components, &command.steps, path)
+                    parameters_setting(definition, &project.modules, &command.steps, path)
                 }
                 None => Vec::new(),
             };
-            let subject = |command: &ResolvedCommand, keys: &[ComponentParamKey]| Subject {
+            let subject = |command: &ResolvedCommand, keys: &[ModuleParamKey]| Subject {
                 parameters: match definition {
                     Some(d) => joined(keys.iter().map(|k| parameter_label(d, k)).collect()),
                     None => String::new(),
@@ -454,7 +449,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 ),
                 inside: definition.is_some(),
             };
-            // Where inside the component: "ClassifyObjects (its step 14)",
+            // Where inside the module: "ClassifyObjects (its step 14)",
             // "(its step 8 › 7)" nested. Empty for a command step.
             let detail = |command: &ResolvedCommand| match command.steps.as_slice() {
                 [] => String::new(),
@@ -470,7 +465,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
             };
             // "the pipeline “Coloc” at #8 (Colocalization)" - the step's id
             // as its card shows it, so it isn't read as a step inside a
-            // component.
+            // module.
             let this_step = format!(
                 "the pipeline “{}” at #{} ({})",
                 pipeline.name.trim(),
@@ -488,7 +483,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                             let keys = setting(command, &path);
                             let who = subject(command, &keys);
                             problems.push(
-                                ComponentProblem::error(
+                                ModuleProblem::error(
                                     None,
                                     at,
                                     format!(
@@ -516,7 +511,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                     let keys = setting(command, "projection");
                     let who = subject(command, &keys);
                     problems.push(
-                        ComponentProblem::warning(
+                        ModuleProblem::warning(
                             None,
                             at,
                             format!(
@@ -558,7 +553,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                         )
                     };
                     problems.push(
-                        ComponentProblem::warning(None, at, message)
+                        ModuleProblem::warning(None, at, message)
                             .about(keys)
                             .inside(detail(command)),
                     );
@@ -633,15 +628,15 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                             who.parameters.clone(),
                         )),
                     }
-                    // A command step's are reported by `check_components`.
+                    // A command step's are reported by `check_modules`.
                     if definition.is_some()
                         && !project.classification.classes().iter().any(|c| c.id == n)
-                        && !problems.iter().any(|p: &ComponentProblem| {
+                        && !problems.iter().any(|p: &ModuleProblem| {
                             p.step == at && p.fix == Some(ProblemFix::AddClass(n))
                         })
                     {
                         problems.push(
-                            ComponentProblem::warning(
+                            ModuleProblem::warning(
                                 None,
                                 at,
                                 format!(
@@ -660,7 +655,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 }
             }
 
-            // Two parameters of one component step creating the same class.
+            // Two parameters of one module step creating the same class.
             if let (Some(instance), Some(definition)) = (instance, definition) {
                 problems.extend(colliding_parameters(project, definition, instance, at));
             }
@@ -673,7 +668,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 n => format!(" - {n} more steps of this pipeline work on it too"),
             };
             problems.push(
-                ComponentProblem::warning(
+                ModuleProblem::warning(
                     None,
                     u.steps[0],
                     format!(
@@ -712,7 +707,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 joined(others)
             )
         };
-        problems.push(ComponentProblem::warning(None, Some(*at), message));
+        problems.push(ModuleProblem::warning(None, Some(*at), message));
     }
     problems
 }
@@ -721,14 +716,14 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
 /// objects of the same class - their objects can't be told apart after.
 fn colliding_parameters(
     project: &ProjectSettings,
-    definition: &ComponentDefinition,
-    instance: &ComponentInstance,
+    definition: &ModuleDefinition,
+    instance: &ModuleInstance,
     at: Option<(PipelineId, StepId)>,
-) -> Vec<ComponentProblem> {
+) -> Vec<ModuleProblem> {
     // Class → the parameters creating it, in parameter order.
-    let mut by_class: Vec<(ObjectClass, Vec<ComponentParamKey>)> = Vec::new();
+    let mut by_class: Vec<(ObjectClass, Vec<ModuleParamKey>)> = Vec::new();
     for parameter in &definition.parameters {
-        if !creates_objects(definition, &project.components, parameter) {
+        if !creates_objects(definition, &project.modules, parameter) {
             continue;
         }
         let value = instance
@@ -751,7 +746,7 @@ fn colliding_parameters(
                 .map(|k| parameter_label(definition, k))
                 .collect();
             let names = joined(names);
-            ComponentProblem::warning(
+            ModuleProblem::warning(
                 Some(&definition.key),
                 at,
                 format!(
@@ -767,12 +762,12 @@ fn colliding_parameters(
 
 fn check_definition(
     project: &ProjectSettings,
-    definition: &ComponentDefinition,
-) -> Vec<ComponentProblem> {
+    definition: &ModuleDefinition,
+) -> Vec<ModuleProblem> {
     let key = Some(definition.key.as_str());
     let mut problems = Vec::new();
-    let error = |message: String| ComponentProblem::error(key, None, message);
-    let named = |message: String| format!("Component {}: {message}", definition.key);
+    let error = |message: String| ModuleProblem::error(key, None, message);
+    let named = |message: String| format!("Module {}: {message}", definition.key);
 
     let mut ids: Vec<StepId> = Vec::new();
     for step in &definition.steps {
@@ -788,7 +783,7 @@ fn check_definition(
     for parameter in &definition.parameters {
         if parameter.bindings.is_empty() {
             problems.push(
-                ComponentProblem::warning(
+                ModuleProblem::warning(
                     key,
                     None,
                     named(format!("parameter \"{}\" sets nothing", parameter.label)),
@@ -831,7 +826,7 @@ fn check_definition(
                 )))
                 .about(vec![parameter.key.clone()])
                 .fixed_by(ProblemFix::RemoveBinding {
-                    component: definition.key.clone(),
+                    module: definition.key.clone(),
                     parameter: parameter.key.clone(),
                     step: binding.step,
                     path: binding.param.clone(),
@@ -841,20 +836,16 @@ fn check_definition(
         }
     }
 
-    // The component at its defaults: what a run would refuse.
+    // The module at its defaults: what a run would refuse.
     let at_defaults = PipelineStepSettings {
         id: StepId::UNASSIGNED,
         enabled: true,
-        content: StepContent::Component(ComponentInstance {
+        content: StepContent::Module(ModuleInstance {
             key: definition.key.clone(),
             values: Default::default(),
         }),
     };
-    if let Err(e) = expand_step(
-        &at_defaults,
-        &project.components,
-        &mut ScopeCounter::default(),
-    ) {
+    if let Err(e) = expand_step(&at_defaults, &project.modules, &mut ScopeCounter::default()) {
         problems.push(error(e.to_string()));
     }
 
@@ -868,12 +859,12 @@ fn check_definition(
                 .iter()
                 .find(|c| matches!(c, ObjectClass::Local(_)))
         {
-            problems.push(ComponentProblem::warning(
+            problems.push(ModuleProblem::warning(
                 key,
                 None,
                 named(format!(
-                    "step {} colocalizes with the component class {} - its links are dropped when \
-                     the component is done, so the results have no colocalization counts for it",
+                    "step {} colocalizes with the module class {} - its links are dropped when \
+                     the module is done, so the results have no colocalization counts for it",
                     step.id,
                     local.to_text()
                 )),
@@ -881,10 +872,10 @@ fn check_definition(
         }
         problems.extend(missing_created_classes(project, command).into_iter().map(
             |(message, id, path)| {
-                ComponentProblem::warning(key, None, named(message))
+                ModuleProblem::warning(key, None, named(message))
                     .about(parameters_setting(
                         definition,
-                        &project.components,
+                        &project.modules,
                         &[step.id],
                         &path,
                     ))
@@ -936,10 +927,10 @@ fn missing_created_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::component_editing::{ClassRole, create_component, plan_component};
-    use evanalyzer_cfg::core_types::{ComponentParamKey, SegmentationClass};
+    use crate::workspace::module_editing::{ClassRole, create_module, plan_module};
+    use evanalyzer_cfg::core_types::{ModuleParamKey, SegmentationClass};
     use evanalyzer_cfg::settings::classification_settings::Class;
-    use evanalyzer_cfg::settings::components::{ComponentParameterDef, ParamBinding, ParamValue};
+    use evanalyzer_cfg::settings::modules::{ModuleParameterDef, ParamBinding, ParamValue};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         BlurSettings, ColocalizationSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
         VoronoiSettings,
@@ -958,11 +949,11 @@ mod tests {
         PipelineStepSettings {
             id: StepId(id),
             enabled: true,
-            content: StepContent::Component(ComponentInstance {
+            content: StepContent::Module(ModuleInstance {
                 key: key.into(),
                 values: values
                     .iter()
-                    .map(|(k, v)| (ComponentParamKey(k.to_string()), v.clone()))
+                    .map(|(k, v)| (ModuleParamKey(k.to_string()), v.clone()))
                     .collect(),
             }),
         }
@@ -972,16 +963,16 @@ mod tests {
         PipelineCommand::Blur(BlurSettings::default())
     }
 
-    /// Component SMOOTH (a blur, its kernel size parameter 1) used by pipeline 1.
+    /// Module SMOOTH (a blur, its kernel size parameter 1) used by pipeline 1.
     fn project() -> ProjectSettings {
         let mut project = ProjectSettings::default();
-        project.components.push(ComponentDefinition {
+        project.modules.push(ModuleDefinition {
             key: "SMOOTH".into(),
             meta: Default::default(),
             classes: vec![],
             steps: vec![step(1, blur())],
-            parameters: vec![ComponentParameterDef {
-                key: ComponentParamKey::from("1"),
+            parameters: vec![ModuleParameterDef {
+                key: ModuleParamKey::from("1"),
                 label: "Size".into(),
                 description: String::new(),
                 section: String::new(),
@@ -1004,23 +995,23 @@ mod tests {
         project
     }
 
-    fn messages(problems: &[ComponentProblem]) -> Vec<String> {
+    fn messages(problems: &[ModuleProblem]) -> Vec<String> {
         problems.iter().map(|p| p.message.clone()).collect()
     }
 
     #[test]
     fn a_working_project_has_no_problems() {
-        assert_eq!(check_components(&project()), []);
+        assert_eq!(check_modules(&project()), []);
     }
 
     #[test]
-    fn a_missing_component_and_a_value_that_doesnt_fit_are_reported_at_the_step() {
+    fn a_missing_module_and_a_value_that_doesnt_fit_are_reported_at_the_step() {
         let mut project = project();
         project.pipelines[0].steps.push(uses(2, "MISSING", &[]));
         project.pipelines[0]
             .steps
             .push(uses(3, "SMOOTH", &[(1, ParamValue::Text("big".into()))]));
-        let problems = check_components(&project);
+        let problems = check_modules(&project);
         assert_eq!(problems.len(), 2, "{:?}", messages(&problems));
         assert_eq!(problems[0].step, Some((PipelineId(1), StepId(2))));
         assert!(problems[0].message.contains("isn't defined"));
@@ -1035,11 +1026,11 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_component_is_reported_once_not_at_every_step_using_it() {
+    fn a_broken_module_is_reported_once_not_at_every_step_using_it() {
         let mut project = project();
-        project.components[0].parameters[0].bindings[0].param = "no_such".into();
+        project.modules[0].parameters[0].bindings[0].param = "no_such".into();
         project.pipelines[0].steps.push(uses(2, "SMOOTH", &[]));
-        let problems = check_components(&project);
+        let problems = check_modules(&project);
         assert!(
             problems.iter().all(|p| p.step.is_none()),
             "{:?}",
@@ -1051,7 +1042,7 @@ mod tests {
     #[test]
     fn duplicate_keys_and_steps_and_a_parameter_of_two_kinds_are_errors() {
         let mut project = project();
-        let mut copy = project.components[0].clone();
+        let mut copy = project.modules[0].clone();
         copy.steps.push(step(
             1,
             PipelineCommand::Voronoi(VoronoiSettings::default()),
@@ -1060,19 +1051,16 @@ mod tests {
             step: StepId(1),
             param: "output_class".into(),
         });
-        project.components.push(copy);
-        let text = messages(&check_components(&project)).join("\n");
-        assert!(
-            text.contains("Two components have the key SMOOTH"),
-            "{text}"
-        );
+        project.modules.push(copy);
+        let text = messages(&check_modules(&project)).join("\n");
+        assert!(text.contains("Two modules have the key SMOOTH"), "{text}");
         assert!(text.contains("two steps have the id 1"), "{text}");
     }
 
     #[test]
     fn a_parameter_binding_a_number_and_a_class_is_an_error() {
         let mut project = project();
-        let definition = &mut project.components[0];
+        let definition = &mut project.modules[0];
         definition.steps.push(step(
             2,
             PipelineCommand::Voronoi(VoronoiSettings::default()),
@@ -1081,7 +1069,7 @@ mod tests {
             step: StepId(2),
             param: "output_class".into(),
         });
-        let text = messages(&check_component(&project, "SMOOTH")).join("\n");
+        let text = messages(&check_module(&project, "SMOOTH")).join("\n");
         assert!(text.contains("different kinds of setting"), "{text}");
     }
 
@@ -1092,7 +1080,7 @@ mod tests {
             id: 1,
             ..Default::default()
         });
-        let definition = &mut project.components[0];
+        let definition = &mut project.modules[0];
         definition.classes.push(Class {
             id: 1,
             ..Default::default()
@@ -1104,8 +1092,8 @@ mod tests {
                 ..Default::default()
             }),
         ));
-        definition.parameters.push(ComponentParameterDef {
-            key: ComponentParamKey::from("2"),
+        definition.parameters.push(ModuleParameterDef {
+            key: ModuleParamKey::from("2"),
             label: "Nothing".into(),
             description: String::new(),
             section: String::new(),
@@ -1122,7 +1110,7 @@ mod tests {
                 ..Default::default()
             }),
         ));
-        let problems = check_components(&project);
+        let problems = check_modules(&project);
         assert!(
             problems.iter().all(|p| p.severity == Severity::Warning),
             "{:?}",
@@ -1130,7 +1118,7 @@ mod tests {
         );
         let text = messages(&problems).join("\n");
         assert!(
-            text.contains("colocalizes with the component class L1"),
+            text.contains("colocalizes with the module class L1"),
             "{text}"
         );
         assert!(text.contains("\"Nothing\" sets nothing"), "{text}");
@@ -1141,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn a_component_made_by_create_component_passes_the_checks() {
+    fn a_module_made_by_create_module_passes_the_checks() {
         let mut project = ProjectSettings::default();
         project.pipelines.push(PipelineSettings {
             id: PipelineId(1),
@@ -1151,14 +1139,14 @@ mod tests {
             enabled: true,
             steps: vec![step(1, blur()), step(2, blur())],
         });
-        let plan = plan_component(&project, PipelineId(1), 0..=1).unwrap();
+        let plan = plan_module(&project, PipelineId(1), 0..=1).unwrap();
         let roles: Vec<(ObjectClass, ClassRole)> = plan
             .classes
             .iter()
             .map(|c| (c.class, c.suggested))
             .collect();
-        create_component(&mut project, PipelineId(1), 0..=1, "Twice", &roles).unwrap();
-        assert_eq!(check_components(&project), []);
+        create_module(&mut project, PipelineId(1), 0..=1, "Twice", &roles).unwrap();
+        assert_eq!(check_modules(&project), []);
     }
 
     /// One parameter setting the input classes of a classify step and the
@@ -1167,7 +1155,7 @@ mod tests {
     fn class_lists_holding_different_classes_are_one_kind() {
         use evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings;
         let mut project = project();
-        let definition = &mut project.components[0];
+        let definition = &mut project.modules[0];
         definition.steps = vec![
             step(
                 1,
@@ -1199,14 +1187,14 @@ mod tests {
                 param: "classes_to_coloc".into(),
             },
         ];
-        let text = messages(&check_component(&project, "SMOOTH")).join("\n");
+        let text = messages(&check_module(&project, "SMOOTH")).join("\n");
         assert!(!text.contains("different kinds"), "{text}");
     }
 
     #[test]
     fn a_parameter_of_two_kinds_can_stop_setting_the_other() {
         let mut project = project();
-        let definition = &mut project.components[0];
+        let definition = &mut project.modules[0];
         definition.steps.push(step(
             2,
             PipelineCommand::Voronoi(VoronoiSettings::default()),
@@ -1215,15 +1203,15 @@ mod tests {
             step: StepId(2),
             param: "output_class".into(),
         });
-        let problems = check_component(&project, "SMOOTH");
+        let problems = check_module(&project, "SMOOTH");
         let fix = problems
             .iter()
             .find_map(|p| p.fix.clone())
             .expect("a fix for the second binding");
         assert!(fix.label().starts_with("Stop setting"), "{}", fix.label());
         assert!(apply_fix(&mut project, &fix));
-        assert_eq!(project.components[0].parameters[0].bindings.len(), 1);
-        assert_eq!(check_component(&project, "SMOOTH"), []);
+        assert_eq!(project.modules[0].parameters[0].bindings.len(), 1);
+        assert_eq!(check_module(&project, "SMOOTH"), []);
     }
 
     /// The project's mistakes in small: SPOTS detects spots (its "Spot"
@@ -1247,8 +1235,8 @@ mod tests {
         };
         let parameter =
             |key: &str, section: &str, label: &str, default: i64, bindings: &[(u32, &str)]| {
-                ComponentParameterDef {
-                    key: ComponentParamKey::from(key),
+                ModuleParameterDef {
+                    key: ModuleParamKey::from(key),
                     label: label.into(),
                     description: String::new(),
                     section: section.into(),
@@ -1287,7 +1275,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let mut definition = ComponentDefinition {
+        let mut definition = ModuleDefinition {
             key: "SPOTS".into(),
             meta: Default::default(),
             classes: vec![],
@@ -1340,7 +1328,7 @@ mod tests {
             origin: None,
         };
         definition.meta.name = "Spots".into();
-        project.components.push(definition);
+        project.modules.push(definition);
         project.pipelines.push(PipelineSettings {
             id: PipelineId(1),
             name: "Spots".into(),
@@ -1353,17 +1341,17 @@ mod tests {
     }
 
     fn set(project: &mut ProjectSettings, step: usize, key: &str, value: i64) {
-        let StepContent::Component(instance) = &mut project.pipelines[0].steps[step].content else {
-            panic!("a component step");
+        let StepContent::Module(instance) = &mut project.pipelines[0].steps[step].content else {
+            panic!("a module step");
         };
         instance
             .values
-            .insert(ComponentParamKey::from(key), ParamValue::Int(value));
+            .insert(ModuleParamKey::from(key), ParamValue::Int(value));
     }
 
     /// A Load Image Channel step with its own projection while the project
     /// analyzes each z-plane: a warning at the step, for a command step and
-    /// inside a component; none with the default (one plane) or a projection.
+    /// inside a module; none with the default (one plane) or a projection.
     #[test]
     fn a_projection_of_its_own_while_planes_are_analyzed_one_by_one_warns() {
         use evanalyzer_cfg::core_types::ImageChannelIdx;
@@ -1387,7 +1375,7 @@ mod tests {
                 }),
             )],
         });
-        let warnings = |project: &ProjectSettings| -> Vec<ComponentProblem> {
+        let warnings = |project: &ProjectSettings| -> Vec<ModuleProblem> {
             check_project(project)
                 .into_iter()
                 .filter(|p| p.severity == Severity::Warning && p.message.contains("one by one"))
@@ -1423,9 +1411,8 @@ mod tests {
             );
         }
 
-        // Inside a component: at the step using it.
-        let PipelineCommand::LoadChannel(load) = (match &mut project.components[0].steps[0].content
-        {
+        // Inside a module: at the step using it.
+        let PipelineCommand::LoadChannel(load) = (match &mut project.modules[0].steps[0].content {
             StepContent::Command(command) => command,
             _ => panic!("a command"),
         }) else {
@@ -1477,8 +1464,8 @@ mod tests {
         assert_eq!(
             collision.parameters,
             [
-                ComponentParamKey::from("spot_class"),
-                ComponentParamKey::from("bead_class")
+                ModuleParamKey::from("spot_class"),
+                ModuleParamKey::from("bead_class")
             ]
         );
         let overlap = problems
@@ -1499,8 +1486,8 @@ mod tests {
         assert_eq!(
             overlap.parameters,
             [
-                ComponentParamKey::from("bead_class"),
-                ComponentParamKey::from("spot_class")
+                ModuleParamKey::from("bead_class"),
+                ModuleParamKey::from("spot_class")
             ]
         );
     }
@@ -1511,7 +1498,7 @@ mod tests {
         set(&mut project, 0, "bead_channel", 3);
         project.pipelines[0].image_source = ImageAddress::Channel(2);
         let problems = check_project(&project);
-        let errors: Vec<&ComponentProblem> = problems
+        let errors: Vec<&ModuleProblem> = problems
             .iter()
             .filter(|p| p.severity == Severity::Error)
             .collect();
@@ -1531,10 +1518,7 @@ mod tests {
             errors[1].detail, "LoadChannel (its step 3)",
             "for debug mode"
         );
-        assert_eq!(
-            errors[1].parameters,
-            [ComponentParamKey::from("bead_channel")]
-        );
+        assert_eq!(errors[1].parameters, [ModuleParamKey::from("bead_channel")]);
     }
 
     #[test]
@@ -1570,7 +1554,7 @@ mod tests {
                 == "“Output class” (Bead) is class 2 “Bead” - but the pipeline “Spots” at #2 \
                     (ExtractObjects) gives new objects that class too; objects of both end up \
                     in one class and can't be told apart"),
-            "the component step names its parameter: {:?}",
+            "the module step names its parameter: {:?}",
             messages(&problems)
         );
         assert!(
@@ -1591,7 +1575,7 @@ mod tests {
             .iter()
             .find(|p| p.fix == Some(ProblemFix::AddClass(7)))
             .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
-        assert_eq!(missing.parameters, [ComponentParamKey::from("bead_class")]);
+        assert_eq!(missing.parameters, [ModuleParamKey::from("bead_class")]);
         assert_eq!(missing.fix.as_ref().unwrap().label(), "Add class 7");
         assert!(apply_fix(&mut project, missing.fix.as_ref().unwrap()));
         assert!(project.classification.classes().iter().any(|c| c.id == 7));

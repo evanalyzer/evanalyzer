@@ -24,31 +24,29 @@ pub struct ChannelVariant {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {
     Scratchpad,
-    /// A pipeline or project memory slot - never `MemoryId::ComponentContext`, see
+    /// A pipeline or project memory slot - never `MemoryId::ModuleContext`, see
     /// [`CacheAddress::memory`].
     Memory(MemoryId),
     Channel((i32, ImageTile)),
     /// An image channel read with its own z-projection or z-plane, not the
     /// project's - for a `LoadChannel` step that sets one.
     ChannelVariant((ChannelVariant, ImageTile)),
-    /// A component instance's memory slot (`MemoryId::ComponentContext`).
-    ComponentMemory(ScopeId, MemorySlot),
+    /// A module instance's memory slot (`MemoryId::ModuleContext`).
+    ModuleMemory(ScopeId, MemorySlot),
 }
 
 impl CacheAddress {
     /// Where memory slot `id` lives for a command running in `scope`: a
-    /// component slot belongs to the component instance (each has its own), the
+    /// module slot belongs to the module instance (each has its own), the
     /// others to the pipeline or project.
     pub fn memory(id: MemoryId, scope: Scope) -> Result<CacheAddress, InternalErrors> {
         match (id, scope) {
-            (MemoryId::ComponentContext(slot), Scope::Scoped(scope_id)) => {
-                Ok(CacheAddress::ComponentMemory(scope_id, slot))
+            (MemoryId::ModuleContext(slot), Scope::Scoped(scope_id)) => {
+                Ok(CacheAddress::ModuleMemory(scope_id, slot))
             }
-            (MemoryId::ComponentContext(slot), Scope::Global) => {
-                Err(InternalErrors::InvalidArgument(format!(
-                    "component memory slot {slot} is only available inside a component"
-                )))
-            }
+            (MemoryId::ModuleContext(slot), Scope::Global) => Err(InternalErrors::InvalidArgument(
+                format!("module memory slot {slot} is only available inside a module"),
+            )),
             (id, _) => Ok(CacheAddress::Memory(id)),
         }
     }
@@ -119,7 +117,7 @@ mod tests {
 
 impl GlobalPipelineCache {
     /// After a pipeline: what only it could use goes - its memory slots
-    /// (`PipelineContext`), its components' slots, the scratchpad. The image
+    /// (`PipelineContext`), its modules' slots, the scratchpad. The image
     /// channels and the shared slots (`ProjectCache`) stay for the pipelines
     /// after it; [`Self::clear_shared_slots`] frees those.
     pub fn clear_pipeline_context(&mut self) {
@@ -127,8 +125,8 @@ impl GlobalPipelineCache {
             CacheAddress::Channel(_)
             | CacheAddress::ChannelVariant(_)
             | CacheAddress::Memory(MemoryId::ProjectCache(_)) => true,
-            CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::ComponentContext(_))
-            | CacheAddress::ComponentMemory(..)
+            CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::ModuleContext(_))
+            | CacheAddress::ModuleMemory(..)
             | CacheAddress::Scratchpad => false,
         });
     }
@@ -211,7 +209,7 @@ impl GlobalPipelineCache {
                 }))),
             },
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
-            CacheAddress::ComponentMemory(..) | CacheAddress::ChannelVariant(_) => {
+            CacheAddress::ModuleMemory(..) | CacheAddress::ChannelVariant(_) => {
                 self.image_cache.get(cache_slot)
             }
             CacheAddress::Channel(channel_idx) => {

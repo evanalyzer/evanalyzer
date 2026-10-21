@@ -1,4 +1,4 @@
-use crate::modules::pipeline_command_settings::{
+use crate::settings::pipeline_command_settings::{
     EdgeDetectionSobelSettings, GaussianBlurSettings, HessianSettings, LaplacianSettings,
     RankFilterSettings, StructureTensorSettings,
 };
@@ -140,7 +140,7 @@ mod tests {
             PreprocessingSteps::RankFilter(RankFilterSettings {
                 radius: 2.0,
                 filter_type:
-                    crate::modules::pipeline_command_settings::FiltersRankFilterRankFilterTypeSettings::Outliers(
+                    crate::settings::pipeline_command_settings::FiltersRankFilterRankFilterTypeSettings::Outliers(
                         12.5,
                     ),
             }),
@@ -185,7 +185,7 @@ mod tests {
                     .unwrap(),
                 vec![PreprocessingSteps::Hessian(HessianSettings {
                     mode:
-                        crate::modules::pipeline_command_settings::FiltersHessianHessianModeSettings::EigenvaluesX,
+                        crate::settings::pipeline_command_settings::FiltersHessianHessianModeSettings::EigenvaluesX,
                 })],
             ],
         };

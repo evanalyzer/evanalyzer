@@ -1,14 +1,14 @@
 import { Places } from "../api/layout.slint";
 import { InkTextField, InkButton, InkButtonKind, InkBanner, InkCaption, InkChip, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
-import { ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState, InPlaceCopyState } from "../api/create_component.slint";
+import { ModuleParamRow, ModuleSettingsState, ModuleUpdateState, CreateModuleState, ExposeChoiceState, InPlaceCopyState } from "../api/create_module.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
 import { InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock, InkTab } from "../ink/ink.slint";
 import { Ink } from "../ink/palette.slint";
 
-// "Create component": turns consecutive steps of a pipeline into a component.
+// "Create module": turns consecutive steps of a pipeline into a module.
 // The host fills the class list with suggested roles (see
-// `evanalyzer_app::components::plan_component`) and recomputes it when the range
+// `evanalyzer_app::modules::plan_module`) and recomputes it when the range
 // changes.
 
 // -- Global state --------------------------------------------
@@ -35,18 +35,18 @@ component RangeRow inherits HorizontalLayout {
 
 // -- Dialog component -----------------------------------------
 
-export component CreateComponentDialog inherits InkDialog {
+export component CreateModuleDialog inherits InkDialog {
     // Next to the steps panel.
     anchor-x: Places.beside-left;
-    title: "Create component";
+    title: "Create module";
     card-width: 480px;
     close-on-backdrop: true;
     close => {
-        CreateComponentState.cancel();
+        CreateModuleState.cancel();
     }
 
     InkHint {
-        text: "The steps become one step - a component you can use like a command, in this and other pipelines.";
+        text: "The steps become one step - a module you can use like a command, in this and other pipelines.";
     }
 
     HorizontalLayout {
@@ -57,10 +57,10 @@ export component CreateComponentDialog inherits InkDialog {
 
         LineEdit {
             horizontal-stretch: 1;
-            text: CreateComponentState.name;
+            text: CreateModuleState.name;
             placeholder-text: "e.g. Cell reconstruction";
             edited(t) => {
-                CreateComponentState.name = t;
+                CreateModuleState.name = t;
             }
         }
     }
@@ -69,24 +69,24 @@ export component CreateComponentDialog inherits InkDialog {
         spacing: 6px;
         RangeRow {
             label: "From";
-            model: CreateComponentState.step-names;
-            current: CreateComponentState.from-step;
+            model: CreateModuleState.step-names;
+            current: CreateModuleState.from-step;
             picked(i) => {
-                CreateComponentState.range-changed(i, CreateComponentState.to-step);
+                CreateModuleState.range-changed(i, CreateModuleState.to-step);
             }
         }
 
         RangeRow {
             label: "To";
-            model: CreateComponentState.step-names;
-            current: CreateComponentState.to-step;
+            model: CreateModuleState.step-names;
+            current: CreateModuleState.to-step;
             picked(i) => {
-                CreateComponentState.range-changed(CreateComponentState.from-step, i);
+                CreateModuleState.range-changed(CreateModuleState.from-step, i);
             }
         }
     }
 
-    if CreateComponentState.classes.length > 0: VerticalLayout {
+    if CreateModuleState.classes.length > 0: VerticalLayout {
         spacing: 6px;
         Text {
             text: "Classes";
@@ -94,7 +94,7 @@ export component CreateComponentDialog inherits InkDialog {
             color: Ink.text-dim;
         }
 
-        for row[i] in CreateComponentState.classes: HorizontalLayout {
+        for row[i] in CreateModuleState.classes: HorizontalLayout {
             spacing: 8px;
             VerticalLayout {
                 horizontal-stretch: 1;
@@ -114,31 +114,31 @@ export component CreateComponentDialog inherits InkDialog {
 
             ComboBox {
                 width: 190px;
-                model: ["Internal (component only)", "Component parameter", "Fixed"];
+                model: ["Internal (module only)", "Module parameter", "Fixed"];
                 current-index: row.role;
                 selected(v) => {
-                    CreateComponentState.role-changed(i, self.current-index);
+                    CreateModuleState.role-changed(i, self.current-index);
                 }
             }
         }
 
         Text {
-            text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
+            text: "Internal classes are the module's own: each use of the module has its own, and their objects don't reach the results.";
             font-size: Ink.fs-secondary;
             color: Ink.text-dim;
             wrap: word-wrap;
         }
     }
 
-    if CreateComponentState.channels-text != "": Text {
-        text: CreateComponentState.channels-text;
+    if CreateModuleState.channels-text != "": Text {
+        text: CreateModuleState.channels-text;
         font-size: Ink.fs-body;
         color: Ink.text-dim;
         wrap: word-wrap;
     }
 
-    if CreateComponentState.error != "": Text {
-        text: CreateComponentState.error;
+    if CreateModuleState.error != "": Text {
+        text: CreateModuleState.error;
         font-size: Ink.fs-body;
         color: Ink.err;
         wrap: word-wrap;
@@ -148,22 +148,22 @@ export component CreateComponentDialog inherits InkDialog {
         InkButton {
             text: "Cancel";
             clicked => {
-                CreateComponentState.cancel();
+                CreateModuleState.cancel();
             }
         }
 
         InkButton {
             kind: InkButtonKind.primary;
-            text: "Create component";
+            text: "Create module";
             clicked => {
-                CreateComponentState.confirm();
+                CreateModuleState.confirm();
             }
         }
     }
 }
 
 // -- "Edit in place": the copy's name ---------------------------
-// Shown only when a copy is made - other steps use the component; the only
+// Shown only when a copy is made - other steps use the module; the only
 // use is edited without asking.
 export component InPlaceCopyDialog inherits InkDialog {
     // Next to the steps panel.
@@ -176,7 +176,7 @@ export component InPlaceCopyDialog inherits InkDialog {
     }
 
     Text {
-        text: "A copy of “\{InPlaceCopyState.component-name}” just for this step, with its values. "
+        text: "A copy of “\{InPlaceCopyState.module-name}” just for this step, with its values. "
             + (InPlaceCopyState.other-uses == 1 ? "The other step using it stays unchanged."
                 : "The \{InPlaceCopyState.other-uses} other steps using it stay unchanged.")
             + (InPlaceCopyState.from-library ? " The copy doesn't get library updates." : "");
@@ -254,7 +254,7 @@ export component ExposeChoiceDialog inherits InkDialog {
     }
 
     InkHint {
-        text: "As a parameter of its own, or set by a parameter the component has already:";
+        text: "As a parameter of its own, or set by a parameter the module has already:";
     }
 
     VerticalLayout {
@@ -321,34 +321,34 @@ export component ExposeChoiceDialog inherits InkDialog {
     }
 }
 
-// -- Update a component from the library -------------------------------
-export component ComponentUpdateDialog inherits InkDialog {
+// -- Update a module from the library -------------------------------
+export component ModuleUpdateDialog inherits InkDialog {
     // Next to the steps panel.
     anchor-x: Places.beside-left;
-    title: "Update \{ComponentUpdateState.component-name}";
+    title: "Update \{ModuleUpdateState.module-name}";
     card-width: 420px;
     close-on-backdrop: true;
     close => {
-        ComponentUpdateState.cancel();
+        ModuleUpdateState.cancel();
     }
 
     Text {
-        text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
+        text: "The module library has a newer version (\{ModuleUpdateState.versions}). Every step using the module gets it; their values stay.";
         font-size: Ink.fs-body;
         color: Ink.text;
         wrap: word-wrap;
     }
 
-    if ComponentUpdateState.changed-here: InkBanner {
+    if ModuleUpdateState.changed-here: InkBanner {
         tone: InkTone.warn;
-        text: "This project changed the component since it was inserted - updating replaces those changes.";
+        text: "This project changed the module since it was inserted - updating replaces those changes.";
     }
 
     InkDialogFooter {
         InkButton {
             text: "Cancel";
             clicked => {
-                ComponentUpdateState.cancel();
+                ModuleUpdateState.cancel();
             }
         }
 
@@ -356,16 +356,16 @@ export component ComponentUpdateDialog inherits InkDialog {
             kind: InkButtonKind.primary;
             text: "Update";
             clicked => {
-                ComponentUpdateState.confirm();
+                ModuleUpdateState.confirm();
             }
         }
     }
 }
 
-// -- Component settings (design P) ----------------------------------------
+// -- Module settings (design P) ----------------------------------------
 // A parameter in the list: its name and default.
 component ParamListRow inherits Rectangle {
-    in property <ComponentParamRow> param;
+    in property <ModuleParamRow> param;
     in property <bool> selected;
     callback clicked;
 
@@ -415,36 +415,36 @@ component FormLabel inherits Text {
     vertical-alignment: center;
 }
 
-// The component's name and descriptions (General) and its parameters - a
+// The module's name and descriptions (General) and its parameters - a
 // list by section, the chosen one's form beside it. Cancel undoes all
 // changes made while it's open (✕ and Esc too), Apply keeps them.
-export component ComponentSettingsDialog inherits InkDialog {
+export component ModuleSettingsDialog inherits InkDialog {
     // Next to the steps panel.
     anchor-x: Places.beside-left;
     placement: InkDialogPlacement.sheet;
-    title: ComponentSettingsState.name;
-    subtitle: "◆ component settings";
+    title: ModuleSettingsState.name;
+    subtitle: "◆ module settings";
     card-width: 700px;
     content-padding: 0px;
     close => {
-        ComponentSettingsState.parameter-edit-cancelled();
-        ComponentSettingsState.close();
+        ModuleSettingsState.parameter-edit-cancelled();
+        ModuleSettingsState.close();
     }
 
     // 0 General, 1 Parameters.
     property <int> current-section: 0;
     // The parameter shown in the form.
     property <int> chosen: 0;
-    property <ComponentParamRow> param: ComponentSettingsState.parameters[min(root.chosen, ComponentSettingsState.parameters.length - 1)];
-    property <bool> has-param: ComponentSettingsState.parameters.length > 0;
+    property <ModuleParamRow> param: ModuleSettingsState.parameters[min(root.chosen, ModuleSettingsState.parameters.length - 1)];
+    property <bool> has-param: ModuleSettingsState.parameters.length > 0;
 
     init => {
         // What Cancel goes back to.
-        ComponentSettingsState.parameter-edit-started("");
+        ModuleSettingsState.parameter-edit-started("");
         // ✎ on an exposed setting: its parameter.
-        if ComponentSettingsState.focus-index >= 0 {
+        if ModuleSettingsState.focus-index >= 0 {
             root.current-section = 1;
-            root.chosen = ComponentSettingsState.focus-index;
+            root.chosen = ModuleSettingsState.focus-index;
         }
     }
 
@@ -466,7 +466,7 @@ export component ComponentSettingsDialog inherits InkDialog {
             }
             InkTab {
                 text: "Parameters";
-                note: "· \{ComponentSettingsState.parameters.length}";
+                note: "· \{ModuleSettingsState.parameters.length}";
                 active: root.current-section == 1;
                 clicked => {
                     root.current-section = 1;
@@ -484,17 +484,17 @@ export component ComponentSettingsDialog inherits InkDialog {
             spacing: 14px;
 
             InkHint {
-                text: "What the component is called and does - shown in the command picker and behind the component card's ?.";
+                text: "What the module is called and does - shown in the command picker and behind the module card's ?.";
             }
 
             InkSettingsCard {
                 InkSettingRow {
                     label: "Name";
                     LineEdit {
-                        text: ComponentSettingsState.name;
-                        placeholder-text: "Component name";
+                        text: ModuleSettingsState.name;
+                        placeholder-text: "Module name";
                         edited(t) => {
-                            ComponentSettingsState.name-edited(t);
+                            ModuleSettingsState.name-edited(t);
                         }
                     }
                 }
@@ -503,10 +503,10 @@ export component ComponentSettingsDialog inherits InkDialog {
                     label: "Short description";
                     description: "One line, shown in the command picker.";
                     LineEdit {
-                        text: ComponentSettingsState.description;
-                        placeholder-text: "What the component does";
+                        text: ModuleSettingsState.description;
+                        placeholder-text: "What the module does";
                         edited(t) => {
-                            ComponentSettingsState.description-edited(t);
+                            ModuleSettingsState.description-edited(t);
                         }
                     }
                 }
@@ -514,10 +514,10 @@ export component ComponentSettingsDialog inherits InkDialog {
                 InkSettingRow {
                     label: "Author";
                     author-name-edit := LineEdit {
-                        text: ComponentSettingsState.author-name;
+                        text: ModuleSettingsState.author-name;
                         placeholder-text: "Full name";
                         edited(t) => {
-                            ComponentSettingsState.author-edited(t, author-organization-edit.text);
+                            ModuleSettingsState.author-edited(t, author-organization-edit.text);
                         }
                     }
                 }
@@ -525,24 +525,24 @@ export component ComponentSettingsDialog inherits InkDialog {
                 InkSettingRow {
                     label: "Organization";
                     author-organization-edit := LineEdit {
-                        text: ComponentSettingsState.author-organization;
+                        text: ModuleSettingsState.author-organization;
                         placeholder-text: "Lab, institute, company";
                         edited(t) => {
-                            ComponentSettingsState.author-edited(author-name-edit.text, t);
+                            ModuleSettingsState.author-edited(author-name-edit.text, t);
                         }
                     }
                 }
 
                 InkSettingBlock {
                     label: "Description";
-                    description: "How to use it, what it expects, references - shown behind the component card's ?.";
+                    description: "How to use it, what it expects, references - shown behind the module card's ?.";
                     TextEdit {
                         height: 96px;
-                        text: ComponentSettingsState.long-description;
+                        text: ModuleSettingsState.long-description;
                         wrap: word-wrap;
                         placeholder-text: "How to use it, what it expects, references…";
                         edited(t) => {
-                            ComponentSettingsState.long-description-edited(t);
+                            ModuleSettingsState.long-description-edited(t);
                         }
                     }
                 }
@@ -565,8 +565,8 @@ export component ComponentSettingsDialog inherits InkDialog {
                     alignment: start;
                     padding-top: 6px;
                     padding-bottom: 6px;
-                    for p[pi] in ComponentSettingsState.parameters: VerticalLayout {
-                        if p.section != "" && (pi == 0 || ComponentSettingsState.parameters[pi - 1].section != p.section): HorizontalLayout {
+                    for p[pi] in ModuleSettingsState.parameters: VerticalLayout {
+                        if p.section != "" && (pi == 0 || ModuleSettingsState.parameters[pi - 1].section != p.section): HorizontalLayout {
                             padding-left: 14px;
                             InkCaption {
                                 text: p.section;
@@ -585,7 +585,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                     if !root.has-param: HorizontalLayout {
                         padding: 14px;
                         InkHint {
-                            text: "None yet - ◇ next to a setting of the opened component makes it a parameter.";
+                            text: "None yet - ◇ next to a setting of the opened module makes it a parameter.";
                         }
                     }
                 }
@@ -622,7 +622,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                         enabled: root.chosen > 0;
                         disabled-reason: "Already the first";
                         clicked => {
-                            ComponentSettingsState.parameter-moved(root.param.key, -1);
+                            ModuleSettingsState.parameter-moved(root.param.key, -1);
                             root.chosen -= 1;
                         }
                     }
@@ -630,10 +630,10 @@ export component ComponentSettingsDialog inherits InkDialog {
                         icon: InkIcons.caret-down;
                         size: 24px;
                         label: "Move down";
-                        enabled: root.chosen < ComponentSettingsState.parameters.length - 1;
+                        enabled: root.chosen < ModuleSettingsState.parameters.length - 1;
                         disabled-reason: "Already the last";
                         clicked => {
-                            ComponentSettingsState.parameter-moved(root.param.key, 1);
+                            ModuleSettingsState.parameter-moved(root.param.key, 1);
                             root.chosen += 1;
                         }
                     }
@@ -646,10 +646,10 @@ export component ComponentSettingsDialog inherits InkDialog {
                     }
                     LineEdit {
                         text: root.param.label;
-                        placeholder-text: "Name on the component card";
+                        placeholder-text: "Name on the module card";
                         accessible-label: "Parameter name";
                         edited(t) => {
-                            ComponentSettingsState.parameter-name-edited(root.param.key, t);
+                            ModuleSettingsState.parameter-name-edited(root.param.key, t);
                         }
                     }
                 }
@@ -664,7 +664,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                         placeholder-text: "e.g. Detection (optional)";
                         accessible-label: "Parameter section";
                         edited(t) => {
-                            ComponentSettingsState.parameter-section-edited(root.param.key, t);
+                            ModuleSettingsState.parameter-section-edited(root.param.key, t);
                         }
                     }
                 }
@@ -684,7 +684,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                             placeholder-text: root.param.default-description != "" ? root.param.default-description : "Shown as ? next to the parameter";
                             accessible-label: "Parameter help text";
                             edited(t) => {
-                                ComponentSettingsState.parameter-help-edited(root.param.key, t);
+                                ModuleSettingsState.parameter-help-edited(root.param.key, t);
                             }
                         }
                         if root.param.description != "" && root.param.default-description != "": HorizontalLayout {
@@ -694,7 +694,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 kind: InkButtonKind.quiet;
                                 text: "Use the setting's own help";
                                 clicked => {
-                                    ComponentSettingsState.parameter-help-reset(root.param.key);
+                                    ModuleSettingsState.parameter-help-reset(root.param.key);
                                 }
                             }
                         }
@@ -735,7 +735,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 // The last one: "Remove parameter" instead.
                                 removable: root.param.bindings.length > 1;
                                 remove => {
-                                    ComponentSettingsState.binding-removed(root.param.key, binding.step-id, binding.path);
+                                    ModuleSettingsState.binding-removed(root.param.key, binding.step-id, binding.path);
                                 }
                             }
                         }
@@ -745,7 +745,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                             accessible-label: "Also set";
                             selected => {
                                 if also-set.current-index > 0 {
-                                    ComponentSettingsState.binding-added(root.param.key, also-set.current-index - 1);
+                                    ModuleSettingsState.binding-added(root.param.key, also-set.current-index - 1);
                                     also-set.current-index = 0;
                                 }
                             }
@@ -762,7 +762,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                         icon: InkIcons.delete;
                         text: "Remove parameter";
                         clicked => {
-                            ComponentSettingsState.parameter-removed(root.param.key);
+                            ModuleSettingsState.parameter-removed(root.param.key);
                             root.chosen = max(0, root.chosen - 1);
                         }
                     }
@@ -784,7 +784,7 @@ export component ComponentSettingsDialog inherits InkDialog {
         padding-bottom: 10px;
         Text {
             horizontal-stretch: 1;
-            text: "Changes apply to every use of the component";
+            text: "Changes apply to every use of the module";
             font-size: Ink.fs-secondary;
             color: Ink.text-mute;
             vertical-alignment: center;
@@ -792,15 +792,15 @@ export component ComponentSettingsDialog inherits InkDialog {
         InkButton {
             text: "Cancel";
             clicked => {
-                ComponentSettingsState.parameter-edit-cancelled();
-                ComponentSettingsState.close();
+                ModuleSettingsState.parameter-edit-cancelled();
+                ModuleSettingsState.close();
             }
         }
         InkButton {
             kind: InkButtonKind.primary;
             text: "Apply";
             clicked => {
-                ComponentSettingsState.close();
+                ModuleSettingsState.close();
             }
         }
     }

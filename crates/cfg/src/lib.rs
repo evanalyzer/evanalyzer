@@ -2,7 +2,7 @@ mod legacy_import;
 mod legacy_schema;
 mod load_config;
 mod migration;
-mod modules;
+pub mod settings;
 mod types;
 mod utils;
 
@@ -11,8 +11,8 @@ pub use load_config::{load_ai_learning_settings, load_project_settings};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
-pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
-pub const COMPONENT_TEMPLATE_EXTENSION: &str = &"evacomp";
+pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evatemplate";
+pub const MODULE_TEMPLATE_EXTENSION: &str = &"evamodule";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 /// Project file extension used by the old (pre-rewrite) application.
@@ -37,21 +37,16 @@ pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 4;
 pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
-/// [`settings::templates::ProjectTemplate`] (`.evapt` files). Unlike
+/// [`settings::templates::ProjectTemplate`] (`.evatemplate` files). Unlike
 /// `ProjectSettings`/`AiLearningSettings`, nothing loads templates through a
 /// version-checked/migrated path: breaking changes to templates are allowed,
 /// old templates are updated by hand. The number only marks the format.
 pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
-/// [`settings::templates::ComponentTemplate`] (`.evacomp` files). See
+/// [`settings::templates::ModuleTemplate`] (`.evamodule` files). See
 /// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
-pub const CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
-
-// Project Settings structs
-pub mod settings {
-    pub use super::modules::*;
-}
+pub const CURRENT_MODULE_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 // Shared types
 pub mod core_types {
@@ -66,12 +61,12 @@ pub mod core_types {
     pub use crate::types::errors::*;
     pub use crate::types::events::TrainingProgressEvent;
     pub use crate::types::events::TrainingStats;
-    pub use crate::types::ids::ComponentId;
-    pub use crate::types::ids::ComponentParamKey;
     pub use crate::types::ids::ImageAddress;
     pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;
     pub use crate::types::ids::MemorySlot;
+    pub use crate::types::ids::ModuleId;
+    pub use crate::types::ids::ModuleParamKey;
     pub use crate::types::ids::ObjectId;
     pub use crate::types::ids::PipelineId;
     pub use crate::types::ids::StepId;

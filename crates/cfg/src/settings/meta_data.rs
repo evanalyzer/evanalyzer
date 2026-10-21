@@ -32,7 +32,7 @@ pub struct MetaData {
     /// Creation time
     pub creation_time: chrono::DateTime<chrono::Utc>,
 
-    /// The author's version of this component or template
+    /// The author's version of this module or template
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
 

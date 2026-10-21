@@ -89,7 +89,7 @@ export component ClassEditDialog inherits InkDialog {
 
     // Changing an existing class's id moves its references.
     if ClassificationSettingsState.settings.class-id > 0 && ClassificationSettingsState.id-index > 0: Text {
-        text: "Pipelines, components and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
+        text: "Pipelines, modules and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
         font-size: Ink.fs-body;
         color: Ink.text-dim;
         wrap: word-wrap;

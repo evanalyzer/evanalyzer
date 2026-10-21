@@ -16,7 +16,7 @@
 //!   classifier's mapping) becomes `segmentationClass`.
 //! - In the pixel classifier's mapping the model's class, so far
 //!   `segmentationClass`, becomes `modelClass` - as in YOLO's mapping.
-//! - A component's parameter bindings name settings by their path
+//! - A module's parameter bindings name settings by their path
 //!   (`thresholds.0.object_class_id`); they follow the same renames.
 
 use serde_json::{Map, Value, json};
@@ -98,9 +98,9 @@ fn renamed_path(param: &str, command_type: Option<&str>) -> String {
         .join(".")
 }
 
-/// The bindings of a component definition, renamed - before its commands are.
-fn rename_bindings(component: &mut Value) {
-    let types: Vec<(Value, Option<String>)> = component
+/// The bindings of a module definition, renamed - before its commands are.
+fn rename_bindings(module: &mut Value) {
+    let types: Vec<(Value, Option<String>)> = module
         .get("steps")
         .and_then(Value::as_array)
         .into_iter()
@@ -115,7 +115,7 @@ fn rename_bindings(component: &mut Value) {
             )
         })
         .collect();
-    let Some(Value::Array(parameters)) = component.get_mut("parameters") else {
+    let Some(Value::Array(parameters)) = module.get_mut("parameters") else {
         return;
     };
     for parameter in parameters {
@@ -145,17 +145,17 @@ fn rename_commands(steps: Option<&mut Value>) {
     }
 }
 
-/// Renames the segmentation class settings in pipelines and components.
+/// Renames the segmentation class settings in pipelines and modules.
 fn migrate_segmentation_class_settings(raw: &mut Value) {
     if let Some(Value::Array(pipelines)) = raw.get_mut("pipelines") {
         for pipeline in pipelines {
             rename_commands(pipeline.get_mut("steps"));
         }
     }
-    if let Some(Value::Array(components)) = raw.get_mut("components") {
-        for component in components {
-            rename_bindings(component);
-            rename_commands(component.get_mut("steps"));
+    if let Some(Value::Array(modules)) = raw.get_mut("modules") {
+        for module in modules {
+            rename_bindings(module);
+            rename_commands(module.get_mut("steps"));
         }
     }
 }
@@ -211,16 +211,16 @@ mod tests {
     }
 
     #[test]
-    fn segmentation_class_settings_are_renamed_in_pipelines_and_components() {
+    fn segmentation_class_settings_are_renamed_in_pipelines_and_modules() {
         let mut raw = json!({
             "pipelines": [{ "steps": [
                 { "command": { "type": "THRESHOLD", "thresholds": [
                     { "minThreshold": 1.0, "objectClassId": 2 }
                 ]}},
                 { "command": { "type": "CELLPOSE", "objectClassId": 1 }},
-                { "component": { "key": "G", "values": {} }}
+                { "module": { "key": "G", "values": {} }}
             ]}],
-            "components": [{ "key": "G", "steps": [
+            "modules": [{ "key": "G", "steps": [
                 { "id": 1, "command": { "type": "STARDIST", "objectClassId": 3 }}
             ], "parameters": []}]
         });
@@ -235,7 +235,7 @@ mod tests {
             json!({ "type": "CELLPOSE", "segmentationClass": 1 })
         );
         assert_eq!(
-            raw["components"][0]["steps"][0]["command"],
+            raw["modules"][0]["steps"][0]["command"],
             json!({ "type": "STARDIST", "segmentationClass": 3 })
         );
     }
@@ -268,8 +268,8 @@ mod tests {
     }
 
     #[test]
-    fn component_bindings_follow_the_renamed_settings() {
-        let mut raw = json!({ "components": [{
+    fn module_bindings_follow_the_renamed_settings() {
+        let mut raw = json!({ "modules": [{
             "key": "G",
             "steps": [
                 { "id": 1, "command": { "type": "THRESHOLD", "thresholds": [] }},
@@ -285,7 +285,7 @@ mod tests {
             ]}]
         }]});
         migrate_from_v3_to_v4(&mut raw);
-        let params: Vec<&str> = raw["components"][0]["parameters"][0]["bindings"]
+        let params: Vec<&str> = raw["modules"][0]["parameters"][0]["bindings"]
             .as_array()
             .unwrap()
             .iter()

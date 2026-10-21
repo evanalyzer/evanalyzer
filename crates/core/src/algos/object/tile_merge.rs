@@ -258,7 +258,7 @@ pub(crate) fn touches_tile_edge(bbox: [u32; 4], tile: &ImageTile) -> bool {
 /// Groups every object in `cache.object_cache` that touches its own
 /// `source_tile`'s edge (and isn't in `classes_to_not_merge`) by its scope,
 /// full class set (sorted/deduped) and plane - the merge-candidate pool.
-/// The scope keeps two component instances' fragments of the same local class
+/// The scope keeps two module instances' fragments of the same local class
 /// apart.
 /// Objects fully interior to their tile can never have a real cross-tile
 /// neighbor, so they're never even candidates.
@@ -588,12 +588,12 @@ mod tests {
         assert_eq!(unchanged.area, 100);
     }
 
-    /// Two instances of one component, both with a fragment pair of
+    /// Two instances of one module, both with a fragment pair of
     /// their local class 1 at the same spot on the same seam: each instance's
     /// pair merges - never across instances, which would be one object in two
     /// scopes.
     #[test]
-    fn fragments_of_two_component_instances_on_one_seam_merge_per_instance() {
+    fn fragments_of_two_module_instances_on_one_seam_merge_per_instance() {
         use crate::pipeline::scope::ScopeId;
         let seed = ObjectClass::Local(1);
         let fragment = |id: u128, bbox: [u32; 4], source: ImageTile, scope: Scope| {

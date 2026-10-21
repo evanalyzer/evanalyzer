@@ -21,11 +21,11 @@
 
 use crate::core_types::{ImageAddress, ObjectClass, PipelineId, SegmentationClass, SizeUnits};
 use crate::legacy_schema::*;
-use crate::modules::meta_data::AuthorInformation;
 use crate::settings::classification_settings::{Class, ClassificationSettings};
 use crate::settings::images_settings::{
     GlobalImageSettings, PixelSizeSettings, ZStackHandling, ZStackSettings,
 };
+use crate::settings::meta_data::AuthorInformation;
 use crate::settings::meta_data::MetaData;
 use crate::settings::pipeline_command::PipelineCommand;
 use crate::settings::pipeline_command_settings::*;
@@ -86,7 +86,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         images,
         pipelines: convert_pipelines(old, warnings),
         tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
-        components: vec![],
+        modules: vec![],
         editor: Default::default(),
     }
 }

@@ -37,54 +37,54 @@ mod core_types {
     pub use super::types::ids::MemoryId;
     pub use super::types::units::{PixelUnits, SizeUnits, SizeUnitsRel};
 }
-mod modules {
+mod settings {
     pub mod meta_data {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/meta_data.rs"
+            "/src/settings/meta_data.rs"
         ));
     }
     pub mod templates {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/templates.rs"
+            "/src/settings/templates.rs"
         ));
     }
     pub mod classification_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/classification_settings.rs"
+            "/src/settings/classification_settings.rs"
         ));
     }
     pub mod object_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/object_settings.rs"
+            "/src/settings/object_settings.rs"
         ));
     }
     pub mod images_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/images_settings.rs"
+            "/src/settings/images_settings.rs"
         ));
     }
     pub mod parameter_def {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/parameter_def.rs"
+            "/src/settings/parameter_def.rs"
         ));
     }
     pub mod pipeline_command_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/pipeline_command_settings.rs"
+            "/src/settings/pipeline_command_settings.rs"
         ));
     }
     #[allow(unused_parens)]
     pub mod pipeline_command {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/pipeline_command.rs"
+            "/src/settings/pipeline_command.rs"
         ));
     }
     // Only the types are needed for the schema, not their helpers.
@@ -92,14 +92,14 @@ mod modules {
     pub mod pipeline_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/pipeline_settings.rs"
+            "/src/settings/pipeline_settings.rs"
         ));
     }
     #[allow(dead_code)]
-    pub mod components {
+    pub mod modules {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/components.rs"
+            "/src/settings/modules.rs"
         ));
     }
     // Only the types are needed for the schema, not their helpers.
@@ -107,42 +107,33 @@ mod modules {
     pub mod plate_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/plate_settings.rs"
+            "/src/settings/plate_settings.rs"
         ));
     }
     pub mod project_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/project_settings.rs"
+            "/src/settings/project_settings.rs"
         ));
     }
     pub mod ai_learning_object_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/ai_learning_object_settings.rs"
+            "/src/settings/ai_learning_object_settings.rs"
         ));
     }
     pub mod ai_learning_pixel_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/ai_learning_pixel_settings.rs"
+            "/src/settings/ai_learning_pixel_settings.rs"
         ));
     }
     pub mod ai_learning_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/ai_learning_settings.rs"
+            "/src/settings/ai_learning_settings.rs"
         ));
     }
-}
-mod settings {
-    pub use crate::modules::classification_settings;
-    pub use crate::modules::components;
-    pub use crate::modules::images_settings;
-    pub use crate::modules::object_settings;
-    pub use crate::modules::pipeline_command;
-    pub use crate::modules::pipeline_settings;
-    pub use crate::modules::plate_settings;
 }
 
 #[path = "build/pipeline_commands_generator.rs"]
@@ -160,19 +151,19 @@ fn main() {
     println!("cargo:rerun-if-changed=src/types/classes.rs");
     println!("cargo:rerun-if-changed=src/types/ids.rs");
     println!("cargo:rerun-if-changed=src/types/units.rs");
-    println!("cargo:rerun-if-changed=src/modules/classification_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/object_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/images_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/parameter_def.rs");
-    println!("cargo:rerun-if-changed=src/modules/pipeline_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/components.rs");
-    println!("cargo:rerun-if-changed=src/modules/plate_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/project_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/meta_data.rs");
-    println!("cargo:rerun-if-changed=src/modules/templates.rs");
-    println!("cargo:rerun-if-changed=src/modules/ai_learning_object_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/ai_learning_pixel_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/ai_learning_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/classification_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/object_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/images_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/parameter_def.rs");
+    println!("cargo:rerun-if-changed=src/settings/pipeline_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/modules.rs");
+    println!("cargo:rerun-if-changed=src/settings/plate_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/project_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/meta_data.rs");
+    println!("cargo:rerun-if-changed=src/settings/templates.rs");
+    println!("cargo:rerun-if-changed=src/settings/ai_learning_object_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/ai_learning_pixel_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/ai_learning_settings.rs");
     // Input: algo structs the generator reads to produce pipeline_command*.rs
     println!("cargo:rerun-if-changed=../core/src/algos");
     println!("cargo:rerun-if-changed=../core/src/dataset");

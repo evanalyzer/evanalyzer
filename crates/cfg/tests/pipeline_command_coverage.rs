@@ -1,5 +1,5 @@
 //! Coverage tests for the generated `pipeline_command` module
-//! (`crates/cfg/src/modules/pipeline_command.rs`). That file is marked
+//! (`crates/cfg/src/settings/pipeline_command.rs`). That file is marked
 //! `// @generated - do not edit by hand`, so tests live here instead of
 //! inline, where they survive regeneration.
 //!

@@ -91,7 +91,7 @@ pub(crate) struct ScriptHost {
     pub(crate) classes: Vec<ObjectClass>,
     /// The step's values of the script's `param`s, by name.
     pub(crate) params:
-        std::collections::HashMap<String, evanalyzer_cfg::settings::components::ParamValue>,
+        std::collections::HashMap<String, evanalyzer_cfg::settings::modules::ParamValue>,
 }
 
 impl ScriptHost {
@@ -451,7 +451,7 @@ fn value_to_param_string(value: &Dynamic) -> Result<String, String> {
             .iter()
             .map(|item| match item.as_int() {
                 Ok(i) => Ok(i.to_string()),
-                // A component's own class from a class param ("L1").
+                // A module's own class from a class param ("L1").
                 Err(_) if item.is_string() => Ok(item.clone().into_string().unwrap_or_default()),
                 Err(_) => Err(format!(
                     "list entries must be integers, got {}",
@@ -498,8 +498,8 @@ fn checked_value(def: &ParameterDef, value: &str) -> Result<String, String> {
                     )
                 })
         }
-        // A number, -1 for none, or a component's own class ("L1" - a class
-        // param inside a component).
+        // A number, -1 for none, or a module's own class ("L1" - a class
+        // param inside a module).
         ParamType::ObjClass => ObjectClass::from_text(value)
             .map(|_| value.to_string())
             .ok_or_else(|| format!("expected a class id (or -1 for none), got `{value}`")),

@@ -1,6 +1,6 @@
 use crate::{
     core_types::{ObjectClass, SegmentationClass},
-    modules::{
+    settings::{
         ai_learning_object_settings::AiLearningObjectFeatureSettings,
         ai_learning_pixel_settings::AiLearningPixelFeatureSettings, meta_data::MetaData,
     },

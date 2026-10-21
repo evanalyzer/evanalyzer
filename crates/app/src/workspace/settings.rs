@@ -30,7 +30,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub always_show_advanced_settings: bool,
 
-    /// Debug mode: the pipeline editor shows how components are wired
+    /// Debug mode: the pipeline editor shows how modules are wired
     /// inside - what a parameter sets, which parameter sets a setting.
     #[serde(default)]
     pub debug_mode: bool,

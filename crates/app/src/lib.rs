@@ -29,36 +29,35 @@ pub mod settings_of {
     };
 }
 
-/// Components in the editor: component cards, creating and expanding components, the library,
+/// Modules in the editor: module cards, creating and expanding modules, the library,
 /// checks.
-pub mod components {
-    pub use crate::workspace::component_checks::{
-        ComponentProblem, ProblemFix, Severity, apply_fix, check_component, check_components,
-        check_project, problems_at, step_problem,
+pub mod modules {
+    pub use crate::workspace::module_checks::{
+        ModuleProblem, ProblemFix, Severity, apply_fix, check_module, check_modules, check_project,
+        problems_at, step_problem,
     };
-    pub use crate::workspace::component_editing::{
-        ClassRole, ComponentPlan, ComponentPlanClass, InPlaceCopy, StepList, add_binding,
-        apply_defaults, bindable_settings, bound_setting_edited, clone_component_for_step,
-        compatible_parameters, component_in_place_for_step, component_uses, copy_name_problem,
-        create_component, edit_parameter, expand_component, exposed_settings, in_place_copy,
-        list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,
-        plan_component, prune_component_values, remove_binding, remove_component,
-        remove_component_step, remove_parameter, remove_unused_components, set_parameter_section,
-        setting_at, step_setting, step_settings, toggle_exposed, unused_components,
-        would_contain_itself,
+    pub use crate::workspace::module_editing::{
+        ClassRole, InPlaceCopy, ModulePlan, ModulePlanClass, StepList, add_binding, apply_defaults,
+        bindable_settings, bound_setting_edited, clone_module_for_step, compatible_parameters,
+        copy_name_problem, create_module, edit_parameter, expand_module, exposed_settings,
+        in_place_copy, list_entry_removed, module_in_place_for_step, module_uses, move_parameter,
+        new_parameter_key, parameter_for_setting, plan_module, prune_module_values, remove_binding,
+        remove_module, remove_module_step, remove_parameter, remove_unused_modules,
+        set_parameter_section, setting_at, step_setting, step_settings, toggle_exposed,
+        unused_modules, would_contain_itself,
     };
-    pub use crate::workspace::component_insights::{
+    pub use crate::workspace::module_insights::{
         ImageChannels, image_channels, parameter_key, parameter_wiring, rekey_parameters,
         setting_wiring,
     };
-    pub use crate::workspace::component_library::{
-        components_used_by, content_hash, insert_component_template, library_name,
-        merge_component_definitions, modified_since_inserted, project_copy,
-        save_component_template, save_pipeline_as_component, update_available, update_from_library,
+    pub use crate::workspace::module_library::{
+        content_hash, insert_module_template, library_name, merge_module_definitions,
+        modified_since_inserted, modules_used_by, project_copy, save_module_template,
+        save_pipeline_as_module, update_available, update_from_library,
     };
-    pub use evanalyzer_core::component_parameters;
-    pub use evanalyzer_core::component_steps_with_values;
-    pub use evanalyzer_core::set_component_parameter;
+    pub use evanalyzer_core::module_parameters;
+    pub use evanalyzer_core::module_steps_with_values;
+    pub use evanalyzer_core::set_module_parameter;
 }
 
 pub mod global {
@@ -175,7 +174,7 @@ pub mod bioimageio {
 
 pub mod templates {
     pub use crate::api::TemplateFolders;
-    pub use crate::workspace::templates::load_component_templates;
+    pub use crate::workspace::templates::load_module_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
     pub use crate::workspace::templates::load_project_templates;
 }

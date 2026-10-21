@@ -1,28 +1,28 @@
-// api/create_component.slint — the Rust interface of dialogs/create_component_dialog.slint: the state Rust
+// api/create_module.slint — the Rust interface of dialogs/create_module_dialog.slint: the state Rust
 // sets, the callbacks it answers.
 
-/// A project class the steps use, and what it becomes in the component.
-export struct ComponentClassRow {
+/// A project class the steps use, and what it becomes in the module.
+export struct ModuleClassRow {
     /// The class in its text form ("3") - how the host knows which it is.
     class-text: string,
     name: string,
     /// "Only used by these steps" / "Also used elsewhere".
     detail: string,
-    /// 0 = internal (the component's own), 1 = component parameter, 2 = fixed.
+    /// 0 = internal (the module's own), 1 = module parameter, 2 = fixed.
     role: int,
 }
 
-export global CreateComponentState {
+export global CreateModuleState {
     in property <int> pipeline-id: 0;
     /// "1 · Threshold", "2 · Extract Objects", ... - for the range pickers.
     in property <[string]> step-names: [];
     in-out property <int> from-step: 0;
     in-out property <int> to-step: 0;
     in-out property <string> name: "";
-    in property <[ComponentClassRow]> classes: [];
-    /// "Channel 1 becomes a component parameter", or empty.
+    in property <[ModuleClassRow]> classes: [];
+    /// "Channel 1 becomes a module parameter", or empty.
     in property <string> channels-text: "";
-    /// Why the component can't be made, or empty.
+    /// Why the module can't be made, or empty.
     in property <string> error: "";
     callback range-changed(int, int);
     callback role-changed(int, int);
@@ -30,11 +30,11 @@ export global CreateComponentState {
     callback cancel();
 }
 
-/// "Edit in place" on a component other steps use too: the name of the copy
+/// "Edit in place" on a module other steps use too: the name of the copy
 /// this step gets.
 export global InPlaceCopyState {
-    in property <string> component-name: "";
-    /// The other steps using the component - they keep it.
+    in property <string> module-name: "";
+    /// The other steps using the module - they keep it.
     in property <int> other-uses: 0;
     /// From the library: the copy gets no library updates.
     in property <bool> from-library: false;
@@ -46,7 +46,7 @@ export global InPlaceCopyState {
     callback cancel();
 }
 
-/// Asked when exposing a setting that existing component parameters could set
+/// Asked when exposing a setting that existing module parameters could set
 /// too (same kind of setting).
 export global ExposeChoiceState {
     in property <string> setting-name: "";
@@ -59,11 +59,11 @@ export global ExposeChoiceState {
     callback cancel();
 }
 
-export global ComponentUpdateState {
-    in property <string> component-name: "";
+export global ModuleUpdateState {
+    in property <string> module-name: "";
     /// "v1 → v3"
     in property <string> versions: "";
-    /// The project changed the component since it was inserted - the update
+    /// The project changed the module since it was inserted - the update
     /// replaces those changes.
     in property <bool> changed-here: false;
     callback confirm();
@@ -71,15 +71,15 @@ export global ComponentUpdateState {
 }
 
 /// A setting a parameter sets.
-export struct ComponentBindingRow {
+export struct ModuleBindingRow {
     /// "#2 EV Detection › Output class"
     text: string,
     step-id: int,
     path: string,
 }
 
-/// A parameter of the component, as it shows on the component card.
-export struct ComponentParamRow {
+/// A parameter of the module, as it shows on the module card.
+export struct ModuleParamRow {
     // The parameter's key ("min_size").
     key: string,
     label: string,
@@ -91,30 +91,30 @@ export struct ComponentParamRow {
     default-description: string,
     /// What it sets: "Blur › Kernel size, Blur › Kernel size".
     sets: string,
-    /// The section it's shown in on the component card; empty: none.
+    /// The section it's shown in on the module card; empty: none.
     section: string,
     /// What it sets, one by one.
-    bindings: [ComponentBindingRow],
+    bindings: [ModuleBindingRow],
     /// "Also set…", then the settings it could also set (same control, set
     /// by no parameter yet) - empty if there are none.
     addable: [string],
 }
 
-/// The opened component's name, descriptions and parameters (name, help text,
-/// order). Opened from "Settings…" in the bar of a component opened to edit, or
+/// The opened module's name, descriptions and parameters (name, help text,
+/// order). Opened from "Settings…" in the bar of a module opened to edit, or
 /// from ✎ on an exposed setting (`focus-index` is then that parameter's
 /// row).
-export global ComponentSettingsState {
+export global ModuleSettingsState {
     in property <string> name: "";
     /// One line, shown in the command picker.
     in property <string> description: "";
-    /// The full description, shown with the short one behind the component
+    /// The full description, shown with the short one behind the module
     /// card's "?".
     in property <string> long-description: "";
     /// The first author - shown in the command picker.
     in property <string> author-name: "";
     in property <string> author-organization: "";
-    in property <[ComponentParamRow]> parameters: [];
+    in property <[ModuleParamRow]> parameters: [];
     /// The row to scroll to and highlight, or -1.
     in property <int> focus-index: -1;
     callback name-edited(string);
@@ -127,13 +127,13 @@ export global ComponentSettingsState {
     callback parameter-name-edited(string, string);
     /// key, help text
     callback parameter-help-edited(string, string);
-    /// key, section on the component card (empty: none)
+    /// key, section on the module card (empty: none)
     callback parameter-section-edited(string, string);
     /// key, -1 up / +1 down
     callback parameter-moved(string, int);
     /// key: back to the bound setting's own help text.
     callback parameter-help-reset(string);
-    /// key: stop exposing it - its settings go back to the component's values.
+    /// key: stop exposing it - its settings go back to the module's values.
     callback parameter-removed(string);
     /// key, step id, path: it no longer sets that setting.
     callback binding-removed(string, int, string);
