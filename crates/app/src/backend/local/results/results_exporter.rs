@@ -1,5 +1,6 @@
 use super::results_generator::{ResultsGenerator, class_display_label};
 use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
+use super::results_tracks::{TrackSummaryHead, TrackSummaryQuery};
 use crate::api::{
     Aggregation, Cell, CellValue, Column, ColumnEntry, DatabaseResult, GroupedByImageFilter,
     ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateFilterMulti, View,
@@ -8,7 +9,9 @@ use crate::api::{
 use crate::api::{ExportFormat, ExportProgress, ResultExport};
 use crate::api::{
     TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCoursePoint, TimeCourseResult,
+    TrackSummary, TrackSummaryFilter,
 };
+use crate::workspace::settings::SpeedUnit;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};
 use std::collections::HashMap;
@@ -315,6 +318,95 @@ impl<'a> TimeCourseLong<'a> {
             out.number(point.n_tracks as f64)?;
         }
         for value in &point.values {
+            out.optional(*value)?;
+        }
+        out.end_row()
+    }
+}
+
+/// The tracks table: who (image, well, class, track), when (time points,
+/// duration), how it moved (path, distance, speed, straightness), whether
+/// it touches the edge or is there from the start, then the measurements.
+/// Lengths in µm with a pixel size, else px; durations in minutes with a
+/// frame interval, else time points; the speed in the unit asked for when
+/// it can be.
+struct TrackColumns<'a> {
+    head: &'a TrackSummaryHead,
+    speed_unit: SpeedUnit,
+}
+
+impl<'a> TrackColumns<'a> {
+    fn new(head: &'a TrackSummaryHead, speed_unit: SpeedUnit) -> Self {
+        Self {
+            head,
+            speed_unit: match head.um && head.timed {
+                true => speed_unit,
+                false => SpeedUnit::PxPerFrame,
+            },
+        }
+    }
+
+    fn length_unit(&self) -> &'static str {
+        if self.head.um { "µm" } else { "px" }
+    }
+
+    fn header(&self, out: &mut dyn FieldSink) -> Result<(), InternalErrors> {
+        let length = self.length_unit();
+        let speed = match self.speed_unit {
+            SpeedUnit::PxPerFrame => "px/time point",
+            SpeedUnit::UmPerMin => "µm/min",
+            SpeedUnit::UmPerS => "µm/s",
+        };
+        out.text("Image")?;
+        out.text(self.head.group_label)?;
+        if self.head.by_z {
+            out.text("Z")?;
+        }
+        for column in ["Class", "Track", "First T", "Last T", "Time points"] {
+            out.text(column)?;
+        }
+        out.text(if self.head.timed {
+            "Duration [min]"
+        } else {
+            "Duration [time points]"
+        })?;
+        out.text(&format!("Path length [{length}]"))?;
+        out.text(&format!("Distance moved [{length}]"))?;
+        out.text(&format!("Mean speed [{speed}]"))?;
+        for column in ["Straightness", "Touches edge", "From first T"] {
+            out.text(column)?;
+        }
+        for name in &self.head.value_names {
+            out.text(name)?;
+        }
+        out.end_row()
+    }
+
+    fn row(&self, track: &TrackSummary, out: &mut dyn FieldSink) -> Result<(), InternalErrors> {
+        let frames = f64::from(track.last_t.saturating_sub(track.first_t));
+        let um = track.um_per_px.filter(|_| self.head.um);
+        let length = |px: f64| um.map_or(px, |um| px * um);
+        out.text(&track.image)?;
+        out.text(&track.group)?;
+        if self.head.by_z {
+            out.number(f64::from(track.z))?;
+        }
+        out.text(&track.class_name)?;
+        out.number(track.track_id as f64)?;
+        out.number(f64::from(track.first_t))?;
+        out.number(f64::from(track.last_t))?;
+        out.number(f64::from(track.points))?;
+        match track.s_per_frame.filter(|_| self.head.timed) {
+            Some(s) => out.number(frames * s / 60.0)?,
+            None => out.number(frames)?,
+        }
+        out.number(length(track.path_px))?;
+        out.number(length(track.displacement_px))?;
+        out.optional(track.speed_in(self.speed_unit))?;
+        out.optional(track.straightness())?;
+        out.text(if track.touches_edge { "TRUE" } else { "FALSE" })?;
+        out.text(if track.from_start { "TRUE" } else { "FALSE" })?;
+        for value in &track.values {
             out.optional(*value)?;
         }
         out.end_row()
@@ -646,6 +738,9 @@ impl ResultExport {
         if self.with_time_course {
             self.export_time_course(database, cancel, &mut *on_progress)?;
         }
+        if self.with_track_summary {
+            self.export_track_summary(database, cancel, &mut *on_progress)?;
+        }
         if self.with_plate_view_heatmap || self.with_well_view_heatmap {
             self.export_plate_and_well(database, cancel, &mut *on_progress)?;
         }
@@ -940,6 +1035,64 @@ impl ResultExport {
     // statistics of `columns` over each line's objects - long (a row per
     // time point × line × class) and/or wide (per value and statistic: a row
     // per time point, a column per line; CSV a file each, XLSX a sheet).
+    /// `tracks.csv` / a "Tracks" sheet: a row per track (see
+    /// `TrackColumns`), written as the tracks are read.
+    fn export_track_summary(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        check_cancelled(cancel)?;
+        on_progress("Exporting Tracks", 0, 1);
+        let settings = &self.track_summary;
+        let filter = TrackSummaryFilter {
+            grouping: self.grouping.clone(),
+            columns: self.columns.clone(),
+            statistics: settings.statistics.clone(),
+            images: (!self.image_rel_paths.is_empty()).then(|| self.image_rel_paths.clone()),
+            object_classes: (!self.object_classes.is_empty()).then(|| self.object_classes.clone()),
+            min_points: settings.min_points,
+            from_start: settings.from_start,
+            no_edge: settings.no_edge,
+        };
+        let query = TrackSummaryQuery::prepare(database, &filter)?;
+        let columns = TrackColumns::new(&query.head, settings.speed_unit);
+        let each_track = |out: &mut dyn FieldSink| {
+            columns.header(out)?;
+            let mut n = 0usize;
+            query.for_each(|track| {
+                n += 1;
+                if n.is_multiple_of(65_536) {
+                    check_cancelled(cancel)?;
+                }
+                columns.row(track, out)
+            })
+        };
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                let worksheet = workbook.add_worksheet_with_constant_memory();
+                worksheet.set_name("Tracks").map_err(xlsx_err)?;
+                each_track(&mut FieldsSheet::new(worksheet))?;
+                workbook
+                    .save(self.output_path("tracks.xlsx"))
+                    .map_err(xlsx_err)?;
+            }
+            ExportFormat::CSV => {
+                let path = self.output_path("tracks.csv");
+                each_track(&mut FieldsCsv::create(&path)?)?;
+            }
+            ExportFormat::Parquet => {
+                return Err(InternalErrors::Internal(
+                    "Parquet export doesn't support the tracks".to_string(),
+                ));
+            }
+        }
+        on_progress("Exporting Tracks", 1, 1);
+        Ok(())
+    }
+
     fn export_time_course(
         &self,
         database: &ResultsGenerator,
@@ -3675,6 +3828,53 @@ mod tests {
         sheet.row(&[Field::Number(1.0)]).expect("the last row");
         let error = sheet.row(&[Field::Number(2.0)]).expect_err("beyond");
         assert!(error.to_string().contains("export it as CSV"), "{error}");
+    }
+
+    /// Tracks: a row per track - who, when, how it moved (µm with the
+    /// fixture's pixel size; time points without a frame interval: the
+    /// speed per time point, whatever unit was asked for), its values.
+    #[test]
+    fn the_tracks_export_has_a_row_per_track() {
+        let (database, out_dir) = open_analysed(
+            &[
+                ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                    .in_track(7)
+                    .at_centroid(0.0, 0.0),
+                ObjectSpec::new("img1.tif", "ClassA", 1, 30)
+                    .in_track(7)
+                    .at_plane(0, 1)
+                    .at_centroid(3.0, 4.0),
+                ObjectSpec::new("img1.tif", "ClassA", 1, 99),
+            ],
+            2,
+        );
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            with_track_summary: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("tracks export");
+        let csv = std::fs::read_to_string(out_dir.join("tracks.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "Image,Well,Class,Track,First T,Last T,Time points,Duration [time points],\
+             Path length [µm],Distance moved [µm],Mean speed [px/time point],Straightness,\
+             Touches edge,From first T,Area [px] mean"
+        );
+        let row: Vec<&str> = lines[1].split(',').collect();
+        assert_eq!(row[0], "img1.tif");
+        assert_eq!(
+            row[2..],
+            [
+                "ClassA", "7", "0", "1", "2", "1", "0.005", "0.005", "5", "1", "FALSE", "TRUE",
+                "20"
+            ]
+        );
+        assert_eq!(lines.len(), 2, "the untracked object isn't a track");
     }
 
     /// A wide table per track would have a column per track: refused with

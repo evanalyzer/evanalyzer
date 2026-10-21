@@ -207,6 +207,11 @@ pub trait ResultsSource: Send + Sync {
         &self,
         filter: &crate::api::ImageObjectsFilter,
     ) -> Result<Vec<crate::api::ResultObject>, InternalErrors>;
+    /// A row per track (`TrackSummaryFilter`).
+    fn track_summary(
+        &self,
+        filter: &crate::api::TrackSummaryFilter,
+    ) -> Result<Vec<crate::api::TrackSummary>, InternalErrors>;
     /// Some of the objects are tracked (Results › Tracks is offered).
     fn has_tracks(&self) -> Result<bool, InternalErrors>;
     /// One image's tracks, their points by time (Results › Tracks).

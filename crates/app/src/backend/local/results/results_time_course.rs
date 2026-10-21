@@ -36,7 +36,7 @@ fn quantile(stat: TimeCourseStat) -> Option<f64> {
     }
 }
 
-fn stat_sql(stat: TimeCourseStat, value: &str) -> String {
+pub(super) fn stat_sql(stat: TimeCourseStat, value: &str) -> String {
     let call = match stat {
         TimeCourseStat::Mean => format!("AVG({value})"),
         TimeCourseStat::Sd => format!("STDDEV_SAMP({value})"),

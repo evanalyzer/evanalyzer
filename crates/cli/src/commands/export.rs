@@ -1,8 +1,10 @@
-use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, TableExportArgs};
+use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, SpeedUnitKind, TableExportArgs};
 use crate::commands::common::{
     ResolvedGrouping, resolve_grouping, resolve_image_rel_paths, resolve_object_classes,
+    to_time_course_stat,
 };
 use evanalyzer_app::backends::Backend;
+use evanalyzer_app::global::SpeedUnit;
 use evanalyzer_app::results::Column;
 use evanalyzer_app::results::ExportFormat;
 use evanalyzer_app::results::ResultExport;
@@ -98,6 +100,11 @@ fn export_table(
     args: TableExportArgs,
     format: ExportFormat,
 ) -> Result<(), InternalErrors> {
+    if args.tracks.tracks && args.group.group_by.is_some() {
+        return Err(InternalErrors::InvalidArgument(
+            "--tracks is a row per track: it can't be grouped (--group-by) too".to_string(),
+        ));
+    }
     let db = backend.open_results(&args.db)?;
     let db = db.as_ref();
     if args.filter.colocalized.is_some() {
@@ -131,6 +138,34 @@ fn export_table(
         ..Default::default()
     };
     let document = match grouping {
+        // A row per track: --agg's statistics (default avg), --group-regex
+        // the well column's pattern.
+        _ if args.tracks.tracks => {
+            export.with_track_summary = true;
+            if let Some(regex) = &args.group.group_regex {
+                export.grouping = evanalyzer_app::results::Grouping::Regex(regex.clone());
+            }
+            export.track_summary = evanalyzer_app::results::TrackSummaryExport {
+                statistics: match args.group.agg.is_empty() {
+                    true => vec![evanalyzer_app::results::TimeCourseStat::Mean],
+                    false => args
+                        .group
+                        .agg
+                        .iter()
+                        .map(|kind| to_time_course_stat(*kind))
+                        .collect(),
+                },
+                min_points: args.tracks.min_points,
+                from_start: args.tracks.from_start,
+                no_edge: args.tracks.no_edge,
+                speed_unit: match args.tracks.speed_unit {
+                    SpeedUnitKind::PxFrame => SpeedUnit::PxPerFrame,
+                    SpeedUnitKind::UmMin => SpeedUnit::UmPerMin,
+                    SpeedUnitKind::UmS => SpeedUnit::UmPerS,
+                },
+            };
+            "tracks"
+        }
         ResolvedGrouping::List => {
             export.with_list_view = true;
             "list"
@@ -269,6 +304,7 @@ mod tests {
                 out: out.clone(),
                 filter: FilterArgs::default(),
                 group: GroupArgs::default(),
+                tracks: Default::default(),
             },
             ExportFormat::CSV,
         )
@@ -284,6 +320,47 @@ mod tests {
         assert!(content.contains("ClassB"));
     }
 
+    /// `--tracks`: a row per track (here each object its own, of one time
+    /// point); `--min-points 2` leaves them out.
+    #[test]
+    fn export_tracks_writes_a_row_per_track() {
+        let db = TempResultsDb::seeded();
+        duckdb::Connection::open(&db.path)
+            .unwrap()
+            .execute_batch("UPDATE objects SET track_id = object_class_id[1];")
+            .unwrap();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let export = |min_points: u32| {
+            let out = out_dir.path().join(format!("tracks_{min_points}.csv"));
+            export_table(
+                TableExportArgs {
+                    db: db.path.clone(),
+                    out: out.clone(),
+                    filter: FilterArgs::default(),
+                    group: GroupArgs::default(),
+                    tracks: crate::args::TrackArgs {
+                        tracks: true,
+                        min_points,
+                        ..Default::default()
+                    },
+                },
+                ExportFormat::CSV,
+            )
+            .expect("tracks export");
+            std::fs::read_to_string(&out).expect("read csv back")
+        };
+        let all = export(1);
+        let lines: Vec<&str> = all.lines().collect();
+        // Several z-planes in this database: a Z column after the well.
+        assert!(
+            lines[0].starts_with("Image,Well,Z,Class,Track,"),
+            "{}",
+            lines[0]
+        );
+        assert_eq!(lines.len(), 3, "{all}");
+        assert_eq!(export(2).lines().count(), 1, "the header only");
+    }
+
     #[test]
     fn export_table_writes_an_xlsx_file_with_the_expected_rows() {
         let db = TempResultsDb::seeded();
@@ -296,6 +373,7 @@ mod tests {
                 out: out.clone(),
                 filter: FilterArgs::default(),
                 group: GroupArgs::default(),
+                tracks: Default::default(),
             },
             ExportFormat::XLSX,
         )
@@ -326,6 +404,7 @@ mod tests {
                     group_by: Some(crate::args::GroupByKind::Image),
                     ..Default::default()
                 },
+                tracks: Default::default(),
             },
             ExportFormat::CSV,
         )
@@ -353,6 +432,7 @@ mod tests {
                     group_by: Some(crate::args::GroupByKind::Group),
                     ..Default::default()
                 },
+                tracks: Default::default(),
             },
             ExportFormat::CSV,
         );
@@ -368,6 +448,7 @@ mod tests {
                 out: out.to_path_buf(),
                 filter: FilterArgs::default(),
                 group,
+                tracks: Default::default(),
             },
             ExportFormat::CSV,
         )
@@ -443,6 +524,7 @@ mod tests {
                 out: out.clone(),
                 filter: FilterArgs::default(),
                 group: GroupArgs::default(),
+                tracks: Default::default(),
             },
             ExportFormat::CSV,
         )

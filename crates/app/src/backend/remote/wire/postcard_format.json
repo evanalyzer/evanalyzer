@@ -1,5 +1,5 @@
 {
-  "protocol_version": 23,
+  "protocol_version": 24,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -953,6 +953,14 @@
           }
         },
         {
+          "with_track_summary": "BOOL"
+        },
+        {
+          "track_summary": {
+            "TYPENAME": "TrackSummaryExport"
+          }
+        },
+        {
           "with_plate_view_heatmap": "BOOL"
         },
         {
@@ -1131,6 +1139,15 @@
               "TYPENAME": "ImageTracks"
             }
           }
+        },
+        "15": {
+          "TrackSummary": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "TrackSummary"
+              }
+            }
+          }
         }
       }
     },
@@ -1270,6 +1287,13 @@
         },
         "20": {
           "HasTracks": "UNIT"
+        },
+        "21": {
+          "TrackSummary": {
+            "NEWTYPE": {
+              "TYPENAME": "TrackSummaryFilter"
+            }
+          }
         }
       }
     },
@@ -1385,6 +1409,19 @@
           "total_object_count": "U64"
         }
       ]
+    },
+    "SpeedUnit": {
+      "ENUM": {
+        "0": {
+          "pxPerFrame": "UNIT"
+        },
+        "1": {
+          "umPerMin": "UNIT"
+        },
+        "2": {
+          "umPerS": "UNIT"
+        }
+      }
     },
     "TimeCourseExport": {
       "STRUCT": [
@@ -1653,6 +1690,139 @@
         },
         {
           "area_px": "F32"
+        }
+      ]
+    },
+    "TrackSummary": {
+      "STRUCT": [
+        {
+          "image": "STR"
+        },
+        {
+          "group": "STR"
+        },
+        {
+          "z": "U32"
+        },
+        {
+          "class_id": "I32"
+        },
+        {
+          "class_name": "STR"
+        },
+        {
+          "track_id": "U64"
+        },
+        {
+          "first_t": "U32"
+        },
+        {
+          "last_t": "U32"
+        },
+        {
+          "points": "U32"
+        },
+        {
+          "path_px": "F64"
+        },
+        {
+          "displacement_px": "F64"
+        },
+        {
+          "touches_edge": "BOOL"
+        },
+        {
+          "from_start": "BOOL"
+        },
+        {
+          "um_per_px": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "s_per_frame": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "values": {
+            "SEQ": {
+              "OPTION": "F64"
+            }
+          }
+        }
+      ]
+    },
+    "TrackSummaryExport": {
+      "STRUCT": [
+        {
+          "statistics": {
+            "SEQ": {
+              "TYPENAME": "TimeCourseStat"
+            }
+          }
+        },
+        {
+          "min_points": "U32"
+        },
+        {
+          "from_start": "BOOL"
+        },
+        {
+          "no_edge": "BOOL"
+        },
+        {
+          "speed_unit": {
+            "TYPENAME": "SpeedUnit"
+          }
+        }
+      ]
+    },
+    "TrackSummaryFilter": {
+      "STRUCT": [
+        {
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
+        },
+        {
+          "columns": {
+            "SEQ": {
+              "TYPENAME": "Column"
+            }
+          }
+        },
+        {
+          "statistics": {
+            "SEQ": {
+              "TYPENAME": "TimeCourseStat"
+            }
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "min_points": "U32"
+        },
+        {
+          "from_start": "BOOL"
+        },
+        {
+          "no_edge": "BOOL"
         }
       ]
     },

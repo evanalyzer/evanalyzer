@@ -247,6 +247,16 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn track_summary(
+        &self,
+        filter: &crate::api::TrackSummaryFilter,
+    ) -> Result<Vec<crate::api::TrackSummary>, InternalErrors> {
+        match self.query(ResultsQuery::TrackSummary(filter.clone()))? {
+            ResultsAnswer::TrackSummary(tracks) => Ok(tracks),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn has_tracks(&self) -> Result<bool, InternalErrors> {
         match self.query(ResultsQuery::HasTracks)? {
             ResultsAnswer::Count(n) => Ok(n > 0),

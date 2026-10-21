@@ -159,6 +159,44 @@ pub struct TableExportArgs {
 
     #[command(flatten)]
     pub group: GroupArgs,
+
+    #[command(flatten)]
+    pub tracks: TrackArgs,
+}
+
+/// `--tracks`: a row per track instead of per object.
+#[derive(Args, Default)]
+pub struct TrackArgs {
+    /// A row per track: when it was seen, how far, fast and straight it
+    /// moved, the --agg statistics (default avg) of every numeric column
+    /// over its time points
+    #[arg(long)]
+    pub tracks: bool,
+
+    /// --tracks: only tracks with at least this many time points
+    #[arg(long, default_value_t = 1, requires = "tracks")]
+    pub min_points: u32,
+
+    /// --tracks: only tracks there from the first time point
+    #[arg(long, requires = "tracks")]
+    pub from_start: bool,
+
+    /// --tracks: leave out tracks with an object touching the image edge
+    #[arg(long, requires = "tracks")]
+    pub no_edge: bool,
+
+    /// --tracks: the speed's unit (px-frame without a pixel size or frame
+    /// interval)
+    #[arg(long, value_enum, default_value = "um-min", requires = "tracks")]
+    pub speed_unit: SpeedUnitKind,
+}
+
+#[derive(Copy, Clone, Default, ValueEnum)]
+pub enum SpeedUnitKind {
+    PxFrame,
+    #[default]
+    UmMin,
+    UmS,
 }
 
 #[derive(Args)]
@@ -326,6 +364,9 @@ pub struct ViewArgs {
 
     #[command(flatten)]
     pub filter: FilterArgs,
+
+    #[command(flatten)]
+    pub tracks: TrackArgs,
 }
 
 #[derive(Args)]

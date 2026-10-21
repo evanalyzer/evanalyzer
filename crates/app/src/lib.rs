@@ -119,7 +119,8 @@ pub mod results {
     };
     pub use crate::api::{
         TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-        TimeCoursePoint, TimeCourseResult, TimeCourseStat,
+        TimeCoursePoint, TimeCourseResult, TimeCourseStat, TrackSummary, TrackSummaryExport,
+        TrackSummaryFilter,
     };
     pub use crate::backend::local::results::{colorize, colorize_thumbnail};
 

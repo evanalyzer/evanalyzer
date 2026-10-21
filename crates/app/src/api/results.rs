@@ -422,6 +422,124 @@ impl Default for TimeCourseExport {
     }
 }
 
+/// One row per track (Results › Tracks, its export): when it was seen,
+/// how it moved, its measurements over its time points. Failed and
+/// disabled images are left out.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackSummaryFilter {
+    /// The well / group column's grouping.
+    pub grouping: Grouping,
+    /// Each one's `statistics` over the track's time points.
+    pub columns: Vec<Column>,
+    pub statistics: Vec<TimeCourseStat>,
+    /// `None`: every image.
+    pub images: Option<Vec<String>>,
+    /// `None`: every class (a track's class is its first object's first).
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// Tracks with fewer time points are left out.
+    pub min_points: u32,
+    /// Only tracks there from the first analysed time point.
+    pub from_start: bool,
+    /// Tracks with an object touching the image's edge are left out.
+    pub no_edge: bool,
+}
+
+impl Default for TrackSummaryFilter {
+    fn default() -> Self {
+        Self {
+            grouping: Grouping::default(),
+            columns: Vec::new(),
+            statistics: vec![TimeCourseStat::Mean],
+            images: None,
+            object_classes: None,
+            min_points: 1,
+            from_start: false,
+            no_edge: false,
+        }
+    }
+}
+
+/// A track, summed up - see [`TrackSummaryFilter`]. Lengths in pixels,
+/// times in time points: `um_per_px` and `s_per_frame` (when known) turn
+/// them into µm and seconds.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackSummary {
+    pub image: String,
+    /// Its well / group (`TrackSummaryFilter::grouping`), empty for none.
+    pub group: String,
+    pub z: u32,
+    pub class_id: i32,
+    pub class_name: String,
+    pub track_id: u64,
+    pub first_t: u32,
+    pub last_t: u32,
+    /// Time points it has an object on.
+    pub points: u32,
+    /// The length of its path, point to point.
+    pub path_px: f64,
+    /// From its first position to its last.
+    pub displacement_px: f64,
+    pub touches_edge: bool,
+    /// There from the first analysed time point.
+    pub from_start: bool,
+    pub um_per_px: Option<f64>,
+    pub s_per_frame: Option<f64>,
+    /// Per column, per statistic (`TrackSummaryFilter` order).
+    pub values: Vec<Option<f64>>,
+}
+
+impl TrackSummary {
+    /// Its path's length over its time points (`None` with one).
+    pub fn speed_px_per_frame(&self) -> Option<f64> {
+        let frames = self.last_t.saturating_sub(self.first_t);
+        (frames > 0).then(|| self.path_px / f64::from(frames))
+    }
+
+    /// Its speed in `unit` - `None` with one time point, or µm without a
+    /// pixel size or frame interval.
+    pub fn speed_in(&self, unit: crate::workspace::settings::SpeedUnit) -> Option<f64> {
+        use crate::workspace::settings::SpeedUnit;
+        let px = self.speed_px_per_frame()?;
+        match (unit, self.um_per_px, self.s_per_frame) {
+            (SpeedUnit::PxPerFrame, ..) => Some(px),
+            (SpeedUnit::UmPerMin, Some(um), Some(s)) => Some(px * um / s * 60.0),
+            (SpeedUnit::UmPerS, Some(um), Some(s)) => Some(px * um / s),
+            _ => None,
+        }
+    }
+
+    /// Distance moved over path length: 1 a straight line, near 0 wandering
+    /// (`None` without a path).
+    pub fn straightness(&self) -> Option<f64> {
+        (self.path_px > 0.0).then(|| self.displacement_px / self.path_px)
+    }
+}
+
+/// The tracks export (`tracks.csv` / a "Tracks" sheet) - see
+/// [`TrackSummaryFilter`] for the filters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackSummaryExport {
+    pub statistics: Vec<TimeCourseStat>,
+    pub min_points: u32,
+    pub from_start: bool,
+    pub no_edge: bool,
+    /// The speed's unit - px/frame when µm can't be (no pixel size or
+    /// frame interval).
+    pub speed_unit: crate::workspace::settings::SpeedUnit,
+}
+
+impl Default for TrackSummaryExport {
+    fn default() -> Self {
+        Self {
+            statistics: vec![TimeCourseStat::Mean],
+            min_points: 1,
+            from_start: false,
+            no_edge: false,
+            speed_unit: crate::workspace::settings::SpeedUnit::UmPerMin,
+        }
+    }
+}
+
 /// The time course's tables: long - a row per time point × line - and/or
 /// wide - per value and statistic, a row per time point, a column per line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -727,6 +845,9 @@ pub struct ResultExport {
     /// over each line's objects (see `TimeCourseExport`).
     pub with_time_course: bool,
     pub time_course: TimeCourseExport,
+    /// `tracks.{csv,xlsx}`: a row per track (see `TrackSummaryExport`).
+    pub with_track_summary: bool,
+    pub track_summary: TrackSummaryExport,
     pub with_plate_view_heatmap: bool,
     pub with_well_view_heatmap: bool,
     pub with_plate_view_list: bool,

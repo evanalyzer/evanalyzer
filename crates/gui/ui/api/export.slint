@@ -61,6 +61,15 @@ export global ExportDialogState {
     in-out property <string> time-stat-summary: "";
     in-out property <bool> time-relative: false;
     in-out property <int> time-layout: 2;
+    // Tracks (with tracked objects): a row per track - the measurements'
+    // statistics over its time points, at least `track-min-points` of
+    // them, there from the first time point, not touching the edge.
+    in-out property <bool> with-tracks: false;
+    in-out property <[MultiSelectItem]> track-stat-items: [];
+    in-out property <string> track-stat-summary: "";
+    in-out property <string> track-min-points: "1";
+    in-out property <bool> track-from-start: false;
+    in-out property <bool> track-no-edge: false;
     // A PNG per image with its objects drawn (boxes in their class colors).
     in-out property <bool> with-drawn-images: false;
 
@@ -90,6 +99,7 @@ export global ExportDialogState {
     callback column-select-none();
     callback aggregation-item-selected(string, bool);
     callback time-stat-item-selected(string, bool);
+    callback track-stat-item-selected(string, bool);
 
     callback start-clicked();
     callback close-clicked();

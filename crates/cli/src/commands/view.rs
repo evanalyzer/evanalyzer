@@ -117,9 +117,139 @@ fn rows_page(
     })
 }
 
+/// `view --tracks`: page `--page` of the tracks (`--min-points`,
+/// `--from-start`, `--no-edge`, `--image`, `--class`), a row each - as a
+/// table, its speed in `--speed-unit` (px/time point when µm can't be).
+fn tracks_table(
+    db: &dyn evanalyzer_app::results::ResultsSource,
+    args: &ViewArgs,
+) -> Result<DatabaseResult, InternalErrors> {
+    use evanalyzer_app::global::SpeedUnit;
+    let image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
+    let object_classes = resolve_object_classes(db, &args.filter.classes)?;
+    let tracks = db.track_summary(&evanalyzer_app::results::TrackSummaryFilter {
+        images: (!image_rel_paths.is_empty()).then_some(image_rel_paths),
+        object_classes: (!object_classes.is_empty()).then_some(object_classes),
+        min_points: args.tracks.min_points,
+        from_start: args.tracks.from_start,
+        no_edge: args.tracks.no_edge,
+        ..Default::default()
+    })?;
+    let wanted = match args.tracks.speed_unit {
+        crate::args::SpeedUnitKind::PxFrame => SpeedUnit::PxPerFrame,
+        crate::args::SpeedUnitKind::UmMin => SpeedUnit::UmPerMin,
+        crate::args::SpeedUnitKind::UmS => SpeedUnit::UmPerS,
+    };
+    // µm only when every track can be: one unit for the column.
+    let unit = match tracks
+        .iter()
+        .all(|t| t.um_per_px.is_some() && t.s_per_frame.is_some())
+    {
+        true => wanted,
+        false => SpeedUnit::PxPerFrame,
+    };
+    let unit_label = match unit {
+        SpeedUnit::PxPerFrame => "px/time point",
+        SpeedUnit::UmPerMin => "µm/min",
+        SpeedUnit::UmPerS => "µm/s",
+    };
+    let cell = |value: CellValue| Cell {
+        value,
+        ..plane_cell(0)
+    };
+    let number = |value: Option<f64>| match value {
+        Some(v) => cell(CellValue::Float(v as f32)),
+        None => cell(CellValue::Empty),
+    };
+    let limit = args.limit.max(1);
+    let rows = tracks
+        .iter()
+        .skip(args.page * limit)
+        .take(limit)
+        .map(|track| {
+            vec![
+                cell(CellValue::String(track.image.clone())),
+                cell(CellValue::String(track.class_name.clone())),
+                cell(CellValue::String(track.track_id.to_string())),
+                cell(CellValue::String(format!(
+                    "{}–{}",
+                    track.first_t, track.last_t
+                ))),
+                plane_cell(track.points),
+                number(Some(track.path_px)),
+                number(Some(track.displacement_px)),
+                number(track.speed_in(unit)),
+                number(track.straightness()),
+            ]
+        })
+        .collect();
+    Ok(DatabaseResult {
+        column_names: [
+            "Image",
+            "Class",
+            "Track",
+            "T",
+            "Time points",
+            "Path [px]",
+            "Moved [px]",
+            &format!("Speed [{unit_label}]"),
+            "Straightness",
+        ]
+        .map(String::from)
+        .to_vec(),
+        row_names: Vec::new(),
+        rows,
+        min: 0.0,
+        max: 0.0,
+        source_object_count: tracks.len(),
+        row_locations: Vec::new(),
+    })
+}
+
 pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
     let db = backend.open_results(&args.db)?;
     let db = db.as_ref();
+
+    if args.tracks.tracks {
+        let table = tracks_table(db, &args)?;
+        if args.json {
+            let rows: Vec<_> = table
+                .rows
+                .iter()
+                .map(|row| {
+                    serde_json::Value::Object(
+                        table
+                            .column_names
+                            .iter()
+                            .zip(row.iter())
+                            .map(|(name, cell)| (name.clone(), json!(cell_text(cell))))
+                            .collect(),
+                    )
+                })
+                .collect();
+            let out = json!({
+                "db": args.db,
+                "page": args.page,
+                "limit": args.limit,
+                "matched": table.source_object_count,
+                "rows": rows,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            return Ok(());
+        }
+        if table.rows.is_empty() {
+            println!("(no tracks match)");
+            return Ok(());
+        }
+        print_object_table(&table);
+        println!(
+            "\nPage {} - {} track(s) shown (of {}). Use --page/--limit to page; `export csv --tracks` for every column.",
+            args.page,
+            table.rows.len(),
+            table.source_object_count
+        );
+        return Ok(());
+    }
 
     if args.filter.colocalized.is_some() {
         return Err(InternalErrors::InvalidArgument(
@@ -300,7 +430,26 @@ mod tests {
             channels,
             json,
             filter: FilterArgs::default(),
+            tracks: Default::default(),
         }
+    }
+
+    /// `--tracks`: a row per track - its time points, path, speed - here
+    /// each object its own track of one time point.
+    #[test]
+    fn view_tracks_shows_a_row_per_track() {
+        let db = TempResultsDb::seeded();
+        duckdb::Connection::open(&db.path)
+            .unwrap()
+            .execute_batch("UPDATE objects SET track_id = object_class_id[1];")
+            .unwrap();
+        let source = LocalBackend::default().open_results(&db.path).unwrap();
+        let mut args = view_args(&db.path, false, false);
+        args.tracks.tracks = true;
+        let table = tracks_table(source.as_ref(), &args).unwrap();
+        assert_eq!(table.column_names[..3], ["Image", "Class", "Track"]);
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.source_object_count, 2);
     }
 
     /// The seeded database's rows as `view` shows them with `args`: (T, Z,
