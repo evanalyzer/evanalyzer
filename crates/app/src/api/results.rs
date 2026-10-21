@@ -471,7 +471,7 @@ pub struct TimeCourseFilter {
 }
 
 /// One point of a time course: a line at one time point (and z-plane).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TimeCoursePoint {
     pub t: u32,
     pub z: u32,

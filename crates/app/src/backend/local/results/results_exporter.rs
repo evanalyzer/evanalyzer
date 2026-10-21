@@ -133,6 +133,70 @@ enum Field {
 /// A table: its header, then its rows.
 type Fields = Vec<Vec<Field>>;
 
+/// Where a table's rows go, a field at a time - nothing per row allocated:
+/// a per-track time course has millions of rows.
+trait FieldSink {
+    fn text(&mut self, text: &str) -> Result<(), InternalErrors>;
+    fn number(&mut self, number: f64) -> Result<(), InternalErrors>;
+    fn empty(&mut self) -> Result<(), InternalErrors>;
+    fn end_row(&mut self) -> Result<(), InternalErrors>;
+
+    fn optional(&mut self, value: Option<f64>) -> Result<(), InternalErrors> {
+        match value {
+            Some(number) => self.number(number),
+            None => self.empty(),
+        }
+    }
+
+    fn row(&mut self, row: &[Field]) -> Result<(), InternalErrors> {
+        for field in row {
+            match field {
+                Field::Text(text) => self.text(text)?,
+                Field::Number(number) => self.number(*number)?,
+                Field::Empty => self.empty()?,
+            }
+        }
+        self.end_row()
+    }
+}
+
+/// Collects one row's fields.
+impl FieldSink for Vec<Field> {
+    fn text(&mut self, text: &str) -> Result<(), InternalErrors> {
+        self.push(Field::Text(text.to_string()));
+        Ok(())
+    }
+    fn number(&mut self, number: f64) -> Result<(), InternalErrors> {
+        self.push(Field::Number(number));
+        Ok(())
+    }
+    fn empty(&mut self) -> Result<(), InternalErrors> {
+        self.push(Field::Empty);
+        Ok(())
+    }
+    fn end_row(&mut self) -> Result<(), InternalErrors> {
+        Ok(())
+    }
+}
+
+/// Takes rows and drops them - nothing to write.
+struct Discard;
+
+impl FieldSink for Discard {
+    fn text(&mut self, _: &str) -> Result<(), InternalErrors> {
+        Ok(())
+    }
+    fn number(&mut self, _: f64) -> Result<(), InternalErrors> {
+        Ok(())
+    }
+    fn empty(&mut self) -> Result<(), InternalErrors> {
+        Ok(())
+    }
+    fn end_row(&mut self) -> Result<(), InternalErrors> {
+        Ok(())
+    }
+}
+
 /// The T, Z (several z-planes) and time (a frame interval) columns - the
 /// time unit (seconds, minutes or hours, by how long the series runs) found
 /// once per table.
@@ -157,26 +221,30 @@ impl TimeAxis {
         }
     }
 
-    fn header(&self) -> Vec<Field> {
-        let mut header = vec![Field::Text("T".into())];
+    fn header(&self, out: &mut dyn FieldSink) -> Result<(), InternalErrors> {
+        out.text("T")?;
         if self.by_z {
-            header.push(Field::Text("Z".into()));
+            out.text("Z")?;
         }
         if let Some((label, _)) = self.unit {
-            header.push(Field::Text(label.into()));
+            out.text(label)?;
         }
-        header
+        Ok(())
     }
 
-    fn fields(&self, point: &TimeCoursePoint) -> Vec<Field> {
-        let mut fields = vec![Field::Number(point.t as f64)];
+    fn fields(
+        &self,
+        point: &TimeCoursePoint,
+        out: &mut dyn FieldSink,
+    ) -> Result<(), InternalErrors> {
+        out.number(point.t as f64)?;
         if self.by_z {
-            fields.push(Field::Number(point.z as f64));
+            out.number(point.z as f64)?;
         }
         if let (Some((_, per)), Some(time)) = (self.unit, point.time_s) {
-            fields.push(Field::Number(time / per));
+            out.number(time / per)?;
         }
-        fields
+        Ok(())
     }
 }
 
@@ -205,8 +273,8 @@ impl<'a> TimeCourseLong<'a> {
         }
     }
 
-    fn header(&self) -> Vec<Field> {
-        let mut header = self.axis.header();
+    fn header(&self, out: &mut dyn FieldSink) -> Result<(), InternalErrors> {
+        self.axis.header(out)?;
         let line_columns: &[&str] = match self.lines {
             TimeCourseLines::Class => &[],
             TimeCourseLines::Image => &["Image"],
@@ -214,36 +282,42 @@ impl<'a> TimeCourseLong<'a> {
             TimeCourseLines::Group => &["Group"],
             TimeCourseLines::Track => &["Track", "Image"],
         };
-        header.extend(line_columns.iter().map(|c| Field::Text(c.to_string())));
-        header.extend(["Class", "N images", "N objects"].map(|c| Field::Text(c.into())));
-        if self.head.tracked {
-            header.push(Field::Text("N tracks".into()));
+        for column in line_columns
+            .iter()
+            .chain(&["Class", "N images", "N objects"])
+        {
+            out.text(column)?;
         }
-        header.extend(self.head.value_names.iter().map(|n| Field::Text(n.clone())));
-        header
+        if self.head.tracked {
+            out.text("N tracks")?;
+        }
+        for name in &self.head.value_names {
+            out.text(name)?;
+        }
+        out.end_row()
     }
 
-    fn row(&self, point: &TimeCoursePoint) -> Vec<Field> {
-        let mut row = self.axis.fields(point);
+    fn row(&self, point: &TimeCoursePoint, out: &mut dyn FieldSink) -> Result<(), InternalErrors> {
+        self.axis.fields(point, out)?;
         match self.lines {
             TimeCourseLines::Class => {}
-            TimeCourseLines::Image => row.push(Field::Text(point.image.clone())),
-            TimeCourseLines::Well | TimeCourseLines::Group => {
-                row.push(Field::Text(point.line.clone()))
-            }
+            TimeCourseLines::Image => out.text(&point.image)?,
+            TimeCourseLines::Well | TimeCourseLines::Group => out.text(&point.line)?,
             TimeCourseLines::Track => {
-                row.push(Field::Text(point.line.clone()));
-                row.push(Field::Text(point.image.clone()));
+                out.text(&point.line)?;
+                out.text(&point.image)?;
             }
         }
-        row.push(Field::Text(point.class_name.clone()));
-        row.push(Field::Number(point.n_images as f64));
-        row.push(Field::Number(point.n_objects as f64));
+        out.text(&point.class_name)?;
+        out.number(point.n_images as f64)?;
+        out.number(point.n_objects as f64)?;
         if self.head.tracked {
-            row.push(Field::Number(point.n_tracks as f64));
+            out.number(point.n_tracks as f64)?;
         }
-        row.extend(point.values.iter().map(|v| optional(*v)));
-        row
+        for value in &point.values {
+            out.optional(*value)?;
+        }
+        out.end_row()
     }
 }
 
@@ -254,7 +328,7 @@ fn time_course_wide(
     result: &TimeCourseResult,
     lines: TimeCourseLines,
     axis: &TimeAxis,
-) -> Vec<(String, Fields)> {
+) -> Result<Vec<(String, Fields)>, InternalErrors> {
     let one_class = result
         .points
         .iter()
@@ -299,37 +373,39 @@ fn time_course_wide(
         .iter()
         .enumerate()
         .map(|(v, value_name)| {
-            let mut header = axis.header();
+            let mut header = Vec::new();
+            axis.header(&mut header)?;
             header.extend(columns.iter().map(|c| Field::Text(c.clone())));
             let mut table = vec![header];
             for plane in 0..planes.len() {
                 let first = (0..columns.len())
                     .find_map(|c| at.get(&(plane, c)))
                     .expect("a point of this plane");
-                let mut row = axis.fields(first);
+                let mut row = Vec::new();
+                axis.fields(first, &mut row)?;
                 row.extend((0..columns.len()).map(|c| {
                     at.get(&(plane, c))
                         .map_or(Field::Empty, |p| optional(p.values[v]))
                 }));
                 table.push(row);
             }
-            (value_name.clone(), table)
+            Ok((value_name.clone(), table))
         })
         .collect()
 }
 
-fn write_fields_csv(
-    table: impl Iterator<Item = Vec<Field>>,
-    path: &Path,
-) -> Result<(), InternalErrors> {
+fn write_fields_csv(table: &Fields, path: &Path) -> Result<(), InternalErrors> {
     let mut out = FieldsCsv::create(path)?;
-    table.into_iter().try_for_each(|row| out.write(&row))
+    table.iter().try_for_each(|row| out.row(row))
 }
 
-/// A CSV file written a row of fields at a time.
+/// A CSV file written a field at a time: into one line buffer, reused.
 struct FieldsCsv<'a> {
     out: std::io::BufWriter<std::fs::File>,
     path: &'a Path,
+    line: Vec<u8>,
+    /// Fields in `line` so far.
+    fields: usize,
 }
 
 impl<'a> FieldsCsv<'a> {
@@ -337,38 +413,85 @@ impl<'a> FieldsCsv<'a> {
         Ok(Self {
             out: create_csv_writer(path)?,
             path,
+            line: Vec::new(),
+            fields: 0,
         })
     }
 
-    fn write(&mut self, row: &[Field]) -> Result<(), InternalErrors> {
-        let cells: Vec<String> = row
-            .iter()
-            .map(|field| match field {
-                Field::Text(text) => text.clone(),
-                Field::Number(number) => number.to_string(),
-                Field::Empty => String::new(),
-            })
-            .collect();
-        write_csv_row(&mut self.out, &cells).map_err(|e| {
+    fn separate(&mut self) {
+        if self.fields > 0 {
+            self.line.push(b',');
+        }
+        self.fields += 1;
+    }
+}
+
+impl FieldSink for FieldsCsv<'_> {
+    fn text(&mut self, text: &str) -> Result<(), InternalErrors> {
+        self.separate();
+        write_csv_field(&mut self.line, text).expect("writing to memory");
+        Ok(())
+    }
+
+    fn number(&mut self, number: f64) -> Result<(), InternalErrors> {
+        use std::io::Write;
+        self.separate();
+        // Whole numbers (T, counts) as integers - the same text as `f64`'s
+        // own, written several times faster.
+        match number.fract() == 0.0 && number.abs() < 1e15 && !number.is_sign_negative() {
+            true => write!(self.line, "{}", number as u64).expect("writing to memory"),
+            false => write_f64(&mut self.line, number),
+        }
+        Ok(())
+    }
+
+    fn empty(&mut self) -> Result<(), InternalErrors> {
+        self.separate();
+        Ok(())
+    }
+
+    fn end_row(&mut self) -> Result<(), InternalErrors> {
+        use std::io::Write;
+        self.line.push(b'\n');
+        let written = self.out.write_all(&self.line);
+        self.line.clear();
+        self.fields = 0;
+        written.map_err(|e| {
             InternalErrors::Internal(format!("could not write {}: {e}", self.path.display()))
         })
     }
 }
 
-fn write_fields_sheet(
-    worksheet: &mut Worksheet,
-    table: impl Iterator<Item = Vec<Field>>,
-) -> Result<(), InternalErrors> {
-    let mut sheet = FieldsSheet::new(worksheet);
-    table.into_iter().try_for_each(|row| sheet.write(&row))
+/// `number` like `f64` prints it - the shortest text that reads back the
+/// same, no exponent - through `zmij`, several times faster. Where 17 digits
+/// are needed and two last digits both read back, `zmij` takes the closer
+/// one, `f64` not always: the value is the same. Where `zmij` would use an
+/// exponent (very small or large values), as `f64` prints it.
+fn write_f64(out: &mut Vec<u8>, number: f64) {
+    use std::io::Write;
+    let mut buffer = zmij::Buffer::new();
+    let text = match number.is_finite() {
+        true => buffer.format_finite(number),
+        false => "e",
+    };
+    match text.contains('e') {
+        true => write!(out, "{number}").expect("writing to memory"),
+        false => out.extend_from_slice(text.strip_suffix(".0").unwrap_or(text).as_bytes()),
+    }
 }
 
-/// A worksheet written a row of fields at a time, the first in bold.
+fn write_fields_sheet(worksheet: &mut Worksheet, table: &Fields) -> Result<(), InternalErrors> {
+    let mut sheet = FieldsSheet::new(worksheet);
+    table.iter().try_for_each(|row| sheet.row(row))
+}
+
+/// A worksheet written a field at a time, the first row in bold.
 struct FieldsSheet<'a> {
     worksheet: &'a mut Worksheet,
     header_format: Format,
     format: Format,
     next_row: usize,
+    next_column: u16,
 }
 
 impl<'a> FieldsSheet<'a> {
@@ -378,37 +501,52 @@ impl<'a> FieldsSheet<'a> {
             header_format: Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE),
             format: Format::new().set_font_size(EXPORT_FONT_SIZE),
             next_row: 0,
+            next_column: 0,
         }
     }
 
-    fn write(&mut self, row: &[Field]) -> Result<(), InternalErrors> {
+    /// The next cell: its row and column - an error beyond the last row.
+    fn cell(&mut self) -> Result<(u32, u16), InternalErrors> {
         if self.next_row >= XLSX_MAX_ROWS {
             return Err(InternalErrors::InvalidArgument(format!(
                 "More than {} rows - more than an XLSX sheet holds: export it as CSV",
                 XLSX_MAX_ROWS - 1
             )));
         }
-        let r = self.next_row as u32;
-        for (c, field) in row.iter().enumerate() {
-            let c = c as u16;
-            match (field, r) {
-                (Field::Text(text), 0) => {
-                    self.worksheet
-                        .write_with_format(r, c, text.as_str(), &self.header_format)
-                }
-                (Field::Text(text), _) => {
-                    self.worksheet
-                        .write_with_format(r, c, text.as_str(), &self.format)
-                }
-                (Field::Number(number), _) => {
-                    self.worksheet
-                        .write_with_format(r, c, *number, &self.format)
-                }
-                (Field::Empty, _) => continue,
-            }
+        self.next_column += 1;
+        Ok((self.next_row as u32, self.next_column - 1))
+    }
+}
+
+impl FieldSink for FieldsSheet<'_> {
+    fn text(&mut self, text: &str) -> Result<(), InternalErrors> {
+        let (r, c) = self.cell()?;
+        let format = match r {
+            0 => &self.header_format,
+            _ => &self.format,
+        };
+        self.worksheet
+            .write_with_format(r, c, text, format)
             .map_err(xlsx_err)?;
-        }
+        Ok(())
+    }
+
+    fn number(&mut self, number: f64) -> Result<(), InternalErrors> {
+        let (r, c) = self.cell()?;
+        self.worksheet
+            .write_with_format(r, c, number, &self.format)
+            .map_err(xlsx_err)?;
+        Ok(())
+    }
+
+    fn empty(&mut self) -> Result<(), InternalErrors> {
+        self.cell()?;
+        Ok(())
+    }
+
+    fn end_row(&mut self) -> Result<(), InternalErrors> {
         self.next_row += 1;
+        self.next_column = 0;
         Ok(())
     }
 }
@@ -831,9 +969,9 @@ impl ResultExport {
         // The long table is written as the points come; they're only kept
         // for the wide tables (never per track: refused above).
         let mut kept = Vec::new();
-        let mut each_point = |write: &mut dyn FnMut(Vec<Field>) -> Result<(), InternalErrors>| {
+        let mut each_point = |out: &mut dyn FieldSink| {
             if write_long {
-                write(long.header())?;
+                long.header(out)?;
             }
             let mut n = 0usize;
             query.for_each(|point| {
@@ -842,17 +980,17 @@ impl ResultExport {
                     check_cancelled(cancel)?;
                 }
                 if write_long {
-                    write(long.row(&point))?;
+                    long.row(point, out)?;
                 }
                 if write_wide {
-                    kept.push(point);
+                    kept.push(point.clone());
                 }
                 Ok(())
             })
         };
         let wide = |kept: Vec<TimeCoursePoint>| {
             if !write_wide {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let result = TimeCourseResult {
                 value_names: query.head.value_names.clone(),
@@ -870,18 +1008,17 @@ impl ResultExport {
                     // Constant memory: rows go to a temporary file.
                     let worksheet = workbook.add_worksheet_with_constant_memory();
                     worksheet.set_name(names.unique("Long")).map_err(xlsx_err)?;
-                    let mut sheet = FieldsSheet::new(worksheet);
-                    each_point(&mut |row| sheet.write(&row))?;
+                    each_point(&mut FieldsSheet::new(worksheet))?;
                 } else {
-                    each_point(&mut |_| Ok(()))?;
+                    each_point(&mut Discard)?;
                 }
                 check_cancelled(cancel)?;
-                for (name, table) in wide(kept) {
+                for (name, table) in wide(kept)? {
                     let sheet = workbook.add_worksheet();
                     // Excel has no [ ] in tab names: "Area (px) mean".
                     let name = name.replace('[', "(").replace(']', ")");
                     sheet.set_name(names.unique(&name)).map_err(xlsx_err)?;
-                    write_fields_sheet(sheet, table.into_iter())?;
+                    write_fields_sheet(sheet, &table)?;
                 }
                 workbook
                     .save(self.output_path("time_course.xlsx"))
@@ -890,18 +1027,17 @@ impl ResultExport {
             ExportFormat::CSV => {
                 if write_long {
                     let path = self.output_path("time_course.csv");
-                    let mut csv = FieldsCsv::create(&path)?;
-                    each_point(&mut |row| csv.write(&row))?;
+                    each_point(&mut FieldsCsv::create(&path)?)?;
                 } else {
-                    each_point(&mut |_| Ok(()))?;
+                    each_point(&mut Discard)?;
                 }
                 check_cancelled(cancel)?;
-                for (name, table) in wide(kept) {
+                for (name, table) in wide(kept)? {
                     let file = format!(
                         "time_course_{}.csv",
                         sanitize_filename_component(name.as_str())
                     );
-                    write_fields_csv(table.into_iter(), &self.output_path(&file))?;
+                    write_fields_csv(&table, &self.output_path(&file))?;
                 }
             }
             ExportFormat::Parquet => {
@@ -1808,15 +1944,20 @@ fn create_csv_writer(path: &Path) -> Result<std::io::BufWriter<std::fs::File>, I
 }
 
 fn write_csv_row(out: &mut impl std::io::Write, fields: &[String]) -> std::io::Result<()> {
-    let line: Vec<String> = fields.iter().map(|f| csv_escape(f)).collect();
-    writeln!(out, "{}", line.join(","))
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 {
+            out.write_all(b",")?;
+        }
+        write_csv_field(out, field)?;
+    }
+    out.write_all(b"\n")
 }
 
-fn csv_escape(field: &str) -> String {
-    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
-        format!("\"{}\"", field.replace('"', "\"\""))
-    } else {
-        field.to_string()
+/// `field`, quoted when it holds a comma, quote or line break.
+fn write_csv_field(out: &mut impl std::io::Write, field: &str) -> std::io::Result<()> {
+    match field.contains([',', '"', '\n', '\r']) {
+        true => write!(out, "\"{}\"", field.replace('"', "\"\"")),
+        false => out.write_all(field.as_bytes()),
     }
 }
 
@@ -2204,6 +2345,93 @@ mod tests {
     use calamine::Reader as _;
     use std::path::PathBuf;
     use std::range::Range;
+
+    /// `write_f64` writes text that reads back as the same value, without
+    /// an exponent, no longer than what `f64` prints - mostly the very same
+    /// text. Small, large, negative, whole, odd values and many random ones.
+    #[test]
+    fn numbers_read_back_as_written_without_an_exponent() {
+        let mut values = vec![
+            0.0,
+            -0.0,
+            1.0,
+            -2.0,
+            0.1,
+            1.5e-7,
+            1e-5,
+            9.99e-6,
+            123456.789,
+            1e15,
+            1e16,
+            1.7e308,
+            f64::MIN_POSITIVE,
+            5e-324,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            2.0 / 3.0,
+        ];
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..200_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            values.push(f64::from_bits(seed));
+            values.push((seed % 1_000_000) as f64 / 1000.0);
+            values.push(f64::from_bits(seed).abs() % 2e14);
+            values.push(f64::from_bits(seed).abs() % 1e3);
+        }
+        let mut same = 0;
+        for value in &values {
+            let mut out = Vec::new();
+            write_f64(&mut out, *value);
+            let text = String::from_utf8(out).unwrap();
+            let printed = value.to_string();
+            let back: f64 = text.parse().unwrap();
+            assert!(
+                back.to_bits() == value.to_bits() || value.is_nan(),
+                "{value:e}: {text}"
+            );
+            assert!(
+                !text.contains('e') && text.len() <= printed.len(),
+                "{value:e}: {text}"
+            );
+            same += usize::from(text == printed);
+        }
+        assert!(
+            same * 100 >= values.len() * 99,
+            "{same} of {}",
+            values.len()
+        );
+    }
+
+    /// One field as `write_csv_field` writes it.
+    fn csv_escape(field: &str) -> String {
+        let mut out = Vec::new();
+        write_csv_field(&mut out, field).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// Fields go out as before: empty ones (the first too) between commas,
+    /// whole numbers without a fraction, the others as `f64` prints them.
+    #[test]
+    fn csv_fields_are_written_like_their_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fields.csv");
+        write_fields_csv(
+            &vec![
+                vec![Field::Empty, Field::Text("a,b".into()), Field::Number(3.0)],
+                vec![Field::Number(0.1), Field::Empty, Field::Number(-2.0)],
+                vec![Field::Number(-0.0), Field::Number(1e300), Field::Empty],
+            ],
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!(",\"a,b\",3\n0.1,,-2\n-0,{},\n", 1e300)
+        );
+    }
 
     #[test]
     fn csv_escape_quotes_fields_containing_commas_or_quotes() {
@@ -3382,8 +3610,8 @@ mod tests {
         let mut workbook = Workbook::new();
         let mut sheet = FieldsSheet::new(workbook.add_worksheet_with_constant_memory());
         sheet.next_row = XLSX_MAX_ROWS - 1;
-        sheet.write(&[Field::Number(1.0)]).expect("the last row");
-        let error = sheet.write(&[Field::Number(2.0)]).expect_err("beyond");
+        sheet.row(&[Field::Number(1.0)]).expect("the last row");
+        let error = sheet.row(&[Field::Number(2.0)]).expect_err("beyond");
         assert!(error.to_string().contains("export it as CSV"), "{error}");
     }
 

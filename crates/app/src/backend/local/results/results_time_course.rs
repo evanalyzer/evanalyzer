@@ -382,7 +382,7 @@ impl<'a> TimeCourseQuery<'a> {
     /// class. Read from the database a chunk at a time.
     pub fn for_each(
         &self,
-        mut visit: impl FnMut(TimeCoursePoint) -> Result<(), InternalErrors>,
+        mut visit: impl FnMut(&TimeCoursePoint) -> Result<(), InternalErrors>,
     ) -> Result<(), InternalErrors> {
         let Some(plan) = &self.plan else {
             return Ok(());
@@ -406,6 +406,7 @@ impl<'a> TimeCourseQuery<'a> {
         let mut starts: HashMap<(u32, String, String, u32), Vec<Option<f64>>> = HashMap::new();
 
         let mut computed_values = vec![None; n_stats];
+        let mut point = TimeCoursePoint::default();
         for sql in &plan.sql {
             let mut statement = self.database.connection().prepare(sql).map_err(err)?;
             // Streamed: DuckDB hands the rows over a chunk at a time instead of
@@ -430,33 +431,37 @@ impl<'a> TimeCourseQuery<'a> {
                         .is_valid(row)
                         .then(|| line.value(row))
                         .unwrap_or_default();
-                    let mut point = TimeCoursePoint {
-                        t,
-                        z: z.value(row) as u32,
-                        time_s: self
-                            .head
-                            .frame_interval_s
-                            .map(|interval| f64::from(t) * interval),
-                        line: match plan.lines {
-                            TimeCourseLines::Class | TimeCourseLines::Image => String::new(),
-                            TimeCourseLines::Track => format!("#{line}"),
-                            TimeCourseLines::Well | TimeCourseLines::Group => line.to_string(),
-                        },
-                        image: match plan.with_image && image.is_valid(row) {
-                            true => image.value(row).to_string(),
-                            false => String::new(),
-                        },
-                        class_id,
-                        class_name: plan
-                            .class_names
-                            .get(&class_id)
-                            .cloned()
-                            .unwrap_or_else(|| class_id.to_string()),
-                        n_images: n_images.value(row) as u32,
-                        n_objects: n_objects.value(row) as u64,
-                        n_tracks: n_tracks.value(row) as u64,
-                        values: Vec::new(),
-                    };
+                    // Overwritten in place: no allocation per row.
+                    point.t = t;
+                    point.z = z.value(row) as u32;
+                    point.time_s = self
+                        .head
+                        .frame_interval_s
+                        .map(|interval| f64::from(t) * interval);
+                    point.line.clear();
+                    match plan.lines {
+                        TimeCourseLines::Class | TimeCourseLines::Image => {}
+                        TimeCourseLines::Track => {
+                            point.line.push('#');
+                            point.line.push_str(line);
+                        }
+                        TimeCourseLines::Well | TimeCourseLines::Group => point.line.push_str(line),
+                    }
+                    point.image.clear();
+                    if plan.with_image && image.is_valid(row) {
+                        point.image.push_str(image.value(row));
+                    }
+                    if point.class_id != class_id || point.class_name.is_empty() {
+                        point.class_id = class_id;
+                        point.class_name.clear();
+                        match plan.class_names.get(&class_id) {
+                            Some(name) => point.class_name.push_str(name),
+                            None => point.class_name.push_str(&class_id.to_string()),
+                        }
+                    }
+                    point.n_images = n_images.value(row) as u32;
+                    point.n_objects = n_objects.value(row) as u64;
+                    point.n_tracks = n_tracks.value(row) as u64;
                     let start = match plan.normalized {
                         false => None,
                         true => {
@@ -467,31 +472,33 @@ impl<'a> TimeCourseQuery<'a> {
                             starts.get(&key)
                         }
                     };
-                    point.values = (0..plan.n_columns)
-                        .flat_map(|i| plan.stats.iter().map(move |stat| (i, *stat)))
-                        .map(|(i, stat)| {
-                            let value = value_of(point.n_objects, &computed_values, i, stat);
-                            match (plan.normalized, start) {
-                                (false, _) => value,
-                                (true, None) => None,
-                                (true, Some(start)) => {
-                                    let base = value_of(
-                                        point.n_objects,
-                                        start,
-                                        i,
-                                        normalization_base(stat),
-                                    );
-                                    match (value, base) {
-                                        (Some(value), Some(base)) if base != 0.0 => {
-                                            Some(value / base * 100.0)
+                    point.values.clear();
+                    point.values.extend(
+                        (0..plan.n_columns)
+                            .flat_map(|i| plan.stats.iter().map(move |stat| (i, *stat)))
+                            .map(|(i, stat)| {
+                                let value = value_of(point.n_objects, &computed_values, i, stat);
+                                match (plan.normalized, start) {
+                                    (false, _) => value,
+                                    (true, None) => None,
+                                    (true, Some(start)) => {
+                                        let base = value_of(
+                                            point.n_objects,
+                                            start,
+                                            i,
+                                            normalization_base(stat),
+                                        );
+                                        match (value, base) {
+                                            (Some(value), Some(base)) if base != 0.0 => {
+                                                Some(value / base * 100.0)
+                                            }
+                                            _ => None,
                                         }
-                                        _ => None,
                                     }
                                 }
-                            }
-                        })
-                        .collect();
-                    visit(point)?;
+                            }),
+                    );
+                    visit(&point)?;
                 }
             }
         }
@@ -502,7 +509,7 @@ impl<'a> TimeCourseQuery<'a> {
     pub fn collect(self) -> Result<TimeCourseResult, InternalErrors> {
         let mut points = Vec::new();
         self.for_each(|point| {
-            points.push(point);
+            points.push(point.clone());
             Ok(())
         })?;
         Ok(TimeCourseResult {
