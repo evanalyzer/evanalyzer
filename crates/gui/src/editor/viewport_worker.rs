@@ -12,7 +12,7 @@ use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::sync::{
     Arc,
@@ -362,7 +362,7 @@ impl ViewportWorker {
                 let slice_duration = slice_start.elapsed();
                 composite_to_screen(native, &prepared, screen, vp_w, vp_h);
                 let composite_duration = composite_start.elapsed();
-                info!(
+                debug!(
                     "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], composite {:?} [make_mut_slice {:?}, resample {:?}] ({}x{} native -> {}x{} viewport, {} threads), total so far {:?}",
                     if is_low_res { "low-res" } else { "high-res" },
                     read_duration,
@@ -393,7 +393,7 @@ impl ViewportWorker {
                 pixel_buffer_to_send = Some(b.screen_buffer_pool[b.screen_pool_idx].clone());
                 render_info = Some(display);
             } else {
-                info!(
+                debug!(
                     "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], no composite (direct GPU scale, {} threads), total so far {:?}",
                     if is_low_res { "low-res" } else { "high-res" },
                     read_duration,

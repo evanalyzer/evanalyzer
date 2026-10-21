@@ -206,7 +206,7 @@ impl ImagesListController {
             }
             self.open_new_image(&absolute_path);
         } else {
-            info!("Image is not part of the project {:?}", rel_path);
+            log::debug!("Image is not part of the project {:?}", rel_path);
         }
     }
 

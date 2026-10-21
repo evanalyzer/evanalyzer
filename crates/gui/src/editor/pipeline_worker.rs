@@ -299,7 +299,7 @@ impl PipelineWorker {
                         total_tiles,
                         objects,
                     } => {
-                        info!("Tile {tile_index}/{total_tiles} completed");
+                        log::debug!("Tile {tile_index}/{total_tiles} completed");
                         if is_preview && self_handle.shown_image() == preview_of {
                             // Append the new ROIs and redraw so the user sees partial results.
                             self_handle
@@ -355,7 +355,7 @@ impl PipelineWorker {
                         // reserves a unit for this event (see its own doc
                         // comment), so this only needs to report progress,
                         // not recompute the total.
-                        info!("Whole-image phase completed ({completed}/{total_tiles})");
+                        log::debug!("Whole-image phase completed ({completed}/{total_tiles})");
                         let ui_handle = self.app_state.ui_handle.clone();
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
@@ -371,7 +371,7 @@ impl PipelineWorker {
                         });
                     }
                     ProgressEvent::ImageCompleted { index, total, path } => {
-                        info!(
+                        log::debug!(
                             "Pipeline progress: {}/{} - {}",
                             index,
                             total,
@@ -423,9 +423,12 @@ impl PipelineWorker {
                         nr_bits,
                         channel_idx,
                     } => {
-                        info!(
+                        log::debug!(
                             "Breakpoint image received for tile ({},{}) {}x{}",
-                            tile_offset_x, tile_offset_y, tile_width, tile_height
+                            tile_offset_x,
+                            tile_offset_y,
+                            tile_width,
+                            tile_height
                         );
                         // Store the raw ImageContainer so the viewport worker can
                         // re-render it with live histogram/LUT settings.

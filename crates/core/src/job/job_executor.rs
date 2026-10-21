@@ -585,7 +585,7 @@ impl<'a> JobExecutor {
             let start = Instant::now();
             let reader = ImageReader::new(image_path, ReadMode::Default)?;
             let duration = start.elapsed();
-            info!("Prepare image reader {:?} {:?}", image_rel_path, duration);
+            log::debug!("Prepare image reader {:?} {:?}", image_rel_path, duration);
 
             let series_info = reader
                 .image_meta
@@ -1101,7 +1101,7 @@ impl<'a> JobExecutor {
         );
 
         let duration = start_image.elapsed();
-        info!("Executed image pipeline in {:?}", duration);
+        log::debug!("Executed image pipeline in {:?}", duration);
 
         analyze_result.and(finalize_result)
     }

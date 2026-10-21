@@ -1315,7 +1315,7 @@ fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
             image_index,
             total_tiles,
         } => {
-            info!("Image {image_index}: {total_tiles} tile(s) scheduled");
+            log::debug!("Image {image_index}: {total_tiles} tile(s) scheduled");
             Some(format!(
                 "Image {}: scanning {total_tiles} tile(s)...",
                 image_index + 1
@@ -1326,7 +1326,7 @@ fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
             tile_index,
             total_tiles,
         } => {
-            info!("Image {image_index}: tile {tile_index}/{total_tiles} processed");
+            log::debug!("Image {image_index}: tile {tile_index}/{total_tiles} processed");
             Some(format!(
                 "Image {}: tile {}/{total_tiles}",
                 image_index + 1,
@@ -1334,7 +1334,7 @@ fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
             ))
         }
         TrainingProgressEvent::ItemCompleted { index, total } => {
-            info!("Training progress: {index}/{total}");
+            log::debug!("Training progress: {index}/{total}");
             Some(format!("Processed {index}/{total} item(s)..."))
         }
         TrainingProgressEvent::ImageFailed { path } => {

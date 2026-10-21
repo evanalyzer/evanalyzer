@@ -1383,7 +1383,7 @@ impl ProjectExt for ProjectWithRuntime {
 
         self.images.list.insert(rel_path.to_path_buf(), img);
 
-        info!(
+        log::debug!(
             "Successfully added image to project: {}",
             rel_path.display()
         );

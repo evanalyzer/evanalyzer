@@ -925,7 +925,7 @@ impl PipelineResultExporter for DuckDbExporter {
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
 
-        log::info!(
+        log::debug!(
             "Database: exported {object_count} object(s) for {} in {:?}",
             cache.image_rel_path.display(),
             start.elapsed()
