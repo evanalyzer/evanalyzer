@@ -6508,7 +6508,6 @@ mod tests {
         );
         let overlay = crate::editor::results_overlay::ResultsOverlay {
             objects: objects.iter().map(|o| (o.bbox_px, [255, 0, 255])).collect(),
-            selected: Some(0),
             trails: None,
         };
         let (w, h) = (1920 + 512, 1080 + 512);
@@ -7313,19 +7312,29 @@ mod tests {
             let db = db.as_ref().unwrap();
             let all = db
                 .get_object_list(&evanalyzer_app::results::ListFilter {
-                    plane: evanalyzer_app::results::PlaneFilter { z_stack: 0, t_stack: 0 },
+                    plane: evanalyzer_app::results::PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
                     images: None,
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,
-                    page: evanalyzer_app::results::Pagination { limit: 10_000, after: None },
+                    page: evanalyzer_app::results::Pagination {
+                        limit: 10_000,
+                        after: None,
+                    },
                     transpond_table: false,
                 })
                 .unwrap();
             all.rows.len()
         };
         assert!(rows > 0, "the List is filled when opened");
-        assert_eq!(rows, at_t0.min(LIST_PAGE_SIZE as usize), "only T 0's objects");
+        assert_eq!(
+            rows,
+            at_t0.min(LIST_PAGE_SIZE as usize),
+            "only T 0's objects"
+        );
         assert_eq!(s.get_t_stack(), 0);
         s.set_t_stack(1);
         s.invoke_t_changed(1);
@@ -8109,7 +8118,7 @@ mod tests {
             .expect("the analysis' objects on the image");
         assert_eq!(overlay.objects.len(), 1, "the one object of {rel_path}");
         assert_eq!(overlay.objects[0].0, bbox);
-        assert_eq!(overlay.selected, Some(0));
+        assert_eq!(controller.split.lock().unwrap().selected, Some(0));
         let sel = state.get_split_sel();
         assert!(sel.active);
         assert_eq!((sel.x, sel.y, sel.w, sel.h), (0.0, 0.0, 11.0, 11.0));
@@ -8139,10 +8148,7 @@ mod tests {
                 .active
         );
         assert_eq!(state.get_list_selected_row(), -1);
-        assert_eq!(
-            controller.viewport().results_overlay().unwrap().selected,
-            None
-        );
+        assert_eq!(controller.split.lock().unwrap().selected, None);
 
         // Leaving the split: the project's objects again.
         state.invoke_split_shown(false);
@@ -8324,11 +8330,11 @@ mod tests {
             .current_image = opened;
         controller._app_state.image_opened();
         drain_ui_queue();
-        let overlay = controller
+        controller
             .viewport()
             .results_overlay()
             .expect("drawn once the image is open");
-        assert_eq!(overlay.selected, Some(0));
+        assert_eq!(controller.split.lock().unwrap().selected, Some(0));
         assert!(state.get_split_sel().active);
 
         // Split view away: an image opened elsewhere gets no results overlay.

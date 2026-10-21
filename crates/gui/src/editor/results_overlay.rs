@@ -1,8 +1,8 @@
 //! The results' split view on the image: every object of the analysis on
 //! the shown image as an ellipse in its box (the results keep boxes, not
-//! outlines), in its class's color or the value's heatmap color. The
-//! selected one is drawn on top and bolder (the viewer's yellow crosshair
-//! points at it); the others are dimmed meanwhile. Drawn instead of the project's
+//! outlines), in its class's color or the value's heatmap color - all
+//! alike: the selected one is marked by the viewer's yellow crosshair, so
+//! selecting draws nothing again here. Drawn instead of the project's
 //! objects (see `ViewportController::sync_objects_to_slint_viewport`).
 //! With tracks (Results › Tracks) each track's path up to the time point
 //! shown goes under them as a trail, fading into the past.
@@ -15,8 +15,6 @@ use std::sync::Arc;
 pub struct ResultsOverlay {
     /// `[xmin, ymin, xmax, ymax]` (inclusive) and RGB.
     pub objects: Vec<([u32; 4], [u8; 3])>,
-    /// Index into `objects`.
-    pub selected: Option<usize>,
     /// The tracks' trails, under the objects.
     pub trails: Option<Arc<TrailsOverlay>>,
 }
@@ -43,10 +41,11 @@ const TRAIL_ALPHA: f32 = 0.9;
 const GHOST_ALPHA: f32 = 0.22;
 const SELECTED_RGB: [u8; 3] = [255, 255, 255];
 
-/// Outline opacity; the inside gets a faint tint, dimmed objects a third.
+/// Outline opacity; the inside gets a faint tint.
 const OUTLINE_ALPHA: f32 = 0.95;
 const FILL_ALPHA: f32 = 0.12;
-const DIMMED: f32 = 0.3;
+/// Half the outline's width.
+const HALF_OUTLINE: f32 = 0.75;
 
 /// Draws `overlay` into `buffer` (`buf_w` × `buf_h`, transparent before),
 /// image pixel `p` at `p * zoom + off` on it.
@@ -63,20 +62,8 @@ pub fn draw_results_overlay(
     if let Some(trails) = &overlay.trails {
         draw_trails(buffer, trails, buf_w, buf_h, zoom, off_x, off_y);
     }
-    // The selected one last: on top.
-    let order = (0..overlay.objects.len())
-        .filter(|i| Some(*i) != overlay.selected)
-        .chain(overlay.selected.filter(|s| *s < overlay.objects.len()));
-    for i in order {
-        let (bbox, rgb) = &overlay.objects[i];
-        let selected = overlay.selected == Some(i);
-        let dim = if overlay.selected.is_some() && !selected {
-            DIMMED
-        } else {
-            1.0
-        };
-        // Half the outline's width.
-        let half = if selected { 1.25 } else { 0.75 };
+    for (bbox, rgb) in &overlay.objects {
+        let (dim, half) = (1.0, HALF_OUTLINE);
         // The box's outer edges on screen (`xmax` is inclusive).
         let x0 = bbox[0] as f32 * zoom + off_x;
         let y0 = bbox[1] as f32 * zoom + off_y;
@@ -118,11 +105,11 @@ pub fn draw_results_overlay(
             } else {
                 0.0
             };
+            // Within the row's part on the buffer: an object cut by its
+            // edge has its middle, even its whole inside, beyond it.
             let (in0, in1) = if inner > 0.0 {
-                (
-                    ((cx - inner).ceil() as i64).max(xs.start),
-                    ((cx + inner).floor() as i64).min(xs.end),
-                )
+                let in0 = ((cx - inner).ceil() as i64).clamp(xs.start, xs.end);
+                (in0, ((cx + inner).floor() as i64).clamp(in0, xs.end))
             } else {
                 (xs.start, xs.start)
             };
@@ -140,13 +127,13 @@ pub fn draw_results_overlay(
                 };
                 blend(&mut row[x as usize], *rgb, alpha * dim);
             };
-            for x in xs.start..in0.max(xs.start) {
+            for x in xs.start..in0 {
                 edge(x, row);
             }
-            for px in &mut row[in0.max(xs.start) as usize..in1.max(in0).max(xs.start) as usize] {
+            for px in &mut row[in0 as usize..in1 as usize] {
                 blend(px, *rgb, FILL_ALPHA * dim);
             }
-            for x in in1.max(in0).max(xs.start)..xs.end {
+            for x in in1..xs.end {
                 edge(x, row);
             }
         }
@@ -400,7 +387,6 @@ mod tests {
         };
         ResultsOverlay {
             objects: Vec::new(),
-            selected: None,
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: Arc::new(ImageTracks {
                     tracks: vec![track(1, 10.0), track(2, 30.0)],
@@ -463,7 +449,6 @@ mod tests {
         });
         let overlay = |frames, selected, only_selected| ResultsOverlay {
             objects: Vec::new(),
-            selected: None,
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: tracks.clone(),
                 colors: vec![[90, 160, 255]; 1500],
@@ -555,7 +540,6 @@ mod tests {
     fn an_object_is_a_ring_with_a_faint_inside() {
         let overlay = ResultsOverlay {
             objects: vec![([10, 10, 29, 29], [255, 0, 0])],
-            selected: None,
             trails: None,
         };
         let mut buf = buffer(40, 40);
@@ -575,7 +559,6 @@ mod tests {
                 ([3, 7, 61, 40], [255, 0, 0]),
                 ([10, 10, 13, 90], [0, 255, 0]),
             ],
-            selected: None,
             trails: None,
         };
         let mut buf = buffer(80, 100);
@@ -614,25 +597,49 @@ mod tests {
         assert!(buf == want, "same pixels");
     }
 
+    /// An object cut by the buffer's edge - its middle beyond it, on any
+    /// side - is drawn up to the edge, not past it (this panicked the object
+    /// worker: the layer then stayed empty).
     #[test]
-    fn others_are_dimmed_while_one_is_selected() {
+    fn objects_cut_by_the_edge_are_drawn_up_to_it() {
+        // Off the right, the bottom, the left (the view moved: offset) and
+        // two sides.
+        for (bbox, off_x) in [
+            ([15, 0, 44, 19], 0.0),
+            ([0, 15, 19, 44], 0.0),
+            ([0, 0, 29, 19], -25.0),
+            ([12, 12, 60, 60], 0.0),
+        ] {
+            let overlay = ResultsOverlay {
+                objects: vec![(bbox, [255, 0, 0])],
+                trails: None,
+            };
+            let mut buf = buffer(20, 20);
+            draw_results_overlay(&mut buf, &overlay, 20, 20, 1.0, off_x, 0.0);
+            assert!(buf.iter().any(|p| p.a > 0), "{bbox:?} at {off_x} drawn");
+        }
+        // Zoomed in, a large object across the right edge, its inside
+        // beyond: the case seen in the app.
+        let overlay = ResultsOverlay {
+            objects: vec![([1300, 0, 1400, 100], [255, 0, 0])],
+            trails: None,
+        };
+        let mut buf = buffer(1344, 120);
+        draw_results_overlay(&mut buf, &overlay, 1344, 120, 1.0, 0.0, 0.0);
+        assert!(buf[50 * 1344 + 1343].a > 0, "up to the last column");
+    }
+
+    #[test]
+    fn every_object_is_drawn_alike() {
         let overlay = ResultsOverlay {
             objects: vec![([0, 0, 9, 9], [255, 0, 0]), ([20, 0, 29, 9], [0, 255, 0])],
-            selected: Some(1),
             trails: None,
         };
         let mut buf = buffer(30, 10);
         draw_results_overlay(&mut buf, &overlay, 30, 10, 1.0, 0.0, 0.0);
-        assert!(
-            buf[5 * 30].a < buf[5 * 30 + 20].a,
-            "the dimmed one is fainter"
-        );
+        assert_eq!(buf[5 * 30].a, buf[5 * 30 + 20].a, "as strong");
         let p = buf[5 * 30 + 20];
-        assert_eq!(
-            [p.r, p.g, p.b],
-            [0, 255, 0],
-            "the selected one in its own colour"
-        );
+        assert_eq!([p.r, p.g, p.b], [0, 255, 0], "in its own colour");
     }
 
     #[test]
@@ -642,7 +649,6 @@ mod tests {
                 ([100, 100, 101, 101], [0, 0, 255]),
                 ([5000, 5000, 5100, 5100], [0, 0, 255]),
             ],
-            selected: None,
             trails: None,
         };
         let mut buf = buffer(20, 20);
@@ -680,7 +686,6 @@ mod tests {
                 ([40, 40, 59, 59], [0; 3]),
                 ([200, 0, 209, 9], [0; 3]),
             ],
-            selected: None,
             trails: None,
         };
         assert_eq!(object_at(&overlay, 50.0, 50.0, 1.0, 0.0, 0.0), Some(1));

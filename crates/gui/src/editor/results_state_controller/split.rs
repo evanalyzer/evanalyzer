@@ -548,9 +548,9 @@ impl ResultsStateController {
     /// "Color by value", the heatmap's).
     pub(super) fn split_push_overlay(&self) {
         let by_value = self.split.lock().expect("Poisoned").by_value && self.in_plate();
-        let (objects, selected, image) = {
+        let (objects, image) = {
             let split = self.split.lock().expect("Poisoned");
-            (split.objects.clone(), split.selected, split.image.clone())
+            (split.objects.clone(), split.image.clone())
         };
         // Its image isn't the one in the viewer (yet): opening it takes
         // longer than reading its objects. They are kept and drawn once it
@@ -614,7 +614,6 @@ impl ResultsStateController {
                     )
                 })
                 .collect(),
-            selected,
             trails,
         };
         self.viewport().set_results_overlay(Some(overlay));
@@ -623,7 +622,7 @@ impl ResultsStateController {
     /// The viewer shows plane `(z, t)`: with the split on screen and its
     /// image in the viewer, the results follow (the Results T / Z) and the
     /// image's objects of that plane are read.
-    fn split_plane_changed(self: &Arc<Self>, z: u32, t: u32) {
+    fn split_plane_changed(self: &Arc<Self>, z: Option<u32>, t: u32) {
         let image = {
             let split = self.split.lock().expect("Poisoned");
             match split.shown {
@@ -636,6 +635,8 @@ impl ResultsStateController {
         };
         let z_changed = {
             let mut plane = self.plane_filter.lock().expect("Poisoned");
+            // A projection: the results stay on their Z plane.
+            let z = z.unwrap_or(plane.selected_z_stack);
             let changed = (plane.selected_z_stack, plane.selected_t_stack) != (z, t);
             let z_changed = plane.selected_z_stack != z;
             plane.selected_z_stack = z;
