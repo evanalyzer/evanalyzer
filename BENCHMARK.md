@@ -302,6 +302,32 @@ own `{}` formatting instead: 4.45-4.75 s (`zmij` saves ~0.75 s, ~17 %).
 Every track held in memory (2.1 GB) is only the benchmark's: the chart
 draws a sample of 400 tracks, the export streams.
 
+### List export - a row per object (2026-10-21)
+
+Same dataset, the List (area and two intensities per object, T column),
+cases 11 and 12 of `bench_time_course`. It already wrote page by page
+(20,000 rows), so its RAM was fine; the time was not.
+
+| Case | Before | After |
+|---|---|---|
+| List CSV, 6.6M rows (163 MB) | 39.1 s / 827 MB | 13.4-13.9 s / 772-789 MB |
+| List XLSX (over the sheet's row limit) | fails after 7.7 s: "Row or column exceeds Excel's allowed limits" | fails after 4.2 s: "more than an XLSX sheet holds: export it as CSV, or one file per image" |
+
+- Each page fetched its rows with `object_id IN (...)` - 20,000 ids
+  DuckDB parsed and planned for every page (~330 pages). Now the page's
+  first and last id: the same rows (the page is the first 20,000 matching
+  ids in order).
+- CSV rows written straight into one line (no string per cell), floats
+  through `zmij` as in the time course.
+- Pages of 50,000 / 100,000 / 200,000 rows: 13.6 / 12.8 / 12.7 s for
+  +130-190 MB - kept at 20,000. The object ids are random, so each page's
+  query still scans the time point; what's left is spread over DuckDB,
+  reading rows through `duckdb`'s row API and building cells - a
+  dedicated Arrow-based List export would be the next step.
+
+The GUI's List uses the same query: open + first page of the 1.7 GB
+analysis 65-75 ms (was 75-79 ms, alternated), RAM unchanged (~200 MB).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -317,6 +343,7 @@ graphics driver).
 | Results views, 1.7 GB analysis (List, Plate, Charts, split) | 323 MB (test process) | 2026-10-17 | Results |
 | Over time chart, 6.6M objects | 180-470 MB (query process) | 2026-10-21 | Time course |
 | Time course export, 6.6M objects | 250-410 MB (query process) | 2026-10-21 | Time course |
+| List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |
@@ -325,9 +352,8 @@ graphics driver).
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.
 
-Not measured yet: the per-object List export of a large file, the real
-app's total with a large results file open, a run on a computer with
-little RAM.
+Not measured yet: the real app's total with a large results file open,
+a run on a computer with little RAM.
 
 ## Not covered
 

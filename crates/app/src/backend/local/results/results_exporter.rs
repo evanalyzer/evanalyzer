@@ -468,9 +468,14 @@ impl FieldSink for FieldsCsv<'_> {
 /// one, `f64` not always: the value is the same. Where `zmij` would use an
 /// exponent (very small or large values), as `f64` prints it.
 fn write_f64(out: &mut Vec<u8>, number: f64) {
+    write_float(out, number, number.is_finite());
+}
+
+/// `write_f64` for an `f64` or `f32` (`finite`: its `is_finite()`).
+fn write_float(out: &mut Vec<u8>, number: impl zmij::Float + std::fmt::Display, finite: bool) {
     use std::io::Write;
     let mut buffer = zmij::Buffer::new();
-    let text = match number.is_finite() {
+    let text = match finite {
         true => buffer.format_finite(number),
         false => "e",
     };
@@ -1824,6 +1829,13 @@ fn write_list_sheet(
 
             let plane_cells = planes.cells(plane);
             for row in &page.rows {
+                if next_row as usize >= XLSX_MAX_ROWS {
+                    return Err(InternalErrors::InvalidArgument(format!(
+                        "The List has more than {} rows - more than an XLSX sheet holds: \
+                         export it as CSV, or one file per image",
+                        XLSX_MAX_ROWS - 1
+                    )));
+                }
                 for (col_idx, cell) in plane_cells.iter().chain(row.iter()).enumerate() {
                     write_cell(worksheet, next_row, col_idx as u16, cell, None)?;
                 }
@@ -1851,6 +1863,7 @@ fn write_list_csv(
         InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
     };
     let planes = ExportPlanes::of(database, export)?;
+    let mut line = Vec::new();
 
     stream_list_pages(
         database,
@@ -1861,6 +1874,7 @@ fn write_list_csv(
         with_coloc_details,
         &planes,
         |page, is_first_page, plane| {
+            use std::io::Write;
             if is_first_page {
                 let header: Vec<String> = planes
                     .header()
@@ -1869,14 +1883,19 @@ fn write_list_csv(
                     .collect();
                 write_csv_row(&mut out, &header).map_err(write_err)?;
             }
+            // Each row into one reused line - no string per cell: a large
+            // List has millions of rows.
             let plane_cells = planes.cells(plane);
             for row in &page.rows {
-                let cells: Vec<String> = plane_cells
-                    .iter()
-                    .chain(row.iter())
-                    .map(cell_text)
-                    .collect();
-                write_csv_row(&mut out, &cells).map_err(write_err)?;
+                line.clear();
+                for (i, cell) in plane_cells.iter().chain(row.iter()).enumerate() {
+                    if i > 0 {
+                        line.push(b',');
+                    }
+                    write_csv_cell(&mut line, cell);
+                }
+                line.push(b'\n');
+                out.write_all(&line).map_err(write_err)?;
             }
             Ok(())
         },
@@ -1958,6 +1977,20 @@ fn write_csv_field(out: &mut impl std::io::Write, field: &str) -> std::io::Resul
     match field.contains([',', '"', '\n', '\r']) {
         true => write!(out, "\"{}\"", field.replace('"', "\"\"")),
         false => out.write_all(field.as_bytes()),
+    }
+}
+
+/// `cell` as CSV - the text `cell_text` gives it (floats through `zmij`,
+/// see `write_f64`), quoted where needed.
+fn write_csv_cell(out: &mut Vec<u8>, cell: &Cell) {
+    use std::io::Write;
+    match &cell.value {
+        CellValue::Empty => {}
+        CellValue::String(s) | CellValue::Class((s, _)) => {
+            write_csv_field(out, s).expect("writing to memory")
+        }
+        CellValue::Float(v) => write_float(out, *v, v.is_finite()),
+        CellValue::Integer(v) => write!(out, "{v}").expect("writing to memory"),
     }
 }
 
@@ -2403,6 +2436,35 @@ mod tests {
             "{same} of {}",
             values.len()
         );
+    }
+
+    /// List cells: `f32` values read back exactly, like `f32` prints them
+    /// (but for the last of 9 digits), text quoted where needed.
+    #[test]
+    fn csv_cells_read_back_as_their_values() {
+        let text = |value| {
+            let mut out = Vec::new();
+            write_csv_cell(&mut out, &plain_cell(value));
+            String::from_utf8(out).unwrap()
+        };
+        let mut seed = 0x2545_F491u32;
+        for _ in 0..200_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let value = f32::from_bits(seed);
+            let written = text(CellValue::Float(value));
+            let back: f32 = written.parse().unwrap();
+            assert!(
+                back.to_bits() == value.to_bits() || value.is_nan(),
+                "{value:e}: {written}"
+            );
+            assert!(!written.contains('e') && written.len() <= value.to_string().len());
+        }
+        assert_eq!(text(CellValue::Float(150.0)), "150");
+        assert_eq!(text(CellValue::Integer(-3)), "-3");
+        assert_eq!(text(CellValue::String("a,b".into())), "\"a,b\"");
+        assert_eq!(text(CellValue::Empty), "");
     }
 
     /// One field as `write_csv_field` writes it.

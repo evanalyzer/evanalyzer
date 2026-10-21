@@ -3,7 +3,8 @@
 // database (make one with core's `make_time_series` example). Each query is
 // the median of `--iters` runs after a warm-up run; each export runs once.
 // Peak RSS at the end (`VmHWM`, Linux). `--case N` runs only the N-th query
-// or export (in the order printed, from 0): its own peak RSS.
+// or export (in the order printed, from 0): its own peak RSS. The last two
+// exports are the List (a row per object, CSV and XLSX).
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N]
 
@@ -147,7 +148,8 @@ fn main() {
     ));
     let mut n_export = queries.len();
     let mut export =
-        |label: &str, format: ExportFormat, lines: TimeCourseLines, layout: TimeCourseLayout| {
+        // `None`: the List - a row per object.
+        |label: &str, format: ExportFormat, time_course: Option<(TimeCourseLines, TimeCourseLayout)>| {
             n_export += 1;
             if !runs(n_export - 1) {
                 return;
@@ -162,18 +164,23 @@ fn main() {
                     Column::IntensityAvg(0),
                     Column::IntensityAvg(1),
                 ],
-                with_time_course: true,
-                time_course: TimeCourseExport {
-                    lines,
-                    layout,
-                    ..Default::default()
-                },
+                with_list_view: time_course.is_none(),
+                with_time_course: time_course.is_some(),
+                time_course: time_course.map_or_else(TimeCourseExport::default, |(lines, layout)| {
+                    TimeCourseExport {
+                        lines,
+                        layout,
+                        ..Default::default()
+                    }
+                }),
                 ..Default::default()
             };
             let start = Instant::now();
-            settings
-                .start_export(&database, &AtomicBool::new(false), &mut |_, _, _| {})
-                .expect("export");
+            if let Err(e) =
+                settings.start_export(&database, &AtomicBool::new(false), &mut |_, _, _| {})
+            {
+                println!("{label:<42} failed: {e}");
+            }
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
             let (files, bytes) = std::fs::read_dir(&out_dir)
                 .unwrap()
@@ -190,27 +197,25 @@ fn main() {
     export(
         "CSV long+wide, line per class",
         ExportFormat::CSV,
-        TimeCourseLines::Class,
-        TimeCourseLayout::Both,
+        Some((TimeCourseLines::Class, TimeCourseLayout::Both)),
     );
     export(
         "CSV long+wide, line per well",
         ExportFormat::CSV,
-        TimeCourseLines::Well,
-        TimeCourseLayout::Both,
+        Some((TimeCourseLines::Well, TimeCourseLayout::Both)),
     );
     export(
         "XLSX long+wide, line per image",
         ExportFormat::XLSX,
-        TimeCourseLines::Image,
-        TimeCourseLayout::Both,
+        Some((TimeCourseLines::Image, TimeCourseLayout::Both)),
     );
     export(
         "CSV long, line per track",
         ExportFormat::CSV,
-        TimeCourseLines::Track,
-        TimeCourseLayout::Long,
+        Some((TimeCourseLines::Track, TimeCourseLayout::Long)),
     );
+    export("List CSV, a row per object", ExportFormat::CSV, None);
+    export("List XLSX, a row per object", ExportFormat::XLSX, None);
     let _ = std::fs::remove_dir_all(&out_root);
     println!("\npeak RSS {:.0} MB", peak_rss_mb());
 }
