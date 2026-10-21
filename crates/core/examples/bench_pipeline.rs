@@ -126,6 +126,8 @@ fn main() {
                 step(PipelineCommand::LoadChannel(
                     evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
                         channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+                        projection: evanalyzer_cfg::settings::pipeline_command_settings::MathLoadChannelChannelZProjectionSettings::Auto,
+                        z_index: 0,
                     },
                 ))
             })

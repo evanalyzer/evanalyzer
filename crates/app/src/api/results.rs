@@ -117,7 +117,7 @@ pub enum ColorScale {
     Manual(f32, f32),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaneFilter {
     pub z_stack: u32,
     pub t_stack: u32,
@@ -489,10 +489,13 @@ pub struct ResultExport {
     pub outputfile_prefix: Option<String>,
 
     pub format: ExportFormat,
-    #[serde(with = "range_serde")]
-    pub t_stacks: Range<u32>,
-    #[serde(with = "range_serde")]
-    pub z_stacks: Range<u32>,
+    /// The time points exported; `None`: all of them. Only the planes the
+    /// results have objects in are exported (see `get_planes`).
+    #[serde(with = "option_range_serde")]
+    pub t_stacks: Option<Range<u32>>,
+    /// The z-planes exported; `None`: all of them.
+    #[serde(with = "option_range_serde")]
+    pub z_stacks: Option<Range<u32>>,
     /// `[]` means every image in the database (see `resolve_images`).
     pub image_rel_paths: Vec<String>,
 
@@ -551,17 +554,23 @@ pub struct DrawnImages {
     pub colors: std::collections::BTreeMap<i32, [f32; 3]>,
 }
 
-/// serde for `std::range::Range` (no upstream support yet): `(start, end)`.
-mod range_serde {
+/// serde for an optional `std::range::Range` (no upstream support yet):
+/// `Option<(start, end)>`.
+mod option_range_serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::range::Range;
 
-    pub fn serialize<S: Serializer>(range: &Range<u32>, serializer: S) -> Result<S::Ok, S::Error> {
-        (range.start, range.end).serialize(serializer)
+    pub fn serialize<S: Serializer>(
+        range: &Option<Range<u32>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        range.map(|range| (range.start, range.end)).serialize(serializer)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Range<u32>, D::Error> {
-        let (start, end) = <(u32, u32)>::deserialize(deserializer)?;
-        Ok(Range { start, end })
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Range<u32>>, D::Error> {
+        let range = Option::<(u32, u32)>::deserialize(deserializer)?;
+        Ok(range.map(|(start, end)| Range { start, end }))
     }
 }

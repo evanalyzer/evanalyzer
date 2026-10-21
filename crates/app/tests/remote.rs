@@ -675,8 +675,8 @@ fn a_remote_export_writes_its_files_on_the_server_and_reports_progress() {
     let export = evanalyzer_app::results::ResultExport {
         output_dir: out.clone(),
         format: evanalyzer_app::results::ExportFormat::CSV,
-        z_stacks: std::range::Range { start: 0, end: 1 },
-        t_stacks: std::range::Range { start: 0, end: 1 },
+        z_stacks: None,
+        t_stacks: None,
         columns: vec![evanalyzer_app::results::Column::AreaSizePx],
         with_list_view: true,
         ..Default::default()

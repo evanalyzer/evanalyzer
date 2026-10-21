@@ -189,6 +189,35 @@ pub struct FilterArgs {
     /// Transponod output table
     #[arg(long)]
     pub transpond: Option<bool>,
+
+    /// Only these time points: one ("3") or a range ("2-5"), 0-based.
+    /// Default: all
+    #[arg(long = "t", value_parser = parse_plane_range)]
+    pub t_stacks: Option<std::range::Range<u32>>,
+
+    /// Only these z-planes: one ("0") or a range ("0-4"), 0-based.
+    /// Default: all
+    #[arg(long = "z", value_parser = parse_plane_range)]
+    pub z_stacks: Option<std::range::Range<u32>>,
+}
+
+/// `--t`/`--z`: "3" or "2-5" (both ends included) as a range.
+pub(crate) fn parse_plane_range(text: &str) -> Result<std::range::Range<u32>, String> {
+    let (start, end) = text.split_once('-').unwrap_or((text, text));
+    let number = |value: &str| {
+        value
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("\"{text}\" isn't a number or a range like 2-5"))
+    };
+    let (start, end) = (number(start)?, number(end)?);
+    if end < start {
+        return Err(format!("\"{text}\": the range ends before it starts"));
+    }
+    Ok(std::range::Range {
+        start,
+        end: end + 1,
+    })
 }
 
 #[derive(Args, Default)]

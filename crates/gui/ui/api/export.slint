@@ -15,7 +15,10 @@ export global ExportDialogState {
     in-out property <[MultiSelectItem]> format-items: [];
     in-out property <string> format-summary: "XLSX";
 
-    // -- Z/T range (exclusive end, matching `ResultExport`'s `Range<u32>`) --
+    // -- Z/T: all (the default) or a range (exclusive end, matching
+    // `ResultExport`'s `Range<u32>`) --
+    in-out property <bool> z-all: true;
+    in-out property <bool> t-all: true;
     in-out property <string> z-start: "0";
     in-out property <string> z-end: "1";
     in-out property <string> t-start: "0";

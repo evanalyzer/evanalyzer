@@ -289,8 +289,8 @@ fn main() {
         image_rel_paths,
         with_list_view: true,
         with_list_one_file_per_image: true,
-        z_stacks: (0..1).into(),
-        t_stacks: (0..1).into(),
+        z_stacks: Some((0..1).into()),
+        t_stacks: Some((0..1).into()),
         ..Default::default()
     };
     let cancel = AtomicBool::new(false);

@@ -37,8 +37,8 @@ fn main() {
     std::fs::create_dir_all(&out_root).unwrap();
 
     let base = ResultExport {
-        z_stacks: (0..1).into(),
-        t_stacks: (0..1).into(),
+        z_stacks: Some((0..1).into()),
+        t_stacks: Some((0..1).into()),
         columns: columns.clone(),
         ..Default::default()
     };

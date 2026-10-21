@@ -118,17 +118,10 @@ fn export_table(
     let export = ResultExport {
         output_dir: scratch_dir.clone(),
         format,
-        // `get_nr_of_z_stacks`/`get_nr_of_t_stacks` return the *max* stack
-        // index (not a count), so the exclusive upper bound of a range
-        // covering every plane is that value plus one.
-        z_stacks: std::range::Range {
-            start: 0,
-            end: db.get_nr_of_z_stacks() + 1,
-        },
-        t_stacks: std::range::Range {
-            start: 0,
-            end: db.get_nr_of_t_stacks() + 1,
-        },
+        // `None`: every plane - the export adds "T"/"Z" columns when the
+        // results have several.
+        z_stacks: args.filter.z_stacks,
+        t_stacks: args.filter.t_stacks,
         image_rel_paths,
         columns,
         object_classes,

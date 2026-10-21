@@ -666,7 +666,9 @@ CREATE TABLE IF NOT EXISTS images (
     height          UINTEGER NOT NULL,
     c_stacks        UINTEGER NOT NULL,
     z_stacks        UINTEGER NOT NULL,
-    t_stacks        UINTEGER NOT NULL
+    t_stacks        UINTEGER NOT NULL,
+    t_stacks_analyzed INTEGER[],
+    z_stacks_analyzed INTEGER[]
 );
 
 CREATE TABLE IF NOT EXISTS classes (
@@ -945,16 +947,20 @@ impl PipelineResultExporter for DuckDbExporter {
         nr_c_stacks: u32,
         nr_z_stacks: u32,
         nr_t_stacks: u32,
+        t_stacks_analyzed: &[i32],
+        z_stacks_analyzed: &[i32],
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         let conn = self.lock_conn();
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
         let successful = error.is_none();
+        // "[0, 1, 2]", cast to INTEGER[] by DuckDB.
+        let list = |values: &[i32]| format!("{values:?}");
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![image_name, image_rel, successful, error, width, height, nr_c_stacks, nr_z_stacks, nr_t_stacks],
+            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]))",
+            params![image_name, image_rel, successful, error, width, height, nr_c_stacks, nr_z_stacks, nr_t_stacks, list(t_stacks_analyzed), list(z_stacks_analyzed)],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
@@ -1346,6 +1352,46 @@ mod tests {
         assert_eq!(object_count(&path), 8 * 500);
     }
 
+    /// Each image's analysed time points and z-planes are kept - also ones
+    /// without objects.
+    #[test]
+    fn the_analysed_planes_of_each_image_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new(), &MetaData::default()).unwrap();
+        exporter
+            .finalize_image(Path::new("a.tif"), 1, 1, 1, 30, 3, &[0, 1, 2], &[0], None)
+            .unwrap();
+        exporter
+            .finalize_image(Path::new("b.tif"), 1, 1, 1, 30, 3, &[2], &[4, 5], None)
+            .unwrap();
+        drop(exporter);
+
+        let conn = shared_connection(&path).unwrap();
+        let mut statement = conn
+            .prepare(
+                "SELECT image_rel_path, CAST(t_stacks_analyzed AS VARCHAR), CAST(z_stacks_analyzed AS VARCHAR) \
+                 FROM images ORDER BY 1",
+            )
+            .unwrap();
+        let rows: Vec<(String, String, String)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "a.tif".to_string(),
+                    "[0, 1, 2]".to_string(),
+                    "[0]".to_string()
+                ),
+                ("b.tif".to_string(), "[2]".to_string(), "[4, 5]".to_string()),
+            ]
+        );
+    }
+
     #[test]
     fn export_still_works_after_another_export_panicked_holding_the_connection() {
         // Every image exports from its own thread: one panicking while it
@@ -1377,7 +1423,7 @@ mod tests {
 
         exporter.export(&cache_with_objects("a.tif", 3)).unwrap();
         exporter
-            .finalize_image(Path::new("a.tif"), 1, 1, 1, 1, 1, None)
+            .finalize_image(Path::new("a.tif"), 1, 1, 1, 1, 1, &[0], &[0], None)
             .unwrap();
 
         assert_eq!(object_count(&path), 3);

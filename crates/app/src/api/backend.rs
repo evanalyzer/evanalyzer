@@ -189,6 +189,9 @@ pub trait ResultsSource: Send + Sync {
     fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors>;
     fn get_nr_of_z_stacks(&self) -> u32;
     fn get_nr_of_t_stacks(&self) -> u32;
+    /// The planes (time point, z-plane) the results have objects in, time
+    /// point by time point - what an export or view over "all" covers.
+    fn get_planes(&self) -> Result<Vec<crate::api::PlaneFilter>, InternalErrors>;
     /// How the analysis that wrote the database ended.
     fn run_status(&self) -> Result<RunStatus, InternalErrors>;
     /// The regex `grouping` uses on this database's images - for

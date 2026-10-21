@@ -1,12 +1,16 @@
 use crate::args::{ColumnsArgs, ViewArgs};
-use crate::commands::common::{cell_text, resolve_image_rel_paths, resolve_object_classes};
+use crate::commands::common::{
+    cell_text, resolve_image_rel_paths, resolve_object_classes, shown_planes,
+};
 use crate::table::print_object_table;
 use evanalyzer_app::backends::Backend;
+use evanalyzer_app::results::Cell;
+use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::Column;
+use evanalyzer_app::results::DatabaseResult;
 use evanalyzer_app::results::ListFilter;
 use evanalyzer_app::results::Pagination;
 use evanalyzer_app::results::PlaneFilter;
-use evanalyzer_app::results::ResultsSource;
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
 
@@ -23,34 +27,94 @@ fn is_intensity_column(column: &Column) -> bool {
     )
 }
 
-/// Walks forward from the first page to find the keyset cursor for
-/// `target_page` (0-based) — `ListFilter`'s own pagination is keyset-based
-/// (a cursor from the *previous* page), not offset-based, so a stateless
-/// one-shot CLI invocation has no cursor to resume from and must re-walk
-/// every earlier page. Fine for `view`'s "quick preview" use case (small
-/// `--page`, typically 0); an unbounded deep `--page` would rescan a lot -
-/// use `export` for anything that needs the whole table.
-fn cursor_for_page(
-    db: &dyn ResultsSource,
-    base: &ListFilter,
-    target_page: usize,
-) -> Result<Option<String>, InternalErrors> {
-    let mut cursor = None;
-    for _ in 0..target_page {
-        let probe = ListFilter {
-            page: Pagination {
-                limit: base.page.limit,
-                after: cursor.take(),
-            },
-            ..base.clone()
-        };
-        let page = db.get_object_list(&probe)?;
-        cursor = page.row_names.last().cloned();
-        if cursor.is_none() {
-            break;
+/// A cell holding just `value` - a row's "T"/"Z".
+fn plane_cell(value: u32) -> Cell {
+    Cell {
+        value: CellValue::Integer(value as i32),
+        bg_color: 0,
+        alternating_color: false,
+        search_key: None,
+        disabled: false,
+        any_disabled: false,
+        failed: false,
+        any_failed: false,
+    }
+}
+
+/// The rows `view` shows: page `args.page` of `base_filter`'s objects
+/// over every plane (`--t`/`--z` choose), time point by time point, each
+/// row with its "T"/"Z" when the results have several. The list's paging is
+/// keyset-based (a cursor from the previous page), so earlier pages are
+/// walked through - fine for a quick look, `export` is for the whole table.
+fn rows_page(
+    db: &dyn evanalyzer_app::results::ResultsSource,
+    base_filter: &ListFilter,
+    args: &ViewArgs,
+) -> Result<DatabaseResult, InternalErrors> {
+    let limit = args.limit.max(1);
+    let shown = shown_planes(db, args.filter.t_stacks, args.filter.z_stacks)?;
+    let skip = args.page * limit;
+    let mut column_names: Option<Vec<String>> = None;
+    let mut rows: Vec<Vec<Cell>> = Vec::new();
+    let mut seen = 0usize;
+    'planes: for &plane in &shown.planes {
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = db.get_object_list(&ListFilter {
+                plane,
+                page: Pagination {
+                    limit: limit as i32,
+                    after: cursor.take(),
+                },
+                ..base_filter.clone()
+            })?;
+            column_names.get_or_insert_with(|| page.column_names.clone());
+            let is_last_page = page.source_object_count < limit;
+            cursor = page.row_names.last().cloned();
+            for row in page.rows {
+                if seen >= skip {
+                    let mut cells = Vec::new();
+                    if shown.by_t {
+                        cells.push(plane_cell(plane.t_stack));
+                    }
+                    if shown.by_z {
+                        cells.push(plane_cell(plane.z_stack));
+                    }
+                    cells.extend(row);
+                    rows.push(cells);
+                    if rows.len() == limit {
+                        break 'planes;
+                    }
+                }
+                seen += 1;
+            }
+            if is_last_page || cursor.is_none() {
+                break;
+            }
         }
     }
-    Ok(cursor)
+    let column_names = match column_names {
+        Some(names) => names,
+        // Nothing in the chosen planes: still the columns.
+        None => db.get_object_list(base_filter)?.column_names,
+    };
+    let mut header = Vec::new();
+    if shown.by_t {
+        header.push("T".to_string());
+    }
+    if shown.by_z {
+        header.push("Z".to_string());
+    }
+    header.extend(column_names);
+    Ok(DatabaseResult {
+        column_names: header,
+        row_names: Vec::new(),
+        source_object_count: rows.len(),
+        rows,
+        min: 0.0,
+        max: 0.0,
+        row_locations: Vec::new(),
+    })
 }
 
 pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
@@ -77,6 +141,7 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
         .map(|entry| entry.key)
         .collect();
 
+    let limit = args.limit.max(1);
     let base_filter = ListFilter {
         plane: PlaneFilter {
             z_stack: 0,
@@ -87,19 +152,13 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
         columns,
         with_coloc_details: false,
         page: Pagination {
-            limit: args.limit.max(1) as i32,
+            limit: limit as i32,
             after: None,
         },
         transpond_table: args.filter.transpond.unwrap_or_else(|| false),
     };
-    let cursor = cursor_for_page(db, &base_filter, args.page)?;
-    let result = db.get_object_list(&ListFilter {
-        page: Pagination {
-            limit: base_filter.page.limit,
-            after: cursor,
-        },
-        ..base_filter
-    })?;
+
+    let result = rows_page(db, &base_filter, &args)?;
 
     if args.json {
         let rows: Vec<_> = result
@@ -226,7 +285,7 @@ mod tests {
     fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
         super::run_columns(args, &LocalBackend::default())
     }
-    use crate::args::{ColumnsArgs, FilterArgs, ViewArgs};
+    use crate::args::{ColumnsArgs, FilterArgs, ViewArgs, parse_plane_range};
     use crate::commands::test_support::TempResultsDb;
 
     fn names(n: usize) -> Vec<String> {
@@ -242,6 +301,75 @@ mod tests {
             json,
             filter: FilterArgs::default(),
         }
+    }
+
+    /// The seeded database's rows as `view` shows them with `args`: (T, Z,
+    /// area) each - img1's object at t0/z0, img2's at t1/z1.
+    fn shown(args: &ViewArgs) -> (Vec<String>, Vec<(String, String, String)>) {
+        let source = LocalBackend::default().open_results(&args.db).unwrap();
+        let base = ListFilter {
+            plane: PlaneFilter {
+                z_stack: 0,
+                t_stack: 0,
+            },
+            images: None,
+            object_classes: None,
+            columns: vec![Column::AreaSizePx],
+            with_coloc_details: false,
+            page: Pagination {
+                limit: args.limit as i32,
+                after: None,
+            },
+            transpond_table: false,
+        };
+        let result = rows_page(source.as_ref(), &base, args).unwrap();
+        let rows = result
+            .rows
+            .iter()
+            .map(|row| (cell_text(&row[0]), cell_text(&row[1]), cell_text(row.last().unwrap())))
+            .collect();
+        (result.column_names, rows)
+    }
+
+    fn row(t: &str, z: &str, area: &str) -> (String, String, String) {
+        (t.to_string(), z.to_string(), area.to_string())
+    }
+
+    /// Every plane by default, each row with its T and Z - not only t0/z0.
+    #[test]
+    fn view_shows_every_plane_with_its_t_and_z() {
+        let db = TempResultsDb::seeded();
+        let (header, rows) = shown(&view_args(&db.path, true, false));
+        assert_eq!(header[..2], ["T", "Z"]);
+        assert_eq!(rows, [row("0", "0", "100"), row("1", "1", "200")]);
+    }
+
+    /// `--t`/`--z` choose the planes; `--page` counts rows across them.
+    #[test]
+    fn view_t_z_and_page_choose_the_rows() {
+        let db = TempResultsDb::seeded();
+        let mut args = view_args(&db.path, true, false);
+        args.filter.t_stacks = Some(parse_plane_range("1").unwrap());
+        assert_eq!(shown(&args).1, [row("1", "1", "200")]);
+
+        let mut args = view_args(&db.path, true, false);
+        args.filter.z_stacks = Some(parse_plane_range("0-0").unwrap());
+        assert_eq!(shown(&args).1, [row("0", "0", "100")]);
+
+        let mut args = view_args(&db.path, true, false);
+        args.limit = 1;
+        args.page = 1;
+        assert_eq!(shown(&args).1, [row("1", "1", "200")], "the second row");
+    }
+
+    #[test]
+    fn a_plane_range_is_one_number_or_both_ends_included() {
+        let range = |text: &str| parse_plane_range(text).map(|r| (r.start, r.end));
+        assert_eq!(range("3"), Ok((3, 4)));
+        assert_eq!(range("2-5"), Ok((2, 6)));
+        assert_eq!(range(" 0 - 1 "), Ok((0, 2)));
+        assert!(range("5-2").is_err());
+        assert!(range("a").is_err());
     }
 
     #[test]

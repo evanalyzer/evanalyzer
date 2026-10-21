@@ -769,6 +769,7 @@ fn answer_query(
         ResultsQuery::AvailableColumns => ResultsAnswer::Columns(source.get_available_columns()?),
         ResultsQuery::ZStacks => ResultsAnswer::Count(source.get_nr_of_z_stacks()),
         ResultsQuery::TStacks => ResultsAnswer::Count(source.get_nr_of_t_stacks()),
+        ResultsQuery::Planes => ResultsAnswer::Planes(source.get_planes()?),
         ResultsQuery::RunStatus => ResultsAnswer::RunStatus(source.run_status()?),
         ResultsQuery::Boxplot(filter) => ResultsAnswer::Boxplot(source.boxplot(&filter)?),
         ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
