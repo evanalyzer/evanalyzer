@@ -3711,6 +3711,8 @@ impl ResultsStateController {
             ExportFormat::XLSX,
         )))));
         state.set_format_summary("XLSX".into());
+        state.set_z_all(true);
+        state.set_t_all(true);
         state.set_z_start("0".into());
         state.set_z_end((z_stack_max + 1).to_string().into());
         state.set_t_start("0".into());
@@ -3831,10 +3833,20 @@ impl ResultsStateController {
                 .parse::<u32>()
                 .map_err(|_| format!("\"{text}\" isn't a valid {label}."))
         };
-        let z_start = parse_u32("Z start", state.get_z_start())?;
-        let z_end = parse_u32("Z end", state.get_z_end())?;
-        let t_start = parse_u32("T start", state.get_t_start())?;
-        let t_end = parse_u32("T end", state.get_t_end())?;
+        // A range only when chosen - "All" leaves its (hidden) fields alone.
+        let range = |all: bool, axis: &str, start: slint::SharedString, end: slint::SharedString| {
+            if all {
+                return Ok(None);
+            }
+            let start = parse_u32(&format!("{axis} start"), start)?;
+            let end = parse_u32(&format!("{axis} end"), end)?;
+            Ok::<_, String>(Some(std::range::Range {
+                start,
+                end: end.max(start + 1),
+            }))
+        };
+        let z_stacks = range(state.get_z_all(), "Z", state.get_z_start(), state.get_z_end())?;
+        let t_stacks = range(state.get_t_all(), "T", state.get_t_start(), state.get_t_end())?;
 
         let selected_keys = |items: ModelRc<MultiSelectItem>| -> Vec<slint::SharedString> {
             items
@@ -3924,14 +3936,8 @@ impl ResultsStateController {
             output_dir: PathBuf::from(output_dir),
             outputfile_prefix: file_prefix,
             format,
-            z_stacks: std::range::Range {
-                start: z_start,
-                end: z_end.max(z_start + 1),
-            },
-            t_stacks: std::range::Range {
-                start: t_start,
-                end: t_end.max(t_start + 1),
-            },
+            z_stacks,
+            t_stacks,
             image_rel_paths,
             columns,
             color_schema,
@@ -6722,6 +6728,28 @@ mod tests {
         );
     }
 
+    /// Every z-plane and time point unless a range is chosen - the hidden
+    /// range fields of "All" don't matter, even when they don't parse.
+    #[test]
+    fn export_covers_all_planes_unless_a_range_is_chosen() {
+        let o = opened();
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        assert!(export.get_z_all() && export.get_t_all(), "All by default");
+        export.set_output_dir("/tmp".into());
+        export.set_t_start("x".into());
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(settings.z_stacks.is_none() && settings.t_stacks.is_none());
+
+        export.set_t_all(false);
+        export.set_t_start("1".into());
+        export.set_t_end("3".into());
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(settings.z_stacks.is_none());
+        let t = settings.t_stacks.expect("a range");
+        assert_eq!((t.start, t.end), (1, 3));
+    }
+
     #[test]
     fn export_reports_invalid_settings_instead_of_starting() {
         let o = opened();
@@ -6734,6 +6762,8 @@ mod tests {
             let value = |i: usize| -> slint::SharedString {
                 if i == broken { "x".into() } else { "1".into() }
             };
+            export.set_z_all(false);
+            export.set_t_all(false);
             export.set_z_start(value(0));
             export.set_z_end(value(1));
             export.set_t_start(value(2));

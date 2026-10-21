@@ -185,6 +185,13 @@ impl ResultsSource for RemoteResults {
         self.count(ResultsQuery::TStacks)
     }
 
+    fn get_planes(&self) -> Result<Vec<crate::api::PlaneFilter>, InternalErrors> {
+        match self.query(ResultsQuery::Planes)? {
+            ResultsAnswer::Planes(planes) => Ok(planes),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn run_status(&self) -> Result<crate::api::RunStatus, InternalErrors> {
         match self.query(ResultsQuery::RunStatus)? {
             ResultsAnswer::RunStatus(status) => Ok(status),

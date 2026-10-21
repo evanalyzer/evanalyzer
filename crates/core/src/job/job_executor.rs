@@ -1073,6 +1073,8 @@ impl<'a> JobExecutor {
         // is passed through so it's recorded as failed rather than looking
         // identical to a genuinely complete image.
         let combined_error = analyze_result.as_ref().err().map(|e| e.to_string());
+        // The planes the loop above ran (a projection's one z) are recorded
+        // as analysed - also where nothing was found.
         let finalize_result = exporter.finalize_image(
             image_rel_path,
             full_size.width as u32,
@@ -1080,6 +1082,8 @@ impl<'a> JobExecutor {
             nr_c_stacks,
             nr_z_stacks,
             nr_t_stacks,
+            &t_stacks,
+            &z_stacks,
             combined_error.as_deref(),
         );
 
@@ -2661,6 +2665,67 @@ mod full_run_integration_tests {
             class_mapping: vec![],
         }));
         pipeline
+    }
+
+    /// Remembers the planes the run reports analysed (`finalize_image`),
+    /// as (t, z) pairs.
+    #[derive(Default)]
+    struct PlanesRecorder(Mutex<Vec<(i32, i32)>>);
+
+    impl PipelineResultExporter for PlanesRecorder {
+        fn export(&self, _cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            Ok(())
+        }
+
+        fn finalize_image(
+            &self,
+            _image_rel_path: &std::path::Path,
+            _width: u32,
+            _height: u32,
+            _nr_c_stacks: u32,
+            _nr_z_stacks: u32,
+            _nr_t_stacks: u32,
+            t_stacks_analyzed: &[i32],
+            z_stacks_analyzed: &[i32],
+            _error: Option<&str>,
+        ) -> Result<(), InternalErrors> {
+            let mut planes = self.0.lock().unwrap();
+            for &t in t_stacks_analyzed {
+                planes.extend(z_stacks_analyzed.iter().map(|&z| (t, z)));
+            }
+            Ok(())
+        }
+    }
+
+    /// The (t, z) planes a run of the fixture image with `z_stack` reports.
+    fn analysed_planes(z_stack: Option<ZStackSettings>) -> Vec<(i32, i32)> {
+        let recorder = Arc::new(PlanesRecorder::default());
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        job.result_storage = recorder.clone();
+        job.global_image_settings.z_stack = z_stack;
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        recorder.0.lock().unwrap().clone()
+    }
+
+    /// Every analysed plane is reported - each z-plane analysed one by one,
+    /// a projection's one z - whether objects were found there or not.
+    #[test]
+    fn the_run_reports_every_plane_it_analysed() {
+        let one_by_one = analysed_planes(Some(ZStackSettings {
+            z_projection: ZStackHandling::AllStacks,
+            z_range: None,
+        }));
+        let projected = analysed_planes(Some(ZStackSettings {
+            z_projection: ZStackHandling::MaxIntensity,
+            z_range: None,
+        }));
+        let z_planes: HashSet<i32> = one_by_one.iter().map(|(_, z)| *z).collect();
+        assert!(z_planes.len() > 2, "the fixture has several z-planes: {one_by_one:?}");
+        assert!(projected.iter().all(|(_, z)| *z == 0), "{projected:?}");
+        let times = |planes: &[(i32, i32)]| planes.iter().map(|(t, _)| *t).collect::<HashSet<_>>();
+        assert_eq!(times(&projected), times(&one_by_one), "the same time points");
+        assert_eq!(projected.len(), times(&projected).len(), "one plane per time point");
     }
 
     fn make_single_image_job(out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>>) -> JobExecutor {

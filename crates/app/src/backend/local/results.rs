@@ -108,6 +108,10 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.get_nr_of_t_stacks())
     }
 
+    fn get_planes(&self) -> Result<Vec<crate::api::PlaneFilter>, InternalErrors> {
+        self.with(|db| db.get_planes())
+    }
+
     fn run_status(&self) -> Result<crate::api::RunStatus, InternalErrors> {
         self.with(|db| db.run_status())
     }

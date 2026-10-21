@@ -115,24 +115,46 @@ impl ResultsGenerator {
         Ok(regex)
     }
 
+    /// Whether the run recorded which planes of each image it analysed
+    /// (`images.t_stacks_analyzed`/`z_stacks_analyzed`) - results written before that
+    /// don't have them.
+    fn analysed_planes_recorded(&self) -> bool {
+        self.database
+            .query_row(
+                "SELECT COUNT(*) FROM images WHERE t_stacks_analyzed IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .is_ok_and(|count| count > 0)
+    }
+
     /// SQL condition that the `images` row `alias` was analysed
     /// successfully on `plane` - i.e. a missing object there really means
     /// "none found", so a Count/Sum of 0 is a real result (see
     /// [`fill_zero_sql`]). A failed image, or a plane the run never
     /// analysed, has no value.
     ///
-    /// Which planes a run analysed isn't stored; it's taken from the
-    /// objects themselves: every plane between the lowest and highest Z/T
-    /// any object was found on (a Z-projection run only produces plane 0),
-    /// and within the image's own plane count. So a plane at the edge of
-    /// the analysed range on which no image found anything at all, or a
-    /// run without a single object, counts as not analysed (empty).
+    /// The run records the planes it analysed of each image
+    /// (`images.t_stacks_analyzed`/`z_stacks_analyzed`) - also those where nothing was
+    /// found. Results
+    /// from before that have them taken from the objects themselves: every
+    /// plane between the lowest and highest Z/T any object was found on (a
+    /// Z-projection run only produces plane 0), and within the image's own
+    /// plane count. So there a plane at the edge of the analysed range on
+    /// which no image found anything at all, or a run without a single
+    /// object, counts as not analysed (empty).
     fn measured_on_plane_sql(
         &self,
         alias: &str,
         plane: &PlaneFilter,
     ) -> Result<String, InternalErrors> {
         let (z, t) = (plane.z_stack as i64, plane.t_stack as i64);
+        if self.analysed_planes_recorded() {
+            return Ok(format!(
+                "({alias}.successful AND list_contains({alias}.t_stacks_analyzed, {t}) \
+                 AND list_contains({alias}.z_stacks_analyzed, {z}))"
+            ));
+        }
         let range: Option<(i64, i64, i64, i64)> = self
             .database
             .query_row(
@@ -2302,6 +2324,40 @@ impl ResultsGenerator {
             .query_row("SELECT MAX(z_stacks) FROM images;", [], |row| row.get(0))
             .unwrap_or(1);
         max_stack
+    }
+
+    /// The planes (time point, z-plane) the run analysed - also those where
+    /// nothing was found - ordered by time point, then z-plane. Results
+    /// from before the run recorded them (`images.t_stacks_analyzed`/`z_stacks_analyzed`):
+    /// the planes with objects.
+    pub fn get_planes(&self) -> Result<Vec<PlaneFilter>, InternalErrors> {
+        // Each image's time points x its z-planes.
+        let planes = match self.analysed_planes_recorded() {
+            true => {
+                "SELECT t AS t_stack, UNNEST(z_stacks_analyzed) AS z_stack \
+                 FROM (SELECT UNNEST(t_stacks_analyzed) AS t, z_stacks_analyzed FROM images \
+                       WHERE t_stacks_analyzed IS NOT NULL)"
+            }
+            false => "SELECT t_stack, z_stack FROM objects",
+        };
+        let mut statement = self
+            .database
+            .prepare(&format!(
+                "SELECT DISTINCT t_stack, z_stack FROM ({planes}) \
+                 WHERE t_stack >= 0 AND z_stack >= 0 ORDER BY t_stack, z_stack;"
+            ))
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let planes = statement
+            .query_map([], |row| {
+                Ok(PlaneFilter {
+                    t_stack: row.get::<_, i64>(0)? as u32,
+                    z_stack: row.get::<_, i64>(1)? as u32,
+                })
+            })
+            .map_err(|e| InternalErrors::Io(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(planes)
     }
 
     pub fn get_nr_of_t_stacks(&self) -> u32 {

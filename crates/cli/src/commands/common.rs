@@ -2,6 +2,7 @@ use crate::args::{AggKind, GroupArgs, GroupByKind};
 use evanalyzer_app::results::Aggregation;
 use evanalyzer_app::results::Cell;
 use evanalyzer_app::results::CellValue;
+use evanalyzer_app::results::PlaneFilter;
 use evanalyzer_app::results::ResultsSource;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 
@@ -206,4 +207,33 @@ mod tests {
             .is_ok()
         );
     }
+}
+
+/// The planes `view` shows: those with objects within `t_stacks`/`z_stacks`
+/// (`None`: all), time point by time point - and whether the results have
+/// several time points / z-planes (then "T" / "Z" columns show which).
+pub struct ShownPlanes {
+    pub planes: Vec<PlaneFilter>,
+    pub by_t: bool,
+    pub by_z: bool,
+}
+
+pub fn shown_planes(
+    db: &dyn ResultsSource,
+    t_stacks: Option<std::range::Range<u32>>,
+    z_stacks: Option<std::range::Range<u32>>,
+) -> Result<ShownPlanes, InternalErrors> {
+    let all = db.get_planes()?;
+    let within = |value: u32, range: Option<std::range::Range<u32>>| {
+        range.is_none_or(|range| range.start <= value && value < range.end)
+    };
+    Ok(ShownPlanes {
+        planes: all
+            .iter()
+            .filter(|p| within(p.t_stack, t_stacks) && within(p.z_stack, z_stacks))
+            .copied()
+            .collect(),
+        by_t: all.iter().any(|p| p.t_stack != all[0].t_stack),
+        by_z: all.iter().any(|p| p.z_stack != all[0].z_stack),
+    })
 }

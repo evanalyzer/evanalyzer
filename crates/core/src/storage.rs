@@ -24,6 +24,12 @@ pub trait PipelineResultExporter: Send + Sync {
     /// there are no objects). Default no-op: only exporters that keep a
     /// separate per-image summary (e.g. `DuckDbExporter`'s `images` table)
     /// need to override this.
+    ///
+    /// `t_stacks_analyzed`/`z_stacks_analyzed`: the time points and z-planes the run
+    /// analysed of it (every time point × every z-plane) - also those where
+    /// nothing was found, so the results tell an empty plane from one never
+    /// analysed. The `nr_*` are the image's own sizes.
+    #[allow(clippy::too_many_arguments)]
     fn finalize_image(
         &self,
         _image_rel_path: &std::path::Path,
@@ -32,6 +38,8 @@ pub trait PipelineResultExporter: Send + Sync {
         _nr_c_stacks: u32,
         _nr_z_stacks: u32,
         _nr_t_stacks: u32,
+        _t_stacks_analyzed: &[i32],
+        _z_stacks_analyzed: &[i32],
         _error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         Ok(())

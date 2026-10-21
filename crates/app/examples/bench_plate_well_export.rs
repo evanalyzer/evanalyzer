@@ -290,8 +290,8 @@ fn main() {
     let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
 
     let base = ResultExport {
-        z_stacks: (0..1).into(),
-        t_stacks: (0..1).into(),
+        z_stacks: Some((0..1).into()),
+        t_stacks: Some((0..1).into()),
         columns: columns.clone(),
         aggregations: aggregations.clone(),
         format: ExportFormat::XLSX,

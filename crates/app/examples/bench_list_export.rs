@@ -218,8 +218,8 @@ fn main() {
             format,
             columns: columns.clone(),
             with_list_view: true,
-            z_stacks: (0..1).into(),
-            t_stacks: (0..1).into(),
+            z_stacks: Some((0..1).into()),
+            t_stacks: Some((0..1).into()),
             ..Default::default()
         };
         let cancel = AtomicBool::new(false);

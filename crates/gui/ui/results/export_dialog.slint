@@ -8,7 +8,7 @@ import { ExportDialogState } from "../api/export.slint";
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, CheckBox } from "../ink/std_compat.slint";
 import { Ink } from "../ink/palette.slint";
-import { InkMultiSelect, MultiSelectItem } from "../ink/ink.slint";
+import { InkMultiSelect, MultiSelectItem, InkSegmented } from "../ink/ink.slint";
 
 // A group: its caption, then its lines.
 component Group inherits VerticalLayout {
@@ -367,7 +367,16 @@ export component ExportDialog inherits InkDialog {
                     InkLabel {
                         text: "Z planes";
                     }
-                    RangeFields {
+                    // All by default; a range only when chosen.
+                    InkSegmented {
+                        label: "Z planes";
+                        model: ["All", "Range"];
+                        selected: ExportDialogState.z-all ? 0 : 1;
+                        picked(i) => {
+                            ExportDialogState.z-all = i == 0;
+                        }
+                    }
+                    if !ExportDialogState.z-all: RangeFields {
                         first <=> ExportDialogState.z-start;
                         last <=> ExportDialogState.z-end;
                     }
@@ -378,7 +387,15 @@ export component ExportDialog inherits InkDialog {
                     InkLabel {
                         text: "Time points";
                     }
-                    RangeFields {
+                    InkSegmented {
+                        label: "Time points";
+                        model: ["All", "Range"];
+                        selected: ExportDialogState.t-all ? 0 : 1;
+                        picked(i) => {
+                            ExportDialogState.t-all = i == 0;
+                        }
+                    }
+                    if !ExportDialogState.t-all: RangeFields {
                         first <=> ExportDialogState.t-start;
                         last <=> ExportDialogState.t-end;
                     }

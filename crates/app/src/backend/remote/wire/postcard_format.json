@@ -1,5 +1,5 @@
 {
-  "protocol_version": 19,
+  "protocol_version": 20,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -812,17 +812,21 @@
         },
         {
           "t_stacks": {
-            "TUPLEARRAY": {
-              "CONTENT": "U32",
-              "SIZE": 2
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "U32",
+                "SIZE": 2
+              }
             }
           }
         },
         {
           "z_stacks": {
-            "TUPLEARRAY": {
-              "CONTENT": "U32",
-              "SIZE": 2
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "U32",
+                "SIZE": 2
+              }
             }
           }
         },
@@ -1054,6 +1058,15 @@
               }
             }
           }
+        },
+        "12": {
+          "Planes": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "PlaneFilter"
+              }
+            }
+          }
         }
       }
     },
@@ -1137,37 +1150,40 @@
           "TStacks": "UNIT"
         },
         "11": {
-          "RunStatus": "UNIT"
+          "Planes": "UNIT"
         },
         "12": {
+          "RunStatus": "UNIT"
+        },
+        "13": {
           "Boxplot": {
             "NEWTYPE": {
               "TYPENAME": "BoxplotFilter"
             }
           }
         },
-        "13": {
+        "14": {
           "Histogram": {
             "NEWTYPE": {
               "TYPENAME": "HistogramFilter"
             }
           }
         },
-        "14": {
+        "15": {
           "Scatter": {
             "NEWTYPE": {
               "TYPENAME": "ScatterFilter"
             }
           }
         },
-        "15": {
+        "16": {
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
             }
           }
         },
-        "16": {
+        "17": {
           "ImageObjects": {
             "NEWTYPE": {
               "TYPENAME": "ImageObjectsFilter"

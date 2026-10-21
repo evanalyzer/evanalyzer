@@ -139,7 +139,7 @@ fn main() {
         let start = Instant::now();
         exporter.export(&cache).expect("export");
         exporter
-            .finalize_image(Path::new(&cache.image_rel_path), 4096, 4096, 3, 1, 1, None)
+            .finalize_image(Path::new(&cache.image_rel_path), 4096, 4096, 3, 1, 1, &[0], &[0], None)
             .expect("finalize");
         write_time += start.elapsed();
     }
