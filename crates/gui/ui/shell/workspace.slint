@@ -202,6 +202,20 @@ export component Workspace inherits Rectangle {
         border-bottom-right-radius: 10px;
         clip: true;
     }
+    // The pane's rounded corners: a ring in the ground's color around it,
+    // its inside edge rounded like the pane - covers what the image and
+    // its objects draw into the corners (rounded clipping isn't drawn by
+    // every renderer, e.g. not the software one).
+    if root.split: Rectangle {
+        x: root.pane-x - 10px;
+        y: 12px - 10px;
+        width: root.pane-w + 20px;
+        height: root.pane-h + 20px;
+        border-width: 10px;
+        // The inside edge's radius: 20 - 10, the pane's.
+        border-radius: 20px;
+        border-color: Ink.ground;
+    }
     // Rounded corners and the edge of the pane, over all of it.
     if root.split: Rectangle {
         x: root.pane-x - 1px;
