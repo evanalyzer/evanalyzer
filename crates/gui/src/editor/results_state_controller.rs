@@ -3,6 +3,7 @@ use crate::editor::viewport_controller::ViewportController;
 
 mod split;
 mod tracks;
+mod tracks_all;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine,
     ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2,
@@ -490,6 +491,8 @@ pub struct ResultsStateController {
     split: Mutex<split::SplitState>,
     /// Results › Tracks - see [`tracks`].
     tracks: Mutex<tracks::TracksState>,
+    /// Results › Tracks, Full - see [`tracks_all`].
+    tracks_all: Mutex<tracks_all::TracksAllState>,
 }
 
 impl ResultsStateController {
@@ -529,6 +532,7 @@ impl ResultsStateController {
             plate_settings_written: Mutex::new(None),
             split: Mutex::new(split::SplitState::default()),
             tracks: Mutex::new(tracks::TracksState::default()),
+            tracks_all: Mutex::new(tracks_all::TracksAllState::default()),
         }
     }
 
@@ -537,6 +541,7 @@ impl ResultsStateController {
         if let Some(ui) = ui_handle.upgrade() {
             self.attach_split_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
+            self.attach_tracks_all_callbacks(&ui);
 
             // -------- ResultsState (api/results.slint) --------
             // Prototypes only for now - wire up the real behavior next.
@@ -584,7 +589,10 @@ impl ResultsStateController {
                         manager.update_matrix_view();
                     }
                     if mode == ResultsRailMode::Tracks {
-                        manager.tracks_show();
+                        match ui_ready.global::<ResultsState>().get_split() {
+                            true => manager.tracks_show(),
+                            false => manager.tracks_all_show(),
+                        }
                     }
                 });
 
@@ -2258,6 +2266,7 @@ impl ResultsStateController {
                 // Another analysis: nothing of the last one's split.
                 *self.split.lock().expect("Poisoned") = split::SplitState::default();
                 *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
+                *self.tracks_all.lock().expect("Poisoned") = tracks_all::TracksAllState::default();
                 // Tracks only with tracked objects.
                 let has_tracks = results.has_tracks().unwrap_or_else(|err| {
                     error!("Could not read whether the objects are tracked: {err}");
@@ -7392,6 +7401,83 @@ mod tests {
         let at_t1 = s.get_list_rows().row_count();
         assert_eq!(rows, at_t1, "the same objects at T 0 and T 1");
         assert_eq!(per_time_point, rows);
+    }
+
+    /// `opened_time_series` with tracks: each object and its T1 copy one.
+    fn opened_tracked() -> Opened {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        {
+            let conn = duckdb::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE ids AS SELECT object_id, row_number() OVER (ORDER BY object_id) AS n FROM objects;
+                 UPDATE objects SET track_id = ids.n FROM ids WHERE objects.object_id = ids.object_id;
+                 INSERT INTO objects SELECT * REPLACE (1 AS t_stack, gen_random_uuid() AS object_id, \
+                     centroid_x_px + 3 AS centroid_x_px, centroid_y_px + 4 AS centroid_y_px) FROM objects;
+                 UPDATE images SET t_stacks = 2;",
+            )
+            .unwrap();
+        }
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        Opened {
+            ui,
+            controller,
+            _dir: dir,
+        }
+    }
+
+    /// Tracks, Full: every track as a row - how many, sorted; a row's
+    /// details with its time points; "Show in image" the split at it.
+    #[test]
+    fn the_full_tracks_view_lists_every_track() {
+        let o = opened_tracked();
+        let s = o.state();
+        assert!(s.get_has_tracks());
+        s.set_split(false);
+        s.set_rail_mode(ResultsRailMode::Tracks);
+        s.invoke_rail_mode_selected(ResultsRailMode::Tracks);
+        drain_ui_queue();
+        let rows = s.get_tracks_all_rows();
+        assert!(rows.row_count() > 0);
+        assert!(
+            s.get_tracks_all_summary()
+                .starts_with(&format!("{} tracks", rows.row_count())),
+            "{}",
+            s.get_tracks_all_summary()
+        );
+        let first = rows.row_data(0).unwrap();
+        assert_eq!(first.points, "2");
+        assert_eq!(first.moved, "5", "3, 4 apart: 5 px");
+
+        s.invoke_tracks_all_row_clicked(0);
+        drain_ui_queue();
+        let detail = s.get_track_detail();
+        assert!(detail.active);
+        assert_eq!(detail.id, first.id);
+        assert_eq!(s.get_track_frames().row_count(), 2, "its two time points");
+
+        s.invoke_track_show_in_image();
+        drain_ui_queue();
+        assert!(s.get_split(), "the split layout");
+        let image = o.controller.tracks.lock().unwrap().image.clone();
+        assert!(
+            image.is_some_and(|rel| rel.ends_with(first.image.as_str())),
+            "the track's image beside it"
+        );
+        s.set_split(false);
+
+        // At least 3 time points: none.
+        s.set_tracks_all_min("3".into());
+        s.invoke_tracks_all_filter_changed();
+        drain_ui_queue();
+        assert_eq!(s.get_tracks_all_rows().row_count(), 0);
+        assert_eq!(s.get_tracks_all_summary(), "No tracks");
     }
 
     /// Over time: a line per class with its legend label, a band where

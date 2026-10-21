@@ -44,6 +44,48 @@ export struct TrackRow {
     curve: string,
 }
 
+// Tracks, Full: a row of the table of every track.
+export struct TrackAllRow {
+    id: string,
+    color: color,
+    class-name: string,
+    image: string,
+    span: string,
+    points: string,
+    moved: string,
+    speed: string,
+    straightness: string,
+    area: string,
+    // The area over its time points (0 0 100 20) - empty until read.
+    curve: string,
+}
+
+// Tracks, Full: a time point of the selected track.
+export struct TrackFrame {
+    t: string,
+    x: string,
+    y: string,
+    area: string,
+}
+
+// Tracks, Full: the selected track's details.
+export struct TrackDetail {
+    active: bool,
+    id: string,
+    class-name: string,
+    image: string,
+    span: string,
+    moved: string,
+    speed: string,
+    straightness: string,
+    // The area over time (0 0 100 40), its range and the time points'.
+    curve: string,
+    area-min: string,
+    area-max: string,
+    t-first: string,
+    t-last: string,
+}
+
 // Tracks: the selected track's card facts.
 export struct TrackCard {
     active: bool,
@@ -228,6 +270,33 @@ export global ResultsState {
     callback trail-changed(int, int);
     callback tracks-only-selected-changed(bool);
     callback tracks-by-track-changed(bool);
+
+    // -- Tracks, Full: every track (`split` off) --
+    in-out property <[TrackAllRow]> tracks-all-rows;
+    in-out property <int> tracks-all-selected: -1;
+    // "412 tracks · 9 864 objects · median 31 time points".
+    in-out property <string> tracks-all-summary;
+    // Filters: a class / an image (0: all), at least N time points, from
+    // the first time point, not touching the edge.
+    in-out property <[string]> tracks-all-classes;
+    in-out property <int> tracks-all-class: 0;
+    in-out property <[string]> tracks-all-images;
+    in-out property <int> tracks-all-image: 0;
+    in-out property <string> tracks-all-min: "1";
+    in-out property <bool> tracks-all-from-start: false;
+    in-out property <bool> tracks-all-no-edge: false;
+    // Sorted by 0 track, 1 time points, 2 moved, 3 speed, 4 straightness
+    // (descending but the track).
+    in-out property <int> tracks-all-sort: 0;
+    in-out property <string> tracks-length-unit: "px";
+    in-out property <TrackDetail> track-detail;
+    in-out property <[TrackFrame]> track-frames;
+    callback tracks-all-filter-changed();
+    callback tracks-all-row-clicked(int);
+    callback tracks-all-sort-changed(int);
+    // The rows in view (first, last): their curves are read.
+    callback tracks-all-rows-shown(int, int);
+    callback track-show-in-image();
 
     // Set when the analysis that wrote the open database didn't finish
     // (cancelled, failed, interrupted) - the results are incomplete.

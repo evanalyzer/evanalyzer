@@ -77,11 +77,8 @@ export component ResultsBarNav inherits HorizontalLayout {
         InkSegmented {
             width: 200px;
             label: "Layout";
-            // Tracks are always beside their image.
-            disabled-index: ResultsState.rail-mode == ResultsRailMode.tracks ? 0 : -1;
-            disabled-why: "Tracks are shown beside their image";
             model: ["Full", "Split with image"];
-            selected: ResultsState.split || ResultsState.rail-mode == ResultsRailMode.tracks ? 1 : 0;
+            selected: ResultsState.split ? 1 : 0;
             picked(i) => {
                 ResultsState.split = i == 1;
                 ResultsState.split-changed(i == 1);

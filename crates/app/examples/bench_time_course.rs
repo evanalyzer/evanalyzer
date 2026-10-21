@@ -6,14 +6,15 @@
 // or export (in the order printed, from 0): its own peak RSS. The last two
 // exports are the List (a row per object, CSV and XLSX); case 13 is
 // Results › Tracks' query: one image's tracks (median of `--iters`); case
-// 14 the tracks export (a row per track).
+// 14 the tracks export (a row per track), 15 every track's row kept
+// (Results › Tracks, Full).
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N]
 
 use evanalyzer_app::results::{
     Column, ExportFormat, Grouping, ImageTracksFilter, LocalResultsGenerator, ResultExport,
     TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-    TimeCourseStat,
+    TimeCourseStat, TrackSummaryFilter,
 };
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -278,6 +279,29 @@ fn main() {
             "Tracks CSV, a row per track",
             csv.lines().count() - 1,
             csv.len() as f64 / 1e6
+        );
+    }
+    // Case 15: Tracks, Full - every track's row kept (the area's mean).
+    if runs(n_export + 2) {
+        let filter = TrackSummaryFilter {
+            columns: vec![Column::AreaSizePx],
+            ..Default::default()
+        };
+        let mut times = Vec::new();
+        let mut n = 0;
+        for i in 0..=iters {
+            let start = Instant::now();
+            let rows = database.track_summary(&filter).expect("tracks");
+            if i > 0 {
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            n = rows.len();
+        }
+        times.sort_by(f64::total_cmp);
+        println!(
+            "\n{:<42} {:>10.1} {n:>8} tracks",
+            "Tracks, Full: every track's row",
+            times[times.len() / 2]
         );
     }
     let _ = std::fs::remove_dir_all(&out_root);

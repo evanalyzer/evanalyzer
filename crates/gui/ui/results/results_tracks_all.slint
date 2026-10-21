@@ -1,0 +1,534 @@
+// results/results_tracks_all.slint — Results › Tracks, Full: every track
+// as a table (filters above, a row per track, sortable), the selected one's
+// details beside it - its numbers, its area over time, its time points.
+// "Show in image" goes to the split layout at that track.
+
+import { ResultsState } from "../api/results.slint";
+import { Ink, InkButton, InkButtonKind, InkSegmented } from "../ink/ink.slint";
+import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
+
+component SortHead inherits Rectangle {
+    in property <string> text;
+    in property <int> key;
+    in property <TextHorizontalAlignment> align: TextHorizontalAlignment.left;
+    property <bool> on: ResultsState.tracks-all-sort == root.key;
+
+    accessible-role: button;
+    accessible-label: "Sort by " + root.text;
+    accessible-checked: root.on;
+    accessible-action-default => {
+        ResultsState.tracks-all-sort = root.key;
+        ResultsState.tracks-all-sort-changed(root.key);
+    }
+    Text {
+        width: 100%;
+        text: root.text + (root.on ? (root.key == 0 ? " ↑" : " ↓") : "");
+        font-size: Ink.fs-secondary;
+        font-weight: 600;
+        color: root.on ? Ink.text : Ink.text-dim;
+        horizontal-alignment: root.align;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            ResultsState.tracks-all-sort = root.key;
+            ResultsState.tracks-all-sort-changed(root.key);
+        }
+    }
+}
+
+component Fact inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 2px;
+    Text {
+        text: root.label;
+        font-size: Ink.fs-caption;
+        color: Ink.text-dim;
+    }
+    Text {
+        text: root.value;
+        font-size: Ink.fs-body;
+        font-family: Ink.font-mono;
+        color: Ink.text;
+    }
+}
+
+export component ResultsTracksAllView inherits Rectangle {
+    property <length> row-h: 32px;
+    property <length> id-w: 74px;
+    property <length> class-w: 96px;
+    property <length> image-w: 120px;
+    property <length> span-w: 92px;
+    property <length> num-w: 82px;
+
+    background: Ink.ground;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        // -- Filters and how many --
+        Rectangle {
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            height: filters.preferred-height;
+            filters := HorizontalLayout {
+                padding: 10px;
+                padding-left: 14px;
+                spacing: 12px;
+                ComboBox {
+                    width: 150px;
+                    model: ResultsState.tracks-all-classes;
+                    current-index: ResultsState.tracks-all-class;
+                    selected(v) => {
+                        ResultsState.tracks-all-class = self.current-index;
+                        ResultsState.tracks-all-filter-changed();
+                    }
+                }
+                ComboBox {
+                    width: 170px;
+                    model: ResultsState.tracks-all-images;
+                    current-index: ResultsState.tracks-all-image;
+                    selected(v) => {
+                        ResultsState.tracks-all-image = self.current-index;
+                        ResultsState.tracks-all-filter-changed();
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "At least";
+                        vertical-alignment: center;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                    }
+                    LineEdit {
+                        width: 56px;
+                        horizontal-alignment: center;
+                        input-type: number;
+                        text <=> ResultsState.tracks-all-min;
+                        accepted => {
+                            ResultsState.tracks-all-filter-changed();
+                        }
+                        edited => {
+                            ResultsState.tracks-all-filter-changed();
+                        }
+                    }
+                    Text {
+                        text: "time points";
+                        vertical-alignment: center;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                    }
+                }
+                CheckBox {
+                    text: "From the first time point";
+                    checked <=> ResultsState.tracks-all-from-start;
+                    toggled => {
+                        ResultsState.tracks-all-filter-changed();
+                    }
+                }
+                CheckBox {
+                    text: "Not touching the edge";
+                    checked <=> ResultsState.tracks-all-no-edge;
+                    toggled => {
+                        ResultsState.tracks-all-filter-changed();
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: ResultsState.tracks-all-summary;
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    min-width: 120px;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkSegmented {
+                        label: "Speed unit";
+                        model: ["px/frame", "µm/min", "µm/s"];
+                        selected: ResultsState.tracks-unit;
+                        enabled: ResultsState.tracks-um;
+                        picked(i) => {
+                            ResultsState.tracks-unit = i;
+                            ResultsState.tracks-unit-changed(i);
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            vertical-stretch: 1;
+
+            // -- The tracks --
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Ink.panel;
+                border-radius: Ink.radius-lg;
+                border-width: 1px;
+                border-color: Ink.border;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        height: 30px;
+                        background: Ink.field;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 12px;
+                            SortHead {
+                                width: root.id-w;
+                                text: "Track";
+                                key: 0;
+                            }
+                            Text {
+                                width: root.class-w;
+                                text: "Class";
+                                font-size: Ink.fs-secondary;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                width: root.image-w;
+                                text: "Image";
+                                font-size: Ink.fs-secondary;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                            SortHead {
+                                width: root.span-w;
+                                text: "Time points";
+                                key: 1;
+                            }
+                            SortHead {
+                                width: root.num-w;
+                                text: "Moved " + ResultsState.tracks-length-unit;
+                                key: 2;
+                                align: TextHorizontalAlignment.right;
+                            }
+                            SortHead {
+                                width: root.num-w + 30px;
+                                text: "Speed " + ResultsState.tracks-speed-unit;
+                                key: 3;
+                                align: TextHorizontalAlignment.right;
+                            }
+                            SortHead {
+                                width: root.num-w;
+                                text: "Straightness";
+                                key: 4;
+                                align: TextHorizontalAlignment.right;
+                            }
+                            Text {
+                                width: root.num-w;
+                                text: "Area px";
+                                font-size: Ink.fs-secondary;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: "Area over time";
+                                font-size: Ink.fs-secondary;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Ink.border-soft;
+                        }
+                    }
+
+                    // The rows in view: their area curves are read (an
+                    // image's tracks at a time).
+                    property <int> first-shown: max(0, floor(-list.content-y / root.row-h));
+                    property <int> last-shown: self.first-shown + ceil(list.visible-height / root.row-h);
+                    property <int> rows: ResultsState.tracks-all-rows.length;
+                    changed first-shown => {
+                        ResultsState.tracks-all-rows-shown(self.first-shown, self.last-shown);
+                    }
+                    changed rows => {
+                        ResultsState.tracks-all-rows-shown(self.first-shown, self.last-shown);
+                    }
+
+                    list := ListView {
+                        vertical-stretch: 1;
+                        accessible-label: "Tracks";
+                        for track[index] in ResultsState.tracks-all-rows: Rectangle {
+                            height: root.row-h;
+                            background: index == ResultsState.tracks-all-selected ? Ink.selection : row-ta.has-hover ? Ink.hover : transparent;
+                            accessible-role: list-item;
+                            accessible-label: "Track " + track.id + ", " + track.class-name + ", " + track.image;
+                            accessible-item-selected: index == ResultsState.tracks-all-selected;
+                            accessible-action-default => {
+                                ResultsState.tracks-all-row-clicked(index);
+                            }
+                            if index == ResultsState.tracks-all-selected: Rectangle {
+                                x: 0;
+                                width: 3px;
+                                background: Ink.focus;
+                            }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 12px;
+                                HorizontalLayout {
+                                    width: root.id-w;
+                                    spacing: 6px;
+                                    Rectangle {
+                                        width: 8px;
+                                        Rectangle {
+                                            width: 8px;
+                                            height: 8px;
+                                            border-radius: 4px;
+                                            background: track.color;
+                                        }
+                                    }
+                                    Text {
+                                        text: track.id;
+                                        font-size: Ink.fs-body;
+                                        font-family: Ink.font-mono;
+                                        color: Ink.text;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                                for cell in [
+                                    { w: root.class-w, t: track.class-name, mono: false, right: false },
+                                    { w: root.image-w, t: track.image, mono: true, right: false },
+                                    { w: root.span-w, t: track.span + " (" + track.points + ")", mono: true, right: false },
+                                    { w: root.num-w, t: track.moved, mono: true, right: true },
+                                    { w: root.num-w + 30px, t: track.speed, mono: true, right: true },
+                                    { w: root.num-w, t: track.straightness, mono: true, right: true },
+                                    { w: root.num-w, t: track.area, mono: true, right: true },
+                                ]: Text {
+                                    width: cell.w;
+                                    text: cell.t;
+                                    font-size: Ink.fs-body;
+                                    font-family: cell.mono ? Ink.font-mono : Ink.font-sans;
+                                    color: Ink.text;
+                                    horizontal-alignment: cell.right ? right : left;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    Path {
+                                        x: 0;
+                                        y: 6px;
+                                        width: min(parent.width, 180px);
+                                        height: parent.height - 12px;
+                                        viewbox-width: 100;
+                                        viewbox-height: 20;
+                                        fit: fill;
+                                        commands: track.curve;
+                                        stroke: track.color;
+                                        stroke-width: 1.4px;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                y: parent.height - 1px;
+                                height: 1px;
+                                background: Ink.border-soft;
+                            }
+                            row-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    ResultsState.tracks-all-row-clicked(index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // -- The selected track --
+            Rectangle {
+                width: 380px;
+                background: Ink.panel;
+                border-radius: Ink.radius-lg;
+                border-width: 1px;
+                border-color: Ink.border;
+                clip: true;
+
+                if !ResultsState.track-detail.active: Text {
+                    width: parent.width - 40px;
+                    text: "Click a track to see it here.";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-dim;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                if ResultsState.track-detail.active: VerticalLayout {
+                    padding: 16px;
+                    spacing: 14px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Track " + ResultsState.track-detail.id;
+                            font-size: Ink.fs-title;
+                            font-weight: 700;
+                            color: Ink.text;
+                        }
+                        Text {
+                            text: ResultsState.track-detail.class-name + " · " + ResultsState.track-detail.image;
+                            font-size: Ink.fs-secondary;
+                            color: Ink.text-dim;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 16px;
+                        Fact {
+                            label: "Time points";
+                            value: ResultsState.track-detail.span;
+                        }
+                        Fact {
+                            label: "Moved";
+                            value: ResultsState.track-detail.moved;
+                        }
+                        Fact {
+                            label: "Speed";
+                            value: ResultsState.track-detail.speed;
+                        }
+                        Fact {
+                            label: "Straightness";
+                            value: ResultsState.track-detail.straightness;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        vertical-stretch: 0;
+                        Text {
+                            text: "Area over time (px)";
+                            font-size: Ink.fs-caption;
+                            font-weight: 600;
+                            color: Ink.text-dim;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            height: 120px;
+                            VerticalLayout {
+                                width: 40px;
+                                Text {
+                                    text: ResultsState.track-detail.area-max;
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-dim;
+                                    horizontal-alignment: right;
+                                }
+                                Rectangle {
+                                    vertical-stretch: 1;
+                                }
+                                Text {
+                                    text: ResultsState.track-detail.area-min;
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-dim;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                            Rectangle {
+                                height: 120px;
+                                border-width: 1px;
+                                border-color: Ink.border-soft;
+                                border-radius: 4px;
+                                Path {
+                                    x: 4px;
+                                    y: 4px;
+                                    width: parent.width - 8px;
+                                    height: parent.height - 8px;
+                                    viewbox-width: 100;
+                                    viewbox-height: 40;
+                                    fit: fill;
+                                    commands: ResultsState.track-detail.curve;
+                                    stroke: Ink.focus;
+                                    stroke-width: 2px;
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 46px;
+                            Text {
+                                text: "T " + ResultsState.track-detail.t-first;
+                                font-size: Ink.fs-caption;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-dim;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: "T " + ResultsState.track-detail.t-last;
+                                font-size: Ink.fs-caption;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-dim;
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            for head in ["T", "X px", "Y px", "Area px"]: Text {
+                                width: 70px;
+                                text: head;
+                                font-size: Ink.fs-caption;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                            }
+                        }
+                        ListView {
+                            vertical-stretch: 1;
+                            accessible-label: "The track's time points";
+                            for frame in ResultsState.track-frames: HorizontalLayout {
+                                height: 22px;
+                                spacing: 8px;
+                                for value in [frame.t, frame.x, frame.y, frame.area]: Text {
+                                    width: 70px;
+                                    text: value;
+                                    font-size: Ink.fs-secondary;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        InkButton {
+                            text: "Show in image";
+                            kind: InkButtonKind.primary;
+                            clicked => {
+                                ResultsState.track-show-in-image();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

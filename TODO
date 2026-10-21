@@ -257,3 +257,14 @@ Kept private on purpose (one screen's own, not a copy of an Ink piece): the step
 
 - [ ] Allow to remove objects from the results table
 - [ ] Allow manual setting a tracking id
+
+## Tracks (left out of v1, 2026-10-21)
+
+- [ ] Tracks, Full: a value picker for the selected track's curve (area only today) - and its intensities in the time-point list.
+- [ ] Tracks, Full: "Show in chart" - the Over time chart for one track (it can't be filtered to a single track yet).
+- [ ] Tracks, Full: sort by class and image (track, time points, moved, speed, straightness only today).
+- [ ] Tracks, Split: color the trails by speed, and the timeline strip (objects per time point, the selected track's time points marked) - from design B.
+- [ ] Tracks: max step speed per track (mean speed and straightness only today) - one more column in the export.
+- [ ] Tracks, Over time chart: the same track filters as Tracks (at least N time points, from the first time point, not touching the edge).
+- [ ] Plate over time (design D): each well's value at T as its color plus a mini curve, with play / a T slider.
+- [ ] Charts: the small "same values" previews (histogram, scatter) under the chart - left out on purpose: two more queries on every change (from REDESIGN.md, 2026-10-16).

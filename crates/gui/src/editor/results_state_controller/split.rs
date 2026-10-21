@@ -90,6 +90,13 @@ impl ResultsStateController {
             manager
                 ._app_state
                 .update_app_settings(|s| s.results_split.on = on);
+            // Tracks: one image's beside it, or every track.
+            if manager.in_tracks() {
+                match on {
+                    true => manager.tracks_show(),
+                    false => manager.tracks_all_show(),
+                }
+            }
             // A row already selected: shown right away.
             if on && let Some(ui) = manager.ui.upgrade() {
                 let row = ui.global::<ResultsState>().get_list_selected_row();

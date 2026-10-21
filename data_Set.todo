@@ -1,3 +1,0 @@
-Dataset steps don't run yet. They're collected, but nothing calls them after the image phase, and there's no "re-run dataset steps only".
-clear_dataset_outputs is left out until the first output table (tracks) exists, since there's nothing to clear yet.
-The generator still can't produce dataset steps. Once the first dataset command exists, it has to scan dataset/ as well.
