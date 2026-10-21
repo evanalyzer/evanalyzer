@@ -74,7 +74,11 @@ impl ImagesListController {
     pub fn clear_shown_image(&self) {
         self.viewport_controller.clear_shown_image();
         self.object_list_controller.sync_objects_to_slint();
-        if self.image_meta_controller.sync_image_meta_to_slint().is_err() {
+        if self
+            .image_meta_controller
+            .sync_image_meta_to_slint()
+            .is_err()
+        {
             warn!("Failed to sync image meta to slint!");
         }
     }
@@ -285,7 +289,11 @@ impl ImagesListController {
         // Now we can scan the new image root for images
         self.scan_image_root_for_images(selected_image_absolute_path);
         // A folder of images opened: next, picking one.
-        crate::editor::start_page_controller::set_active(&self.ui, false, Some(crate::WorkspaceMode::Images));
+        crate::editor::start_page_controller::set_active(
+            &self.ui,
+            false,
+            Some(crate::WorkspaceMode::Images),
+        );
     }
 
     /// Updates the project's root image directory without performing a fresh filesystem crawl.
@@ -1165,7 +1173,11 @@ mod tests {
                 PathBuf::from(name),
                 ImageEntry {
                     rel_path: PathBuf::from(name),
-                    series: if name == "a.tif" { series.clone() } else { BTreeMap::new() },
+                    series: if name == "a.tif" {
+                        series.clone()
+                    } else {
+                        BTreeMap::new()
+                    },
                     ..Default::default()
                 },
             );

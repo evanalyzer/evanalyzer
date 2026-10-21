@@ -316,7 +316,12 @@ fn analyzes_planes_one_by_one(project: &ProjectSettings) -> bool {
         ZStackHandling::SingleStack => z.z_range.as_ref().is_some_and(|r| r.end() > r.start()),
         _ => false,
     };
-    project.images.settings.z_stack.as_ref().is_some_and(one_by_one)
+    project
+        .images
+        .settings
+        .z_stack
+        .as_ref()
+        .is_some_and(one_by_one)
         || project
             .images
             .list
@@ -1410,14 +1415,17 @@ mod tests {
             assert_eq!(found.len(), 1, "{:?}", messages(&found));
             assert_eq!(found[0].step, Some((PipelineId(2), StepId(7))));
             assert!(
-                found[0].message.starts_with("LoadChannel loads its channel with a z-projection"),
+                found[0]
+                    .message
+                    .starts_with("LoadChannel loads its channel with a z-projection"),
                 "{}",
                 found[0].message
             );
         }
 
         // Inside a component: at the step using it.
-        let PipelineCommand::LoadChannel(load) = (match &mut project.components[0].steps[0].content {
+        let PipelineCommand::LoadChannel(load) = (match &mut project.components[0].steps[0].content
+        {
             StepContent::Command(command) => command,
             _ => panic!("a command"),
         }) else {
@@ -1427,8 +1435,15 @@ mod tests {
         load.z_index = 1;
         let found = warnings(&project);
         assert_eq!(found.len(), 2, "{:?}", messages(&found));
-        let inside = found.iter().find(|p| p.step == Some((PipelineId(1), StepId(1)))).unwrap();
-        assert!(inside.message.starts_with("“Spots” loads"), "{}", inside.message);
+        let inside = found
+            .iter()
+            .find(|p| p.step == Some((PipelineId(1), StepId(1))))
+            .unwrap();
+        assert!(
+            inside.message.starts_with("“Spots” loads"),
+            "{}",
+            inside.message
+        );
         assert_eq!(inside.detail, "LoadChannel (its step 1)");
     }
 

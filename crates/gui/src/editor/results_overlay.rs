@@ -87,7 +87,10 @@ pub fn draw_results_overlay(
                 0.0
             };
             let (in0, in1) = if inner > 0.0 {
-                (((cx - inner).ceil() as i64).max(xs.start), ((cx + inner).floor() as i64).min(xs.end))
+                (
+                    ((cx - inner).ceil() as i64).max(xs.start),
+                    ((cx + inner).floor() as i64).min(xs.end),
+                )
             } else {
                 (xs.start, xs.start)
             };
@@ -137,9 +140,7 @@ fn blend(dst: &mut slint::Rgba8Pixel, rgb: [u8; 3], alpha: f32) {
     if out_a <= 0.0 {
         return;
     }
-    let mix = |s: u8, d: u8| {
-        ((s as f32 * sa + d as f32 * da * (1.0 - sa)) / out_a).round() as u8
-    };
+    let mix = |s: u8, d: u8| ((s as f32 * sa + d as f32 * da * (1.0 - sa)) / out_a).round() as u8;
     *dst = slint::Rgba8Pixel {
         r: mix(rgb[0], dst.r),
         g: mix(rgb[1], dst.g),
@@ -160,15 +161,28 @@ pub fn focus_view(
     bbox: [f32; 4],
 ) -> (f32, f32, f32) {
     let fit = (v_w / image_w.max(1.0)).min(v_h / image_h.max(1.0)) * 0.95;
-    let (bw, bh) = ((bbox[2] - bbox[0] + 1.0).max(1.0), (bbox[3] - bbox[1] + 1.0).max(1.0));
+    let (bw, bh) = (
+        (bbox[2] - bbox[0] + 1.0).max(1.0),
+        (bbox[3] - bbox[1] + 1.0).max(1.0),
+    );
     let zoom = (v_w / (bw * 4.0)).min(v_h / (bh * 4.0)).min(4.0).max(fit);
-    let (cx, cy) = ((bbox[0] + bbox[2] + 1.0) / 2.0, (bbox[1] + bbox[3] + 1.0) / 2.0);
+    let (cx, cy) = (
+        (bbox[0] + bbox[2] + 1.0) / 2.0,
+        (bbox[1] + bbox[3] + 1.0) / 2.0,
+    );
     (zoom, v_w / 2.0 - cx * zoom, v_h / 2.0 - cy * zoom)
 }
 
 /// The object under the screen point `(x, y)`: the smallest whose ellipse
 /// holds it, else the nearest within 6 px of its box.
-pub fn object_at(overlay: &ResultsOverlay, x: f32, y: f32, zoom: f32, off_x: f32, off_y: f32) -> Option<usize> {
+pub fn object_at(
+    overlay: &ResultsOverlay,
+    x: f32,
+    y: f32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) -> Option<usize> {
     let ix = (x - off_x) / zoom;
     let iy = (y - off_y) / zoom;
     let slack = 6.0 / zoom;
@@ -202,7 +216,15 @@ mod tests {
     use super::*;
 
     fn buffer(w: u32, h: u32) -> Vec<slint::Rgba8Pixel> {
-        vec![slint::Rgba8Pixel { r: 0, g: 0, b: 0, a: 0 }; (w * h) as usize]
+        vec![
+            slint::Rgba8Pixel {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0
+            };
+            (w * h) as usize
+        ]
     }
 
     #[test]
@@ -224,7 +246,10 @@ mod tests {
     #[test]
     fn the_fast_fill_matches_the_pixel_by_pixel_ellipse() {
         let overlay = ResultsOverlay {
-            objects: vec![([3, 7, 61, 40], [255, 0, 0]), ([10, 10, 13, 90], [0, 255, 0])],
+            objects: vec![
+                ([3, 7, 61, 40], [255, 0, 0]),
+                ([10, 10, 13, 90], [0, 255, 0]),
+            ],
             selected: None,
         };
         let mut buf = buffer(80, 100);
@@ -232,8 +257,18 @@ mod tests {
         // The reference: each pixel's own distance (as before).
         let mut want = buffer(80, 100);
         for (bbox, rgb) in &overlay.objects {
-            let (x0, y0, x1, y1) = (bbox[0] as f32, bbox[1] as f32, (bbox[2] + 1) as f32, (bbox[3] + 1) as f32);
-            let (cx, cy, rx, ry) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+            let (x0, y0, x1, y1) = (
+                bbox[0] as f32,
+                bbox[1] as f32,
+                (bbox[2] + 1) as f32,
+                (bbox[3] + 1) as f32,
+            );
+            let (cx, cy, rx, ry) = (
+                (x0 + x1) / 2.0,
+                (y0 + y1) / 2.0,
+                (x1 - x0) / 2.0,
+                (y1 - y0) / 2.0,
+            );
             let r = rx.min(ry);
             for y in y0.floor() as usize..(y1.ceil() as usize).min(100) {
                 for x in x0.floor() as usize..(x1.ceil() as usize).min(80) {
@@ -261,15 +296,25 @@ mod tests {
         };
         let mut buf = buffer(30, 10);
         draw_results_overlay(&mut buf, &overlay, 30, 10, 1.0, 0.0, 0.0);
-        assert!(buf[5 * 30].a < buf[5 * 30 + 20].a, "the dimmed one is fainter");
+        assert!(
+            buf[5 * 30].a < buf[5 * 30 + 20].a,
+            "the dimmed one is fainter"
+        );
         let p = buf[5 * 30 + 20];
-        assert_eq!([p.r, p.g, p.b], [0, 255, 0], "the selected one in its own colour");
+        assert_eq!(
+            [p.r, p.g, p.b],
+            [0, 255, 0],
+            "the selected one in its own colour"
+        );
     }
 
     #[test]
     fn a_tiny_or_far_object_is_still_a_dot_and_off_screen_ones_are_skipped() {
         let overlay = ResultsOverlay {
-            objects: vec![([100, 100, 101, 101], [0, 0, 255]), ([5000, 5000, 5100, 5100], [0, 0, 255])],
+            objects: vec![
+                ([100, 100, 101, 101], [0, 0, 255]),
+                ([5000, 5000, 5100, 5100], [0, 0, 255]),
+            ],
             selected: None,
         };
         let mut buf = buffer(20, 20);
@@ -280,23 +325,40 @@ mod tests {
 
     #[test]
     fn the_focus_centres_the_object_and_keeps_within_fit_and_4x() {
-        let (zoom, ox, oy) = focus_view(800.0, 600.0, 10_000.0, 10_000.0, [4990.0, 4990.0, 5009.0, 5009.0]);
+        let (zoom, ox, oy) = focus_view(
+            800.0,
+            600.0,
+            10_000.0,
+            10_000.0,
+            [4990.0, 4990.0, 5009.0, 5009.0],
+        );
         assert_eq!(zoom, 4.0, "a small object: at most 4×");
         assert!((ox + 5000.0 * zoom - 400.0).abs() < 0.01);
         assert!((oy + 5000.0 * zoom - 300.0).abs() < 0.01);
         let (zoom, ..) = focus_view(800.0, 600.0, 1000.0, 1000.0, [0.0, 0.0, 999.0, 999.0]);
-        assert!((zoom - 0.6 * 0.95).abs() < 1e-5, "a huge object: the whole image fitted");
+        assert!(
+            (zoom - 0.6 * 0.95).abs() < 1e-5,
+            "a huge object: the whole image fitted"
+        );
     }
 
     #[test]
     fn a_click_picks_the_smallest_object_under_it_or_the_nearest() {
         let overlay = ResultsOverlay {
-            objects: vec![([0, 0, 99, 99], [0; 3]), ([40, 40, 59, 59], [0; 3]), ([200, 0, 209, 9], [0; 3])],
+            objects: vec![
+                ([0, 0, 99, 99], [0; 3]),
+                ([40, 40, 59, 59], [0; 3]),
+                ([200, 0, 209, 9], [0; 3]),
+            ],
             selected: None,
         };
         assert_eq!(object_at(&overlay, 50.0, 50.0, 1.0, 0.0, 0.0), Some(1));
         assert_eq!(object_at(&overlay, 10.0, 50.0, 1.0, 0.0, 0.0), Some(0));
-        assert_eq!(object_at(&overlay, 213.0, 5.0, 1.0, 0.0, 0.0), Some(2), "4 px beside it");
+        assert_eq!(
+            object_at(&overlay, 213.0, 5.0, 1.0, 0.0, 0.0),
+            Some(2),
+            "4 px beside it"
+        );
         assert_eq!(object_at(&overlay, 150.0, 150.0, 1.0, 0.0, 0.0), None);
     }
 }

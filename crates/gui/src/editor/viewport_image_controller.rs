@@ -101,10 +101,17 @@ impl ViewportImageController {
             let auto_preview = ViewportMemorySettings::auto_preview_tiles(ram);
             let auto_breakpoint = ViewportMemorySettings::auto_breakpoint_tiles(ram);
             let gb = ram as f64 / (1024.0 * 1024.0 * 1024.0);
-            state.set_auto_preview_tiles_note(format!("{gb:.0} GB RAM here: {auto_preview}").into());
-            state.set_auto_breakpoint_tiles_note(format!("{gb:.0} GB RAM: {auto_breakpoint}").into());
+            state
+                .set_auto_preview_tiles_note(format!("{gb:.0} GB RAM here: {auto_preview}").into());
+            state.set_auto_breakpoint_tiles_note(
+                format!("{gb:.0} GB RAM: {auto_breakpoint}").into(),
+            );
             state.set_preview_tiles_auto(settings.preview_tiles_auto);
-            state.set_preview_tiles(if settings.preview_tiles_auto { auto_preview } else { settings.preview_tiles } as i32);
+            state.set_preview_tiles(if settings.preview_tiles_auto {
+                auto_preview
+            } else {
+                settings.preview_tiles
+            } as i32);
             state.set_breakpoint_tiles_auto(settings.breakpoint_tiles_auto);
             state.set_software_renderer(settings.software_renderer);
             state.set_breakpoint_tiles(settings.effective_breakpoint_tiles(ram) as i32);
@@ -588,8 +595,10 @@ impl ViewportImageController {
 
             // Comparing: the breakpoint image's value at the same pixel too.
             if self.viewport_controller.comparing() && viewport_state.zoom > 0.0 {
-                let x = (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
-                let y = (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
+                let x =
+                    (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
+                let y =
+                    (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
                 if let Some(value) = self.viewport_controller.breakpoint_value_at(x, y) {
                     pixel_values.push(format!("Breakpoint: {value}"));
                 }
@@ -1757,11 +1766,7 @@ mod tests {
 
         advance(40);
         drain_ui_queue();
-        assert_eq!(
-            pixel_info(&ui).0,
-            "DAPI: 64",
-            "the trailing update"
-        );
+        assert_eq!(pixel_info(&ui).0, "DAPI: 64", "the trailing update");
     }
 
     #[test]

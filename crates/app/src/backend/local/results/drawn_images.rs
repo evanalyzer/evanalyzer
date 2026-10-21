@@ -8,9 +8,9 @@
 use super::results_generator::ResultsGenerator;
 use crate::api::{DrawnImages, ExportProgress};
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
-use evanalyzer_core::{ImageReader, ReadMode};
-use evanalyzer_core::ImageContainer;
 use evanalyzer_core::ImageChannel;
+use evanalyzer_core::ImageContainer;
+use evanalyzer_core::{ImageReader, ReadMode};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +41,14 @@ pub(super) fn export_drawn_images(
         on_progress("Drawing the objects on the images", i, images.len());
         let boxes = object_boxes(database, rel_path, z_stack, t_stack)?;
         let path = settings.image_root.join(rel_path);
-        let picture = render(&path, settings, z_stack as i32, t_stack as i32, &boxes, &class_colors)?;
+        let picture = render(
+            &path,
+            settings,
+            z_stack as i32,
+            t_stack as i32,
+            &boxes,
+            &class_colors,
+        )?;
         let name = Path::new(rel_path)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -51,7 +58,11 @@ pub(super) fn export_drawn_images(
             .save(&out)
             .map_err(|e| InternalErrors::Io(format!("Could not write {}: {e}", out.display())))?;
     }
-    on_progress("Drawing the objects on the images", images.len(), images.len());
+    on_progress(
+        "Drawing the objects on the images",
+        images.len(),
+        images.len(),
+    );
     Ok(())
 }
 
@@ -101,10 +112,9 @@ fn render(
         .get(&settings.series)
         .or_else(|| meta.series.values().next())
         .ok_or_else(|| InternalErrors::ImageReadError(format!("{}: no series", path.display())))?;
-    let full = series
-        .resolutions
-        .get(&0)
-        .ok_or_else(|| InternalErrors::ImageReadError(format!("{}: no resolution", path.display())))?;
+    let full = series.resolutions.get(&0).ok_or_else(|| {
+        InternalErrors::ImageReadError(format!("{}: no resolution", path.display()))
+    })?;
     // The largest level whose longer side fits (else the smallest there is).
     let (level, info) = series
         .resolutions
@@ -157,7 +167,10 @@ pub fn colorize(
 ) -> image::RgbImage {
     let mut rgb = vec![0f32; width * height * 3];
     for channel in channels {
-        let color = colors.get(&channel.c_stack).copied().unwrap_or([1.0, 1.0, 1.0]);
+        let color = colors
+            .get(&channel.c_stack)
+            .copied()
+            .unwrap_or([1.0, 1.0, 1.0]);
         match &*channel.image {
             ImageContainer::F32Gray(image) => {
                 let data = image.data.as_slice();
@@ -248,7 +261,11 @@ mod tests {
         draw_box(&mut picture, [2, 2, 7, 7], red);
         assert_eq!(*picture.get_pixel(2, 5), red, "left edge");
         assert_eq!(*picture.get_pixel(7, 2), red, "corner");
-        assert_eq!(*picture.get_pixel(5, 5), image::Rgb([0, 0, 0]), "inside stays");
+        assert_eq!(
+            *picture.get_pixel(5, 5),
+            image::Rgb([0, 0, 0]),
+            "inside stays"
+        );
         // Past the edge: no panic.
         draw_box(&mut picture, [-5, -5, 20, 20], red);
     }

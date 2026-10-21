@@ -228,17 +228,19 @@ impl ResultCharts {
         Ok(BoxplotResult {
             boxes: rows
                 .into_iter()
-                .map(|(label, min_v, q1, median, q3, max_v, n, outliers)| BoxplotBox {
-                    label,
-                    color: 0,
-                    min: min_v,
-                    q1,
-                    median,
-                    q3,
-                    max: max_v,
-                    outliers: extract_f64_list(outliers),
-                    object_count: n as usize,
-                })
+                .map(
+                    |(label, min_v, q1, median, q3, max_v, n, outliers)| BoxplotBox {
+                        label,
+                        color: 0,
+                        min: min_v,
+                        q1,
+                        median,
+                        q3,
+                        max: max_v,
+                        outliers: extract_f64_list(outliers),
+                        object_count: n as usize,
+                    },
+                )
                 .collect(),
         })
     }
@@ -455,7 +457,11 @@ impl ResultCharts {
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         stmt.query_map(
-            duckdb::params![filter.image_rel_path, filter.plane.z_stack, filter.plane.t_stack],
+            duckdb::params![
+                filter.image_rel_path,
+                filter.plane.z_stack,
+                filter.plane.t_stack
+            ],
             |row| {
                 let means = match row.get::<_, duckdb::types::Value>(9)? {
                     duckdb::types::Value::List(values) => values

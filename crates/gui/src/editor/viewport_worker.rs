@@ -137,7 +137,10 @@ impl ViewportWorker {
                 project.get_image_channel_histograms(),
                 project.get_selected_image_channel_idx(),
                 // The user's setting: a new image's channels auto-scaled.
-                !self.viewport_controller.memory_settings().auto_scale_new_images,
+                !self
+                    .viewport_controller
+                    .memory_settings()
+                    .auto_scale_new_images,
             )
         };
 
@@ -229,7 +232,8 @@ impl ViewportWorker {
                 // STEP 5: Auto-adjust - write lock acquired AFTER read lock
                 // dropped. Safe because we dropped the project read lock in
                 // STEP 1.
-                if task.auto_adjust_if_not_set || task.auto_adjust_selected || task.auto_adjust_all {
+                if task.auto_adjust_if_not_set || task.auto_adjust_selected || task.auto_adjust_all
+                {
                     for channel in render_src.iter() {
                         let idx = channel.c_stack;
                         if let Some(ch) = hist_settings.get(&idx) {
@@ -240,15 +244,14 @@ impl ViewportWorker {
                                 // Auto-scale off: a channel without any
                                 // scaling shows its full value range (the
                                 // values are normalized to 0..1).
-                                let (min, max, min_range, max_range) =
-                                    if auto_scale_off
-                                        && !task.auto_adjust_selected
-                                        && !task.auto_adjust_all
-                                    {
-                                        (0.0, 1.0, 0.0, 1.0)
-                                    } else {
-                                        auto_adjust_range(channel.slice(), channel.is_rgb)
-                                    };
+                                let (min, max, min_range, max_range) = if auto_scale_off
+                                    && !task.auto_adjust_selected
+                                    && !task.auto_adjust_all
+                                {
+                                    (0.0, 1.0, 0.0, 1.0)
+                                } else {
+                                    auto_adjust_range(channel.slice(), channel.is_rgb)
+                                };
                                 debug!(
                                     "Auto-adjusting channel {} min={} max={} range=({},{})",
                                     idx, min, max, min_range, max_range
@@ -485,8 +488,7 @@ impl ViewportWorker {
             }
         }
 
-        if comparing && !is_low_res && version_tracker.load(Ordering::SeqCst) == current_version
-        {
+        if comparing && !is_low_res && version_tracker.load(Ordering::SeqCst) == current_version {
             self.render_compare(&viewport_state, &mut b.compare);
         } else if !comparing {
             // Compare off (or no breakpoint): its render's RAM is freed.
@@ -519,7 +521,13 @@ impl ViewportWorker {
             let mut screen = SharedPixelBuffer::<Rgb8Pixel>::new(vp_w as u32, vp_h as u32);
             let dest = screen.make_mut_slice();
             for (native, tile) in &render.tiles {
-                composite_into_screen(native.as_slice(), &tile_context(tile, viewport_state), dest, vp_w, vp_h);
+                composite_into_screen(
+                    native.as_slice(),
+                    &tile_context(tile, viewport_state),
+                    dest,
+                    vp_w,
+                    vp_h,
+                );
             }
             let rect = ImageRect::from_screen(
                 0.0,
@@ -530,7 +538,8 @@ impl ViewportWorker {
                 viewport_state.offset_x,
                 viewport_state.offset_y,
             );
-            self.viewport_controller.sync_compare_to_slint(vec![(screen, rect)]);
+            self.viewport_controller
+                .sync_compare_to_slint(vec![(screen, rect)]);
         } else if !fresh {
             self.viewport_controller.sync_compare_to_slint(
                 render
@@ -560,14 +569,18 @@ impl ViewportWorker {
         if tiles.is_empty() {
             return None;
         }
-        self.viewport_controller.compare_renders.fetch_add(1, Ordering::Relaxed);
+        self.viewport_controller
+            .compare_renders
+            .fetch_add(1, Ordering::Relaxed);
         let mode = self.viewport_controller.breakpoint_view_mode();
         let source = |bp: &crate::editor::viewport_controller::BreakpointChannelData| match mode {
             BreakpointViewMode::Image => bp.image.clone(),
             BreakpointViewMode::Segmentation => {
                 bp.segmentation.clone().unwrap_or_else(|| bp.image.clone())
             }
-            BreakpointViewMode::Instances => bp.instances.clone().unwrap_or_else(|| bp.image.clone()),
+            BreakpointViewMode::Instances => {
+                bp.instances.clone().unwrap_or_else(|| bp.image.clone())
+            }
         };
         let channel_of = |bp: &crate::editor::viewport_controller::BreakpointChannelData| {
             let image = source(bp);
@@ -597,7 +610,11 @@ impl ViewportWorker {
                 min_limit,
                 max_limit,
             };
-            *self.viewport_controller.breakpoint_histogram.write().unwrap() = Some(auto.clone());
+            *self
+                .viewport_controller
+                .breakpoint_histogram
+                .write()
+                .unwrap() = Some(auto.clone());
             // The panel shows it: its sliders.
             if self.viewport_controller.histogram_side() == 1 {
                 self.histogram_controller.sync_histogram_settings_to_slint();
@@ -611,7 +628,8 @@ impl ViewportWorker {
         let mut nr_bits = 8;
         for bp in tiles.iter() {
             nr_bits = bp.nr_bits;
-            let mut native = SharedPixelBuffer::<Rgb8Pixel>::new(bp.tile_width as u32, bp.tile_height as u32);
+            let mut native =
+                SharedPixelBuffer::<Rgb8Pixel>::new(bp.tile_width as u32, bp.tile_height as u32);
             let slice = native.make_mut_slice();
             let channel = channel_of(bp);
             if let ImageContainer::U32(img) = &*source(bp) {
@@ -651,7 +669,11 @@ impl ViewportWorker {
         let curves = if bins.is_empty() {
             Vec::new()
         } else {
-            histogram_to_svg_fast(&vec![(bins, color)], NUM_BINS, self.viewport_controller.histogram_log())
+            histogram_to_svg_fast(
+                &vec![(bins, color)],
+                NUM_BINS,
+                self.viewport_controller.histogram_log(),
+            )
         };
         self.viewport_controller
             .publish_histogram(1, curves, 2f32.powi(nr_bits as i32));
@@ -1592,7 +1614,10 @@ mod tests {
             .map(|y| y.parse().unwrap())
             .collect();
         assert_eq!(ys[0], 100.0);
-        assert!((ys[1] - 100.0 * (1.0 - 2f32.ln() / 1000f32.ln())).abs() < 0.1, "{path}");
+        assert!(
+            (ys[1] - 100.0 * (1.0 - 2f32.ln() / 1000f32.ln())).abs() < 0.1,
+            "{path}"
+        );
         assert_eq!(ys[2], 0.0);
     }
 
@@ -1703,7 +1728,11 @@ mod tests {
         r.worker.viewport_controller.set_memory_settings(settings);
         r.draw(TaskDispatch::HighRes, new_image_task());
         let histograms = r.app_state.get_project().get_image_channel_histograms();
-        let window = histograms.values().flatten().next().expect("a window was kept");
+        let window = histograms
+            .values()
+            .flatten()
+            .next()
+            .expect("a window was kept");
         assert_eq!(
             (window.min, window.max, window.min_limit, window.max_limit),
             (0.0, 1.0, 0.0, 1.0)
@@ -2171,7 +2200,17 @@ mod tests {
         let mut r = render_fixture(project_with_fixture_image());
         r.draw(TaskDispatch::HighRes, new_image_task());
         let vc = r.worker.viewport_controller.clone();
-        vc.set_breakpoint_channel(gray_container(vec![0.1, 0.5, 0.9, 0.2]), None, None, 0, 0, 4, 1, 8, Some(0));
+        vc.set_breakpoint_channel(
+            gray_container(vec![0.1, 0.5, 0.9, 0.2]),
+            None,
+            None,
+            0,
+            0,
+            4,
+            1,
+            8,
+            Some(0),
+        );
         vc.set_compare(true);
         drain_ui_queue();
         r.draw(TaskDispatch::HighRes, DrawingTask::default());
@@ -2197,17 +2236,18 @@ mod tests {
         let mut r = render_fixture(project_with_fixture_image());
         r.draw(TaskDispatch::HighRes, new_image_task());
         let vc = r.worker.viewport_controller.clone();
-        let tile = |x: usize, value: f32| crate::editor::viewport_controller::BreakpointChannelData {
-            image: Arc::new(gray_container(vec![value; 4])),
-            segmentation: None,
-            instances: None,
-            tile_offset_x: x,
-            tile_offset_y: 0,
-            tile_width: 4,
-            tile_height: 1,
-            nr_bits: 8,
-            channel_idx: Some(0),
-        };
+        let tile =
+            |x: usize, value: f32| crate::editor::viewport_controller::BreakpointChannelData {
+                image: Arc::new(gray_container(vec![value; 4])),
+                segmentation: None,
+                instances: None,
+                tile_offset_x: x,
+                tile_offset_y: 0,
+                tile_width: 4,
+                tile_height: 1,
+                nr_bits: 8,
+                channel_idx: Some(0),
+            };
         vc.add_breakpoint_tile(tile(0, 0.25), true);
         vc.add_breakpoint_tile(tile(4, 0.5), false);
         vc.set_compare(true);
@@ -2227,7 +2267,11 @@ mod tests {
         vc.clear_breakpoint();
         drain_ui_queue();
         assert!(vc.breakpoint_tiles.read().unwrap().is_empty());
-        assert!(!r.ui.global::<crate::PipelinesPanelState>().get_has_breakpoint_image());
+        assert!(
+            !r.ui
+                .global::<crate::PipelinesPanelState>()
+                .get_has_breakpoint_image()
+        );
         assert_eq!(slint::Model::row_count(&r.view().get_compare_tiles()), 0);
         assert_eq!(vc.breakpoint_value_at(1.5, 0.5), None);
     }
@@ -2490,7 +2534,9 @@ mod tests {
         // compared - as after a breakpoint preview there.
         if std::env::var("BENCH_COMPARE").is_ok() {
             let side = 4096usize.min(full_w as usize).min(full_h as usize);
-            let values: Vec<f32> = (0..side * side).map(|i| ((i * 2654435761) % 1000) as f32 / 1000.0).collect();
+            let values: Vec<f32> = (0..side * side)
+                .map(|i| ((i * 2654435761) % 1000) as f32 / 1000.0)
+                .collect();
             r.worker.viewport_controller.set_breakpoint_channel(
                 gray_container_sized(values, side, side),
                 None,
@@ -2567,7 +2613,9 @@ mod tests {
             return;
         };
         let (rss_start, _) = rss_mb();
-        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(slide.into()));
+        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(
+            slide.into(),
+        ));
         {
             let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
             vp.viewport_width = 1920.0;
@@ -2614,7 +2662,12 @@ mod tests {
             if i % 50 == 49 {
                 trim();
                 let (rss, peak) = rss_mb();
-                println!("{:>6} {:>9.0} {:>9.0}", i + 1, rss - rss_start, peak - rss_start);
+                println!(
+                    "{:>6} {:>9.0} {:>9.0}",
+                    i + 1,
+                    rss - rss_start,
+                    peak - rss_start
+                );
             }
         }
         println!("400 renders in {:.1} s", start.elapsed().as_secs_f64());
@@ -2715,8 +2768,14 @@ mod tests {
         assert!(pixels.iter().any(|p| p.r > 0), "something was drawn");
         assert!(pixels.iter().all(|p| p.r == p.g && p.g == p.b), "in gray");
         // Its own window, auto-adjusted - the channel's stays as it was.
-        assert!(r.worker.viewport_controller.breakpoint_histogram().is_some());
-        let window = |h: Option<HistogramSettings>| h.map(|h| (h.min, h.max, h.min_limit, h.max_limit));
+        assert!(
+            r.worker
+                .viewport_controller
+                .breakpoint_histogram()
+                .is_some()
+        );
+        let window =
+            |h: Option<HistogramSettings>| h.map(|h| (h.min, h.max, h.min_limit, h.max_limit));
         assert_eq!(
             window(
                 r.app_state
@@ -2729,8 +2788,15 @@ mod tests {
             window(channel_window)
         );
         // The panel shows the breakpoint's curve, in 8-bit values.
-        assert_eq!(r.ui.global::<crate::HistogramState>().get_histogram_svg_path().row_count(), 1);
-        assert_eq!(r.ui.global::<crate::HistogramState>().get_value_scale(), 256.0);
+        assert_eq!(
+            r.ui.global::<crate::HistogramState>()
+                .get_histogram_svg_path()
+                .row_count(),
+            1
+        );
+        assert_eq!(
+            r.ui.global::<crate::HistogramState>().get_value_scale(),
+            256.0
+        );
     }
-
 }

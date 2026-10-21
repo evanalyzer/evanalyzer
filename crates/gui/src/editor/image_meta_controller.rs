@@ -967,7 +967,10 @@ mod tests {
         controller.sync_image_meta_to_slint().unwrap();
         drain_ui_queue();
         // This image, not the last one's info.
-        assert_ne!(ui.global::<ImageMetaData>().get_image_name(), "the last image");
+        assert_ne!(
+            ui.global::<ImageMetaData>().get_image_name(),
+            "the last image"
+        );
         assert!(ui.global::<ChannelState>().get_channels().row_count() > 0);
     }
 

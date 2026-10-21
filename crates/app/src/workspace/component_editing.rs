@@ -2761,7 +2761,8 @@ mod tests {
         assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
 
         let key =
-            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1, None).unwrap();
+            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1, None)
+                .unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION_2");
         assert_eq!(project.components[1].meta.name, "Cell reconstruction (2)");
         assert_eq!(
@@ -2778,11 +2779,13 @@ mod tests {
     #[test]
     fn edit_in_place_gives_the_step_a_component_with_its_values() {
         let runs = |project: &ProjectSettings, pipeline: usize, step: usize| {
-            let StepContent::Component(instance) = &project.pipelines[pipeline].steps[step].content else {
+            let StepContent::Component(instance) = &project.pipelines[pipeline].steps[step].content
+            else {
                 panic!("a component step");
             };
             serde_json::to_string(
-                &evanalyzer_core::component_steps_with_values(instance, &project.components).unwrap(),
+                &evanalyzer_core::component_steps_with_values(instance, &project.components)
+                    .unwrap(),
             )
             .unwrap()
         };
@@ -2792,7 +2795,10 @@ mod tests {
             panic!("a component step");
         };
         let parameters = project.components[0].parameters.clone();
-        assert!(!parameters.is_empty(), "the fixture's component has parameters");
+        assert!(
+            !parameters.is_empty(),
+            "the fixture's component has parameters"
+        );
         for p in &parameters {
             instance.values.insert(p.key.clone(), p.default.clone());
         }
@@ -2802,10 +2808,16 @@ mod tests {
         let before = runs(&project, 0, 2);
         let other_before = runs(&project, 1, 1);
 
-        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2, None).unwrap();
+        let key =
+            component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2, None)
+                .unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION_2", "used twice: a copy");
         assert_eq!(runs(&project, 0, 2), before, "the step runs as before");
-        assert_eq!(runs(&project, 1, 1), other_before, "the other use is untouched");
+        assert_eq!(
+            runs(&project, 1, 1),
+            other_before,
+            "the other use is untouched"
+        );
         let StepContent::Component(own) = &project.pipelines[0].steps[2].content else {
             panic!("a component step");
         };
@@ -2814,7 +2826,9 @@ mod tests {
 
         // The other use, now alone with its component: no copy.
         let count = project.components.len();
-        let key = component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1, None).unwrap();
+        let key =
+            component_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1, None)
+                .unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION");
         assert_eq!(project.components.len(), count, "no copy");
         assert_eq!(runs(&project, 1, 1), other_before);
@@ -2852,13 +2866,22 @@ mod tests {
         let mut project = with_component();
         let list = StepList::Pipeline(PipelineId(1));
         let name = project.components[0].meta.name.clone();
-        assert_eq!(in_place_copy(&mut project, &list, 2).unwrap(), None, "the only use");
-        assert!(in_place_copy(&mut project, &list, 0).is_err(), "not a component step");
+        assert_eq!(
+            in_place_copy(&mut project, &list, 2).unwrap(),
+            None,
+            "the only use"
+        );
+        assert!(
+            in_place_copy(&mut project, &list, 0).is_err(),
+            "not a component step"
+        );
 
         let mut second_use = project.pipelines[0].steps[2].clone();
         second_use.id = StepId(1);
         project.pipelines[1].steps.push(second_use);
-        let copy = in_place_copy(&mut project, &list, 2).unwrap().expect("a copy");
+        let copy = in_place_copy(&mut project, &list, 2)
+            .unwrap()
+            .expect("a copy");
         assert_eq!(copy.component, name);
         assert_eq!(copy.other_uses, 1);
         assert!(!copy.from_library);
@@ -2879,7 +2902,11 @@ mod tests {
         component_in_place_for_step(&mut project, &list, 2, Some(" Strict nuclei ")).unwrap();
         assert_eq!(project.components.len(), 2);
         assert_eq!(project.components[1].meta.name, "Strict nuclei");
-        assert_eq!(in_place_copy(&mut project, &list, 2).unwrap(), None, "alone with its copy");
+        assert_eq!(
+            in_place_copy(&mut project, &list, 2).unwrap(),
+            None,
+            "alone with its copy"
+        );
     }
 
     /// Pipeline 1 made the component "Outer": local Nuclei (L1, extracted in
@@ -3442,8 +3469,9 @@ mod tests {
         project.components.push(outer);
         assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
 
-        let key = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 0, None)
-            .unwrap();
+        let key =
+            clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 0, None)
+                .unwrap();
         let outer = project
             .components
             .iter()
@@ -3456,9 +3484,10 @@ mod tests {
             "the pipeline keeps it"
         );
 
-        let error = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 5, None)
-            .unwrap_err()
-            .to_string();
+        let error =
+            clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 5, None)
+                .unwrap_err()
+                .to_string();
         assert!(error.contains("component OUTER has no step 6"), "{error}");
     }
 
@@ -3934,9 +3963,10 @@ mod tests {
         let expand = expand_component(&mut project, PipelineId(1), 0)
             .unwrap_err()
             .to_string();
-        let copy = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 0, None)
-            .unwrap_err()
-            .to_string();
+        let copy =
+            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 0, None)
+                .unwrap_err()
+                .to_string();
 
         assert!(expand.contains("step 1 isn't a component"), "{expand}");
         assert!(copy.contains("step 1 isn't a component"), "{copy}");
@@ -3962,9 +3992,10 @@ mod tests {
         let mut project = with_component();
         project.components.clear();
 
-        let error = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2, None)
-            .unwrap_err()
-            .to_string();
+        let error =
+            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2, None)
+                .unwrap_err()
+                .to_string();
 
         assert!(
             error.contains("no component CELL_RECONSTRUCTION"),

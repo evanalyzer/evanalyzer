@@ -23,8 +23,7 @@ use crate::api::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, ExportProgressFn,
     GroupedByImageFilter, HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter,
     ListFilter, PlateFilter, ResultExport, ResultsSource, ScatterFilter, ScatterResult,
-    TimeCourseFilter, TimeCourseResult, View,
-    WellFilter,
+    TimeCourseFilter, TimeCourseResult, View, WellFilter,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::classification_settings::Class;

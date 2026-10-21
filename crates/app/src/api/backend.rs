@@ -6,9 +6,8 @@ use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, FileSystem, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageChannel, ImageEntry, ImageHeatmapFilter, ImageMeta,
     JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport, RunStatus,
-    RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError, TimeCourseFilter,
-    TimeCourseResult,
-    StartTrainingError, View, WellFilter,
+    RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError,
+    StartTrainingError, TimeCourseFilter, TimeCourseResult, View, WellFilter,
 };
 use crate::workspace::settings::AppSettings;
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};

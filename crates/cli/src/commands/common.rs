@@ -1,12 +1,12 @@
 use crate::args::{AggKind, GroupArgs, GroupByKind, LayoutKind, NormalizeKind};
-use evanalyzer_app::results::{
-    Aggregation, Grouping, TimeCourseExport, TimeCourseLayout, TimeCourseLines,
-    TimeCourseNormalize, TimeCourseStat,
-};
 use evanalyzer_app::results::Cell;
 use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::PlaneFilter;
 use evanalyzer_app::results::ResultsSource;
+use evanalyzer_app::results::{
+    Aggregation, Grouping, TimeCourseExport, TimeCourseLayout, TimeCourseLines,
+    TimeCourseNormalize, TimeCourseStat,
+};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 
 /// Resolves `--image` names into the `image_rel_path`s the results engine
@@ -164,7 +164,9 @@ pub fn resolve_grouping(args: &GroupArgs) -> Result<ResolvedGrouping, InternalEr
         }
         Some(GroupByKind::Class) => time_course(TimeCourseLines::Class, Grouping::Auto),
         Some(GroupByKind::Well) => time_course(TimeCourseLines::Well, Grouping::Auto),
-        Some(GroupByKind::Group | GroupByKind::Regex) => time_course(TimeCourseLines::Group, regex()?),
+        Some(GroupByKind::Group | GroupByKind::Regex) => {
+            time_course(TimeCourseLines::Group, regex()?)
+        }
         Some(GroupByKind::Folder) => time_course(TimeCourseLines::Group, Grouping::Folder),
         Some(GroupByKind::Track) => time_course(TimeCourseLines::Track, Grouping::Auto),
     })
@@ -218,7 +220,10 @@ mod tests {
             agg: vec![AggKind::Q1],
             ..Default::default()
         };
-        assert!(resolve_grouping(&quartiles).is_err(), "q1 only for a time course");
+        assert!(
+            resolve_grouping(&quartiles).is_err(),
+            "q1 only for a time course"
+        );
     }
 
     /// class / well / group / folder / regex / track: the time course -
@@ -256,10 +261,14 @@ mod tests {
             lines_and_grouping(resolve(GroupByKind::Track, None).unwrap()),
             (TimeCourseLines::Track, Grouping::Auto)
         );
-        assert!(resolve(GroupByKind::Group, None).is_err(), "needs --group-regex");
+        assert!(
+            resolve(GroupByKind::Group, None).is_err(),
+            "needs --group-regex"
+        );
         assert!(resolve(GroupByKind::Regex, Some("")).is_err());
 
-        let ResolvedGrouping::TimeCourse { settings, .. } = resolve(GroupByKind::Class, None).unwrap()
+        let ResolvedGrouping::TimeCourse { settings, .. } =
+            resolve(GroupByKind::Class, None).unwrap()
         else {
             panic!("a time course")
         };
@@ -279,7 +288,11 @@ mod tests {
         };
         assert_eq!(
             settings.statistics,
-            [TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3]
+            [
+                TimeCourseStat::Median,
+                TimeCourseStat::Q1,
+                TimeCourseStat::Q3
+            ]
         );
         assert_eq!(settings.normalize, TimeCourseNormalize::RelativeToStart);
         assert_eq!(settings.layout, TimeCourseLayout::Both);

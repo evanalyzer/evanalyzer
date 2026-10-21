@@ -744,7 +744,12 @@ impl ProjectExt for ProjectWithRuntime {
         let current = self.get_image_channel_histograms();
         for (idx, histogram) in current {
             if let Some(histogram) = histogram {
-                self.images.settings.channels.entry(idx).or_default().histogram = Some(histogram);
+                self.images
+                    .settings
+                    .channels
+                    .entry(idx)
+                    .or_default()
+                    .histogram = Some(histogram);
             }
         }
         for image in self.images.list.values_mut() {
@@ -2345,7 +2350,12 @@ mod tests {
     fn channels_without_wavelengths_are_white_until_assigned_and_grayscale_makes_them_white() {
         let mut project = project_with_three_unnamed_channels();
         let white = [1.0, 1.0, 1.0];
-        assert!(project.get_channel_display_colors().values().all(|c| *c == white));
+        assert!(
+            project
+                .get_channel_display_colors()
+                .values()
+                .all(|c| *c == white)
+        );
 
         // Assigned (the user setting): distinct colours, none white.
         project.assign_missing_wavelengths(&[(0, 0.0), (1, 0.0), (2, 0.0)]);
@@ -3059,15 +3069,33 @@ mod tests {
         project.apply_histograms_to_all_images();
 
         // The project's scaling now; no image keeps its own.
-        let global = project.images.settings.channels[&0].histogram.as_ref().unwrap();
+        let global = project.images.settings.channels[&0]
+            .histogram
+            .as_ref()
+            .unwrap();
         assert_eq!((global.min, global.max), (0.1, 0.9));
-        assert!(project.images.list.values().all(|image| image
-            .series
-            .values()
-            .all(|series| series.channels.values().all(|c| c.histogram.is_none()))));
+        assert!(project.images.list.values().all(|image| {
+            image
+                .series
+                .values()
+                .all(|series| series.channels.values().all(|c| c.histogram.is_none()))
+        }));
         // ... which the open image shows.
-        assert_eq!(project.get_image_channel_histograms()[&0].as_ref().unwrap().min, 0.1);
-        assert!(project.images.settings.channels.get(&1).is_none_or(|c| c.histogram.is_none()));
+        assert_eq!(
+            project.get_image_channel_histograms()[&0]
+                .as_ref()
+                .unwrap()
+                .min,
+            0.1
+        );
+        assert!(
+            project
+                .images
+                .settings
+                .channels
+                .get(&1)
+                .is_none_or(|c| c.histogram.is_none())
+        );
     }
 
     #[test]
@@ -3076,7 +3104,11 @@ mod tests {
         // Channel 1 is red already (635 nm): the others skip red.
         assert!(project.assign_missing_wavelengths(&[(0, 0.0), (1, 635.0), (2, 0.0)]));
         let nm = |p: &ProjectWithRuntime, id: i32| {
-            p.images.settings.channels.get(&id).and_then(|c| c.emission_wave_length)
+            p.images
+                .settings
+                .channels
+                .get(&id)
+                .and_then(|c| c.emission_wave_length)
         };
         assert_eq!(nm(&project, 0), Some(520.0));
         assert_eq!(nm(&project, 1), None, "it has its own");
@@ -3606,21 +3638,36 @@ mod tests {
         use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
         let mut project = ProjectWithRuntime::default();
         let preview = |project: &mut ProjectWithRuntime| {
-            project.tmp_settings.preview_objects = vec![ObjectMetricSettings { id: ObjectId(7), ..Default::default() }];
+            project.tmp_settings.preview_objects = vec![ObjectMetricSettings {
+                id: ObjectId(7),
+                ..Default::default()
+            }];
             project.set_selected_object(Some(ObjectId(7)));
         };
         project.set_current_image_path(&PathBuf::from("/d/a.tif"));
         preview(&mut project);
         project.set_current_image_path(&PathBuf::from("/d/a.tif"));
-        assert_eq!(project.get_preview_objects().len(), 1, "the same image keeps them");
+        assert_eq!(
+            project.get_preview_objects().len(),
+            1,
+            "the same image keeps them"
+        );
 
         project.set_current_image_path(&PathBuf::from("/d/b.tif"));
         assert!(project.get_preview_objects().is_empty());
-        assert_eq!(project.get_selected_object_id(), None, "the selection was one of them");
+        assert_eq!(
+            project.get_selected_object_id(),
+            None,
+            "the selection was one of them"
+        );
 
         preview(&mut project);
         project.set_active_series(&0);
-        assert_eq!(project.get_preview_objects().len(), 1, "the same series keeps them");
+        assert_eq!(
+            project.get_preview_objects().len(),
+            1,
+            "the same series keeps them"
+        );
         project.set_active_series(&1);
         assert!(project.get_preview_objects().is_empty());
     }

@@ -3,10 +3,9 @@ use crate::editor::viewport_controller::ViewportController;
 
 mod split;
 use crate::{
-    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine, ExportDialogState,
-    MatrixCell,
-    MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsRailMode,
-    ResultsState, UiState,
+    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine,
+    ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2,
+    ResultsRailMode, ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::ColorScale;
@@ -256,7 +255,11 @@ const CHART_TIME_PALETTE: [u32; 10] = [
 
 /// A line of the "Over time" chart before it's a `ChartTimeLine`: label,
 /// color, its values per time point (center, low, high).
-type TimeSeries = (String, u32, Vec<(u32, Option<f64>, Option<f64>, Option<f64>)>);
+type TimeSeries = (
+    String,
+    u32,
+    Vec<(u32, Option<f64>, Option<f64>, Option<f64>)>,
+);
 
 /// The time course's lines: a series per line (and class) of `result`, in
 /// their order - center and spread from the statistics `median` asks for
@@ -265,20 +268,31 @@ type TimeSeries = (String, u32, Vec<(u32, Option<f64>, Option<f64>, Option<f64>)
 /// classes left, an image's / well's / track's label names its class.
 fn time_series(result: &TimeCourseResult, median: bool, classes: &[Class]) -> Vec<TimeSeries> {
     let mut series: Vec<((String, String, u32), TimeSeries)> = Vec::new();
+    let mut index: std::collections::HashMap<(String, String, u32), usize> =
+        std::collections::HashMap::new();
     for point in &result.points {
         let key = (point.line.clone(), point.image.clone(), point.class_id);
         let (center, low, high) = match median {
-            true => (point.values.first().copied().flatten(), point.values.get(1).copied().flatten(), point.values.get(2).copied().flatten()),
+            true => (
+                point.values.first().copied().flatten(),
+                point.values.get(1).copied().flatten(),
+                point.values.get(2).copied().flatten(),
+            ),
             false => {
                 let mean = point.values.first().copied().flatten();
                 let sd = point.values.get(1).copied().flatten();
-                (mean, mean.zip(sd).map(|(m, s)| m - s), mean.zip(sd).map(|(m, s)| m + s))
+                (
+                    mean,
+                    mean.zip(sd).map(|(m, s)| m - s),
+                    mean.zip(sd).map(|(m, s)| m + s),
+                )
             }
         };
-        if let Some((_, (_, _, values))) = series.iter_mut().find(|(k, _)| *k == key) {
-            values.push((point.t, center, low, high));
+        if let Some(&at) = index.get(&key) {
+            series[at].1.2.push((point.t, center, low, high));
             continue;
         }
+        index.insert(key.clone(), series.len());
         let label = match (point.line.is_empty(), point.image.is_empty()) {
             (true, true) => point.class_name.clone(),
             (true, false) => point.image.clone(),
@@ -298,12 +312,17 @@ fn time_series(result: &TimeCourseResult, median: bool, classes: &[Class]) -> Ve
     }
     series.retain(|(_, (_, _, points))| points.iter().any(|(_, center, _, _)| center.is_some()));
     let class_of = |key: &(String, String, u32)| key.2;
-    let several_classes = series.iter().any(|(key, _)| class_of(key) != series.first().map_or(0, |(k, _)| class_of(k)));
+    let several_classes = series
+        .iter()
+        .any(|(key, _)| class_of(key) != series.first().map_or(0, |(k, _)| class_of(k)));
     series
         .into_iter()
         .map(|(key, (label, color, points))| {
             let of_class = key.0.is_empty() && key.1.is_empty();
-            let label = match (several_classes && !of_class, classes.iter().find(|c| c.id == key.2)) {
+            let label = match (
+                several_classes && !of_class,
+                classes.iter().find(|c| c.id == key.2),
+            ) {
                 (true, Some(class)) => format!("{label} · {}", class.name),
                 _ => label,
             };
@@ -320,7 +339,10 @@ fn chart_path(points: impl Iterator<Item = Option<(f64, f64)>>) -> String {
     for point in points {
         match point {
             Some((x, y)) => {
-                path.push_str(&format!("{}{x:.1} {y:.1} ", if pen_down { "L " } else { "M " }));
+                path.push_str(&format!(
+                    "{}{x:.1} {y:.1} ",
+                    if pen_down { "L " } else { "M " }
+                ));
                 pen_down = true;
             }
             None => pen_down = false,
@@ -336,8 +358,15 @@ fn chart_band(points: &[(f64, Option<f64>, Option<f64>)]) -> String {
     let mut run: Vec<(f64, f64, f64)> = Vec::new();
     let close = |run: &mut Vec<(f64, f64, f64)>, band: &mut String| {
         if run.len() >= 2 {
-            let up: Vec<String> = run.iter().map(|(x, _, hi)| format!("{x:.1} {hi:.1}")).collect();
-            let down: Vec<String> = run.iter().rev().map(|(x, lo, _)| format!("{x:.1} {lo:.1}")).collect();
+            let up: Vec<String> = run
+                .iter()
+                .map(|(x, _, hi)| format!("{x:.1} {hi:.1}"))
+                .collect();
+            let down: Vec<String> = run
+                .iter()
+                .rev()
+                .map(|(x, lo, _)| format!("{x:.1} {lo:.1}"))
+                .collect();
             band.push_str(&format!("M {} L {} Z ", up.join(" L "), down.join(" L ")));
         }
         run.clear();
@@ -1136,7 +1165,8 @@ impl ResultsStateController {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let names: Vec<String> = images.iter().map(|image| image.key.to_string()).collect();
+                    let names: Vec<String> =
+                        images.iter().map(|image| image.key.to_string()).collect();
                     state.set_active_well_images(ModelRc::from(Rc::new(VecModel::from(images))));
                     state.set_active_well(key);
                     // Split: the well's images in the image pane.
@@ -1177,8 +1207,9 @@ impl ResultsStateController {
                     // The status bar's "1 disabled".
                     {
                         let mut images = manager.images.lock().expect("Poisened");
-                        if let Some(image) =
-                            images.iter_mut().find(|image| image.name == image_name.as_str())
+                        if let Some(image) = images
+                            .iter_mut()
+                            .find(|image| image.name == image_name.as_str())
                         {
                             image.disabled = disable;
                         }
@@ -1200,9 +1231,9 @@ impl ResultsStateController {
                             let guard = manager.result_generator.lock().expect("Poisned");
                             match guard.as_ref() {
                                 None => Err("No database opened!".to_string()),
-                                Some(db) => db
-                                    .enable_image(&rel_path, disable)
-                                    .map_err(|err| format!("Could not toggle image {rel_path}: {err}")),
+                                Some(db) => db.enable_image(&rel_path, disable).map_err(|err| {
+                                    format!("Could not toggle image {rel_path}: {err}")
+                                }),
                             }
                         };
                         if let Err(err) = toggled {
@@ -1236,7 +1267,9 @@ impl ResultsStateController {
                                     state.set_active_well_value(cell.label.clone());
                                 }
                                 state.set_active_well(well.into());
-                                state.set_active_well_images(ModelRc::from(Rc::new(VecModel::from(images))));
+                                state.set_active_well_images(ModelRc::from(Rc::new(
+                                    VecModel::from(images),
+                                )));
                             }
                         })
                         .ok();
@@ -1463,7 +1496,11 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_image_heatmap_cell_open(move |key| {
                     // Split with the image: shown there (the split stays).
-                    if manager.ui.upgrade().is_some_and(|ui| ui.global::<ResultsState>().get_split()) {
+                    if manager
+                        .ui
+                        .upgrade()
+                        .is_some_and(|ui| ui.global::<ResultsState>().get_split())
+                    {
                         manager.split_show_tile(&key);
                         return;
                     }
@@ -1524,21 +1561,20 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
-            ui.global::<ResultsState>()
-                .on_chart_time_changed(move || {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let state = ui.global::<ResultsState>();
-                    {
-                        let mut filter = manager.chart_filter.lock().expect("Poisened");
-                        filter.time_lines = time_lines_of(state.get_chart_time_lines());
-                        filter.time_median = state.get_chart_time_summary() == 1;
-                        filter.time_relative = state.get_chart_time_relative();
-                        filter.time_tracks = state.get_chart_time_tracks();
-                    }
-                    manager.refresh_charts();
-                });
+            ui.global::<ResultsState>().on_chart_time_changed(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let state = ui.global::<ResultsState>();
+                {
+                    let mut filter = manager.chart_filter.lock().expect("Poisened");
+                    filter.time_lines = time_lines_of(state.get_chart_time_lines());
+                    filter.time_median = state.get_chart_time_summary() == 1;
+                    filter.time_relative = state.get_chart_time_relative();
+                    filter.time_tracks = state.get_chart_time_tracks();
+                }
+                manager.refresh_charts();
+            });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -1857,8 +1893,16 @@ impl ResultsStateController {
                         return;
                     };
                     let state = ui_ready.global::<ExportDialogState>();
-                    let selected = state.get_time_stat_items().iter().filter(|i| i.selected).count();
-                    state.set_time_stat_summary(list_summary(selected, TIME_STATS.len(), "Statistics"));
+                    let selected = state
+                        .get_time_stat_items()
+                        .iter()
+                        .filter(|i| i.selected)
+                        .count();
+                    state.set_time_stat_summary(list_summary(
+                        selected,
+                        TIME_STATS.len(),
+                        "Statistics",
+                    ));
                 });
 
             let manager = self.clone();
@@ -2434,7 +2478,9 @@ impl ResultsStateController {
                     column: chart_filter.column,
                     bins: chart_filter.bins.max(1),
                 }) {
-                    Ok(histogram) => self.push_histogram_in_slint(&histogram, chart_filter.log_counts),
+                    Ok(histogram) => {
+                        self.push_histogram_in_slint(&histogram, chart_filter.log_counts)
+                    }
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
@@ -2490,9 +2536,15 @@ impl ResultsStateController {
                         start: plane.z_stack,
                         end: plane.z_stack + 1,
                     }),
+                    // The faint tracks: only as many as are drawn.
+                    max_tracks: Some(CHART_TIME_MAX_TRACKS),
                 };
                 let statistics = match chart_filter.time_median {
-                    true => vec![TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3],
+                    true => vec![
+                        TimeCourseStat::Median,
+                        TimeCourseStat::Q1,
+                        TimeCourseStat::Q3,
+                    ],
                     false => TimeCourseStat::DEFAULT.to_vec(),
                 };
                 let result = db.time_course(&filter(chart_filter.time_lines, statistics));
@@ -2507,7 +2559,9 @@ impl ResultsStateController {
                     false => None,
                 };
                 match result {
-                    Ok(result) => self.push_time_course_in_slint(&result, tracks.as_ref(), &chart_filter),
+                    Ok(result) => {
+                        self.push_time_course_in_slint(&result, tracks.as_ref(), &chart_filter)
+                    }
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
@@ -2524,10 +2578,15 @@ impl ResultsStateController {
     ) {
         let classes = self.classes.lock().expect("Poisened").clone();
         let series = time_series(result, filter.time_median, &classes);
-        let faint = tracks.map(|tracks| time_series(tracks, false, &classes)).unwrap_or_default();
+        let faint = tracks
+            .map(|tracks| time_series(tracks, false, &classes))
+            .unwrap_or_default();
         let times: Vec<u32> = result.points.iter().map(|p| p.t).collect();
-        let (Some(t_min), Some(t_max)) = (times.iter().min().copied(), times.iter().max().copied()) else {
-            self.push_chart_error("Nothing to show over time: no objects of this class.".to_string());
+        let (Some(t_min), Some(t_max)) = (times.iter().min().copied(), times.iter().max().copied())
+        else {
+            self.push_chart_error(
+                "Nothing to show over time: no objects of this class.".to_string(),
+            );
             return;
         };
         if t_min == t_max {
@@ -2541,7 +2600,11 @@ impl ResultsStateController {
         let values = shown
             .iter()
             .flat_map(|(_, _, points)| points.iter().flat_map(|(_, c, l, h)| [*c, *l, *h]))
-            .chain(faint.iter().flat_map(|(_, _, points)| points.iter().map(|(_, c, _, _)| *c)))
+            .chain(
+                faint
+                    .iter()
+                    .flat_map(|(_, _, points)| points.iter().map(|(_, c, _, _)| *c)),
+            )
             .flatten();
         let (mut low, mut high) = values.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
             (lo.min(v), hi.max(v))
@@ -2571,7 +2634,9 @@ impl ResultsStateController {
             .collect();
         let faint_paths: Vec<String> = faint
             .iter()
-            .map(|(_, _, points)| chart_path(points.iter().map(|(t, c, _, _)| c.map(|c| (x(*t), y(c))))))
+            .map(|(_, _, points)| {
+                chart_path(points.iter().map(|(t, c, _, _)| c.map(|c| (x(*t), y(c)))))
+            })
             .collect();
         let unit = if filter.time_relative { " %" } else { "" };
         let (x_min, x_max) = match result.frame_interval_s {
@@ -2582,8 +2647,14 @@ impl ResultsStateController {
                     _ => ("s", 1.0),
                 };
                 (
-                    format!("{} {name}", format_chart_value(f64::from(t_min) * interval / per)),
-                    format!("{} {name}", format_chart_value(f64::from(t_max) * interval / per)),
+                    format!(
+                        "{} {name}",
+                        format_chart_value(f64::from(t_min) * interval / per)
+                    ),
+                    format!(
+                        "{} {name}",
+                        format_chart_value(f64::from(t_max) * interval / per)
+                    ),
                 )
             }
             None => (format!("T {t_min}"), format!("T {t_max}")),
@@ -2591,8 +2662,16 @@ impl ResultsStateController {
         let column = filter.column.display_label(&classes);
         let title = format!(
             "{column} · {}{}",
-            if filter.time_median { "median + IQR" } else { "mean ± SD" },
-            if filter.time_relative { " · % of the first time point" } else { "" }
+            if filter.time_median {
+                "median + IQR"
+            } else {
+                "mean ± SD"
+            },
+            if filter.time_relative {
+                " · % of the first time point"
+            } else {
+                ""
+            }
         );
         let note = match series.len() > shown.len() {
             true => format!("{} of {} lines shown", shown.len(), series.len()),
@@ -2641,7 +2720,8 @@ impl ResultsStateController {
         let Some(ui_ready) = self.ui.upgrade() else {
             return;
         };
-        let populated = std::mem::replace(&mut *self.export_populated.lock().expect("Poisened"), true);
+        let populated =
+            std::mem::replace(&mut *self.export_populated.lock().expect("Poisened"), true);
         if !populated {
             self.populate_export_defaults(&ui_ready);
         }
@@ -2659,11 +2739,21 @@ impl ResultsStateController {
         state.set_with_time_course(true);
         state.set_time_lines(time_lines_index(filter.time_lines));
         let statistics = match filter.time_median {
-            true => vec![TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3],
+            true => vec![
+                TimeCourseStat::Median,
+                TimeCourseStat::Q1,
+                TimeCourseStat::Q3,
+            ],
             false => TimeCourseStat::DEFAULT.to_vec(),
         };
-        state.set_time_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(&statistics)))));
-        state.set_time_stat_summary(list_summary(statistics.len(), TIME_STATS.len(), "Statistics"));
+        state.set_time_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(
+            &statistics,
+        )))));
+        state.set_time_stat_summary(list_summary(
+            statistics.len(),
+            TIME_STATS.len(),
+            "Statistics",
+        ));
         state.set_time_relative(filter.time_relative);
         // The chart's value only.
         let key = filter.column.as_key(&classes);
@@ -2776,13 +2866,15 @@ impl ResultsStateController {
             let _ = class;
             self.push_class_items(items, list_summary(1, classes.len(), "Classes"));
         } else {
-            let items = filtered_image_items(&images, |path| picked_images.iter().any(|p| p == path), "");
+            let items =
+                filtered_image_items(&images, |path| picked_images.iter().any(|p| p == path), "");
             self.push_image_items(items, image_summary_text(picked_images.len(), total_images));
         }
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ResultsState>().set_rail_mode(ResultsRailMode::List);
+                ui.global::<ResultsState>()
+                    .set_rail_mode(ResultsRailMode::List);
             }
         })
         .ok();
@@ -4263,19 +4355,30 @@ impl ResultsStateController {
                 .map_err(|_| format!("\"{text}\" isn't a valid {label}."))
         };
         // A range only when chosen - "All" leaves its (hidden) fields alone.
-        let range = |all: bool, axis: &str, start: slint::SharedString, end: slint::SharedString| {
-            if all {
-                return Ok(None);
-            }
-            let start = parse_u32(&format!("{axis} start"), start)?;
-            let end = parse_u32(&format!("{axis} end"), end)?;
-            Ok::<_, String>(Some(std::range::Range {
-                start,
-                end: end.max(start + 1),
-            }))
-        };
-        let z_stacks = range(state.get_z_all(), "Z", state.get_z_start(), state.get_z_end())?;
-        let t_stacks = range(state.get_t_all(), "T", state.get_t_start(), state.get_t_end())?;
+        let range =
+            |all: bool, axis: &str, start: slint::SharedString, end: slint::SharedString| {
+                if all {
+                    return Ok(None);
+                }
+                let start = parse_u32(&format!("{axis} start"), start)?;
+                let end = parse_u32(&format!("{axis} end"), end)?;
+                Ok::<_, String>(Some(std::range::Range {
+                    start,
+                    end: end.max(start + 1),
+                }))
+            };
+        let z_stacks = range(
+            state.get_z_all(),
+            "Z",
+            state.get_z_start(),
+            state.get_z_end(),
+        )?;
+        let t_stacks = range(
+            state.get_t_all(),
+            "T",
+            state.get_t_start(),
+            state.get_t_end(),
+        )?;
 
         let selected_keys = |items: ModelRc<MultiSelectItem>| -> Vec<slint::SharedString> {
             items
@@ -5038,7 +5141,9 @@ fn short_object_id(value: &str) -> &str {
     let b = value.as_bytes();
     let is_uuid = b.len() == 36
         && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
-        && b.iter().enumerate().all(|(i, c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit());
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit());
     if is_uuid { &value[24..] } else { value }
 }
 
@@ -5083,14 +5188,16 @@ fn list_column_widths<'a>(
         .collect()
 }
 
-
-
 /// "81 images · 1 disabled" (the status bar's) - without the disabled
 /// part when none is.
 fn analysis_summary(images: &[ImageEntry]) -> String {
     let disabled = images.iter().filter(|image| image.disabled).count();
     let n = images.len();
-    let images_text = if n == 1 { "1 image".to_string() } else { format!("{n} images") };
+    let images_text = if n == 1 {
+        "1 image".to_string()
+    } else {
+        format!("{n} images")
+    };
     if disabled == 0 {
         images_text
     } else {
@@ -5518,17 +5625,27 @@ mod tests {
         let ui_state = test_ui_state();
         let results = make_controller_with_state(ui.as_weak(), ui_state.clone());
         results.attach_callbacks();
-        let list = Arc::new(ResultsListController::new(ui.as_weak(), ui_state, results.clone()));
+        let list = Arc::new(ResultsListController::new(
+            ui.as_weak(),
+            ui_state,
+            results.clone(),
+        ));
         list.attach_callbacks();
 
         results.open_database(earlier.join("earlier.evadb"));
         drain_ui_queue();
-        assert_eq!(ui.global::<ResultsState>().get_database_name(), "earlier.evadb");
+        assert_eq!(
+            ui.global::<ResultsState>().get_database_name(),
+            "earlier.evadb"
+        );
 
         list.analysis_finished(&finished);
         ui.global::<PipelineRunningState>().invoke_open_results();
         drain_ui_queue();
-        assert_eq!(ui.global::<ResultsState>().get_database_name(), "finished.evadb");
+        assert_eq!(
+            ui.global::<ResultsState>().get_database_name(),
+            "finished.evadb"
+        );
     }
 
     #[test]
@@ -5555,9 +5672,20 @@ mod tests {
         };
         controller.show_box_in_list(&image.0);
         drain_ui_queue();
-        assert_eq!(controller.list_filter.lock().unwrap().image_rel_path, vec![image.1]);
-        let checked: Vec<bool> = state.get_list_image_items().iter().map(|i| i.selected).collect();
-        assert_eq!(checked.iter().filter(|c| **c).count(), 1, "its box ticked in the list");
+        assert_eq!(
+            controller.list_filter.lock().unwrap().image_rel_path,
+            vec![image.1]
+        );
+        let checked: Vec<bool> = state
+            .get_list_image_items()
+            .iter()
+            .map(|i| i.selected)
+            .collect();
+        assert_eq!(
+            checked.iter().filter(|c| **c).count(),
+            1,
+            "its box ticked in the list"
+        );
     }
 
     #[test]
@@ -5985,7 +6113,10 @@ mod tests {
         assert_eq!(short_object_id("D15_03.vsi"), "D15_03.vsi");
         assert_eq!(histogram_bar(10, 100, false), 0.1);
         assert_eq!(histogram_bar(100, 100, true), 1.0);
-        assert!(histogram_bar(1, 1000, true) > 0.09, "small counts still show");
+        assert!(
+            histogram_bar(1, 1000, true) > 0.09,
+            "small counts still show"
+        );
         assert_eq!(scatter_points_limit(3), None);
     }
 
@@ -6282,7 +6413,12 @@ mod tests {
         };
         let report = |name: &str, took: std::time::Duration| {
             let (now, peak) = rss();
-            println!("{name:<34} {:>9.1} ms {:>8.0} MB {:>8.0} MB", took.as_secs_f64() * 1000.0, now, peak);
+            println!(
+                "{name:<34} {:>9.1} ms {:>8.0} MB {:>8.0} MB",
+                took.as_secs_f64() * 1000.0,
+                now,
+                peak
+            );
         };
         println!("{:<34} {:>12} {:>11} {:>11}", "step", "time", "RSS", "peak");
         report("start", std::time::Duration::ZERO);
@@ -6297,7 +6433,11 @@ mod tests {
         controller.open_database(PathBuf::from(&path));
         drain_ui_queue();
         report("open (List, first page)", start.elapsed());
-        println!("  {} rows on the page, {} images", state.get_list_rows().row_count(), controller.images.lock().unwrap().len());
+        println!(
+            "  {} rows on the page, {} images",
+            state.get_list_rows().row_count(),
+            controller.images.lock().unwrap().len()
+        );
 
         for (name, mode) in [
             ("Plate", ResultsRailMode::Matrix),
@@ -6323,11 +6463,17 @@ mod tests {
             .unwrap()
             .image_objects(&evanalyzer_app::results::ImageObjectsFilter {
                 image_rel_path: rel_path.clone(),
-                plane: evanalyzer_app::results::PlaneFilter { z_stack: 0, t_stack: 0 },
+                plane: evanalyzer_app::results::PlaneFilter {
+                    z_stack: 0,
+                    t_stack: 0,
+                },
                 value_column: None,
             })
             .unwrap();
-        report(&format!("split: objects of one image ({})", objects.len()), start.elapsed());
+        report(
+            &format!("split: objects of one image ({})", objects.len()),
+            start.elapsed(),
+        );
         let overlay = crate::editor::results_overlay::ResultsOverlay {
             objects: objects.iter().map(|o| (o.bbox_px, [255, 0, 255])).collect(),
             selected: Some(0),
@@ -6335,11 +6481,25 @@ mod tests {
         let (w, h) = (1920 + 512, 1080 + 512);
         let max_x = objects.iter().map(|o| o.bbox_px[2]).max().unwrap_or(1) as f32;
         let max_y = objects.iter().map(|o| o.bbox_px[3]).max().unwrap_or(1) as f32;
-        for (name, zoom) in [("fitted", (1920.0 / max_x).min(1080.0 / max_y)), ("zoom 1", 1.0f32)] {
+        for (name, zoom) in [
+            ("fitted", (1920.0 / max_x).min(1080.0 / max_y)),
+            ("zoom 1", 1.0f32),
+        ] {
             let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
             let start = Instant::now();
-            crate::editor::results_overlay::draw_results_overlay(buffer.make_mut_slice(), &overlay, w, h, zoom, 256.0, 256.0);
-            report(&format!("split: draw the ellipses, {name}"), start.elapsed());
+            crate::editor::results_overlay::draw_results_overlay(
+                buffer.make_mut_slice(),
+                &overlay,
+                w,
+                h,
+                zoom,
+                256.0,
+                256.0,
+            );
+            report(
+                &format!("split: draw the ellipses, {name}"),
+                start.elapsed(),
+            );
         }
     }
 
@@ -6369,7 +6529,10 @@ mod tests {
         controller.attach_callbacks();
         let state = ui.global::<ResultsState>();
         let start = rss();
-        let rounds: usize = std::env::var("BENCH_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(15);
+        let rounds: usize = std::env::var("BENCH_ROUNDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
         // BENCH_PART=open: only reopening; =views: opened once, then only
         // the views and the split's selections.
         let part = std::env::var("BENCH_PART").unwrap_or_default();
@@ -6392,7 +6555,11 @@ mod tests {
                 }
                 continue;
             }
-            for mode in [ResultsRailMode::Matrix, ResultsRailMode::Charts, ResultsRailMode::List] {
+            for mode in [
+                ResultsRailMode::Matrix,
+                ResultsRailMode::Charts,
+                ResultsRailMode::List,
+            ] {
                 state.set_rail_mode(mode);
                 state.invoke_rail_mode_selected(mode);
                 drain_ui_queue();
@@ -7116,8 +7283,16 @@ mod tests {
         let lines: Vec<ChartTimeLine> = s.get_chart_time_data().iter().collect();
         let labels: Vec<String> = lines.iter().map(|l| l.label.to_string()).collect();
         assert_eq!(labels, ["ClassA", "ClassB"]);
-        assert!(lines[0].line.starts_with("M 0.0 ") && lines[0].line.contains(" L 1000.0 "), "{}", lines[0].line);
-        assert!(lines[0].band.starts_with('M') && lines[0].band.ends_with('Z'), "{}", lines[0].band);
+        assert!(
+            lines[0].line.starts_with("M 0.0 ") && lines[0].line.contains(" L 1000.0 "),
+            "{}",
+            lines[0].line
+        );
+        assert!(
+            lines[0].band.starts_with('M') && lines[0].band.ends_with('Z'),
+            "{}",
+            lines[0].band
+        );
         assert_eq!(lines[1].band, "", "one object: no SD");
         assert_eq!(s.get_chart_time_x_min(), "T 0");
         assert_eq!(s.get_chart_time_x_max(), "T 1");
@@ -7127,12 +7302,27 @@ mod tests {
         s.invoke_chart_time_changed();
         drain_ui_queue();
         // Only the image × class lines with objects, named with their class.
-        let images: Vec<String> = s.get_chart_time_data().iter().map(|l| l.label.to_string()).collect();
-        assert_eq!(images, ["A1_01.tif · ClassA", "A1_02.tif · ClassA", "A2_01.tif · ClassB"]);
+        let images: Vec<String> = s
+            .get_chart_time_data()
+            .iter()
+            .map(|l| l.label.to_string())
+            .collect();
+        assert_eq!(
+            images,
+            [
+                "A1_01.tif · ClassA",
+                "A1_02.tif · ClassA",
+                "A2_01.tif · ClassB"
+            ]
+        );
 
         s.invoke_chart_class_selected("ClassA".into(), true);
         drain_ui_queue();
-        let images: Vec<String> = s.get_chart_time_data().iter().map(|l| l.label.to_string()).collect();
+        let images: Vec<String> = s
+            .get_chart_time_data()
+            .iter()
+            .map(|l| l.label.to_string())
+            .collect();
         assert_eq!(images, ["A1_01.tif", "A1_02.tif"], "the class picked");
     }
 
@@ -7145,7 +7335,11 @@ mod tests {
         s.set_chart_kind(ResultsChartKind2::OverTime);
         s.invoke_chart_kind_selected(ResultsChartKind2::OverTime);
         drain_ui_queue();
-        assert!(s.get_chart_error().contains("several time points"), "{}", s.get_chart_error());
+        assert!(
+            s.get_chart_error().contains("several time points"),
+            "{}",
+            s.get_chart_error()
+        );
         assert_eq!(s.get_chart_time_data().row_count(), 0);
     }
 
@@ -7184,9 +7378,16 @@ mod tests {
         assert_eq!(settings.time_course.lines, TimeCourseLines::Well);
         assert_eq!(
             settings.time_course.statistics,
-            [TimeCourseStat::Median, TimeCourseStat::Q1, TimeCourseStat::Q3]
+            [
+                TimeCourseStat::Median,
+                TimeCourseStat::Q1,
+                TimeCourseStat::Q3
+            ]
         );
-        assert_eq!(settings.time_course.normalize, TimeCourseNormalize::RelativeToStart);
+        assert_eq!(
+            settings.time_course.normalize,
+            TimeCourseNormalize::RelativeToStart
+        );
         assert_eq!(settings.time_course.layout, TimeCourseLayout::Both);
     }
 
@@ -7834,7 +8035,10 @@ mod tests {
         state.invoke_list_row_selected(1);
         drain_ui_queue();
 
-        let overlay = controller.viewport().results_overlay().expect("the analysis' objects on the image");
+        let overlay = controller
+            .viewport()
+            .results_overlay()
+            .expect("the analysis' objects on the image");
         assert_eq!(overlay.objects.len(), 1, "the one object of {rel_path}");
         assert_eq!(overlay.objects[0].0, bbox);
         assert_eq!(overlay.selected, Some(0));
@@ -7842,19 +8046,35 @@ mod tests {
         assert!(sel.active);
         assert_eq!((sel.x, sel.y, sel.w, sel.h), (0.0, 0.0, 11.0, 11.0));
         assert!(sel.class_name.starts_with("Class"));
-        assert_eq!((state.get_split_pos(), state.get_split_total()), (2, 3), "row 2 of 3");
+        assert_eq!(
+            (state.get_split_pos(), state.get_split_total()),
+            (2, 3),
+            "row 2 of 3"
+        );
         assert_eq!(state.get_split_title(), rel_path.as_str());
 
-        let highlight = ui.global::<crate::ViewportObjectState>().get_object_highlight();
-        assert!(highlight.active && !highlight.paint_as_rectangle, "the yellow crosshair");
+        let highlight = ui
+            .global::<crate::ViewportObjectState>()
+            .get_object_highlight();
+        assert!(
+            highlight.active && !highlight.paint_as_rectangle,
+            "the yellow crosshair"
+        );
 
         // Esc: nothing selected, the objects stay.
         state.invoke_split_clear();
         drain_ui_queue();
         assert!(!state.get_split_sel().active);
-        assert!(!ui.global::<crate::ViewportObjectState>().get_object_highlight().active);
+        assert!(
+            !ui.global::<crate::ViewportObjectState>()
+                .get_object_highlight()
+                .active
+        );
         assert_eq!(state.get_list_selected_row(), -1);
-        assert_eq!(controller.viewport().results_overlay().unwrap().selected, None);
+        assert_eq!(
+            controller.viewport().results_overlay().unwrap().selected,
+            None
+        );
 
         // Leaving the split: the project's objects again.
         state.invoke_split_shown(false);
@@ -7887,7 +8107,10 @@ mod tests {
         drain_ui_queue();
         assert_eq!(state.get_list_selected_row(), 1);
         let next = controller.list_row_locations.lock().unwrap()[1].0.clone();
-        assert_eq!(controller.split.lock().unwrap().image.as_deref(), Some(next.as_str()));
+        assert_eq!(
+            controller.split.lock().unwrap().image.as_deref(),
+            Some(next.as_str())
+        );
         // At the end it stays.
         state.invoke_split_step(1);
         state.invoke_split_step(1);
@@ -7904,11 +8127,22 @@ mod tests {
         // A double click (or "Show on image"): no leaving for Images.
         state.invoke_image_heatmap_cell_open("R0C0".into());
         drain_ui_queue();
-        assert_ne!(ui.global::<crate::LayoutState>().get_mode(), crate::WorkspaceMode::Images);
+        assert_ne!(
+            ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Images
+        );
         assert!(!state.get_peek());
-        assert_eq!(controller.split.lock().unwrap().image.as_deref(), Some("A1_01.tif"));
-        let highlight = ui.global::<crate::ViewportObjectState>().get_object_highlight();
-        assert!(highlight.active && highlight.paint_as_rectangle, "the tile's box");
+        assert_eq!(
+            controller.split.lock().unwrap().image.as_deref(),
+            Some("A1_01.tif")
+        );
+        let highlight = ui
+            .global::<crate::ViewportObjectState>()
+            .get_object_highlight();
+        assert!(
+            highlight.active && highlight.paint_as_rectangle,
+            "the tile's box"
+        );
         assert_eq!((highlight.x_px, highlight.y_px), (0.0, 0.0));
         assert!(!state.get_split_sel().active, "no object selected");
 
@@ -7917,8 +8151,13 @@ mod tests {
         state.invoke_split_image_clicked(5.0, 5.0);
         drain_ui_queue();
         assert!(state.get_split_sel().active);
-        let highlight = ui.global::<crate::ViewportObjectState>().get_object_highlight();
-        assert!(highlight.active && !highlight.paint_as_rectangle, "the crosshair");
+        let highlight = ui
+            .global::<crate::ViewportObjectState>()
+            .get_object_highlight();
+        assert!(
+            highlight.active && !highlight.paint_as_rectangle,
+            "the crosshair"
+        );
         assert_eq!((highlight.x_px, highlight.w_px), (0.0, 11.0));
     }
 
@@ -7935,7 +8174,13 @@ mod tests {
         assert!(!saved.follow);
         assert!(!saved.image_panel, "closed by default");
         state.invoke_split_image_panel_changed(true);
-        assert!(controller._app_state.load_app_settings().results_split.image_panel);
+        assert!(
+            controller
+                ._app_state
+                .load_app_settings()
+                .results_split
+                .image_panel
+        );
     }
 
     /// Leaving the split view takes its marker off the image; "Open in
@@ -7944,7 +8189,11 @@ mod tests {
     fn leaving_the_split_view_takes_its_marker_off_the_image() {
         let (ui, controller) = split_controller();
         let state = ui.global::<ResultsState>();
-        let marker = || ui.global::<crate::ViewportObjectState>().get_object_highlight().active;
+        let marker = || {
+            ui.global::<crate::ViewportObjectState>()
+                .get_object_highlight()
+                .active
+        };
         state.invoke_split_shown(true);
         state.invoke_list_row_selected(1);
         drain_ui_queue();
@@ -7976,20 +8225,41 @@ mod tests {
         state.invoke_list_row_selected(0);
         drain_ui_queue();
         assert!(controller.viewport().results_overlay().is_some());
-        let opened = controller._app_state.get_project().tmp_settings.current_image.clone();
+        let opened = controller
+            ._app_state
+            .get_project()
+            .tmp_settings
+            .current_image
+            .clone();
 
         // Another image still in the viewer when the objects arrive.
-        controller._app_state.get_project_write().tmp_settings.current_image =
-            Some(PathBuf::from("/data/images/still-the-old-one.tif"));
+        controller
+            ._app_state
+            .get_project_write()
+            .tmp_settings
+            .current_image = Some(PathBuf::from("/data/images/still-the-old-one.tif"));
         controller.split_push_overlay();
-        assert!(controller.viewport().results_overlay().is_none(), "not drawn on the wrong image");
-        assert!(!controller.split.lock().unwrap().objects.is_empty(), "kept, not dropped");
+        assert!(
+            controller.viewport().results_overlay().is_none(),
+            "not drawn on the wrong image"
+        );
+        assert!(
+            !controller.split.lock().unwrap().objects.is_empty(),
+            "kept, not dropped"
+        );
 
         // Now it is open: the objects and the selection go on it.
-        controller._app_state.get_project_write().tmp_settings.current_image = opened;
+        controller
+            ._app_state
+            .get_project_write()
+            .tmp_settings
+            .current_image = opened;
         controller._app_state.image_opened();
         drain_ui_queue();
-        let overlay = controller.viewport().results_overlay().expect("drawn once the image is open");
+        let overlay = controller
+            .viewport()
+            .results_overlay()
+            .expect("drawn once the image is open");
         assert_eq!(overlay.selected, Some(0));
         assert!(state.get_split_sel().active);
 

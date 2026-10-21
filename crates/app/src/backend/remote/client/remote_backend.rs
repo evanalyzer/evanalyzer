@@ -143,7 +143,9 @@ impl Backend for RemoteBackend {
                 parallelism,
                 ..
             } => Ok(session.running_job(id, rx, output_path, parallelism)),
-            Reply::PreviewTooManyTiles { tiles, max } => Err(StartPreviewError::TooManyTiles { tiles, max }),
+            Reply::PreviewTooManyTiles { tiles, max } => {
+                Err(StartPreviewError::TooManyTiles { tiles, max })
+            }
             Reply::Failed(e) => Err(StartPreviewError::Failed(e.into_internal())),
             _ => Err(StartPreviewError::Failed(unexpected_reply())),
         }

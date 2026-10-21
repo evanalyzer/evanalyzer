@@ -120,10 +120,7 @@ pub(crate) fn commands(
 }
 
 /// The Tuning panel's settings, the same way.
-pub(crate) fn tuned(
-    old: &ModelRc<TunedSetting>,
-    new: Vec<TunedSetting>,
-) -> ModelRc<TunedSetting> {
+pub(crate) fn tuned(old: &ModelRc<TunedSetting>, new: Vec<TunedSetting>) -> ModelRc<TunedSetting> {
     patch(
         old,
         ModelRc::new(VecModel::from(new)),
@@ -181,7 +178,16 @@ mod tests {
         let first = again.row_data(0).unwrap();
         assert_eq!(first.parameters, settings, "the same settings model");
         assert_eq!(first.parameters.row_data(0).unwrap().value, "5");
-        assert_eq!(again.row_data(1).unwrap().parameters.row_data(0).unwrap().value, "9");
+        assert_eq!(
+            again
+                .row_data(1)
+                .unwrap()
+                .parameters
+                .row_data(0)
+                .unwrap()
+                .value,
+            "9"
+        );
     }
 
     /// A step added, removed or moved: new models.

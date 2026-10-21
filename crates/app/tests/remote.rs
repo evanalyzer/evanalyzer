@@ -1064,8 +1064,7 @@ fn logging_in_at_a_worker_or_a_closing_server_fails_clearly() {
 #[test]
 fn annotations_go_to_geojson_and_back_through_the_server() {
     use evanalyzer_app::project::{
-        apply_import, export_image_geojson, measure_on_source, measure_pending,
-        read_image_geojson,
+        apply_import, export_image_geojson, measure_on_source, measure_pending, read_image_geojson,
     };
     let remote = connect();
     let (_dir, settings) = project_with_fixture_image();
@@ -1099,7 +1098,10 @@ fn annotations_go_to_geojson_and_back_through_the_server() {
         &rel,
         &std::collections::HashSet::from([None]),
         &file,
-        evanalyzer_app::project::PipelineObjects { objects: &[], series },
+        evanalyzer_app::project::PipelineObjects {
+            objects: &[],
+            series,
+        },
     )
     .unwrap();
     assert_eq!(written, 1);

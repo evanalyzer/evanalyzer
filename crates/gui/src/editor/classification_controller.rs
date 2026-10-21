@@ -232,13 +232,14 @@ impl ClassificationController {
 
             // Delete all classes
             let manager = self.clone();
-            ui.global::<ClassificationState>().on_class_delete_all(move || {
-                let mut project = manager.app_state.get_project_write();
-                project.delete_all_classes();
-                project.set_selected_object_class(ObjectClass::Unset);
-                manager.sync_classification_to_slint();
-                manager.object_list_controller.sync_objects_to_slint();
-            });
+            ui.global::<ClassificationState>()
+                .on_class_delete_all(move || {
+                    let mut project = manager.app_state.get_project_write();
+                    project.delete_all_classes();
+                    project.set_selected_object_class(ObjectClass::Unset);
+                    manager.sync_classification_to_slint();
+                    manager.object_list_controller.sync_objects_to_slint();
+                });
 
             // Move up
             let manager = self.clone();

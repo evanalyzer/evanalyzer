@@ -381,7 +381,10 @@ impl ObjectTerm {
             return ObjectTerm::Id(id);
         }
         for (name, make) in [
-            ("circularity", ObjectTerm::Circularity as fn(Compare, f64) -> ObjectTerm),
+            (
+                "circularity",
+                ObjectTerm::Circularity as fn(Compare, f64) -> ObjectTerm,
+            ),
             ("circ", ObjectTerm::Circularity),
             ("area", ObjectTerm::Area),
         ] {
@@ -871,9 +874,15 @@ mod tests {
         };
         assert_eq!(shows(&ObjectFilter::parse(-1, "")), [true, true, true]);
         assert_eq!(shows(&ObjectFilter::parse(1, "")), [true, true, false]);
-        assert_eq!(shows(&ObjectFilter::parse(-1, "area >= 50")), [true, false, false]);
+        assert_eq!(
+            shows(&ObjectFilter::parse(-1, "area >= 50")),
+            [true, false, false]
+        );
         assert_eq!(shows(&ObjectFilter::parse(-1, "8")), [false, true, false]);
-        assert_eq!(shows(&ObjectFilter::parse(1, "area < 50")), [false, true, false]);
+        assert_eq!(
+            shows(&ObjectFilter::parse(1, "area < 50")),
+            [false, true, false]
+        );
     }
 
     #[test]
@@ -887,7 +896,10 @@ mod tests {
             ui_state.get_project().hide_unclassified_objects(),
             "hide_unclassified_objects defaults to true"
         );
-        assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![1]);
+        assert_eq!(
+            compute_visible_rows(&ui_state, &ObjectFilter::default()),
+            vec![1]
+        );
     }
 
     #[test]
@@ -898,7 +910,10 @@ mod tests {
         project.toggle_hide_unclassified_objects();
         let ui_state = test_ui_state_with_project(project);
 
-        assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![0, 1]);
+        assert_eq!(
+            compute_visible_rows(&ui_state, &ObjectFilter::default()),
+            vec![0, 1]
+        );
     }
 
     #[test]
@@ -933,7 +948,10 @@ mod tests {
             .push(object_with_class(2, 1, true)); // preview, index 1
         let ui_state = test_ui_state_with_project(project);
 
-        assert_eq!(compute_visible_rows(&ui_state, &ObjectFilter::default()), vec![0, 1]);
+        assert_eq!(
+            compute_visible_rows(&ui_state, &ObjectFilter::default()),
+            vec![0, 1]
+        );
     }
 
     #[test]
@@ -990,7 +1008,9 @@ mod tests {
             ObjectClass::Global(2),
             vec![Default::default(), Default::default()],
         );
-        object.colocalized_with.insert(ObjectClass::Global(3), vec![]);
+        object
+            .colocalized_with
+            .insert(ObjectClass::Global(3), vec![]);
 
         let selected = object_rust_to_object_slint(&object, &project, 1, true, 0, Some(16));
         assert_eq!(selected.coloc_with.as_str(), "CY5 · 2");
