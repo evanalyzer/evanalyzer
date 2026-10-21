@@ -704,9 +704,12 @@ impl ViewportImageController {
 
         self.viewport_controller
             .trigger_redraw_low_res_and_high_res();
-        // E.g. the results' split view: its objects of this plane.
-        self.app_state
-            .plane_changed(z_stack.max(0) as u32, t_stack.max(0) as u32);
+        // E.g. the results' split view: its objects of this plane. A
+        // projection (Max, …) shows no one slice: its hidden Z slider says
+        // nothing.
+        let z =
+            matches!(projection, IntensityProjection::SingleStack).then(|| z_stack.max(0) as u32);
+        self.app_state.plane_changed(z, t_stack.max(0) as u32);
     }
 
     /// Shows how many channels are visible - and with `update_rows` which,

@@ -1244,9 +1244,16 @@ impl ViewportController {
     }
 
     /// The results' split view's objects (`None`: the project's again),
-    /// drawn right away.
+    /// drawn right away - unless they are what is drawn already (e.g. only
+    /// the selection changed: the crosshair shows it, not this layer).
     pub fn set_results_overlay(&self, overlay: Option<ResultsOverlay>) {
-        *self.results_overlay.write().expect("Poisoned") = overlay.map(Arc::new);
+        {
+            let mut current = self.results_overlay.write().expect("Poisoned");
+            if current.as_deref() == overlay.as_ref() {
+                return;
+            }
+            *current = overlay.map(Arc::new);
+        }
         self.trigger_image_redraw_objects();
     }
 
@@ -1304,14 +1311,23 @@ impl ViewportController {
     /// * `Ok(())` if the transformation parameters were successfully applied to the UI state.
     /// * `Err(InternalErrors)` if the UI properties could not be updated or the handle is invalid.
     pub fn sync_zoom_to_slint(&self, zoom: f32, offset_x: f32, offset_y: f32) {
-        {
+        let changed = {
             let mut state = self
                 .viewport_state
                 .write()
                 .expect("Failed to acquire write lock on viewport state");
+            let changed =
+                (state.zoom, state.offset_x, state.offset_y) != (zoom, offset_x, offset_y);
             state.zoom = zoom;
             state.offset_x = offset_x;
             state.offset_y = offset_y;
+            changed
+        };
+        // The objects for this view: they may have been drawn for the one
+        // before it (an image's objects can come before its first frame
+        // fits or focuses the view) - left so, they'd sit off the image.
+        if changed {
+            self.trigger_image_redraw_objects();
         }
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -2190,6 +2206,28 @@ mod breakpoint_state_tests {
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         })
+    }
+
+    /// The first frame fitting or focusing the view: the objects are drawn
+    /// again for it - not when the view stays as it was.
+    #[test]
+    fn a_new_view_from_the_first_frame_redraws_the_objects() {
+        let controller = make_controller();
+        let object_slot = || {
+            controller
+                .drawing_tasks
+                .object_task
+                .task_request
+                .0
+                .lock()
+                .unwrap()
+                .take()
+                .is_some()
+        };
+        controller.sync_zoom_to_slint(0.25, 10.0, 20.0);
+        assert!(object_slot(), "another view: drawn again");
+        controller.sync_zoom_to_slint(0.25, 10.0, 20.0);
+        assert!(!object_slot(), "the same view: not");
     }
 
     // -- breakpoint_view_mode / set_breakpoint_view_mode -----------------------

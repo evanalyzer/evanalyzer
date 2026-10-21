@@ -4152,7 +4152,10 @@ mod tests {
             ObjectSpec::new("img1.tif", "ClassA", 1, 400).at_plane(0, 2),
         ]);
         for (t, objects) in [(0, 1), (1, 1), (2, 2)] {
-            let plane = PlaneFilter { z_stack: 0, t_stack: t };
+            let plane = PlaneFilter {
+                z_stack: 0,
+                t_stack: t,
+            };
             let result = generator
                 .get_object_list(&ListFilter {
                     plane,
