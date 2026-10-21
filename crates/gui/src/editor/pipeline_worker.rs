@@ -224,6 +224,7 @@ impl PipelineWorker {
                 }
             };
             let job_id = job.id().map(str::to_string);
+            let output_dir = job.output_path().clone();
 
             info!("Pipeline job started ...");
 
@@ -514,7 +515,7 @@ impl PipelineWorker {
                     } else {
                         self_handle
                             .results_list_controller
-                            .sync_results_files_to_slint();
+                            .analysis_finished(&output_dir);
                     }
 
                     ("Analysis completed successfully.".to_string(), false)

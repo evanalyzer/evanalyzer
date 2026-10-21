@@ -29,6 +29,8 @@ export global PipelineRunningState {
     in-out property <string> eta;
     callback cancel();
     callback close();
+    // Opens the results of the analysis that just finished.
+    callback open-results();
 }
 
 // The preview of the current image (the overlay over the image while it

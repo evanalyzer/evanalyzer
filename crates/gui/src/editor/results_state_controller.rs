@@ -5040,6 +5040,39 @@ mod tests {
         (ui, controller)
     }
 
+    /// "Open results" on a finished analysis' note opens that analysis'
+    /// database - not the one the Results view had open before.
+    #[test]
+    fn open_results_opens_the_finished_analysis_not_the_one_open_before() {
+        use crate::PipelineRunningState;
+        use crate::editor::results_list_controller::ResultsListController;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let earlier = dir.path().join("20261001T000000Z__earlier");
+        let finished = dir.path().join("20261021T000000Z__finished");
+        for (folder, name) in [(&earlier, "earlier"), (&finished, "finished")] {
+            std::fs::create_dir_all(folder).unwrap();
+            seed_test_db(&folder.join(format!("{name}.evadb")));
+            // The run's settings beside it - not a database.
+            std::fs::write(folder.join(format!("{name}.evaproj")), "{}").unwrap();
+        }
+
+        let ui = test_ui_window();
+        let ui_state = test_ui_state();
+        let results = make_controller_with_state(ui.as_weak(), ui_state.clone());
+        results.attach_callbacks();
+        let list = Arc::new(ResultsListController::new(ui.as_weak(), ui_state, results.clone()));
+        list.attach_callbacks();
+
+        results.open_database(earlier.join("earlier.evadb"));
+        drain_ui_queue();
+        assert_eq!(ui.global::<ResultsState>().get_database_name(), "earlier.evadb");
+
+        list.analysis_finished(&finished);
+        ui.global::<PipelineRunningState>().invoke_open_results();
+        drain_ui_queue();
+        assert_eq!(ui.global::<ResultsState>().get_database_name(), "finished.evadb");
+    }
+
     #[test]
     fn a_clicked_box_shows_its_class_or_image_in_the_list() {
         let (ui, controller) = controller_with_open_database();
