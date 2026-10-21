@@ -642,6 +642,11 @@ export component ResultsChartsView inherits Rectangle {
                     if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSegmented {
                         label: "Summary";
                         model: ["Mean ± SD", "Median + IQR"];
+                        tips: ["Mean ± standard deviation", "Median and interquartile range"];
+                        tip-details: [
+                            "The line is the average of the objects at each time point; the band reaches one standard deviation above and below it - how far the values typically spread. A few very large or small objects pull both.",
+                            "The line is the middle value: half of the objects lie above it, half below. The band holds the middle half of the objects (25th to 75th percentile). Robust to outliers and skewed values such as sizes or intensities.",
+                        ];
                         selected: ResultsState.chart-time-summary;
                         picked(i) => {
                             ResultsState.chart-time-summary = i;
