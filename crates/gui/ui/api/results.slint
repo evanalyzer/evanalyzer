@@ -173,6 +173,9 @@ export global ResultsState {
     in-out property <[string]> split-channels;
     in-out property <int> split-channel: 0;
     callback split-channel-changed(int);
+    // The selected object's facts folded to their first line.
+    in-out property <bool> split-card-folded: false;
+    callback split-card-folded-changed(bool);
     // The image controls (channels, histogram, overlay) over the image.
     in-out property <bool> split-image-panel: false;
     callback split-image-panel-changed(bool);

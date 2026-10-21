@@ -182,13 +182,18 @@ export component ResultsBarNav inherits HorizontalLayout {
 // Right of the bar: Z/T, Export.
 export component ResultsBarActions inherits HorizontalLayout {
     spacing: 8px;
+    // Its own width at the right: the bar's spacer takes the rest.
+    horizontal-stretch: 0;
     VerticalLayout {
         alignment: center;
+        horizontal-stretch: 0;
         GlobalPlaneStepper { }
     }
     VerticalLayout {
         alignment: center;
+        horizontal-stretch: 0;
         InkButton {
+            horizontal-stretch: 0;
             text: "Export…";
             icon: InkIcons.export;
             enabled: ResultsState.database-name != "";

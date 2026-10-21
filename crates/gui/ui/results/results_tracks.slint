@@ -41,6 +41,8 @@ component SortHead inherits Rectangle {
 
 export component ResultsTracksView inherits Rectangle {
     property <length> row-h: 32px;
+    // The selected track's facts, under its row.
+    property <length> detail-h: 46px;
     property <length> id-w: 84px;
     property <length> span-w: 92px;
     property <length> speed-w: 96px;
@@ -184,7 +186,8 @@ export component ResultsTracksView inherits Rectangle {
                     vertical-stretch: 1;
                     accessible-label: "Tracks";
                     for track[index] in ResultsState.track-rows: Rectangle {
-                        height: root.row-h;
+                        property <bool> open: index == ResultsState.track-selected && ResultsState.track-card.active;
+                        height: self.open ? root.row-h + root.detail-h : root.row-h;
                         background: index == ResultsState.track-selected ? Ink.selection : row-ta.has-hover ? Ink.hover : transparent;
                         accessible-role: list-item;
                         accessible-label: "Track " + track.id + ", " + track.frames + " time points, speed " + track.speed;
@@ -198,6 +201,8 @@ export component ResultsTracksView inherits Rectangle {
                             background: Ink.focus;
                         }
                         HorizontalLayout {
+                            y: 0;
+                            height: root.row-h;
                             padding-left: 16px;
                             padding-right: 16px;
                             spacing: 14px;
@@ -253,6 +258,34 @@ export component ResultsTracksView inherits Rectangle {
                                     commands: track.curve;
                                     stroke: track.color;
                                     stroke-width: 1.4px;
+                                }
+                            }
+                        }
+                        // The track's facts: where it is, how far and fast it went.
+                        if index == ResultsState.track-selected && ResultsState.track-card.active: HorizontalLayout {
+                            y: root.row-h;
+                            height: root.detail-h;
+                            padding-left: 30px;
+                            padding-right: 16px;
+                            padding-bottom: 8px;
+                            spacing: 24px;
+                            alignment: start;
+                            for fact in [
+                                { k: "Time points", v: ResultsState.track-card.span },
+                                { k: "Moved", v: ResultsState.track-card.displacement },
+                                { k: "Speed", v: ResultsState.track-card.speed },
+                            ]: VerticalLayout {
+                                spacing: 2px;
+                                Text {
+                                    text: fact.k;
+                                    font-size: Ink.fs-caption;
+                                    color: Ink.text-dim;
+                                }
+                                Text {
+                                    text: fact.v;
+                                    font-size: Ink.fs-body;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text;
                                 }
                             }
                         }
