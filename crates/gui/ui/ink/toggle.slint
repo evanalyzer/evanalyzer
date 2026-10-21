@@ -1,6 +1,7 @@
 // ink/toggle.slint — on/off and one-of-a-few: checkbox, switch, segmented
 // control, the mode tabs of the top bar.
 
+import { InkTipZone } from "tooltip.slint";
 import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 
@@ -187,6 +188,10 @@ export component InkSegmented inherits Rectangle {
     /// (`disabled-why`, for screen readers and the hover hint).
     in property <int> disabled-index: -1;
     in property <string> disabled-why;
+    /// A tooltip per entry (empty: none) - its first line, then
+    /// `tip-details` dimmer below.
+    in property <[string]> tips;
+    in property <[string]> tip-details;
     callback picked(int);
 
     height: 24px;
@@ -215,7 +220,7 @@ export component InkSegmented inherits Rectangle {
                 accessible-role: tab;
                 accessible-label: entry;
                 accessible-item-selected: i == root.selected;
-                accessible-description: i == root.disabled-index ? root.disabled-why : "";
+                accessible-description: i == root.disabled-index ? root.disabled-why : root.tip-details[i];
                 opacity: i == root.disabled-index ? 0.4 : 1.0;
                 seg-text := Text {
                     text: entry;
@@ -229,6 +234,11 @@ export component InkSegmented inherits Rectangle {
                     clicked => {
                         root.picked(i);
                     }
+                }
+                InkTipZone {
+                    wanted: seg-ta.has-hover && !seg-ta.pressed;
+                    text: root.tips[i];
+                    sub: root.tip-details[i];
                 }
             }
         }
