@@ -393,8 +393,6 @@ export global PipelinesPanelState {
         // Nothing to edit: a component only viewed, or the run's lock.
         out property <bool> steps-read-only: self.open-component-read-only || self.run-locked;
         callback view-component(int);
-        /// "Edit" in the bar of a component opened with "View".
-        callback edit-open-component();
         /// "Settings…" in the opened component's bar: its name, description and
         /// parameters, in a dialog.
         callback open-component-settings();
