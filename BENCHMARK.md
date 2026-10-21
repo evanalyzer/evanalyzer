@@ -1,8 +1,9 @@
 # Benchmarks - GUI speed and RAM
 
 Measured 2026-10-17 on the dev container: 22 cores, 64 GB RAM, release
-build. The analysis itself (running pipelines, writing results) is in
-[performave.md](performave.md).
+build. The analysis itself (running pipelines, writing results) has its
+own benchmarks: core's `bench_pipeline` and `bench_export` examples (see
+"Not covered").
 
 ## How to run them
 
@@ -346,6 +347,7 @@ cargo test --release -p evanalyzer_gui --lib bench_trails -- --ignored --nocaptu
 | Whole tracks up to the time point | 5.3 ms | - |
 | The selected track only | 0.01 ms | - |
 | Export: a row per track, 144,000 tracks, 3 values (CSV, 25.6 MB) | 1.27-1.50 s | 406-410 MB peak (query process) |
+| Tracks, Full: every track's row kept, 144,000 tracks | 1.05 s | 291-300 MB peak (query process) |
 
 The track export (case 14 of `bench_time_course`) reads one image at a
 time - a track never leaves its image - and writes each track's row as it
@@ -378,6 +380,7 @@ graphics driver).
 | List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |
 | Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
 | Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
+| Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |
@@ -397,4 +400,7 @@ a run on a computer with little RAM.
   use (Settings › Viewport).
 - Real weak hardware: "2 threads, small caches" runs on this machine -
   its disk and memory speed, no slow GPU.
-- Running pipelines and analyses: see [performave.md](performave.md).
+- Running pipelines and analyses: not written up here yet - core's
+  `bench_pipeline <workdir> --images 200 --size 2048 --threads 8`
+  (~7 s, ~1 GB RSS) and `bench_export <out.evadb>` (~33 s, ~2.4 GB),
+  measured 2026-10-21 (see the Peak RAM overview).

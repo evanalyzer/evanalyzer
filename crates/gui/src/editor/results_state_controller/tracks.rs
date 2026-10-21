@@ -16,7 +16,7 @@ use slint::{Model, ModelNotify, ModelTracker};
 const MAX_POINTS: usize = 1_000_000;
 
 /// Track colors on the image: light enough on dark images.
-const TRACK_PALETTE: [u32; 10] = [
+pub(super) const TRACK_PALETTE: [u32; 10] = [
     0x5B9BFF, 0xFF8A4C, 0x2DD4BF, 0xC084FC, 0xFACC15, 0xF472B6, 0x38BDF8, 0xA3E635, 0xFB7185,
     0x4ADE80,
 ];
@@ -147,7 +147,7 @@ fn track_rgb(track: &TrackPath, by_track: bool, class_colors: &HashMap<i32, u32>
 }
 
 /// The area over the track's time points as path commands in 0 0 100 20.
-fn area_curve(track: &TrackPath, first_t: u32, last_t: u32) -> String {
+pub(super) fn area_curve(track: &TrackPath, first_t: u32, last_t: u32) -> String {
     let (lo, hi) = track
         .points
         .iter()
@@ -222,6 +222,8 @@ pub(super) struct TracksState {
     generation: u64,
     /// The table's sort (`ResultsState.tracks-sort`).
     sort: i32,
+    /// Selected once the image's tracks are read (Full's "Show in image").
+    pending_track: Option<u64>,
 }
 
 impl ResultsStateController {
@@ -273,6 +275,8 @@ impl ResultsStateController {
             });
             manager.tracks_push_table();
             manager.tracks_push_card();
+            manager.tracks_all_push_table();
+            manager.tracks_all_push_detail();
         });
         let manager = self.clone();
         state.on_trail_changed(move |mode, frames| {
@@ -328,7 +332,28 @@ impl ResultsStateController {
         }
     }
 
-    fn tracks_show_image(self: &Arc<Self>, rel_path: String) {
+    /// Full's "Show in image": `rel_path` beside its tracks, `track_id`
+    /// selected (once read).
+    pub(super) fn tracks_show_track(self: &Arc<Self>, rel_path: String, track_id: u64) {
+        self.tracks_show_image(rel_path);
+        let index = {
+            let mut state = self.tracks.lock().expect("Poisoned");
+            let index = state
+                .tracks
+                .tracks
+                .binary_search_by_key(&track_id, |track| track.track_id)
+                .ok();
+            if index.is_none() {
+                state.pending_track = Some(track_id);
+            }
+            index
+        };
+        if let Some(index) = index {
+            self.tracks_select(index, true);
+        }
+    }
+
+    pub(super) fn tracks_show_image(self: &Arc<Self>, rel_path: String) {
         self.split_show_image(rel_path.clone(), None, None);
         let loaded =
             self.tracks.lock().expect("Poisoned").image.as_deref() == Some(rel_path.as_str());
@@ -414,14 +439,28 @@ impl ResultsStateController {
                 state.tracks = Arc::new(tracks);
                 state.stats = Arc::new(stats);
             }
+            let pending = {
+                let mut state = manager.tracks.lock().expect("Poisoned");
+                let id = state.pending_track.take();
+                id.and_then(|id| {
+                    state
+                        .tracks
+                        .tracks
+                        .binary_search_by_key(&id, |track| track.track_id)
+                        .ok()
+                })
+            };
             manager.tracks_push_table();
             manager.tracks_objects_loaded();
             manager.split_push_selection(false);
             manager.split_push_overlay();
+            if let Some(index) = pending {
+                manager.tracks_select(index, true);
+            }
         });
     }
 
-    fn class_colors(&self) -> HashMap<i32, u32> {
+    pub(super) fn class_colors(&self) -> HashMap<i32, u32> {
         self.classes
             .lock()
             .expect("Poisoned")

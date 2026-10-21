@@ -58,8 +58,7 @@ export component Workspace inherits Rectangle {
     property <length> bottom-room: root.tuning-shown ? root.dock-h + Float.gap : root.table-room;
     // Results, split with the image (board Z): the results left, the
     // viewer in a pane right - List and Plate, with an analysis open.
-    // Tracks: always beside their image.
-    property <bool> split: LayoutState.mode == WorkspaceMode.results && (ResultsState.split || ResultsState.rail-mode == ResultsRailMode.tracks) && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts;
+    property <bool> split: LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts;
     changed split => {
         ResultsState.split-shown(self.split);
     }

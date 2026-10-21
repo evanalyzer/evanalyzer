@@ -9,6 +9,7 @@ import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
 import { ResultsTracksView } from "results_tracks.slint";
+import { ResultsTracksAllView } from "results_tracks_all.slint";
 import { ResultsListPanel } from "../editor/results_list_panel.slint";
 
 export component ResultsView inherits Rectangle {
@@ -53,7 +54,11 @@ export component ResultsView inherits Rectangle {
         if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
             vertical-stretch: 1;
         }
-        if ResultsState.rail-mode == ResultsRailMode.tracks: ResultsTracksView {
+        // Tracks: one image's beside it (split), else every track.
+        if ResultsState.rail-mode == ResultsRailMode.tracks && ResultsState.split: ResultsTracksView {
+            vertical-stretch: 1;
+        }
+        if ResultsState.rail-mode == ResultsRailMode.tracks && !ResultsState.split: ResultsTracksAllView {
             vertical-stretch: 1;
         }
     }
