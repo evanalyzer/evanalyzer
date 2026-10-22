@@ -1,4 +1,4 @@
-use super::results_generator::{ResultsGenerator, class_display_label};
+use super::results_generator::{ResultsGenerator, class_display_label, sql_string_in_list};
 use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
 use super::results_tracks::{TrackSummaryHead, TrackSummaryQuery};
 use crate::api::{
@@ -741,6 +741,9 @@ impl ResultExport {
         if self.with_track_summary {
             self.export_track_summary(database, cancel, &mut *on_progress)?;
         }
+        if self.with_measurements {
+            self.export_measurements(database, cancel, &mut *on_progress)?;
+        }
         if self.with_plate_view_heatmap || self.with_well_view_heatmap {
             self.export_plate_and_well(database, cancel, &mut *on_progress)?;
         }
@@ -1037,6 +1040,120 @@ impl ResultExport {
     // per time point, a column per line; CSV a file each, XLSX a sheet).
     /// `tracks.csv` / a "Tracks" sheet: a row per track (see
     /// `TrackColumns`), written as the tracks are read.
+    /// `measurements.{csv,xlsx}`: one row per measurement value with what
+    /// it is about - the results' `measurements` table, its columns named
+    /// the same, of the chosen images and planes and the measurements among
+    /// `columns` (none chosen: all). The long layout R or Python read
+    /// without reshaping, and every new measurement fits without new
+    /// columns.
+    fn export_measurements(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        check_cancelled(cancel)?;
+        on_progress("Exporting Measurements", 0, 1);
+        if database.get_measurement_columns()?.is_empty() {
+            return Err(InternalErrors::InvalidArgument(
+                "These results have no measurements - a pipeline needs a measurement step"
+                    .to_string(),
+            ));
+        }
+        let images = resolve_images(database, self)?;
+        let mut conditions = vec![match images.is_empty() {
+            true => "false".to_string(),
+            false => format!("image_rel_path IN ({})", sql_string_in_list(&images)),
+        }];
+        let keys: Vec<String> = self
+            .columns
+            .iter()
+            .filter_map(|column| match column {
+                Column::Measurement(m) => Some(m.key.clone()),
+                _ => None,
+            })
+            .collect();
+        if !keys.is_empty() {
+            conditions.push(format!("key IN ({})", sql_string_in_list(&keys)));
+        }
+        for (column, range) in [("t_stack", &self.t_stacks), ("z_stack", &self.z_stacks)] {
+            if let Some(range) = range {
+                conditions.push(format!(
+                    "{column} >= {} AND {column} < {}",
+                    range.start, range.end
+                ));
+            }
+        }
+        const COLUMNS: [&str; 12] = [
+            "image_name",
+            "image_rel_path",
+            "z_stack",
+            "t_stack",
+            "region",
+            "object_id",
+            "object_class_name",
+            "step",
+            "measurement",
+            "unit",
+            "key",
+            "value",
+        ];
+        let sql = format!(
+            "SELECT image_name, image_rel_path, z_stack, t_stack, region, object_id::VARCHAR, \
+             object_class_name, step, measurement, unit, key, value \
+             FROM measurements WHERE {} \
+             ORDER BY image_name, t_stack, z_stack, step, key, region, object_id",
+            conditions.join(" AND ")
+        );
+        let mut stmt = database.connection().prepare(&sql).map_err(err)?;
+        let mut each_row = |out: &mut dyn FieldSink| -> Result<(), InternalErrors> {
+            for name in COLUMNS {
+                out.text(name)?;
+            }
+            out.end_row()?;
+            let mut rows = stmt.query([]).map_err(err)?;
+            let mut n = 0usize;
+            while let Some(row) = rows.next().map_err(err)? {
+                n += 1;
+                if n.is_multiple_of(65_536) {
+                    check_cancelled(cancel)?;
+                }
+                for i in 0..COLUMNS.len() {
+                    match i {
+                        2 | 3 => out.number(row.get::<_, i32>(i).map_err(err)? as f64)?,
+                        11 => out.optional(row.get::<_, Option<f64>>(i).map_err(err)?)?,
+                        _ => match row.get::<_, Option<String>>(i).map_err(err)? {
+                            Some(text) => out.text(&text)?,
+                            None => out.empty()?,
+                        },
+                    }
+                }
+                out.end_row()?;
+            }
+            Ok(())
+        };
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                let worksheet = workbook.add_worksheet_with_constant_memory();
+                worksheet.set_name("Measurements").map_err(xlsx_err)?;
+                each_row(&mut FieldsSheet::new(worksheet))?;
+                workbook
+                    .save(self.output_path("measurements.xlsx"))
+                    .map_err(xlsx_err)?;
+            }
+            ExportFormat::CSV => {
+                let path = self.output_path("measurements.csv");
+                each_row(&mut FieldsCsv::create(&path)?)?;
+            }
+            // Written with the objects (`export_as_parquet`).
+            ExportFormat::Parquet => {}
+        }
+        on_progress("Exporting Measurements", 1, 1);
+        Ok(())
+    }
+
     fn export_track_summary(
         &self,
         database: &ResultsGenerator,
@@ -1763,6 +1880,17 @@ impl ResultExport {
             .connection()
             .execute_batch(&sql)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        // The measurements beside them, as they are (one row per value).
+        if !database.get_measurement_columns()?.is_empty() {
+            let path = self.output_path("measurements.parquet");
+            let path_literal = path.to_string_lossy().replace('\'', "''");
+            database
+                .connection()
+                .execute_batch(&format!(
+                    "COPY measurements TO '{path_literal}' (FORMAT parquet);"
+                ))
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        }
         on_progress("Exporting Parquet", 1, 1);
         Ok(())
     }
@@ -4784,5 +4912,141 @@ mod tests {
             panic!("expected an error");
         };
         assert!(e.to_string().contains("could not create"), "{e}");
+    }
+
+    // -- measurements -----------------------------------------------------
+
+    /// `img1.tif`'s two time points with an image measurement each, and one
+    /// object's value; `img2.tif` with a value too.
+    fn with_measurements() -> (ResultsGenerator, PathBuf, String) {
+        let (generator, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 20),
+        ]);
+        let object: String = generator
+            .connection()
+            .query_row(
+                "SELECT object_id::VARCHAR FROM objects WHERE area_px = 10",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        generator
+            .connection()
+            .execute_batch(&format!(
+                "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
+                 step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
+                 range_max DOUBLE, aggregatable BOOLEAN);
+                 CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+                 z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+                 object_class_name VARCHAR, object_class_id INTEGER[], step VARCHAR, \
+                 measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
+                 INSERT INTO measurement_info VALUES
+                     ('p_01/p', 'Pearson', 'p_01', 'None', 'Image', -1, 1, true),
+                     ('q_01/q', 'Pearson', 'q_01', 'None', 'Object', -1, 1, true);
+                 INSERT INTO measurements VALUES
+                     ('img1.tif', 'img1.tif', 0, 1, 'image', NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', NULL),
+                     ('img1.tif', 'img1.tif', 0, 0, 'image', NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.5),
+                     ('img1.tif', 'img1.tif', 0, 0, 'object', '{object}', '[\"ClassA\"]', [1], 'q_01', 'Pearson', 'None', 'q_01/q', 0.25),
+                     ('img2.tif', 'img2.tif', 0, 0, 'image', NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.75);"
+            ))
+            .unwrap();
+        (generator, out_dir, object)
+    }
+
+    /// One row per value, the columns named like the database's; a value
+    /// that isn't there stays empty.
+    #[test]
+    fn the_measurements_export_has_a_row_per_value() {
+        let (generator, out_dir, object) = with_measurements();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_measurements: true,
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let csv = std::fs::read_to_string(out_dir.join("measurements.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "image_name,image_rel_path,z_stack,t_stack,region,object_id,\
+                 object_class_name,step,measurement,unit,key,value",
+                "img1.tif,img1.tif,0,0,image,,,p_01,Pearson,None,p_01/p,0.5",
+                &format!(
+                    "img1.tif,img1.tif,0,0,object,{object},\"[\"\"ClassA\"\"]\",q_01,Pearson,None,q_01/q,0.25"
+                ),
+                "img1.tif,img1.tif,0,1,image,,,p_01,Pearson,None,p_01/p,",
+                "img2.tif,img2.tif,0,0,image,,,p_01,Pearson,None,p_01/p,0.75",
+            ]
+        );
+    }
+
+    /// The measurements chosen among the columns, of the chosen images and
+    /// time points.
+    #[test]
+    fn the_measurements_export_keeps_to_the_chosen_ones() {
+        let (generator, out_dir, _) = with_measurements();
+        let p = generator
+            .get_measurement_columns()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.key == "p_01/p")
+            .unwrap();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_measurements: true,
+            columns: vec![Column::AreaSizePx, Column::Measurement(p)],
+            image_rel_paths: vec!["img1.tif".into()],
+            t_stacks: Some(Range { start: 0, end: 1 }),
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let csv = std::fs::read_to_string(out_dir.join("measurements.csv")).unwrap();
+        assert_eq!(
+            csv.lines().skip(1).collect::<Vec<_>>(),
+            ["img1.tif,img1.tif,0,0,image,,,p_01,Pearson,None,p_01/p,0.5"]
+        );
+    }
+
+    #[test]
+    fn results_without_measurements_say_so_and_parquet_writes_them_too() {
+        let (generator, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let err = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_measurements: true,
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .err()
+        .expect("refused")
+        .to_string();
+        assert!(err.contains("no measurements"), "{err}");
+
+        let (generator, out_dir, _) = with_measurements();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::Parquet,
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let rows: i64 = generator
+            .connection()
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM '{}'",
+                    out_dir.join("measurements.parquet").display()
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 4);
     }
 }

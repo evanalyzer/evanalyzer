@@ -979,6 +979,9 @@
           "with_track_summary": "BOOL"
         },
         {
+          "with_measurements": "BOOL"
+        },
+        {
           "track_summary": {
             "TYPENAME": "TrackSummaryExport"
           }

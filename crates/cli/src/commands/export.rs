@@ -166,6 +166,10 @@ fn export_table(
             };
             "tracks"
         }
+        _ if args.measurements => {
+            export.with_measurements = true;
+            "measurements"
+        }
         ResolvedGrouping::List => {
             export.with_list_view = true;
             "list"
@@ -305,6 +309,7 @@ mod tests {
                 filter: FilterArgs::default(),
                 group: GroupArgs::default(),
                 tracks: Default::default(),
+                measurements: false,
             },
             ExportFormat::CSV,
         )
@@ -343,6 +348,7 @@ mod tests {
                         min_points,
                         ..Default::default()
                     },
+                    measurements: false,
                 },
                 ExportFormat::CSV,
             )
@@ -374,6 +380,7 @@ mod tests {
                 filter: FilterArgs::default(),
                 group: GroupArgs::default(),
                 tracks: Default::default(),
+                measurements: false,
             },
             ExportFormat::XLSX,
         )
@@ -405,6 +412,7 @@ mod tests {
                     ..Default::default()
                 },
                 tracks: Default::default(),
+                measurements: false,
             },
             ExportFormat::CSV,
         )
@@ -433,6 +441,7 @@ mod tests {
                     ..Default::default()
                 },
                 tracks: Default::default(),
+                measurements: false,
             },
             ExportFormat::CSV,
         );
@@ -449,6 +458,7 @@ mod tests {
                 filter: FilterArgs::default(),
                 group,
                 tracks: Default::default(),
+                measurements: false,
             },
             ExportFormat::CSV,
         )
@@ -525,6 +535,7 @@ mod tests {
                 filter: FilterArgs::default(),
                 group: GroupArgs::default(),
                 tracks: Default::default(),
+                measurements: false,
             },
             ExportFormat::CSV,
         )

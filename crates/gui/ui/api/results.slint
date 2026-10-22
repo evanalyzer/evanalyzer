@@ -245,6 +245,8 @@ export global ResultsState {
 
     // -- Tracks (with tracked objects): one image's tracks, beside it --
     in-out property <bool> has-tracks: false;
+    // The open analysis has measurements (a measurement step ran).
+    in-out property <bool> has-measurements: false;
     // The image's tracks in the table's order, the selected row (-1 none).
     in-out property <[TrackRow]> track-rows;
     in-out property <int> track-selected: -1;
