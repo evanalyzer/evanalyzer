@@ -191,7 +191,7 @@ mod tests {
     fn cache() -> GlobalPipelineCache {
         let mut cache = GlobalPipelineCache::default();
         let quality = ImageQuality {
-            name: "quality_01".into(),
+            id: "quality_01".into(),
             channel: ImageChannelIdx(0),
         };
         let values = [
@@ -314,7 +314,7 @@ mod tests {
 
         // A value per object can't decide about an image.
         let info = PearsonCorrelationCoefficient {
-            name: "per_object".into(),
+            id: "per_object".into(),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(1),
         }

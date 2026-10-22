@@ -19,7 +19,7 @@ use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, Measurement
 /// ]
 /// ```
 ///
-/// Each key is "step/id" (step names are unique in the project), each name
+/// Each key is "step ID/value id" (step IDs are unique in the project), each name
 /// gets what it is about in brackets: "Focus score (channel 0)".
 pub struct Outputs<'a> {
     step: &'a str,
@@ -27,7 +27,7 @@ pub struct Outputs<'a> {
 }
 
 impl<'a> Outputs<'a> {
-    /// The outputs of the measurement step named `step`.
+    /// The outputs of the measurement step with ID `step`.
     pub fn of(step: &'a str) -> Self {
         Self { step, about: None }
     }

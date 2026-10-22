@@ -136,7 +136,7 @@ mod tests {
         let (dir, mut settings) = project_with_fixture_image();
         let mut pearson =
             PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
-        *pearson.measurement_name_mut().unwrap() = "pearson_01".into();
+        *pearson.measurement_id_mut().unwrap() = "pearson_01".into();
         settings.pipelines.push(PipelineSettings {
             id: PipelineId(1),
             name: "Coloc".into(),

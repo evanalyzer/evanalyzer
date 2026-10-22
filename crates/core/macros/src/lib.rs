@@ -61,9 +61,9 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         // Section the setting is shown in, e.g. "Detection" - settings of
         // the same section are listed together under its header.
         "section",
-        // `String` field: a measurement step's name (unique in the project),
+        // `String` field: a measurement step's ID (unique in the project),
         // the value the start of a new one ("pearson" -> "pearson_01").
-        "measurement_name",
+        "measurement_id",
     ];
 
     // Validate struct-level #[cmdsmeta(...)]

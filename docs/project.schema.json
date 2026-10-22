@@ -126,8 +126,8 @@
       "description": "Measures how much of the image the objects of a class cover.\n\nThe area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
       "type": "object",
       "properties": {
-        "name": {
-          "description": "The measurement's name - its values in the results start with it.",
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"area_occupied_01/...\").",
           "type": "string"
         },
         "objectClass": {
@@ -136,7 +136,7 @@
         }
       },
       "required": [
-        "name",
+        "id",
         "objectClass"
       ]
     },
@@ -1333,13 +1333,13 @@
           "description": "The channel to measure.",
           "$ref": "#/$defs/ImageChannelIdx"
         },
-        "name": {
-          "description": "The measurement's name - its values in the results start with it.",
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"intensity_01/...\").",
           "type": "string"
         }
       },
       "required": [
-        "name",
+        "id",
         "channel"
       ]
     },
@@ -1374,13 +1374,13 @@
           "description": "The channel to measure.",
           "$ref": "#/$defs/ImageChannelIdx"
         },
-        "name": {
-          "description": "The measurement's name - its values in the results start with it.",
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"quality_01/...\").",
           "type": "string"
         }
       },
       "required": [
-        "name",
+        "id",
         "channel"
       ]
     },
@@ -2638,8 +2638,8 @@
           "$ref": "#/$defs/ImageChannelIdx",
           "default": 1
         },
-        "name": {
-          "description": "The measurement's name - its values in the results start with it.",
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"pearson_01/...\").",
           "type": "string",
           "default": ""
         }

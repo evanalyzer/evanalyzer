@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct MeasurementColumn {
     /// The measurement's key ("pearson_01/pearson").
     pub key: String,
-    /// The measurement step's name ("pearson_01").
+    /// The measurement step's ID ("pearson_01").
     pub step: String,
     /// Readable ("Pearson (channel 0 × channel 1)").
     pub name: String,

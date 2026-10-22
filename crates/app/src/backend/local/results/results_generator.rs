@@ -730,7 +730,7 @@ impl ResultsGenerator {
             .map(|(rel_path, _, class_id, _, _)| format!("{rel_path}\u{1}{class_id}"))
             .collect();
         // A row is an image: clicking it shows the whole image.
-        let row_locations = groups
+        let row_locations: Vec<(String, Option<[u32; 4]>)> = groups
             .iter()
             .map(|(rel_path, ..)| (rel_path.clone(), None))
             .collect();
@@ -776,6 +776,8 @@ impl ResultsGenerator {
             })
             .collect();
 
+        let mut rows = rows;
+        self.flag_disabled_image_rows(&mut rows, &row_locations)?;
         Ok(DatabaseResult {
             column_names,
             row_names,
@@ -949,12 +951,12 @@ impl ResultsGenerator {
         let (min, max) = value_range(groups.iter().flat_map(|(_, _, _, values)| values.iter()));
         let row_names = groups.iter().map(|(path, ..)| path.clone()).collect();
         // A row is an image: clicking it shows the whole image.
-        let row_locations = groups
+        let row_locations: Vec<(String, Option<[u32; 4]>)> = groups
             .iter()
             .map(|(path, ..)| (path.clone(), None))
             .collect();
         let source_object_count = groups.len();
-        let rows = groups
+        let rows: Vec<Vec<Cell>> = groups
             .into_iter()
             .map(|(image_rel_path, image_name, failed, values)| {
                 let search_key = Some((image_name.clone(), image_rel_path));
@@ -975,6 +977,8 @@ impl ResultsGenerator {
                 cells
             })
             .collect();
+        let mut rows = rows;
+        self.flag_disabled_image_rows(&mut rows, &row_locations)?;
         Ok(DatabaseResult {
             column_names,
             row_names,
@@ -2386,6 +2390,35 @@ impl ResultsGenerator {
     }
 
     pub fn get_heatmap(&self) {}
+
+    /// Marks every cell of a row whose image is disabled (`row_locations`
+    /// names each row's image) - an image row then looks like the rows of a
+    /// disabled image's objects.
+    fn flag_disabled_image_rows(
+        &self,
+        rows: &mut [Vec<Cell>],
+        row_locations: &[(String, Option<[u32; 4]>)],
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare("SELECT image_rel_path FROM images WHERE disabled")
+            .map_err(err)?;
+        let disabled: std::collections::HashSet<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+        if disabled.is_empty() {
+            return Ok(());
+        }
+        for (row, (rel_path, _)) in rows.iter_mut().zip(row_locations) {
+            if disabled.contains(rel_path) {
+                row.iter_mut().for_each(|cell| cell.disabled = true);
+            }
+        }
+        Ok(())
+    }
 
     pub fn get_images(&self) -> Result<Vec<ImageEntry>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
@@ -4704,6 +4737,48 @@ mod tests {
         assert_eq!(result.column_names[0], "image");
         assert_eq!(result.column_names[1], "class");
         assert_eq!(result.column_names[2], "Area [px] (AVG)");
+    }
+
+    /// A row per image, also with the classes side by side: every cell of a
+    /// disabled image's row is flagged, like a disabled image's objects.
+    #[test]
+    fn get_grouped_by_image_flags_a_disabled_images_rows() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+        ]);
+        generator.enable_image("img2.tif", true).unwrap();
+        for transpond_table in [false, true] {
+            let result = generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::AreaSizePx],
+                    aggregation: vec![Aggregation::Avg],
+                    page: no_page(),
+                    transpond_table,
+                })
+                .unwrap();
+            let flags: Vec<(String, bool)> = result
+                .rows
+                .iter()
+                .zip(&result.row_locations)
+                .map(|(row, (path, _))| (path.clone(), row.iter().all(|cell| cell.disabled)))
+                .collect();
+            assert_eq!(
+                flags,
+                [
+                    ("img1.tif".to_string(), false),
+                    ("img2.tif".to_string(), true)
+                ],
+                "transposed: {transpond_table}"
+            );
+            assert!(
+                result.rows[0].iter().all(|cell| !cell.disabled),
+                "img1's cells aren't flagged"
+            );
+        }
     }
 
     #[test]

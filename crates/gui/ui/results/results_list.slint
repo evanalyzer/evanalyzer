@@ -1,13 +1,13 @@
 // results_list.slint — the results as a table (a row per object or per
 // image), with what to show and how in the settings column on the right.
-import { InkButton, InkButtonKind, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkCheckbox, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
 import { SettingsGroup } from "results_common.slint";
 import { ResultRow, ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { InkCheckList, InkMultiSelect, InkSwitch } from "../ink/ink.slint";
+import { InkCheckList, InkMultiSelect, InkSwitch, InkTipSide, InkTipZone } from "../ink/ink.slint";
 
 export component ResultsListView inherits Rectangle {
     property <length> side-w: 280px;
@@ -47,6 +47,17 @@ export component ResultsListView inherits Rectangle {
 
                     SettingsGroup {
                         title: "SHOW";
+                        InkMultiSelect {
+                            label: "Images";
+                            summary-text: ResultsState.list-image-state-summary;
+                            items <=> ResultsState.list-image-state-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.list-image-state-summary = value;
+                                ResultsState.list-image-state-selected(key);
+                            }
+                        }
                         // In place, as on the board (L): ticked = shown.
                         InkCheckList {
                             title: "IMAGES · " + ResultsState.list-image-summary;
@@ -254,6 +265,60 @@ export component ResultsListView inherits Rectangle {
                     VerticalLayout {
                         spacing: 0px;
 
+                        // What is ticked, and what to do with its images.
+                        if ResultsState.list-checked-rows > 0: Rectangle {
+                            height: 40px;
+                            background: Ink.info-tint;
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 12px;
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: ResultsState.list-checked-images == 1 ? "1 image ticked" : ResultsState.list-checked-images + " images ticked";
+                                    font-size: Ink.fs-body;
+                                    font-weight: 600;
+                                    color: Ink.text;
+                                    vertical-alignment: center;
+                                }
+                                if ResultsState.list-group-by-summary == "Objects": Text {
+                                    text: "· " + ResultsState.list-checked-rows + (ResultsState.list-checked-rows == 1 ? " row" : " rows");
+                                    font-size: Ink.fs-body;
+                                    color: Ink.text-mute;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { width: 8px; }
+                                InkButton {
+                                    small: true;
+                                    kind: InkButtonKind.primary;
+                                    text: "Take back in";
+                                    enabled: ResultsState.list-checked-any-disabled;
+                                    disabled-reason: "None of them is left out";
+                                    clicked => {
+                                        ResultsState.list-checked-set-disabled(false);
+                                    }
+                                }
+                                InkButton {
+                                    small: true;
+                                    text: "Leave out";
+                                    enabled: ResultsState.list-checked-any-enabled;
+                                    disabled-reason: "All of them are left out already";
+                                    clicked => {
+                                        ResultsState.list-checked-set-disabled(true);
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                InkButton {
+                                    small: true;
+                                    kind: InkButtonKind.quiet;
+                                    text: "Clear";
+                                    clicked => {
+                                        ResultsState.list-check-clear();
+                                    }
+                                }
+                            }
+                        }
+
                         header-rect := Rectangle {
                             height: 30px;
                             background: Ink.field;
@@ -271,6 +336,20 @@ export component ResultsListView inherits Rectangle {
                                 padding-right: 16px;
                                 // Space between the columns (the same in the rows).
                                 spacing: 18px;
+
+                                // Ticks every row of the page (or none).
+                                Rectangle {
+                                    width: 16px;
+                                    InkCheckbox {
+                                        y: (parent.height - self.height) / 2;
+                                        checked: ResultsState.list-page-checked;
+                                        text: "";
+                                        accessible-label: "Tick every row of this page";
+                                        toggled(on) => {
+                                            ResultsState.list-check-page(on);
+                                        }
+                                    }
+                                }
 
                                 for header[idx] in ResultsState.list-column-headers: Rectangle {
                                     horizontal-stretch: 1;
@@ -375,6 +454,27 @@ export component ResultsListView inherits Rectangle {
                                     // screen at once horizontally — the rest don't
                                     // need a live Text element just to sit clipped
                                     // off to the side.
+                                    // The row's checkbox (Shift: every row from
+                                    // the last one ticked).
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16.5px;
+                                        InkCheckbox {
+                                            y: (parent.height - self.height) / 2;
+                                            checked: row.checked;
+                                            text: "";
+                                            accessible-label: "Tick this row";
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                                                    ResultsState.list-row-check(index, !row.checked, event.modifiers.shift);
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     for cell[c-index] in row.cells: Rectangle {
                                         height: 16.5px;
                                         horizontal-stretch: 1;
@@ -408,22 +508,6 @@ export component ResultsListView inherits Rectangle {
                                     Rectangle { }
                                 }
 
-                                // The selected object: on its image (at the right of
-                        // what's in view, also when scrolled sideways).
-                        if index == ResultsState.list-selected-row && ResultsState.list-group-by-summary == "Objects" && !ResultsState.split: InkButton {
-                            x: -body-list.content-x + body-list.visible-width - self.width - 10px;
-                            y: (parent.height - self.height) / 2;
-                            // Its own size (in a plain Rectangle it'd fill the row).
-                            width: self.preferred-width;
-                            height: self.preferred-height;
-                            small: true;
-                            kind: InkButtonKind.primary;
-                            text: "Show on image ↗";
-                            clicked => {
-                                ResultsState.list-row-clicked(index);
-                            }
-                        }
-
                         if row.disabled: Rectangle {
                                     y: parent.height / 2 - 1px;
                                     x: 0;
@@ -431,6 +515,57 @@ export component ResultsListView inherits Rectangle {
                                     height: 1px;
                                     background: Ink.text-mute;
                                 }
+
+                        // At the row's right (also when scrolled sideways): left
+                        // out - why on hover; the eye leaves the row's image out
+                        // or takes it back in; the selected object's button.
+                        HorizontalLayout {
+                            x: -body-list.content-x + body-list.visible-width - self.width - 10px;
+                            y: (parent.height - self.height) / 2;
+                            width: self.preferred-width;
+                            height: 24px;
+                            spacing: 6px;
+                            alignment: end;
+                            if row.disabled: Rectangle {
+                                y: 3px;
+                                width: left-out.preferred-width + 14px;
+                                height: 18px;
+                                border-radius: 9px;
+                                background: row.note != "" ? Ink.warn-tint : Ink.field;
+                                left-out := Text {
+                                    text: row.note != "" ? "Excluded" : "Left out";
+                                    font-size: Ink.fs-caption;
+                                    color: row.note != "" ? Ink.warn : Ink.text-mute;
+                                    vertical-alignment: center;
+                                }
+                                InkTipZone {
+                                    width: 100%;
+                                    height: 100%;
+                                    wanted: ta.has-hover;
+                                    text: row.note != "" ? "Excluded by the pipeline: " + row.note : "Left out of the results by hand";
+                                    side: InkTipSide.above;
+                                }
+                            }
+                            // Shown on the row's hover (and on a left-out row).
+                            eye := InkIconButton {
+                                size: 24px;
+                                opacity: ta.has-hover || self.has-hover || row.disabled ? 1.0 : 0.0;
+                                icon: row.disabled ? InkIcons.hidden : InkIcons.visible;
+                                label: row.disabled ? "Take this image back into the results" : "Leave this image out of the results";
+                                tip-side: InkTipSide.above;
+                                clicked => {
+                                    ResultsState.list-row-set-disabled(index, !row.disabled);
+                                }
+                            }
+                            if index == ResultsState.list-selected-row && ResultsState.list-group-by-summary == "Objects" && !ResultsState.split: InkButton {
+                                small: true;
+                                kind: InkButtonKind.primary;
+                                text: "Show on image ↗";
+                                clicked => {
+                                    ResultsState.list-row-clicked(index);
+                                }
+                            }
+                        }
                             }
                         }
                     }

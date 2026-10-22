@@ -39,9 +39,10 @@ use rustfft::{FftPlanner, num_complex::Complex};
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Image Quality")]
 pub struct ImageQuality {
-    /// The measurement's name - its values in the results start with it.
-    #[cmdsmeta(measurement_name = "quality", summary = true)]
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("quality_01/...").
+    #[cmdsmeta(measurement_id = "quality", display_name = "ID", summary = true)]
+    pub id: String,
 
     /// The channel to measure.
     #[cmdsmeta(summary = true)]
@@ -126,7 +127,7 @@ impl ImageAlgorithm for ImageQuality {
     }
 
     fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
-        let outputs = Outputs::of(&self.name).about(format!("channel {}", self.channel));
+        let outputs = Outputs::of(&self.id).about(format!("channel {}", self.channel));
         vec![
             outputs.image("focus_score", "Focus score", MeasurementUnit::None),
             outputs.image(
@@ -598,7 +599,7 @@ mod tests {
             },
         );
         let step = ImageQuality {
-            name: "qc".into(),
+            id: "qc".into(),
             channel: ImageChannelIdx(2),
         };
         let mut ctx =
@@ -627,7 +628,7 @@ mod tests {
         // (`measurement_outputs` via the settings).
         let mut settings =
             evanalyzer_cfg::settings::pipeline_command_settings::ImageQualitySettings::default();
-        settings.name = "qc".into();
+        settings.id = "qc".into();
         settings.channel = ImageChannelIdx(2);
         let offered = crate::measurement_outputs(
             &evanalyzer_cfg::settings::pipeline_command::PipelineCommand::ImageQuality(settings),
@@ -641,7 +642,7 @@ mod tests {
         assert_eq!(reported, offered);
 
         let missing = ImageQuality {
-            name: "qc".into(),
+            id: "qc".into(),
             channel: ImageChannelIdx(5),
         };
         let err = missing

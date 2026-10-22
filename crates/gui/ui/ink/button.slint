@@ -128,6 +128,8 @@ export component InkIconButton inherits Rectangle {
     in property <[string]> keys;
     in property <string> disabled-reason;
     in property <InkTipSide> tip-side: InkTipSide.below;
+    /// The pointer is over it - e.g. to keep a button shown only on hover.
+    out property <bool> has-hover: ta.has-hover;
     callback clicked;
 
     width: root.size;

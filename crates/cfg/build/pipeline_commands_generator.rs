@@ -800,10 +800,10 @@ struct FieldMetadata {
     read_only: bool,
     /// `#[cmdsmeta(section = "...")]`: the section the setting is shown in.
     section: Option<String>,
-    /// `#[cmdsmeta(measurement_name = "pearson")]` on a `String` field: the
-    /// measurement step's name (unique in the project, its measurements'
+    /// `#[cmdsmeta(measurement_id = "pearson")]` on a `String` field: the
+    /// measurement step's ID (unique in the project, its measurements'
     /// keys start with it); new names are "pearson_01", "pearson_02", ...
-    measurement_name: Option<String>,
+    measurement_id: Option<String>,
 }
 
 /// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
@@ -860,7 +860,7 @@ impl Default for FieldMetadata {
             measurement: false,
             read_only: false,
             section: None,
-            measurement_name: None,
+            measurement_id: None,
         }
     }
 }
@@ -1480,9 +1480,9 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                 } else if meta.path.is_ident("section") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.section = Some(value.value());
-                } else if meta.path.is_ident("measurement_name") {
+                } else if meta.path.is_ident("measurement_id") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    metadata.measurement_name = Some(value.value());
+                    metadata.measurement_id = Some(value.value());
                 } else if meta.path.is_ident("measurement") {
                     metadata.measurement = true;
                 } else if meta.path.is_ident("script") {
@@ -3602,16 +3602,16 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        });\n");
     out.push_str("        classes\n");
     out.push_str("    }\n\n");
-    // measurement_name(): a measurement step's own name (see
-    // `FieldMetadata::measurement_name`).
+    // measurement_id(): a measurement step's own ID (see
+    // `FieldMetadata::measurement_id`).
     let named: Vec<(&&CommandInfo, &FieldInfo, &str)> = algo_commands
         .iter()
         .filter_map(|cmd| {
             cmd.fields.iter().find_map(|f| {
-                f.meta.measurement_name.as_deref().map(|prefix| {
+                f.meta.measurement_id.as_deref().map(|prefix| {
                     assert_eq!(
                         f.ty, "String",
-                        "cmdsmeta: measurement_name on {}.{} - it must be a String",
+                        "cmdsmeta: measurement_id on {}.{} - it must be a String",
                         cmd.struct_name, f.name
                     );
                     (cmd, f, prefix)
@@ -3619,9 +3619,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
             })
         })
         .collect();
-    out.push_str("    /// A measurement step's name - unique in the project, its\n");
+    out.push_str("    /// A measurement step's ID - unique in the project, its\n");
     out.push_str("    /// measurements' keys start with it. `None`: no measurement step.\n");
-    out.push_str("    pub fn measurement_name(&self) -> Option<&str> {\n        match self {\n");
+    out.push_str("    pub fn measurement_id(&self) -> Option<&str> {\n        match self {\n");
     for (cmd, field, _) in &named {
         out.push_str(&format!(
             "            Self::{}(s) => Some(s.{}.as_str()),\n",
@@ -3629,8 +3629,10 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         ));
     }
     out.push_str("            _ => None,\n        }\n    }\n\n");
-    out.push_str("    /// [`Self::measurement_name`] to change.\n");
-    out.push_str("    pub fn measurement_name_mut(&mut self) -> Option<&mut String> {\n        match self {\n");
+    out.push_str("    /// [`Self::measurement_id`] to change.\n");
+    out.push_str(
+        "    pub fn measurement_id_mut(&mut self) -> Option<&mut String> {\n        match self {\n",
+    );
     for (cmd, field, _) in &named {
         out.push_str(&format!(
             "            Self::{}(s) => Some(&mut s.{}),\n",
@@ -3640,7 +3642,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            _ => None,\n        }\n    }\n\n");
     out.push_str("    /// How a new name of this measurement step starts (\"pearson\" ->\n");
     out.push_str("    /// \"pearson_01\").\n");
-    out.push_str("    pub fn measurement_name_prefix(&self) -> Option<&'static str> {\n        match self {\n");
+    out.push_str(
+        "    pub fn measurement_id_prefix(&self) -> Option<&'static str> {\n        match self {\n",
+    );
     for (cmd, _, prefix) in &named {
         out.push_str(&format!(
             "            Self::{}(_) => Some(\"{}\"),\n",

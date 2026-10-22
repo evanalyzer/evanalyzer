@@ -36,11 +36,11 @@ pub enum MeasurementTarget {
 /// step "pearson_01".
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementInfo {
-    /// Stable and unique, e.g. "pearson_01/pearson" (the step's name, then the value's id).
+    /// Stable and unique, e.g. "pearson_01/pearson" (the step's ID, then the value's id).
     pub key: String,
     /// Shown in the results, e.g. "Pearson (channel 0 × channel 1)".
     pub name: String,
-    /// The step's name, e.g. "pearson_01" - the results group by it.
+    /// The step's ID, e.g. "pearson_01" - the results group by it.
     pub step: String,
     pub unit: MeasurementUnit,
     pub target: MeasurementTarget,
@@ -96,15 +96,15 @@ pub enum MeasurementRegion {
     Class(ObjectClass),
 }
 
-/// A measurement step's name is valid: letters, digits and `_` - it starts
+/// A measurement step's ID is valid: letters, digits and `_` - it starts
 /// its measurements' keys and the export's columns.
-pub fn is_valid_measurement_name(name: &str) -> bool {
+pub fn is_valid_measurement_id(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The first free name "`prefix`_01", "`prefix`_02", ... - `taken` holds the
-/// names in use, lower-case (names differing only in case are the same).
-pub fn next_measurement_name(prefix: &str, taken: &HashSet<String>) -> String {
+/// IDs in use, lower-case (IDs differing only in case are the same).
+pub fn next_measurement_id(prefix: &str, taken: &HashSet<String>) -> String {
     (1..)
         .map(|n| format!("{prefix}_{n:02}"))
         .find(|name| !taken.contains(&name.to_lowercase()))
@@ -113,7 +113,7 @@ pub fn next_measurement_name(prefix: &str, taken: &HashSet<String>) -> String {
 
 /// How a measurement is offered to pick: "step · name", e.g.
 /// "quality_01 · Focus score (channel 0)" - unique, as step names are and a
-/// step's names are (two areas differing by unit get it added).
+/// step's names are (two areas differing by unit get it added) - step IDs are unique.
 pub fn measurement_label(info: &MeasurementInfo) -> String {
     match info.unit {
         MeasurementUnit::SquarePixels => format!("{} · {} (px²)", info.step, info.name),
@@ -128,20 +128,20 @@ mod tests {
 
     #[test]
     fn a_name_is_letters_digits_and_underscores() {
-        assert!(is_valid_measurement_name("nuclei_coloc_2"));
+        assert!(is_valid_measurement_id("nuclei_coloc_2"));
         for bad in ["", "nuclei coloc", "a/b", "a.b", "äpfel", "x-y"] {
-            assert!(!is_valid_measurement_name(bad), "{bad:?}");
+            assert!(!is_valid_measurement_id(bad), "{bad:?}");
         }
     }
 
     #[test]
     fn a_new_name_takes_the_first_free_number_whatever_the_case() {
         let taken: HashSet<String> = ["pearson_01", "pearson_03"].map(String::from).into();
-        assert_eq!(next_measurement_name("pearson", &taken), "pearson_02");
+        assert_eq!(next_measurement_id("pearson", &taken), "pearson_02");
         let taken: HashSet<String> = ["pearson_01".to_string()].into();
-        assert_eq!(next_measurement_name("PEARSON", &taken), "PEARSON_02");
+        assert_eq!(next_measurement_id("PEARSON", &taken), "PEARSON_02");
         assert_eq!(
-            next_measurement_name("texture", &HashSet::new()),
+            next_measurement_id("texture", &HashSet::new()),
             "texture_01"
         );
     }

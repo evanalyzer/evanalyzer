@@ -2897,7 +2897,7 @@ mod full_run_integration_tests {
             },
         );
         measure.add_command(Box::new(crate::algos::PearsonCorrelationCoefficient {
-            name: "pearson_01".into(),
+            id: "pearson_01".into(),
             channel_a: evanalyzer_cfg::core_types::ImageChannelIdx(0),
             channel_b: evanalyzer_cfg::core_types::ImageChannelIdx(1),
         }));
@@ -2957,7 +2957,7 @@ mod full_run_integration_tests {
             },
         );
         measure.add_command(Box::new(crate::algos::AreaOccupied {
-            name: "area_occupied_01".into(),
+            id: "area_occupied_01".into(),
             object_class: ObjectClass::Global(1),
         }));
         job.add_post_process_pipeline(measure);
@@ -3043,7 +3043,7 @@ mod full_run_integration_tests {
                 },
             );
             check.add_command(Box::new(ImageQuality {
-                name: "quality_01".into(),
+                id: "quality_01".into(),
                 channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
             }));
             check.add_command(Box::new(ExcludeImage {

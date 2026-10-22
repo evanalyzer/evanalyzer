@@ -162,6 +162,11 @@ export struct ResultRow {
     // dot before the name.
     class-column: int,
     class-color: color,
+    // A disabled row's image was left out by the run ("Exclude Image"):
+    // why; "" left out by hand (or not left out).
+    note: string,
+    // Ticked (the checkbox column) - for "Leave out" / "Take back in".
+    checked: bool,
 }
 
 export struct ChartScatterPoint {
@@ -368,6 +373,16 @@ export global ResultsState {
     ];
     in-out property <string> list-group-by-summary: "Objects";
     callback list-group-by-selected(string);
+    // Which images the list shows: all, only those in the results, only
+    // those left out (disabled) - e.g. to check what "Exclude Image" left
+    // out.
+    in-out property <[MultiSelectItem]> list-image-state-items: [
+        { key: "all", value: "All images", group: "", selected: true },
+        { key: "enabled", value: "Only enabled", group: "", selected: false },
+        { key: "disabled", value: "Only disabled", group: "", selected: false },
+    ];
+    in-out property <string> list-image-state-summary: "All images";
+    callback list-image-state-selected(string);
 
     // Images mode's per-column aggregation(s) — `get_grouped_by_image`
     // accepts more than one, adding one output column per (selected column
@@ -429,6 +444,23 @@ export global ResultsState {
     // (`ResultsStateController::list_row_locations` mirrors it 1:1) so Rust
     // can open that object's source image and highlight it there.
     callback list-row-clicked(int);
+    // A row's eye: its image left out of the results (true) or taken back.
+    callback list-row-set-disabled(int, bool);
+    // A row's checkbox: ticked or not; with Shift every row from the last
+    // one ticked.
+    callback list-row-check(int, bool, bool);
+    // The header's checkbox: every row of the page ticked or none.
+    callback list-check-page(bool);
+    callback list-check-clear();
+    // The ticked rows' images left out (true) or taken back in.
+    callback list-checked-set-disabled(bool);
+    // What is ticked: images (several rows can be one image), rows, and
+    // whether some of them are left out / in the results.
+    in property <int> list-checked-images: 0;
+    in property <int> list-checked-rows: 0;
+    in property <bool> list-checked-any-disabled: false;
+    in property <bool> list-checked-any-enabled: false;
+    in property <bool> list-page-checked: false;
 
     callback list-image-filter-changed(string);
     callback list-class-selected(string, bool);

@@ -29,9 +29,10 @@ use std::sync::Arc;
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Pearson Correlation")]
 pub struct PearsonCorrelationCoefficient {
-    /// The measurement's name - its values in the results start with it.
-    #[cmdsmeta(measurement_name = "pearson", summary = true)]
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("pearson_01/...").
+    #[cmdsmeta(measurement_id = "pearson", display_name = "ID", summary = true)]
+    pub id: String,
 
     /// The first channel.
     #[cmdsmeta(summary = true)]
@@ -106,7 +107,7 @@ impl ImageAlgorithm for PearsonCorrelationCoefficient {
     fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
         let about = format!("channel {} × channel {}", self.channel_a, self.channel_b);
         vec![
-            Outputs::of(&self.name)
+            Outputs::of(&self.id)
                 .about(about)
                 .image("pearson", "Pearson", MeasurementUnit::None)
                 .range(-1.0, 1.0),
@@ -296,7 +297,7 @@ mod tests {
             (1, [&[0.2, 0.3, 0.1], &[0.8, 0.7, 0.4]]),
         ]);
         let step = PearsonCorrelationCoefficient {
-            name: "nuclei_coloc".into(),
+            id: "nuclei_coloc".into(),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(1),
         };
@@ -325,7 +326,7 @@ mod tests {
     fn a_channel_the_image_lacks_is_an_error() {
         let mut cache = cache_with_channels(&[(0, [&[0.1, 0.4], &[0.9, 0.5]])]);
         let step = PearsonCorrelationCoefficient {
-            name: "p".into(),
+            id: "p".into(),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(3),
         };

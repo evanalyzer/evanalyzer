@@ -38,7 +38,7 @@ use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -133,9 +133,21 @@ enum ListGroupBy {
     Images,
 }
 
+/// Which images the list shows, by whether they're in the results.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum ImageState {
+    #[default]
+    All,
+    /// Only those in the results (not disabled).
+    Enabled,
+    /// Only those left out (disabled) - by hand or by "Exclude Image".
+    Disabled,
+}
+
 #[derive(Default)]
 struct ListFilter {
     pub image_rel_path: Vec<PathBuf>,
+    pub image_state: ImageState,
     pub object_classes: Vec<ObjectClass>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
@@ -447,6 +459,9 @@ pub struct ResultsStateController {
     // navigate to a clicked object's own image without re-querying the
     // database.
     list_row_locations: Mutex<Vec<(String, Option<[u32; 4]>)>>,
+    /// The list's ticked rows (this page), and the last one ticked - a
+    /// Shift-click ticks every row from it.
+    list_checked: Mutex<(BTreeSet<usize>, Option<usize>)>,
     /// The scatter's points (0..1, as drawn) and their objects' image and
     /// box - for a click on a point.
     scatter_points: Mutex<Vec<(f32, f32, String, [u32; 4])>>,
@@ -520,6 +535,7 @@ impl ResultsStateController {
             current_well: Mutex::new(None),
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
+            list_checked: Mutex::new((BTreeSet::new(), None)),
             scatter_points: Mutex::new(Vec::new()),
             image_list_controller,
             export_populated: Mutex::new(false),
@@ -780,6 +796,76 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_columns_select_none(move || manager.select_none_columns());
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_image_state_selected(move |key| {
+                    let state = match key.as_str() {
+                        "enabled" => ImageState::Enabled,
+                        "disabled" => ImageState::Disabled,
+                        _ => ImageState::All,
+                    };
+                    manager.list_filter.lock().expect("Poisened").image_state = state;
+                    *manager.list_page.lock().expect("Poisned") = 0;
+                    manager.refresh_list();
+                });
+
+            // The row's eye: its image out of the results, or back in.
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_row_set_disabled(move |index, disable| {
+                    let rel_path = manager
+                        .list_row_locations
+                        .lock()
+                        .expect("Poisoned")
+                        .get(index as usize)
+                        .map(|(rel_path, _)| rel_path.clone());
+                    if let Some(rel_path) = rel_path {
+                        manager.set_images_disabled(vec![rel_path], disable);
+                    }
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_row_check(move |index, on, range| {
+                    {
+                        let mut checked = manager.list_checked.lock().expect("Poisoned");
+                        let index = index as usize;
+                        let from = match (range, checked.1) {
+                            (true, Some(last)) => last.min(index)..=last.max(index),
+                            _ => index..=index,
+                        };
+                        for row in from {
+                            match on {
+                                true => checked.0.insert(row),
+                                false => checked.0.remove(&row),
+                            };
+                        }
+                        checked.1 = Some(index);
+                    }
+                    manager.push_list_checks();
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_list_check_page(move |on| {
+                let rows = manager.list_row_locations.lock().expect("Poisoned").len();
+                *manager.list_checked.lock().expect("Poisoned") = match on {
+                    true => ((0..rows).collect(), None),
+                    false => (BTreeSet::new(), None),
+                };
+                manager.push_list_checks();
+            });
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_list_check_clear(move || {
+                *manager.list_checked.lock().expect("Poisoned") = (BTreeSet::new(), None);
+                manager.push_list_checks();
+            });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_checked_set_disabled(move |disable| {
+                    let images = manager.checked_images();
+                    *manager.list_checked.lock().expect("Poisoned") = (BTreeSet::new(), None);
+                    manager.push_list_checks();
+                    manager.set_images_disabled(images, disable);
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -2189,6 +2275,102 @@ impl ResultsStateController {
     /// A result's object shown on its image (`row`: the List row, -1 none):
     /// the window goes to the image, a bar on it says which (`label`) and
     /// leads back - `can_step`: ‹ › to the next row's (see `ResultsPeek`).
+    /// The images of the ticked rows (several rows can be one image), in
+    /// the list's order.
+    fn checked_images(&self) -> Vec<String> {
+        let checked = self.list_checked.lock().expect("Poisoned");
+        let locations = self.list_row_locations.lock().expect("Poisoned");
+        let mut images: Vec<String> = Vec::new();
+        for row in &checked.0 {
+            if let Some((rel_path, _)) = locations.get(*row)
+                && !images.contains(rel_path)
+            {
+                images.push(rel_path.clone());
+            }
+        }
+        images
+    }
+
+    /// The ticks into the list: each row's box, the bar's counts, the
+    /// header's box. On the UI thread.
+    fn push_list_checks(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let checked = self.list_checked.lock().expect("Poisoned").0.clone();
+        let images = self.checked_images();
+        let (any_disabled, any_enabled) = {
+            let known = self.images.lock().expect("Poisoned");
+            let disabled = |rel_path: &String| {
+                known
+                    .iter()
+                    .find(|image| image.rel_path.to_string_lossy() == rel_path.as_str())
+                    .is_some_and(|image| image.disabled)
+            };
+            (
+                images.iter().any(disabled),
+                images.iter().any(|image| !disabled(image)),
+            )
+        };
+        let state = ui.global::<ResultsState>();
+        let rows = state.get_list_rows();
+        for i in 0..rows.row_count() {
+            if let Some(mut row) = rows.row_data(i)
+                && row.checked != checked.contains(&i)
+            {
+                row.checked = checked.contains(&i);
+                rows.set_row_data(i, row);
+            }
+        }
+        state.set_list_checked_rows(checked.len() as i32);
+        state.set_list_checked_images(images.len() as i32);
+        state.set_list_checked_any_disabled(any_disabled);
+        state.set_list_checked_any_enabled(any_enabled);
+        state.set_list_page_checked(rows.row_count() > 0 && checked.len() == rows.row_count());
+    }
+
+    /// Leaves `images` (rel paths) out of the results (`disable`) or takes
+    /// them back in - by hand, so the run's reasons go. The list shows it
+    /// again (same page), the plate and charts their new values.
+    fn set_images_disabled(self: &Arc<Self>, images: Vec<String>, disable: bool) {
+        if images.is_empty() {
+            return;
+        }
+        {
+            let mut known = self.images.lock().expect("Poisoned");
+            for image in known.iter_mut() {
+                if images
+                    .iter()
+                    .any(|p| image.rel_path.to_string_lossy() == p.as_str())
+                {
+                    image.disabled = disable;
+                    image.disabled_reason = None;
+                }
+            }
+            let summary = analysis_summary(&known);
+            if let Some(ui) = self.ui.upgrade() {
+                ui.global::<ResultsState>()
+                    .set_analysis_summary(summary.into());
+            }
+        }
+        self.run_db_job(move |manager| {
+            {
+                let guard = manager.result_generator.lock().expect("Poisoned");
+                let Some(db) = guard.as_ref() else {
+                    return;
+                };
+                for rel_path in &images {
+                    if let Err(err) = db.enable_image(rel_path, disable) {
+                        error!("Could not toggle image {rel_path}: {err}");
+                    }
+                }
+            }
+            manager.update_list_view();
+            manager.refresh_matrix_view_at(MatrixLevel::Plate);
+            manager.refresh_charts();
+        });
+    }
+
     /// Why the run left image `name` out ("Exclude Image"); "" not by the
     /// run.
     fn disabled_reason(&self, name: &str) -> String {
@@ -2482,6 +2664,7 @@ impl ResultsStateController {
 
                 *self.list_filter.lock().expect("Poisened") = ListFilter {
                     image_rel_path: Vec::new(),
+                    image_state: ImageState::All,
                     object_classes: default_object_classes,
                     columns: DEFAULT_LIST_COLUMNS.to_vec(),
                     with_coloc_details: false,
@@ -2568,6 +2751,10 @@ impl ResultsStateController {
                         state.set_list_with_coloc_details(false);
                         state.set_list_transpond(false);
                         state.set_list_group_by_summary("Objects".into());
+                        state.set_list_image_state_summary("All images".into());
+                        state.set_list_image_state_items(ModelRc::from(Rc::new(VecModel::from(
+                            image_state_items(),
+                        ))));
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
                             group_by_items(false),
                         ))));
@@ -3299,17 +3486,11 @@ impl ResultsStateController {
         drop(plane_filter);
 
         let list_filter = self.list_filter.lock().expect("Poisened".into());
-        let images = if list_filter.image_rel_path.is_empty() {
-            None
-        } else {
-            Some(
-                list_filter
-                    .image_rel_path
-                    .iter()
-                    .filter_map(|p| p.to_str().map(str::to_string))
-                    .collect(),
-            )
-        };
+        let images = list_images(
+            &list_filter.image_rel_path,
+            list_filter.image_state,
+            &self.images.lock().expect("Poisoned"),
+        );
         let object_classes = if list_filter.object_classes.is_empty() {
             None
         } else {
@@ -3418,10 +3599,23 @@ impl ResultsStateController {
         // `cell_for_column`/`get_grouped_by_image`), so the first cell's
         // flags speak for the whole row; an empty row (no columns selected)
         // just isn't alternated/disabled/failed.
-        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool, bool, i32, u32)> = result
+        // Why the run left an image out ("Exclude Image"), by its rel path.
+        let reasons: HashMap<String, String> = self
+            .images
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .filter_map(|image| {
+                let reason = image.disabled_reason.clone()?;
+                Some((image.rel_path.to_string_lossy().into_owned(), reason))
+            })
+            .collect();
+        #[allow(clippy::type_complexity)]
+        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool, bool, i32, u32, String)> = result
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(index, row)| {
                 let alternating = row.first().is_some_and(|cell| cell.alternating_color);
                 let disabled = row.first().is_some_and(|cell| cell.disabled);
                 let failed = row.first().is_some_and(|cell| cell.failed);
@@ -3434,6 +3628,14 @@ impl ResultsStateController {
                         _ => None,
                     })
                     .unwrap_or((-1, 0));
+                let note = match disabled {
+                    true => result
+                        .row_locations
+                        .get(index)
+                        .and_then(|(rel_path, _)| reasons.get(rel_path).cloned())
+                        .unwrap_or_default(),
+                    false => String::new(),
+                };
                 (
                     row.iter().map(cell_to_string).collect(),
                     alternating,
@@ -3441,6 +3643,7 @@ impl ResultsStateController {
                     failed,
                     class_column,
                     class_color,
+                    note,
                 )
             })
             .collect();
@@ -3455,25 +3658,34 @@ impl ResultsStateController {
             *width += 14.0;
         }
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
+        // A new page: nothing ticked.
+        *self.list_checked.lock().expect("Poisoned") = (BTreeSet::new(), None);
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|(cells, alternating, disabled, failed, class_column, class_color)| {
-                        ResultRow {
-                            cells: ModelRc::new(VecModel::from(cells)),
-                            alternating,
-                            disabled,
-                            failed,
-                            class_column,
-                            class_color: bg_color_to_slint(class_color),
-                        }
-                    })
+                    .map(
+                        |(cells, alternating, disabled, failed, class_column, class_color, note)| {
+                            ResultRow {
+                                cells: ModelRc::new(VecModel::from(cells)),
+                                alternating,
+                                disabled,
+                                failed,
+                                class_column,
+                                class_color: bg_color_to_slint(class_color),
+                                note: note.into(),
+                                checked: false,
+                            }
+                        },
+                    )
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
                 state.set_list_column_widths(ModelRc::from(Rc::new(VecModel::from(column_widths))));
                 state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                state.set_list_checked_images(0);
+                state.set_list_checked_rows(0);
+                state.set_list_page_checked(false);
                 state.set_list_row_count(row_count);
                 state.set_list_page_number(page_number);
                 state.set_list_has_next_page(has_next_page);
@@ -4966,6 +5178,63 @@ fn chart_column_items(
 // The GROUP BY dropdown's two fixed options, Objects always selected — used
 // both to seed it on a fresh database and to reset it whenever `list_filter`
 // itself is reset back to `ListGroupBy::Objects`.
+/// The images the list asks for (`None`: all): those ticked (none ticked:
+/// all), narrowed to those in or out of the results.
+fn list_images(
+    ticked: &[PathBuf],
+    state: ImageState,
+    images: &[ImageEntry],
+) -> Option<Vec<String>> {
+    let wanted = |disabled: bool| match state {
+        ImageState::All => true,
+        ImageState::Enabled => !disabled,
+        ImageState::Disabled => disabled,
+    };
+    let to_string = |path: &PathBuf| path.to_str().map(str::to_string);
+    match (state, ticked.is_empty()) {
+        (ImageState::All, true) => None,
+        (ImageState::All, false) => Some(ticked.iter().filter_map(to_string).collect()),
+        (_, true) => Some(
+            images
+                .iter()
+                .filter(|image| wanted(image.disabled))
+                .filter_map(|image| to_string(&image.rel_path))
+                .collect(),
+        ),
+        (_, false) => Some(
+            ticked
+                .iter()
+                .filter(|path| {
+                    images
+                        .iter()
+                        .find(|image| &&image.rel_path == path)
+                        .is_some_and(|image| wanted(image.disabled))
+                })
+                .filter_map(to_string)
+                .collect(),
+        ),
+    }
+}
+
+/// The Images selector: all, only enabled, only disabled.
+fn image_state_items() -> Vec<MultiSelectItem> {
+    [
+        ("all", "All images"),
+        ("enabled", "Only enabled"),
+        ("disabled", "Only disabled"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (key, value))| MultiSelectItem {
+        key: key.into(),
+        value: value.into(),
+        color: Color::default(),
+        group: "".into(),
+        selected: i == 0,
+    })
+    .collect()
+}
+
 fn group_by_items(selected_images: bool) -> Vec<MultiSelectItem> {
     vec![
         MultiSelectItem {
@@ -6210,6 +6479,48 @@ pub(crate) mod tests {
         assert!(exported_images(&controller, &ui).is_empty());
     }
 
+    /// All / only enabled / only disabled, with and without ticked images.
+    #[test]
+    fn the_list_asks_for_the_images_in_or_out_of_the_results() {
+        let image = |name: &str, disabled| ImageEntry {
+            name: name.into(),
+            rel_path: PathBuf::from(name),
+            disabled,
+            disabled_reason: None,
+        };
+        let images = [
+            image("a.tif", false),
+            image("b.tif", true),
+            image("c.tif", true),
+        ];
+        let none: Vec<PathBuf> = Vec::new();
+        let ticked = vec![PathBuf::from("a.tif"), PathBuf::from("b.tif")];
+        let ask = |ticked: &[PathBuf], state| list_images(ticked, state, &images);
+
+        assert_eq!(ask(&none, ImageState::All), None, "everything");
+        assert_eq!(
+            ask(&none, ImageState::Enabled),
+            Some(vec!["a.tif".to_string()])
+        );
+        assert_eq!(
+            ask(&none, ImageState::Disabled),
+            Some(vec!["b.tif".to_string(), "c.tif".to_string()])
+        );
+        assert_eq!(
+            ask(&ticked, ImageState::All),
+            Some(vec!["a.tif".to_string(), "b.tif".to_string()])
+        );
+        assert_eq!(
+            ask(&ticked, ImageState::Disabled),
+            Some(vec!["b.tif".to_string()])
+        );
+        // None left: an empty list, which the query answers with no rows.
+        assert_eq!(
+            ask(&[PathBuf::from("a.tif")], ImageState::Disabled),
+            Some(vec![])
+        );
+    }
+
     #[test]
     fn filtered_image_items_matches_by_name_case_insensitively_and_keeps_real_selection() {
         let images = vec![
@@ -7351,6 +7662,106 @@ pub(crate) mod tests {
         fn export(&self) -> ExportDialogState<'_> {
             self.ui.global::<ExportDialogState>()
         }
+    }
+
+    /// The list's images and whether each is left out (from the list's
+    /// rows) - a row per image.
+    fn listed_images(o: &Opened) -> Vec<(String, bool)> {
+        let rows = o.state().get_list_rows();
+        let locations = o.controller.list_row_locations.lock().unwrap().clone();
+        (0..rows.row_count())
+            .map(|i| (locations[i].0.clone(), rows.row_data(i).unwrap().disabled))
+            .collect()
+    }
+
+    /// A row's eye leaves its image out of the results and takes it back -
+    /// in the results file and in the list.
+    #[test]
+    fn the_rows_eye_leaves_its_image_out_and_takes_it_back() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        s.invoke_list_group_by_selected("images".into());
+        drain_ui_queue();
+        let before = listed_images(&o);
+        assert!(before.len() >= 2 && before.iter().all(|(_, out)| !out));
+        let first = before[0].0.clone();
+
+        s.invoke_list_row_set_disabled(0, true);
+        drain_ui_queue();
+        let disabled = |o: &Opened, rel_path: &str| {
+            o.controller
+                .images
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|image| image.rel_path.to_string_lossy() == rel_path)
+                .unwrap()
+                .disabled
+        };
+        assert!(disabled(&o, &first));
+        assert_eq!(
+            listed_images(&o)[0],
+            (first.clone(), true),
+            "struck through"
+        );
+        let in_file = o
+            .controller
+            .result_generator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get_images()
+            .unwrap()
+            .into_iter()
+            .find(|image| image.rel_path.to_string_lossy() == first.as_str())
+            .unwrap()
+            .disabled;
+        assert!(in_file, "written to the results file");
+
+        s.invoke_list_row_set_disabled(0, false);
+        drain_ui_queue();
+        assert!(!disabled(&o, &first));
+        assert_eq!(listed_images(&o)[0], (first, false));
+    }
+
+    /// Ticking rows (Shift for a range) counts their images; "Leave out"
+    /// leaves those images out and clears the ticks; "Take back in" brings
+    /// them back.
+    #[test]
+    fn ticked_rows_images_are_left_out_together() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        s.invoke_list_group_by_selected("images".into());
+        drain_ui_queue();
+        let rows = listed_images(&o).len();
+        assert!(rows >= 2, "{rows} rows");
+
+        s.invoke_list_row_check(0, true, false);
+        s.invoke_list_row_check(1, true, true);
+        assert_eq!(s.get_list_checked_rows(), 2);
+        assert!(s.get_list_checked_images() >= 1);
+        assert!(s.get_list_checked_any_enabled() && !s.get_list_checked_any_disabled());
+        assert!(s.get_list_rows().row_data(1).unwrap().checked);
+
+        s.invoke_list_checked_set_disabled(true);
+        drain_ui_queue();
+        assert_eq!(s.get_list_checked_rows(), 0, "ticks cleared");
+        let listed = listed_images(&o);
+        assert!(listed[0].1 && listed[1].1, "both left out: {listed:?}");
+
+        s.invoke_list_check_page(true);
+        assert_eq!(s.get_list_checked_rows() as usize, rows);
+        assert!(s.get_list_page_checked());
+        s.invoke_list_checked_set_disabled(false);
+        drain_ui_queue();
+        assert!(listed_images(&o).iter().all(|(_, out)| !out), "all back in");
+
+        s.invoke_list_row_check(0, true, false);
+        s.invoke_list_check_clear();
+        assert_eq!(s.get_list_checked_rows(), 0);
     }
 
     #[test]

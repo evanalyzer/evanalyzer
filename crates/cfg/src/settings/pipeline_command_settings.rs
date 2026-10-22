@@ -2677,8 +2677,9 @@ pub struct VoronoiSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AreaOccupiedSettings {
-    /// The measurement's name - its values in the results start with it.
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("area_occupied_01/...").
+    pub id: String,
     /// The objects whose area is measured.
     pub object_class: ObjectClass,
 }
@@ -2710,8 +2711,9 @@ pub struct ExcludeImageSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageIntensitySettings {
-    /// The measurement's name - its values in the results start with it.
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("intensity_01/...").
+    pub id: String,
     /// The channel to measure.
     pub channel: ImageChannelIdx,
 }
@@ -2728,8 +2730,9 @@ pub struct ImageIntensitySettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageQualitySettings {
-    /// The measurement's name - its values in the results start with it.
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("quality_01/...").
+    pub id: String,
     /// The channel to measure.
     pub channel: ImageChannelIdx,
 }
@@ -2743,8 +2746,9 @@ pub struct ImageQualitySettings {
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct PearsonCorrelationCoefficientSettings {
-    /// The measurement's name - its values in the results start with it.
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("pearson_01/...").
+    pub id: String,
     /// The first channel.
     pub channel_a: ImageChannelIdx,
     /// The second channel.
@@ -2754,7 +2758,7 @@ pub struct PearsonCorrelationCoefficientSettings {
 impl Default for PearsonCorrelationCoefficientSettings {
     fn default() -> Self {
         Self {
-            name: String::default(),
+            id: String::default(),
             channel_a: ImageChannelIdx::default(),
             channel_b: ImageChannelIdx(1),
         }

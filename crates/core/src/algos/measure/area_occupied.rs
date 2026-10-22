@@ -24,9 +24,10 @@ use std::collections::{HashMap, HashSet};
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Area Occupied")]
 pub struct AreaOccupied {
-    /// The measurement's name - its values in the results start with it.
-    #[cmdsmeta(measurement_name = "area_occupied", summary = true)]
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("area_occupied_01/...").
+    #[cmdsmeta(measurement_id = "area_occupied", display_name = "ID", summary = true)]
+    pub id: String,
 
     /// The objects whose area is measured.
     #[cmdsmeta(summary = true)]
@@ -88,7 +89,7 @@ impl ImageAlgorithm for AreaOccupied {
     }
 
     fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
-        let outputs = Outputs::of(&self.name);
+        let outputs = Outputs::of(&self.id);
         vec![
             outputs.image("area_px", "Area occupied", MeasurementUnit::SquarePixels),
             outputs.image(
@@ -262,7 +263,7 @@ mod tests {
             cache.object_cache.insert(object.id.clone(), object);
         }
         let step = AreaOccupied {
-            name: "nuclei_area".into(),
+            id: "nuclei_area".into(),
             object_class: class,
         };
         step.execute(&mut ctx, &mut cache).unwrap();
@@ -290,7 +291,7 @@ mod tests {
     fn without_a_pixel_size_theres_no_um2() {
         let mut cache = GlobalPipelineCache::default();
         let step = AreaOccupied {
-            name: "a".into(),
+            id: "a".into(),
             object_class: ObjectClass::Global(1),
         };
         run(&step, &mut cache).unwrap();
@@ -303,7 +304,7 @@ mod tests {
     fn the_class_must_be_chosen() {
         let mut cache = GlobalPipelineCache::default();
         let step = AreaOccupied {
-            name: "a".into(),
+            id: "a".into(),
             object_class: ObjectClass::Unset,
         };
         assert!(run(&step, &mut cache).is_err());
