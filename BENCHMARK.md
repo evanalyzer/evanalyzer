@@ -362,6 +362,25 @@ objects on the viewer's worker thread (the ellipses take 17-37 ms there).
 The window's generated UI code grew 52.49 → 53.33 MB (+1.6 %) with the
 Tracks view.
 
+### Help texts as markdown (2026-10-22)
+
+The step and setting help is drawn as markdown (`InkMarkdownText`, Slint
+`StyledText`; `crates/gui/src/helper/markdown.rs`). Measured over all 235
+help texts (46 KB, the longest 1.2 KB) in release, outside the app with a
+counting allocator; the code is not in the repo:
+
+| | Time | RAM |
+|---|---|---|
+| Markdown -> styled text, one help text | ~1 µs on average, 4.3 µs the longest | ~350 bytes (1.8× the text), 1.6 KB the longest |
+| Plain text without the marks (picker rows) | ~1.5 µs | a copy of the text |
+| All 235 at once (never happens: one is shown at a time, a picker row each) | ~0.25 ms | ~82 KB |
+| Generated UI code | | +21.5 KB |
+
+A text is converted once when its element is made (a card opened, a step's
+dialog shown, a module or command picked in Add step), not per frame. Drawing
+was not measured separately - styled and plain text both go through the same
+text layout.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

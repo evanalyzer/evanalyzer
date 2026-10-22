@@ -923,6 +923,7 @@ impl ResultsStateController {
                     let level = ui_ready.global::<ResultsState>().get_matrix_level();
                     manager.apply_matrix_aggregate_enabled(&ui_ready, level);
                     manager.refresh_active_matrix_view();
+                    manager.split_value_column_changed();
                 });
 
             let manager = self.clone();
@@ -1047,6 +1048,8 @@ impl ResultsStateController {
                     }
                     manager.update_matrix_filter(|filter| filter.color_schema = schema);
                     manager.refresh_active_matrix_view();
+                    // The split's objects colored by value: in the new colors.
+                    manager.split_push_overlay();
                 });
 
             let manager = self.clone();
@@ -2311,6 +2314,7 @@ impl ResultsStateController {
             state.set_split_sel(Default::default());
             state.set_split_thumbs(ModelRc::default());
             state.set_split_channels(ModelRc::default());
+            state.set_split_values(false);
             // Like an empty project (opening one goes on to its images).
             let layout = ui.global::<crate::LayoutState>();
             if layout.get_mode() == crate::WorkspaceMode::Results {
@@ -2478,6 +2482,7 @@ impl ResultsStateController {
                     plate: self._app_state.get_project().plate.clone(),
                     ..MatrixFilter::default()
                 });
+                let per_object = is_chartable_column(&default_matrix_column);
                 let matrix_eligible_columns: Vec<ColumnEntry> = available_columns
                     .iter()
                     .filter(|entry| is_matrix_column(&entry.key))
@@ -2509,6 +2514,7 @@ impl ResultsStateController {
                             matrix_column_items_vec,
                         ))));
                         state.set_matrix_column_summary(default_matrix_column_label.into());
+                        state.set_split_values(per_object);
                         state.set_matrix_aggregate_enabled(true);
 
                         state.set_chart_kind(ResultsChartKind2::Histogram);
@@ -8631,6 +8637,53 @@ pub(crate) mod tests {
             by_value,
             "still by value"
         );
+    }
+
+    /// Another plate value: the image's objects are read again with it (the
+    /// selected one stays) - and Value is off while the plate shows no
+    /// value of each object (Count, its default).
+    #[test]
+    fn split_color_by_value_follows_the_plates_value() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        controller.split.lock().unwrap().shown = true;
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        assert!(!state.get_split_values(), "the plate starts on Count");
+        let selected = {
+            let split = controller.split.lock().unwrap();
+            assert!(split.objects.iter().all(|o| o.value.is_none()));
+            split.selected.map(|i| split.objects[i].object_id.clone())
+        };
+        assert!(selected.is_some());
+
+        let pick = |key: &str| {
+            state.set_matrix_column_items(ModelRc::new(VecModel::from(vec![MultiSelectItem {
+                key: key.into(),
+                selected: true,
+                ..Default::default()
+            }])));
+            state.invoke_matrix_value_clicked();
+            drain_ui_queue();
+        };
+        pick("intensity_mean_gray_ch0");
+        assert!(state.get_split_values());
+        {
+            let split = controller.split.lock().unwrap();
+            assert!(
+                split.objects.iter().any(|o| o.value.is_some()),
+                "read again with the intensity"
+            );
+            assert_eq!(
+                split.selected.map(|i| split.objects[i].object_id.clone()),
+                selected,
+                "the selected object stays"
+            );
+        }
+
+        pick("count");
+        assert!(!state.get_split_values(), "Count: nothing to color by");
     }
 
     /// The card's mean is of the channel picked in the image controls.
