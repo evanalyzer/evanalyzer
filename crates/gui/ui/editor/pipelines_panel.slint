@@ -2294,20 +2294,6 @@ component StepRow inherits Rectangle {
                                 }
                             }
 
-                            // Edited since the running analysis started: for
-                            // the next run.
-                            if step.changed-since-run: VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 7px;
-                                    height: 7px;
-                                    border-radius: 3.5px;
-                                    background: Ink.warn;
-                                    accessible-role: text;
-                                    accessible-label: "Changed since the run started";
-                                }
-                            }
-
                             // What it's set to, like a line of code.
                             if !root.values-below: StepValues {
                                 horizontal-stretch: 1;
@@ -3484,14 +3470,7 @@ export component PipelinesPanel inherits Rectangle {
                     overflow: elide;
                 }
 
-                if PipelinesPanelState.run-changes > 0: Text {
-                    text: PipelinesPanelState.run-changes + (PipelinesPanelState.run-changes == 1 ? " change" : " changes") + " for the next run";
-                    color: Ink.warn;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    vertical-alignment: center;
-                }
-                if PipelinesPanelState.run-changes == 0: Text {
+                Text {
                     text: "~" + PipelinesPanelState.eta-seconds-per-image + " s/image";
                     color: Ink.text-mute;
                     font-size: Ink.fs-caption;
@@ -4009,11 +3988,5 @@ export component TuningPanel inherits Rectangle {
                 }
             }
         }
-    }
-
-    // Locked while the analysis runs (the settings can't change).
-    if PipelinesPanelState.run-locked: TouchArea {
-        y: Ink.head-h;
-        height: parent.height - Ink.head-h;
     }
 }

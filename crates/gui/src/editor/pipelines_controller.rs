@@ -91,10 +91,6 @@ pub struct PipelinesController {
     /// An analysis (not a preview) is running - closing the window asks
     /// what to do with it.
     pub(crate) analysis_running: Arc<std::sync::atomic::AtomicBool>,
-    /// The steps as the running analysis took them (it runs a copy): what
-    /// is edited meanwhile applies to the next run - marked on the steps.
-    /// `None` while no analysis runs.
-    pub(crate) run_snapshot: Mutex<Option<StepFingerprints>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
     pub(crate) breakpoint: Arc<
         Mutex<
@@ -180,7 +176,6 @@ impl PipelinesController {
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
             preview_cancel_flag: Arc::new(Mutex::new(None)),
             analysis_running: Arc::default(),
-            run_snapshot: Mutex::new(None),
             breakpoint: Arc::new(Mutex::new(None)),
             auto_preview_enabled: Mutex::new(false),
             focus_controller,
@@ -2971,10 +2966,9 @@ impl PipelinesController {
     }
 
     /// Shows a starting analysis' progress in the top bar; the window stays
-    /// usable. The steps start locked unless editing during an analysis is
-    /// allowed (`ViewportMemorySettings::edit_during_analysis`, the default)
-    /// - the Steps panel's strip switches it. The run takes a copy: what is
-    /// edited meanwhile is marked as for the next run.
+    /// usable. The steps start locked (read-only, no previews competing with
+    /// the analysis); the Steps panel's "Unlock" lets a power user tune them
+    /// during the run - it runs a copy, edits apply to the next run.
     pub(crate) fn show_analysis_progress(&self, ui: &AppWindow) {
         let running = ui.global::<PipelineRunningState>();
         running.set_processed(0);
@@ -2989,19 +2983,22 @@ impl PipelinesController {
         running.set_has_error(false);
         running.set_status_message("".into());
         running.set_active(true);
-        *self.run_snapshot.lock().expect("Poisoned") =
-            Some(step_fingerprints(&self.app_state.get_project().pipelines));
-        let panel = ui.global::<PipelinesPanelState>();
-        panel.set_run_changes(0);
-        panel.set_run_locked(
-            !self
-                .app_state
-                .viewport_memory_settings()
-                .edit_during_analysis,
-        );
+        ui.global::<PipelinesPanelState>().set_run_locked(true);
     }
 
-    /// The analysis' progress closed: no lock, no marks for the next run.
+    /// The analysis ended (done, cancelled or failed): the steps are
+    /// unlocked and - with auto preview on - the shown image previewed
+    /// again, as no preview ran during the locked run.
+    pub(crate) fn analysis_ended(&self, ui: &AppWindow) {
+        ui.global::<PipelinesPanelState>().set_run_locked(false);
+        if *self.auto_preview_enabled.lock().expect("Poisoned")
+            && self.app_state.get_project().get_current_image_path_cloned().is_some()
+        {
+            self.trigger_pipeline_preview_execution();
+        }
+    }
+
+    /// The analysis' progress closed: no lock.
     pub(crate) fn end_analysis_progress(self: &Arc<Self>, ui: &AppWindow) {
         let running = ui.global::<PipelineRunningState>();
         running.set_done(false);
@@ -3009,8 +3006,6 @@ impl PipelinesController {
         running.set_active(false);
         let panel = ui.global::<PipelinesPanelState>();
         panel.set_run_locked(false);
-        panel.set_run_changes(0);
-        *self.run_snapshot.lock().expect("Poisoned") = None;
         let pipeline = panel.get_active_pipeline_id();
         if pipeline >= 0 {
             self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline as u32), false);
@@ -4864,8 +4859,6 @@ impl PipelinesController {
             problems: Vec<ProblemData>,
             /// Per setting (its name): what it's wired to, what a check found.
             notes: std::collections::HashMap<String, ParamNote>,
-            /// Edited since the running analysis started (it runs the old one).
-            changed: bool,
         }
         // The opened module's name, or empty. A module that's gone (e.g. undone)
         // is closed - and the ones opened inside it.
@@ -4895,15 +4888,6 @@ impl PipelinesController {
         // What the checks find in the whole project: the panel's list, and
         // the marks on the cards and settings.
         let problems = evanalyzer_app::modules::check_project(&self.app_state.get_project());
-        // A running analysis' copy of the steps: what was edited since.
-        let run_snapshot = self.run_snapshot.lock().expect("Poisoned").clone();
-        let now_fingerprints = run_snapshot
-            .as_ref()
-            .map(|_| step_fingerprints(&self.app_state.get_project().pipelines));
-        let run_changes = match (&run_snapshot, &now_fingerprints) {
-            (Some(before), Some(now)) => changed_steps(before, now) as i32,
-            _ => 0,
-        };
         let debug_mode = self.debug_mode.load(std::sync::atomic::Ordering::Relaxed);
         let problem_data = problem_data(&self.app_state.get_project(), &problems, debug_mode);
         *self.last_problems.lock().expect("Poisoned") = problems.clone();
@@ -5057,14 +5041,6 @@ impl PipelinesController {
                     .iter()
                     .enumerate()
                     .map(|(idx, step)| {
-                        let changed = open_module.is_none()
-                            && match (&run_snapshot, &now_fingerprints) {
-                                (Some(before), Some(now)) => {
-                                    let key = (pipeline_id, step.id);
-                                    before.get(&key) != now.get(&key)
-                                }
-                                _ => false,
-                            };
                         let (step_problems, notes) = step_marks(
                             &Marks {
                                 project: &project,
@@ -5102,7 +5078,6 @@ impl PipelinesController {
                                 update_version: String::new(),
                                 help: command_help(command.name()),
                                 problems: step_problems,
-                                changed,
                                 notes,
                             },
                             // The module's name and parameters - each shown with the
@@ -5167,7 +5142,6 @@ impl PipelinesController {
                                         })
                                         .unwrap_or_default(),
                                     problems: step_problems,
-                                    changed,
                                     notes,
                                 }
                             }
@@ -5562,7 +5536,6 @@ impl PipelinesController {
                             update_version: d.update_version.into(),
                             help: d.help.into(),
                             sections: ModelRc::new(VecModel::from(sections)),
-                            changed_since_run: d.changed,
                             pinned: step_pinned,
                             problem_errors: d.problems.iter().filter(|p| p.error).count() as i32,
                             problems: ModelRc::new(VecModel::from(
@@ -5598,7 +5571,6 @@ impl PipelinesController {
                         .collect::<Vec<_>>(),
                 )));
                 state.set_open_module_read_only(read_only);
-                state.set_run_changes(run_changes);
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 // In place where the steps are the same: a field being
                 // edited keeps the focus (see `step_model_patch`).
@@ -5986,34 +5958,6 @@ fn shown_in_pipelines(problem: &evanalyzer_app::modules::ModuleProblem, debug_mo
     debug_mode
         || problem.step.is_some()
         || problem.severity == evanalyzer_app::modules::Severity::Error
-}
-
-/// Every step of every pipeline, as text: two that differ were changed.
-pub(crate) type StepFingerprints =
-    std::collections::HashMap<(PipelineId, evanalyzer_cfg::core_types::StepId), String>;
-
-pub(crate) fn step_fingerprints(
-    pipelines: &[evanalyzer_cfg::settings::pipeline_settings::PipelineSettings],
-) -> StepFingerprints {
-    pipelines
-        .iter()
-        .flat_map(|pipeline| {
-            pipeline.steps.iter().map(move |step| {
-                (
-                    (pipeline.id, step.id),
-                    serde_json::to_string(step).unwrap_or_default(),
-                )
-            })
-        })
-        .collect()
-}
-
-/// Steps changed, added or removed since `before`.
-pub(crate) fn changed_steps(before: &StepFingerprints, now: &StepFingerprints) -> usize {
-    now.iter()
-        .filter(|(key, text)| before.get(*key) != Some(*text))
-        .count()
-        + before.keys().filter(|key| !now.contains_key(*key)).count()
 }
 
 fn problem_item(p: ProblemData) -> ProblemItem {
@@ -11366,69 +11310,50 @@ mod tests {
         assert_eq!(active_dialog(&ui), DialogType::None);
     }
 
-    /// No dialog blocks the window during an analysis: the steps start
-    /// locked only when editing during it is off.
+    /// No dialog blocks the window during an analysis, and every run starts
+    /// with the steps locked (read-only, no previews); they unlock when it
+    /// ends.
     #[test]
-    fn a_started_analysis_locks_the_steps_only_when_editing_during_it_is_off() {
-        let (ui, ui_state, _controller) = selected(vec![]);
+    fn a_started_analysis_locks_the_steps_until_it_ends() {
+        let (ui, ui_state, controller) = selected(vec![]);
         ui_state.get_project_write().tmp_settings.current_project =
             Some(PathBuf::from("/data/exp/project.evaproj"));
-        assert!(ui_state.viewport_memory_settings().edit_during_analysis);
         let panel = ui.global::<PipelinesPanelState>();
 
         panel.invoke_run_all();
         ui.global::<RunAnalysisState>().invoke_confirm();
         let running = ui.global::<PipelineRunningState>();
-        assert!(running.get_active());
-        assert!(!panel.get_run_locked());
-        assert_eq!(active_dialog(&ui), DialogType::None);
-
-        running.set_done(true);
-        running.invoke_close();
-        assert!(!running.get_active());
-
-        let mut settings = ui_state.viewport_memory_settings();
-        settings.edit_during_analysis = false;
-        ui_state.save_viewport_memory_settings(settings);
-        panel.invoke_run_all();
-        ui.global::<RunAnalysisState>().invoke_confirm();
         assert!(running.get_active());
         assert!(panel.get_run_locked());
+        assert!(panel.get_steps_read_only());
         assert_eq!(active_dialog(&ui), DialogType::None);
+
+        controller.analysis_ended(&ui);
+        assert!(!panel.get_run_locked(), "unlocked at the end, not when the note closes");
     }
 
-    /// The run uses a copy of the steps: a step edited meanwhile is marked
-    /// and counted for the next run, until the run's note is closed.
+    /// No preview ran during the locked run: at its end the shown image is
+    /// previewed again - only with auto preview on.
     #[test]
-    fn a_step_edited_during_a_run_is_marked_for_the_next_run() {
-        let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Blur")]);
-        ui_state.get_project_write().tmp_settings.current_project =
-            Some(PathBuf::from("/data/exp/project.evaproj"));
-        let panel = ui.global::<PipelinesPanelState>();
-        panel.invoke_run_all();
-        ui.global::<RunAnalysisState>().invoke_confirm();
-        drain_ui_queue();
-        assert_eq!(panel.get_run_changes(), 0);
+    fn the_end_of_a_run_previews_the_shown_image_with_auto_preview_on() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        {
+            let mut project = ui_state.get_project_write();
+            let mut with_image = crate::editor::test_support::project_with_one_image();
+            with_image.tmp_settings.current_project =
+                Some(PathBuf::from("/data/project.evaproj"));
+            with_image.settings.pipelines = project.settings.pipelines.clone();
+            *project = with_image;
+        }
+        let dispatched = || controller.task_request.0.lock().unwrap().take();
 
-        panel.invoke_toggle_step(1);
-        drain_ui_queue();
-        let commands = panel.get_active_commands();
-        assert!(!commands.row_data(0).unwrap().changed_since_run);
-        assert!(commands.row_data(1).unwrap().changed_since_run);
-        assert_eq!(panel.get_run_changes(), 1);
+        *controller.auto_preview_enabled.lock().unwrap() = false;
+        controller.analysis_ended(&ui);
+        assert!(dispatched().is_none(), "auto preview off: none");
 
-        let running = ui.global::<PipelineRunningState>();
-        running.set_done(true);
-        running.invoke_close();
-        drain_ui_queue();
-        assert_eq!(panel.get_run_changes(), 0);
-        assert!(
-            !panel
-                .get_active_commands()
-                .row_data(1)
-                .unwrap()
-                .changed_since_run
-        );
+        *controller.auto_preview_enabled.lock().unwrap() = true;
+        controller.analysis_ended(&ui);
+        assert!(dispatched().expect("previewed").preview);
     }
 
     /// A pinned setting is marked on its card and listed in the Tuning

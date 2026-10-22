@@ -152,8 +152,6 @@ export struct PipelineCommand {
         // Position in the pipeline - what the step actions (remove, move,
         // change a parameter) refer to; the list is rebuilt after each change.
         id: int,
-        // Edited since the running analysis started: for the next run.
-        changed-since-run: bool,
         // A setting of it is pinned into the Tuning dock (its row's ⌖).
         pinned: bool,
         // The step's stable id - for what must stay with the step when steps
@@ -385,11 +383,9 @@ export global PipelinesPanelState {
         /// The opened module is only being looked at ("View"): nothing can be
         /// changed.
         in property <bool> open-module-read-only: false;
-        // An analysis runs with the steps locked (the Steps panel's strip
-        // switches it; it starts as "edit during an analysis" says).
+        // An analysis runs with the steps locked - every run starts so, the
+        // Steps panel's "Unlock" lets them be tuned meanwhile.
         in-out property <bool> run-locked: false;
-        // Steps edited since the running analysis started.
-        in property <int> run-changes: 0;
         // Nothing to edit: a module only viewed, or the run's lock.
         out property <bool> steps-read-only: self.open-module-read-only || self.run-locked;
         callback view-module(int);

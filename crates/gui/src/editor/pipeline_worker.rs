@@ -76,8 +76,8 @@ impl PipelineWorker {
     }
 
     /// Previews run here, one after the other. An analysis gets a thread of
-    /// its own: previews keep running while it does (with editing allowed
-    /// during an analysis, see `ViewportMemorySettings::edit_during_analysis`).
+    /// its own: previews can run while it does, once its steps are unlocked
+    /// (`PipelinesPanelState.run-locked`).
     fn run_worker_loop(self: &Arc<Self>) -> ! {
         let task_request = &self.pipeline_controller.task_request;
         loop {
@@ -553,6 +553,7 @@ impl PipelineWorker {
             };
             let ui_handle = self.app_state.ui_handle.clone();
             let is_preview = task.preview;
+            let pipelines = self.pipeline_controller.clone();
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_handle.upgrade() {
                     with_progress!(ui, is_preview, |running| {
@@ -560,6 +561,11 @@ impl PipelineWorker {
                         running.set_has_error(is_error);
                         running.set_done(true);
                     });
+                    // The steps unlock with the run's end (a lost server
+                    // connection isn't one: it goes on there).
+                    if !is_preview && !connection_lost {
+                        pipelines.analysis_ended(&ui);
+                    }
 
                     // The preview's pill goes on success or cancel, and stays
                     // on an error. Open dialogs stay open.
