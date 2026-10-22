@@ -54,6 +54,8 @@ pub use self::math::load_channel::LoadChannel;
 pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
+pub use self::measure::area_occupied::AreaOccupied;
+pub use self::measure::image_intensity::ImageIntensity;
 pub use self::measure::pearson_correlation_coefficient::PearsonCorrelationCoefficient;
 pub use self::morphology::fill_holes::FillHoles;
 pub use self::morphology::fill_object_holes::FillObjectHoles;

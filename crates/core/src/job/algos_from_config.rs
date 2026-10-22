@@ -461,6 +461,15 @@ impl From<AiObjectClassifierSettings> for AiObjectClassifier {
     }
 }
 
+impl From<AreaOccupiedSettings> for AreaOccupied {
+    fn from(_s: AreaOccupiedSettings) -> Self {
+        AreaOccupied {
+            name: _s.name,
+            object_class: _s.object_class,
+        }
+    }
+}
+
 impl From<BlurSettings> for Blur {
     fn from(_s: BlurSettings) -> Self {
         Blur {
@@ -671,6 +680,15 @@ impl From<ImageCacheSettings> for ImageCache {
         ImageCache {
             mode: ImageCacheMode::from(_s.mode),
             address: _s.address,
+        }
+    }
+}
+
+impl From<ImageIntensitySettings> for ImageIntensity {
+    fn from(_s: ImageIntensitySettings) -> Self {
+        ImageIntensity {
+            name: _s.name,
+            channel: _s.channel,
         }
     }
 }
@@ -999,6 +1017,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::AiObjectClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::AiObjectClassifier::from(settings),
         ))),
+        PipelineCommand::AreaOccupied(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::AreaOccupied::from(settings),
+        ))),
         PipelineCommand::Blur(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Blur::from(settings),
         ))),
@@ -1049,6 +1070,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::ImageCache(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ImageCache::from(settings),
+        ))),
+        PipelineCommand::ImageIntensity(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ImageIntensity::from(settings),
         ))),
         PipelineCommand::ImageMath(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ImageMath::from(settings),

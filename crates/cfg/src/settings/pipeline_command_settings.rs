@@ -2601,6 +2601,33 @@ pub struct VoronoiSettings {
 
 // ============ MEASURE ============
 
+/// Measures how much of the image the objects of a class cover: the area
+/// in pixels and µm² (with a known pixel size) and the part of the image
+/// (0..1). Where objects overlap, the area counts once.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaOccupiedSettings {
+    /// The measurement's name - its values in the results start with it.
+    pub name: String,
+    /// The objects whose area is measured.
+    pub object_class: ObjectClass,
+}
+
+/// Measures the brightness of a channel across the whole image: total, mean,
+/// standard deviation, minimum, maximum, median, lower and upper quartile
+/// and median absolute deviation - in gray values, like the objects'
+/// intensities.
+///
+/// It uses every pixel of the image, the background too.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageIntensitySettings {
+    /// The measurement's name - its values in the results start with it.
+    pub name: String,
+    /// The channel to measure.
+    pub channel: ImageChannelIdx,
+}
+
 /// Measures how two channels go together across the whole image: the
 /// Pearson correlation coefficient, from -1 (one bright where the other is
 /// dark) over 0 (unrelated) to 1 (bright together).

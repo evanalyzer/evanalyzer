@@ -2901,6 +2901,68 @@ mod full_run_integration_tests {
         }
     }
 
+    /// Per plane: the measurements' values, the area of its objects and of
+    /// the image.
+    struct AreaRecorder(Mutex<Vec<(Vec<f64>, usize, usize)>>);
+
+    impl PipelineResultExporter for AreaRecorder {
+        fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            use crate::pipeline::pipeline_measure::MeasurementValues;
+            let values = cache
+                .measurements
+                .measurements
+                .iter()
+                .flat_map(|m| match &m.values {
+                    MeasurementValues::Image(values) => values.iter().map(|(_, v)| *v).collect(),
+                    MeasurementValues::Objects(_) => Vec::new(),
+                })
+                .collect();
+            let area = cache.object_cache.values().map(|o| o.area).sum();
+            let size = &cache.image_meta.full_image_width;
+            let image_area = size.width * size.height;
+            self.0.lock().unwrap().push((values, area, image_area));
+            Ok(())
+        }
+    }
+
+    /// In a real run a measurement step sees the objects the pipelines
+    /// before it found (the threshold's lower bound is exclusive: the
+    /// fixture's black first row isn't covered).
+    #[test]
+    fn area_occupied_sees_the_objects_of_the_run() {
+        let recorder = Arc::new(AreaRecorder(Mutex::new(Vec::new())));
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        job.result_storage = recorder.clone();
+        let mut measure = Pipeline::new(
+            PipelineId(2),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        measure.add_command(Box::new(crate::algos::AreaOccupied {
+            name: "area_occupied_01".into(),
+            object_class: ObjectClass::Global(1),
+        }));
+        job.add_post_process_pipeline(measure);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+
+        let planes = recorder.0.lock().unwrap();
+        assert!(!planes.is_empty(), "no plane measured");
+        for (values, objects_area, image_area) in planes.iter() {
+            // area_px, area_um2 (if the image has a pixel size), fraction
+            let (area_px, fraction) = (values[0], values[values.len() - 1]);
+            assert!(*objects_area > 0);
+            assert_eq!(area_px, *objects_area as f64);
+            let expected = *objects_area as f64 / *image_area as f64;
+            assert!(
+                (fraction - expected).abs() < 1e-12,
+                "{fraction} != {expected}"
+            );
+        }
+    }
+
     #[test]
     fn a_pipeline_reading_a_channel_the_image_lacks_fails_with_a_clear_message() {
         // What the pre-start check catches for images with stored channel

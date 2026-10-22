@@ -293,6 +293,16 @@ Decided - to build, in this order:
   - [ ] The step being edited highlighted in the panel.
   - [ ] Per-object values as a column in Objects (with the first per-object measurement).
   - [ ] Optional: the value on the step card too.
-  - [ ] Look at the panel in the real app (screenshot).
+  - [x] Look at the panel in the real app.
 - [ ] Per-object measurements: the Arrow appender for `measurements` (row by row is too slow for many objects).
 - [ ] Next steps: Pearson per object / per class region, Manders M1/M2 (+ Costes), then quality control (focus, saturation, Flag images).
+- [x] Image Intensity (channel → total, mean, std, min, max, median, quartiles, MAD in gray values; exact histogram up to 16 bit, 65536 bins above) and Area Occupied (class → px², µm², part of the image; overlaps count once) - 2026-10-22.
+  - [ ] Image Intensity "only inside class X" (e.g. intensity within a tissue mask).
+- [ ] CellProfiler parity (2026-10-22):
+  - [ ] Propagation (IdentifySecondaryObjects; Jones, Carpenter & Golland 2005): nuclei (seeds) + cell stain (+ mask) in, one cell per nucleus out; λ weighs intensity change vs distance. Could also offer "watershed seeded by objects".
+  - [ ] Expand objects without growing into neighbours (today `Expand` dilates each object alone, so neighbours overlap).
+  - [ ] More object intensity statistics: std, median, quartiles (cheap); edge intensity, center of mass / mass displacement (niche).
+  - [ ] Image quality (focus, saturation, power-log-log slope) + Flag images.
+  - [ ] Texture (Haralick), granularity, radial distribution, Zernike, object neighbours, skeleton.
+  - [ ] Screening statistics: math between measurements, Z'/V-factor, EC50.
+  - [ ] Validation against CellProfiler numbers; example pipelines.
