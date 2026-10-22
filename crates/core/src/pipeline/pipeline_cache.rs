@@ -1,4 +1,5 @@
 use crate::image::Point2d;
+use crate::pipeline::pipeline_measure::PipelineMeasurements;
 use crate::pipeline::scope::{Scope, ScopeId};
 use crate::{
     ImageTile,
@@ -83,6 +84,8 @@ pub struct GlobalPipelineCache {
     pub image_cache: ImageCache,
     pub image_meta: GlobalImageMeta,
     pub object_cache: ObjectCache,
+    /// What the measurement steps measured on this plane.
+    pub measurements: PipelineMeasurements,
     pub image_rel_path: PathBuf,
     /// The objects the user annotated by hand on this image, for the plane being processed
     pub annotated_objects:

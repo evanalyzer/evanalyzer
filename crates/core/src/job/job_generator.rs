@@ -14,7 +14,10 @@ use crate::{
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
-use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
+use evanalyzer_cfg::{
+    PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
+    core_types::{ImageAddress, is_valid_measurement_name},
+};
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, StepId},
     settings::{
@@ -548,6 +551,8 @@ fn generate_job_from_project_settings_intenal(
 
     // Now generate the pipelines from the user settings
     let mut scopes = ScopeCounter::default();
+    // The measurement steps' names, with their pipeline's: unique in the run.
+    let mut measurement_names: Vec<(String, &str)> = Vec::new();
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
             continue;
@@ -581,6 +586,9 @@ fn generate_job_from_project_settings_intenal(
                 command,
             } in step_commands(&pipeline_setting.name, step, &config.modules, &mut scopes)?
             {
+                if let Some(name) = command.measurement_name() {
+                    measurement_names.push((name.to_string(), pipeline_setting.name.as_str()));
+                }
                 let loads = loads_image(&command);
                 match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
@@ -621,8 +629,32 @@ fn generate_job_from_project_settings_intenal(
         job.add_pre_process_pipeline(pipeline_pre_process);
         job.add_post_process_pipeline(pipeline_post_process);
     }
+    check_measurement_names(&measurement_names)?;
 
     Ok(job)
+}
+
+/// Refuses a run with a measurement name that isn't valid or is used twice
+/// (`names`: each with its pipeline's name) - a name starts its
+/// measurements' keys. The editor reports the same while editing.
+fn check_measurement_names(names: &[(String, &str)]) -> Result<(), InternalErrors> {
+    let mut seen = BTreeSet::new();
+    for (name, pipeline) in names {
+        if !is_valid_measurement_name(name) {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Pipeline \"{pipeline}\": the measurement name \"{name}\" may only have \
+                 letters, digits and _"
+            )));
+        }
+        if !seen.insert(name.to_lowercase()) {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Pipeline \"{pipeline}\": the measurement name \"{name}\" is used more than \
+                 once - each measurement step needs its own (a module used twice: make the \
+                 name its parameter)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Adds an [`EndScope`] right after each module use's last command
@@ -1589,6 +1621,26 @@ mod tests {
             built, ids,
             "what a breakpoint targets, whatever the position"
         );
+    }
+
+    #[test]
+    fn a_run_with_a_measurement_name_used_twice_or_not_valid_is_refused() {
+        let named = |names: &[&str]| -> Vec<(String, &'static str)> {
+            names.iter().map(|n| (n.to_string(), "Nuclei")).collect()
+        };
+        assert!(check_measurement_names(&named(&["pearson_01", "texture_01"])).is_ok());
+        let twice = check_measurement_names(&named(&["pearson_01", "PEARSON_01"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            twice.contains("\"PEARSON_01\" is used more than once"),
+            "{twice}"
+        );
+        let bad = check_measurement_names(&named(&["coloc nuclei"]))
+            .unwrap_err()
+            .to_string();
+        assert!(bad.contains("only have letters, digits and _"), "{bad}");
+        assert!(check_measurement_names(&named(&[""])).is_err(), "no name");
     }
 
     #[test]

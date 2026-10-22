@@ -1597,6 +1597,7 @@ impl ProjectExt for ProjectWithRuntime {
     fn add_pipeline(&mut self, mut pipeline_settings: PipelineSettings) {
         super::utils::assign_step_ids(&mut pipeline_settings.steps);
         self.pipelines.push(pipeline_settings);
+        super::utils::assign_measurement_names(self);
     }
     fn apply_project_template(&mut self, template: &ProjectTemplate) {
         self.classification = template.classification.clone();
@@ -1616,6 +1617,7 @@ impl ProjectExt for ProjectWithRuntime {
                 warn!("Project template {}: {e}", template.meta.name);
             }
         }
+        super::utils::assign_measurement_names(self);
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
@@ -1833,6 +1835,8 @@ pub fn load_project(
             );
         }
     }
+    // Measurement steps written without a name get one.
+    super::utils::assign_measurement_names(&mut inner);
 
     // Reverse of the relativization `save_project_as` does on write - resolve
     // AI command `model_path`s back to absolute now, using this project
@@ -1885,6 +1889,7 @@ pub fn import_legacy_project(
     for pipeline in &mut outcome.project.pipelines {
         super::utils::assign_step_ids(&mut pipeline.steps);
     }
+    super::utils::assign_measurement_names(&mut outcome.project);
     let project = ProjectWithRuntime {
         settings: outcome.project,
         tmp_settings: ProjectTmpSettings::default(),

@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::image::Point2d;
 use crate::pipeline::scope::Scope;
 use crate::{
@@ -10,6 +7,8 @@ use crate::{
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::{Image, ImageSize};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct PipelineContext {
     // Output path where pipeline artifacts are stored in

@@ -6,4 +6,5 @@ pub(crate) mod events;
 pub(crate) mod ids;
 pub(crate) mod image;
 pub(crate) mod macros;
+pub(crate) mod measurement;
 pub(crate) mod units;

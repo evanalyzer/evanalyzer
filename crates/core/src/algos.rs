@@ -5,6 +5,7 @@ mod ai_segmentation;
 mod filters;
 mod flow_control;
 mod math;
+mod measure;
 mod morphology;
 mod object;
 mod script;

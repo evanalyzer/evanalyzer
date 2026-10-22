@@ -1,9 +1,14 @@
+use evanalyzer_cfg::core_types::next_measurement_name;
 use evanalyzer_cfg::core_types::{InternalErrors, StepId};
 use evanalyzer_cfg::settings::modules::ModuleDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
-use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use evanalyzer_cfg::settings::pipeline_settings::{
+    PipelineSettings, PipelineStepSettings, StepContent,
+};
+use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use pathdiff::diff_paths;
+use std::collections::HashSet;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -138,6 +143,46 @@ pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
         }
     }
     assigned
+}
+
+/// Gives each measurement step without a name the next free one
+/// ("pearson_01", …) - in the pipelines and the module definitions: one set
+/// of names for the project. A name already given stays, also one used
+/// twice: the checks report that (`check_project`). How many got one.
+pub fn assign_measurement_names(project: &mut ProjectSettings) -> usize {
+    let mut names: Vec<(&'static str, &mut String)> = project
+        .pipelines
+        .iter_mut()
+        .flat_map(|p| p.steps.iter_mut())
+        .chain(project.modules.iter_mut().flat_map(|m| m.steps.iter_mut()))
+        .filter_map(|step| match &mut step.content {
+            StepContent::Command(command) => {
+                let prefix = command.measurement_name_prefix()?;
+                command.measurement_name_mut().map(|name| (prefix, name))
+            }
+            StepContent::Module(_) => None,
+        })
+        .collect();
+    fill_measurement_names(&mut names)
+}
+
+/// The empty names of `names` (prefix, name) get the next free one of their
+/// prefix; how many did.
+fn fill_measurement_names(names: &mut [(&str, &mut String)]) -> usize {
+    let mut taken: HashSet<String> = names
+        .iter()
+        .filter(|(_, name)| !name.trim().is_empty())
+        .map(|(_, name)| name.to_lowercase())
+        .collect();
+    let mut filled = 0;
+    for (prefix, name) in names.iter_mut() {
+        if name.trim().is_empty() {
+            **name = next_measurement_name(prefix, &taken);
+            taken.insert(name.to_lowercase());
+            filled += 1;
+        }
+    }
+    filled
 }
 
 /// Numbers the steps of a module definition that have no id yet, like
@@ -332,6 +377,41 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
 mod tests {
 
     use super::*;
+
+    /// Empty names get the next free number of their kind; names already
+    /// given stay - also one used twice (the checks report it).
+    #[test]
+    fn empty_measurement_names_get_the_next_free_number() {
+        let mut texts = [
+            "".to_string(),
+            "Pearson_02".into(),
+            "".into(),
+            "own".into(),
+            "own".into(),
+            " ".into(),
+        ];
+        let [a, b, c, d, e, f] = &mut texts;
+        let mut names: Vec<(&str, &mut String)> = vec![
+            ("pearson", a),
+            ("pearson", b),
+            ("pearson", c),
+            ("texture", d),
+            ("texture", e),
+            ("texture", f),
+        ];
+        assert_eq!(fill_measurement_names(&mut names), 3);
+        assert_eq!(
+            texts,
+            [
+                "pearson_01",
+                "Pearson_02",
+                "pearson_03",
+                "own",
+                "own",
+                "texture_01"
+            ]
+        );
+    }
 
     const RED: [f32; 3] = DEFAULT_CHANNEL_COLORS[0];
     const GREEN: [f32; 3] = DEFAULT_CHANNEL_COLORS[1];

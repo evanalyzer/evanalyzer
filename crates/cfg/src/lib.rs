@@ -74,6 +74,11 @@ pub mod core_types {
     pub use crate::types::image::ImagePlane;
     pub use crate::types::image::ImageTile;
     pub use crate::types::image::ZProjection;
+    pub use crate::types::measurement::MeasurementInfo;
+    pub use crate::types::measurement::MeasurementTarget;
+    pub use crate::types::measurement::MeasurementUnit;
+    pub use crate::types::measurement::is_valid_measurement_name;
+    pub use crate::types::measurement::next_measurement_name;
     pub use crate::types::units::PixelUnits;
     pub use crate::types::units::SizeUnits;
     pub use crate::types::units::SizeUnitsRel;

@@ -1098,6 +1098,29 @@ impl PipelineCommand {
         classes
     }
 
+    /// A measurement step's name - unique in the project, its
+    /// measurements' keys start with it. `None`: no measurement step.
+    pub fn measurement_name(&self) -> Option<&str> {
+        match self {
+            _ => None,
+        }
+    }
+
+    /// [`Self::measurement_name`] to change.
+    pub fn measurement_name_mut(&mut self) -> Option<&mut String> {
+        match self {
+            _ => None,
+        }
+    }
+
+    /// How a new name of this measurement step starts ("pearson" ->
+    /// "pearson_01").
+    pub fn measurement_name_prefix(&self) -> Option<&'static str> {
+        match self {
+            _ => None,
+        }
+    }
+
     /// The module local classes (`ObjectClass::Local`) this command
     /// uses - only allowed inside a module.
     pub fn local_classes(&self) -> Vec<ObjectClass> {
