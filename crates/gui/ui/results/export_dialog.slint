@@ -157,6 +157,11 @@ export component ExportDialog inherits InkDialog {
                         checked <=> ExportDialogState.time-relative;
                     }
                 }
+                // With measurement steps: a row per value, like the database.
+                if ResultsState.has-measurements: CheckBox {
+                    text: "Measurements - one row per value";
+                    checked <=> ExportDialogState.with-measurements;
+                }
                 // With tracked objects: a row per track.
                 if ResultsState.has-tracks: CheckBox {
                     text: "Tracks - one row per track";

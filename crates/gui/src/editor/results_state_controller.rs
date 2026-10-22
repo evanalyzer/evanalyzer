@@ -2313,6 +2313,7 @@ impl ResultsStateController {
             state.set_database_name("".into());
             state.set_run_warning("".into());
             state.set_has_tracks(false);
+            state.set_has_measurements(false);
             state.set_list_rows(ModelRc::default());
             state.set_list_selected_row(-1);
             state.set_peek(false);
@@ -2395,6 +2396,17 @@ impl ResultsStateController {
                 match results.get_available_columns() {
                     Ok(columns) => {
                         self.set_columns_in_slint(&columns);
+                        let has_measurements = columns
+                            .iter()
+                            .any(|c| matches!(c.key, Column::Measurement(_)));
+                        let ui_weak = self.ui.clone();
+                        crate::helper::ui_thread::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.global::<ResultsState>()
+                                    .set_has_measurements(has_measurements);
+                            }
+                        })
+                        .ok();
                         *self.available_columns.lock().expect("Poisened") = columns;
                     }
                     Err(err) => {
@@ -4416,6 +4428,7 @@ impl ResultsStateController {
         state.set_time_relative(false);
         state.set_time_layout(2);
         state.set_with_tracks(false);
+        state.set_with_measurements(false);
         state.set_track_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(&[
             TimeCourseStat::Mean,
         ])))));
@@ -4658,6 +4671,7 @@ impl ResultsStateController {
                 },
             },
             with_track_summary: state.get_with_tracks(),
+            with_measurements: state.get_with_measurements(),
             track_summary: evanalyzer_app::results::TrackSummaryExport {
                 statistics: TIME_STATS
                     .iter()
@@ -7693,6 +7707,40 @@ pub(crate) mod tests {
             TimeCourseNormalize::RelativeToStart
         );
         assert_eq!(settings.time_course.layout, TimeCourseLayout::Both);
+    }
+
+    /// "Measurements - one row per value" is offered when the analysis has
+    /// measurements, off until ticked.
+    #[test]
+    fn the_export_dialog_exports_measurements_of_an_analysis_with_them() {
+        let o = opened();
+        assert!(!o.state().get_has_measurements(), "no measurement step ran");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        duckdb::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
+                 step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
+                 range_max DOUBLE, aggregatable BOOLEAN);
+                 INSERT INTO measurement_info VALUES
+                     ('pearson_01/pearson/ch0_ch1', 'Pearson', 'pearson_01', 'None', 'Image',
+                      -1, 1, true);",
+            )
+            .unwrap();
+        o.controller.open_database(path);
+        drain_ui_queue();
+        assert!(o.state().get_has_measurements());
+
+        o.controller.populate_export_defaults(&o.ui);
+        o.export().set_output_dir("/tmp".into());
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(!settings.with_measurements);
+        o.export().set_with_measurements(true);
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(settings.with_measurements);
     }
 
     /// Tracks in the export dialog: off by default; on, with its

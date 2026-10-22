@@ -162,6 +162,13 @@ pub struct TableExportArgs {
 
     #[command(flatten)]
     pub tracks: TrackArgs,
+
+    /// One row per measurement value (image, plane, object or region, step,
+    /// measurement, value) - the measurement steps' values, like the
+    /// results' `measurements` table; --columns picks measurements by key
+    /// (`measurement:<key>`), none: all
+    #[arg(long, conflicts_with = "tracks")]
+    pub measurements: bool,
 }
 
 /// `--tracks`: a row per track instead of per object.

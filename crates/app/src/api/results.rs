@@ -847,6 +847,11 @@ pub struct ResultExport {
     pub time_course: TimeCourseExport,
     /// `tracks.{csv,xlsx}`: a row per track (see `TrackSummaryExport`).
     pub with_track_summary: bool,
+    /// `measurements.{csv,xlsx}`: one row per measurement value, like the
+    /// results' `measurements` table - the measurements among `columns`
+    /// (none chosen: all), of the chosen images and planes.
+    #[serde(default)]
+    pub with_measurements: bool,
     pub track_summary: TrackSummaryExport,
     pub with_plate_view_heatmap: bool,
     pub with_well_view_heatmap: bool,
