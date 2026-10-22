@@ -124,6 +124,7 @@ fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut us
         }
         ProgressEvent::Finished => println!(),
         ProgressEvent::TilesScheduled { .. }
+        | ProgressEvent::ImageStarted { .. }
         | ProgressEvent::TileCompleted { .. }
         | ProgressEvent::WholeImagePhaseCompleted { .. }
         | ProgressEvent::BreakpointReached { .. } => {}

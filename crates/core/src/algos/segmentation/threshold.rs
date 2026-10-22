@@ -168,9 +168,9 @@ pub struct ThresholdEntry {
 
 /// A filter that segments an image into discrete classes based on intensity.
 ///
-/// This supports "Multi-Otsu" style behavior by allowing a vector of
-/// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-/// determine which `segmentation_class` it belongs to.
+/// This supports "Multi-Otsu" style behavior by allowing several
+/// thresholds. Each pixel is evaluated against them to determine which
+/// segmentation class it belongs to.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", next = "instance_segmentation")]
 pub struct Threshold {

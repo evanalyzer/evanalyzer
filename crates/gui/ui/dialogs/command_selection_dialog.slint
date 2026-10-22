@@ -50,6 +50,8 @@ import {
     InkHint,
     InkDivider,
     InkDialogPlacement,
+    InkMarkdown,
+    InkMarkdownText,
 } from "../ink/ink.slint";
 import { StepCategory } from "../api/pipelines.slint";
 import { CommandDef, PickerStyle } from "../api/command_selection.slint";
@@ -284,7 +286,7 @@ component CommandRow inherits Rectangle {
             }
 
             Text {
-                text: cmd.summary;
+                text: InkMarkdown.plain(cmd.summary);
                 color: Ink.text-mute;
                 font-size: Ink.fs-caption;
                 font-family: Ink.font-mono;
@@ -430,11 +432,8 @@ component DetailPane inherits Rectangle {
         }
 
         // The short description.
-        Text {
-            text: cmd.summary;
-            color: Ink.text;
-            font-size: Ink.fs-body;
-            wrap: word-wrap;
+        InkMarkdownText {
+            markdown: cmd.summary;
         }
 
         InkDivider { }
@@ -448,11 +447,9 @@ component DetailPane inherits Rectangle {
                 alignment: start;
 
                 // The long description.
-                if cmd.description != "": Text {
-                    text: cmd.description;
-                    color: Ink.text-dim;
-                    font-size: Ink.fs-body;
-                    wrap: word-wrap;
+                if cmd.description != "": InkMarkdownText {
+                    markdown: cmd.description;
+                    default-color: Ink.text-dim;
                 }
 
                 if cmd.default-params.length > 0: DetailSection {

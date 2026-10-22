@@ -2257,6 +2257,69 @@ impl ResultsStateController {
         self.run_db_job(move |manager| manager.open_database_now(path));
     }
 
+    /// Another project: nothing of the open results stays - not the
+    /// database, its views and split, nor the Results mode or the "Back to
+    /// results" bar. On the database thread, so an open queued before
+    /// can't land after it.
+    #[cfg(test)]
+    pub(crate) fn has_open_database(&self) -> bool {
+        self.result_generator.lock().expect("Poisoned").is_some()
+    }
+
+    pub fn close_database(self: &Arc<Self>) {
+        self.run_db_job(|manager| manager.close_database_now());
+    }
+
+    fn close_database_now(&self) {
+        *self.result_generator.lock().expect("Poisoned") = None;
+        *self.split.lock().expect("Poisoned") = split::SplitState::default();
+        *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
+        *self.tracks_all.lock().expect("Poisoned") = tracks_all::TracksAllState::default();
+        self.viewport().set_results_overlay(None);
+        *self.matrix_filter.lock().expect("Poisoned") = None;
+        self.classes.lock().expect("Poisoned").clear();
+        self.images.lock().expect("Poisoned").clear();
+        self.available_columns.lock().expect("Poisoned").clear();
+        self.matrix_cells.lock().expect("Poisoned").clear();
+        self.well_cells.lock().expect("Poisoned").clear();
+        self.image_heatmap_cells.lock().expect("Poisoned").clear();
+        *self.current_well.lock().expect("Poisoned") = None;
+        *self.current_image.lock().expect("Poisoned") = None;
+        self.list_row_locations.lock().expect("Poisoned").clear();
+        self.scatter_points.lock().expect("Poisoned").clear();
+        *self.export_populated.lock().expect("Poisoned") = false;
+        self.export_image_selection.lock().expect("Poisoned").clear();
+
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            state.set_database_name("".into());
+            state.set_run_warning("".into());
+            state.set_has_tracks(false);
+            state.set_list_rows(ModelRc::default());
+            state.set_list_selected_row(-1);
+            state.set_peek(false);
+            state.set_peek_label("".into());
+            state.set_peek_can_step(false);
+            state.set_split_title("".into());
+            state.set_split_image_key("".into());
+            state.set_split_pos(0);
+            state.set_split_total(0);
+            state.set_split_sel(Default::default());
+            state.set_split_thumbs(ModelRc::default());
+            state.set_split_channels(ModelRc::default());
+            // Like an empty project (opening one goes on to its images).
+            let layout = ui.global::<crate::LayoutState>();
+            if layout.get_mode() == crate::WorkspaceMode::Results {
+                layout.set_mode(crate::WorkspaceMode::Pipelines);
+            }
+        })
+        .ok();
+    }
+
     fn open_database_now(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
         let db = self._app_state.backend().open_results(&path);
@@ -4768,8 +4831,8 @@ fn column_items(
 
 /// Whether `column` is something `chart_value_expr`/`column_aggregate_expr`
 /// (results_generator.rs) can resolve to a single per-object SQL
-/// expression — the exact same set that function accepts, kept in sync by
-/// inspecting the same variants. Unlike `Column::is_aggregable`, `Count` is
+/// expression — the exact same set that function accepts (the test
+/// `charts_offer_and_draw_the_intensities` draws every column offered). Unlike `Column::is_aggregable`, `Count` is
 /// also excluded here: it's a row tally (1 per object), not a per-object
 /// measurement, so charting it doesn't mean anything the way it does for
 /// Images-mode's own per-image counts.
@@ -4781,10 +4844,6 @@ fn is_chartable_column(column: &Column) -> bool {
             | Column::ImageName
             | Column::ObjectClass
             | Column::Count
-            | Column::IntensityAvg(_)
-            | Column::IntensitySum(_)
-            | Column::IntensityMin(_)
-            | Column::IntensityMax(_)
     )
 }
 
@@ -5319,7 +5378,7 @@ fn nearest_point(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::AppWindow;
     use crate::editor::histogram_controller::HistogramController;
@@ -5554,7 +5613,7 @@ mod tests {
     /// (`A2_01.tif`) - matching `DEFAULT_GROUPING_REGEX` - across two
     /// classes, with one object colocalizing with another so
     /// `with_coloc_details`-adjacent code has something real to resolve.
-    fn seed_test_db(path: &std::path::Path) {
+    pub(crate) fn seed_test_db(path: &std::path::Path) {
         let conn = duckdb::Connection::open(path).expect("open test db");
         conn.execute_batch(
             "CREATE TABLE objects (
@@ -8009,6 +8068,35 @@ mod tests {
         state.invoke_matrix_value_clicked();
 
         assert_eq!(matrix_filter_value(&o, |f| f.column.clone()), column);
+    }
+
+    /// Users missed them: a channel's intensities are charted like any
+    /// other per-object value.
+    #[test]
+    fn charts_offer_and_draw_the_intensities() {
+        let o = opened();
+        let state = o.state();
+        let offered: Vec<String> = state
+            .get_chart_column_items()
+            .iter()
+            .map(|item| item.key.to_string())
+            .collect();
+        assert!(offered.contains(&"intensity_mean_gray_ch0".to_string()));
+        assert!(offered.contains(&"intensity_max_gray_ch0".to_string()));
+
+        // Every column offered can be drawn - the picker and the charts'
+        // SQL (`column_aggregate_expr`) once drifted apart.
+        state.set_rail_mode(ResultsRailMode::Charts);
+        state.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        for key in &offered {
+            state.invoke_chart_column_selected(key.as_str().into());
+            drain_ui_queue();
+            assert_eq!(state.get_chart_error(), "", "{key}");
+        }
+        assert_eq!(
+            o.controller.chart_filter.lock().unwrap().column.as_key(&[]),
+            offered.last().unwrap().as_str()
+        );
     }
 
     #[test]

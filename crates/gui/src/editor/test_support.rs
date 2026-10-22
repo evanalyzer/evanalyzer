@@ -211,7 +211,10 @@ pub(crate) fn ensure_slint_test_platform() {
 pub(crate) fn test_ui_window() -> AppWindow {
     ensure_slint_test_platform();
     crate::helper::ui_thread::fresh_test_queue();
-    AppWindow::new().expect("AppWindow::new must succeed under the headless test platform")
+    let ui =
+        AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
+    crate::helper::markdown::attach(&ui);
+    ui
 }
 
 /// A [`UiState`] wired to a real window (see [`test_ui_window`]), with the

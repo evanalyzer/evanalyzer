@@ -1,6 +1,8 @@
 // ink/tooltip.slint — tooltips: one at a time, drawn by the window's
 // `InkTipLayer` above everything. A control asks with `InkTip.request` while
-// hovered or focused and lets go with `InkTip.release`.
+// hovered or focused and lets go with `InkTip.release`. A control that goes
+// away while hovered never lets go, so the layer also drops the tip as soon
+// as the pointer is outside its control.
 //
 // It appears after 450 ms; moving on to a neighbour within 300 ms shows the
 // next one at once. 120 ms fade.
@@ -46,6 +48,11 @@ export global InkTip {
             root.pending = false;
         }
     }
+
+    /// Drops the tip, whoever asked for it.
+    public function clear() {
+        root.pending = false;
+    }
 }
 
 // A key of the tip: "Ctrl", "Z".
@@ -68,6 +75,10 @@ component TipKey inherits Rectangle {
 /// The tip itself, over the whole window: put once, last, in the main
 /// window.
 export component InkTipLayer inherits Rectangle {
+    // The pointer in window coordinates, and whether it's in the window.
+    in property <length> pointer-x;
+    in property <length> pointer-y;
+    in property <bool> pointer-in: true;
     // Shown: the tip's own copy (it stays while it fades out).
     property <bool> shown: false;
     // A tip was shown a moment ago: the next comes at once.
@@ -114,14 +125,24 @@ export component InkTipLayer inherits Rectangle {
         }
     }
 
-    // A control that went away while hovered never lets go: gone after a
-    // while anyway.
-    linger := Timer {
-        interval: 8s;
-        running: root.shown;
-        triggered => {
-            root.shown = false;
+    // The pointer left the asking control (or the window): no tip. Also
+    // drops a tip of a control that went away while hovered, and a
+    // focus tip once the mouse is used elsewhere.
+    function check-pointer() {
+        if InkTip.pending && (!root.pointer-in
+            || root.pointer-x < InkTip.ax - 1px || root.pointer-x > InkTip.ax + InkTip.aw + 1px
+            || root.pointer-y < InkTip.ay - 1px || root.pointer-y > InkTip.ay + InkTip.ah + 1px) {
+            InkTip.clear();
         }
+    }
+    changed pointer-x => {
+        root.check-pointer();
+    }
+    changed pointer-y => {
+        root.check-pointer();
+    }
+    changed pointer-in => {
+        root.check-pointer();
     }
 
     delay := Timer {

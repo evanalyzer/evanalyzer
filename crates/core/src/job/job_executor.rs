@@ -71,6 +71,11 @@ pub enum ProgressEvent {
         completed: usize,
         total_tiles: usize,
     },
+    /// Emitted when an image starts. With several images in parallel more
+    /// than one is in work; each ends with `ImageCompleted` or `ImageFailed`.
+    ImageStarted {
+        path: PathBuf,
+    },
     ImageCompleted {
         index: usize,
         total: usize,
@@ -339,6 +344,11 @@ impl<'a> JobExecutor {
                 // Single image: parallelize over tiles instead of images
                 let (rel_path, image_info) = self.images.iter().next().unwrap();
                 let abs_path = self.image_base_path.join(rel_path);
+                progress
+                    .send(ProgressEvent::ImageStarted {
+                        path: rel_path.clone(),
+                    })
+                    .ok();
                 match self.analyze_image(
                     rel_path,
                     &abs_path,
@@ -393,6 +403,11 @@ impl<'a> JobExecutor {
                         return;
                     }
                     let abs_path = self.image_base_path.join(rel_path);
+                    progress
+                        .send(ProgressEvent::ImageStarted {
+                            path: rel_path.clone(),
+                        })
+                        .ok();
                     match self.analyze_image(
                         rel_path,
                         &abs_path,
@@ -489,6 +504,7 @@ impl<'a> JobExecutor {
     ///             eprintln!("Failed: {}", path.display());
     ///         }
     ///         ProgressEvent::Finished => break,
+    ///         _ => {}
     ///     }
     /// }
     ///

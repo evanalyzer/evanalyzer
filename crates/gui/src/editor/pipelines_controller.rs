@@ -2983,7 +2983,7 @@ impl PipelinesController {
         running.set_images_total(0);
         running.set_tiles_done(0);
         running.set_tiles_total(0);
-        running.set_last_image("".into());
+        running.set_current_image("".into());
         running.set_eta("".into());
         running.set_done(false);
         running.set_has_error(false);
@@ -8942,12 +8942,8 @@ mod tests {
             let (at, size) = (e.absolute_position(), e.size());
             slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0)
         };
-        let card_open = || {
-            ElementHandle::find_by_element_type_name(&ui, "Text").any(|t| {
-                t.accessible_label()
-                    .is_some_and(|l| l == param.description.as_str())
-            })
-        };
+        let help = crate::helper::markdown::plain(&param.description);
+        let card_open = || ElementHandle::find_by_accessible_label(&ui, &help).next().is_some();
 
         // Over the row's name: the ⓘ shows; a click opens the card.
         let label = ElementHandle::find_by_element_type_name(&ui, "Text")

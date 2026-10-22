@@ -42,7 +42,7 @@ pub enum UNetOutputMode {
 /// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
 /// applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
 /// channel, in which case `output_mode` and `foreground_channel` decide how the
-/// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
+/// foreground probability is extracted. Runs on GPU
 /// automatically if CUDA is available in the linked libtorch build, otherwise
 /// falls back to CPU.
 ///

@@ -1720,10 +1720,131 @@ fn is_user_struct(ty: &str, all_commands: &[CommandInfo]) -> bool {
     all_commands.iter().any(|c| c.struct_name == ty)
 }
 
+/// A doc comment as the help text the app shows (markdown, drawn by the
+/// GUI's `StyledText`), not as rustdoc: an intra-doc link becomes its name
+/// as code (`[`a::B`]` -> `` `B` ``, `[text](a::B)` -> `text`), code
+/// blocks and an "Examples" section go, other headings become a bold line.
+/// The `///` comments re-emitted into `pipeline_command_settings.rs` keep
+/// the rustdoc as it is.
+fn doc_to_help(doc_comments: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_code = false;
+    let mut in_examples = false;
+    for line in doc_comments {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        if let Some(heading) = trimmed.strip_prefix('#') {
+            let heading = heading.trim_start_matches('#').trim();
+            in_examples = heading.eq_ignore_ascii_case("examples")
+                || heading.eq_ignore_ascii_case("example");
+            if !in_examples {
+                out.push(format!("**{heading}**"));
+            }
+            continue;
+        }
+        if in_examples {
+            continue;
+        }
+        out.push(replace_intra_doc_links(line));
+    }
+    // No blank lines left over at either end, nor two in a row.
+    out.dedup_by(|b, a| a.trim().is_empty() && b.trim().is_empty());
+    while out.first().is_some_and(|l| l.trim().is_empty()) {
+        out.remove(0);
+    }
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    out
+}
+
+/// `text` cut after its first sentence: (that sentence, the rest). A
+/// period ends a sentence before a space, not in "e.g." / "i.e." or a
+/// number.
+fn split_first_sentence(text: &str) -> (&str, &str) {
+    for (i, _) in text.match_indices(". ") {
+        let word_start = text[..i].rfind(' ').map_or(0, |s| s + 1);
+        let word = &text[word_start..i];
+        if matches!(word, "e.g" | "i.e" | "etc" | "vs" | "approx")
+            || word.chars().all(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        return (text[..=i].trim(), text[i + 1..].trim());
+    }
+    (text.trim(), "")
+}
+
+/// `[`a::B`]` / `[a::B]` -> `` `B` ``; `[text](a::B)` / `[text][a::B]` ->
+/// `text`. A web link (`[text](https://...)`) stays.
+fn replace_intra_doc_links(line: &str) -> String {
+    let is_path = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | '`' | '(' | ')' | '!'))
+    };
+    let last_segment = |s: &str| {
+        let s = s.trim_matches('`').trim_end_matches("()");
+        s.rsplit("::").next().unwrap_or(s).to_string()
+    };
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(']') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let inner = &after[..close];
+        let tail = &after[close + 1..];
+        // `[text](target)` / `[text][target]`
+        let target = match tail.chars().next() {
+            Some('(') => tail[1..].find(')').map(|end| (&tail[1..1 + end], end + 2)),
+            Some('[') => tail[1..].find(']').map(|end| (&tail[1..1 + end], end + 2)),
+            _ => None,
+        };
+        match target {
+            Some((target, len)) if target.contains("://") || target.starts_with('#') => {
+                out.push_str(&rest[open..open + 1 + close + 1 + len]);
+                rest = &tail[len..];
+            }
+            Some((target, len)) if is_path(target) => {
+                if inner.starts_with('`') {
+                    out.push_str(&format!("`{}`", last_segment(inner)));
+                } else {
+                    out.push_str(inner);
+                }
+                rest = &tail[len..];
+            }
+            Some(_) => {
+                out.push('[');
+                rest = after;
+            }
+            None if is_path(inner) && (inner.starts_with('`') || inner.contains("::")) => {
+                out.push_str(&format!("`{}`", last_segment(inner)));
+                rest = tail;
+            }
+            None => {
+                out.push('[');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Escapes a doc-comment block into the single-line, backslash-escaped string literal body
 /// used for both a `ParameterDef.description` and a discriminant-variant's own field.
 fn escape_doc_comments(doc_comments: &[String]) -> String {
-    let lines: Vec<String> = doc_comments
+    let lines: Vec<String> = doc_to_help(doc_comments)
         .iter()
         .map(|s| {
             s.trim_start()
@@ -3225,28 +3346,28 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("#[allow(dead_code)]\n");
     out.push_str("pub fn all_command_meta() -> Vec<CommandMeta> {\n    vec![\n");
     for (i, cmd) in algo_commands.iter().enumerate() {
-        let summary = cmd
-            .doc_comments
-            .first()
-            .map(|s| s.trim().replace('"', "\\\""))
-            .unwrap_or_default();
-        // Description: everything after the first blank separator line, joined with \n
-        let description = {
-            let rest = if cmd.doc_comments.len() > 1 {
-                &cmd.doc_comments[1..]
-            } else {
-                &[][..]
-            };
-            let start = rest
-                .iter()
-                .position(|s| !s.trim().is_empty())
-                .unwrap_or(rest.len());
-            rest[start..]
-                .iter()
-                .map(|s| s.trim_start().replace('\\', "\\\\").replace('"', "\\\""))
-                .collect::<Vec<_>>()
-                .join("\\n")
-        };
+        let escape = |s: &str| s.trim().replace('\\', "\\\\").replace('"', "\\\"");
+        let help = doc_to_help(&cmd.doc_comments);
+        // Summary: the first sentence (one line in the picker), description:
+        // the rest - a sentence may span lines, a paragraph sentences.
+        let split = help
+            .iter()
+            .position(|s| s.trim().is_empty())
+            .unwrap_or(help.len());
+        let first = help[..split]
+            .iter()
+            .map(|s| s.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let (summary, more) = split_first_sentence(&first);
+        let description = std::iter::once(more.to_string())
+            .filter(|more| !more.is_empty())
+            .chain(std::iter::once(String::new()).filter(|_| !more.is_empty() && split < help.len()))
+            .chain(help[split..].iter().skip_while(|s| s.trim().is_empty()).cloned())
+            .map(|s| escape(&s))
+            .collect::<Vec<_>>()
+            .join("\\n");
+        let summary = escape(summary);
         let cat = category_to_enum_variant(&cmd.category);
         let display_name = command_display_name(cmd);
         out.push_str(&format!(

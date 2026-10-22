@@ -16,6 +16,7 @@ use evanalyzer_app::preview::StartPreviewError;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
+use std::path::PathBuf;
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -242,8 +243,34 @@ impl PipelineWorker {
             let mut pipeline_start: Option<std::time::Instant> = None;
             // A run's first breakpoint tile replaces the last run's ones.
             let mut first_breakpoint_tile = true;
+            // The images in work, in the order they started; the status bar
+            // names the oldest.
+            let mut in_work: Vec<PathBuf> = Vec::new();
+            let mut shown_in_work = String::new();
             for event in job.events() {
+                match &event {
+                    ProgressEvent::ImageStarted { path } => in_work.push(path.clone()),
+                    ProgressEvent::ImageCompleted { path, .. }
+                    | ProgressEvent::ImageFailed { path } => in_work.retain(|p| p != path),
+                    _ => {}
+                }
+                // Not throttled like the counters below: a dropped update
+                // would leave a finished image named until the next event.
+                let text = in_work_text(&in_work);
+                if !is_preview && text != shown_in_work {
+                    shown_in_work = text.clone();
+                    let ui_handle = self.app_state.ui_handle.clone();
+                    let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_handle.upgrade() {
+                            ui.global::<PipelineRunningState>()
+                                .set_current_image(text.into());
+                        }
+                    });
+                }
                 match event {
+                    ProgressEvent::ImageStarted { path } => {
+                        log::debug!("Image started: {}", path.display());
+                    }
                     ProgressEvent::TilesScheduled { total_tiles } => {
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total_tiles as i32;
@@ -382,10 +409,6 @@ impl PipelineWorker {
                             .unwrap_or(0.0);
                         let eta_str = format!("{:.2}", secs_per_image);
                         let left = time_left(secs_per_image * total.saturating_sub(index) as f64);
-                        let file = path
-                            .file_name()
-                            .map(|f| f.to_string_lossy().into_owned())
-                            .unwrap_or_default();
                         let is_last = index == total;
                         let elapsed = last_ui_update.elapsed();
                         if is_last || elapsed >= std::time::Duration::from_millis(100) {
@@ -403,7 +426,6 @@ impl PipelineWorker {
                                         let running = ui.global::<PipelineRunningState>();
                                         running.set_images_done(index);
                                         running.set_images_total(total);
-                                        running.set_last_image(file.into());
                                         running.set_eta(left.into());
                                     }
                                     ui.global::<PipelinesPanelState>()
@@ -567,6 +589,22 @@ fn time_left(secs: f64) -> String {
     }
 }
 
+/// The status bar's "in work" text: the image started first of those still
+/// running, and how many more run beside it.
+fn in_work_text(in_work: &[PathBuf]) -> String {
+    let Some(first) = in_work.first() else {
+        return String::new();
+    };
+    let name = first
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match in_work.len() {
+        1 => name,
+        n => format!("{name} (+{})", n - 1),
+    }
+}
+
 fn secs_per_image(elapsed: std::time::Duration, index: usize) -> f64 {
     elapsed.as_secs_f64() / (index.max(1) as f64)
 }
@@ -593,6 +631,20 @@ mod tests {
         assert_eq!(time_left(42.0), "~42 s");
         assert_eq!(time_left(239.0), "~4 min");
         assert_eq!(time_left(7800.0), "~2 h 10 min");
+    }
+
+    #[test]
+    fn the_status_bar_names_the_oldest_image_in_work() {
+        assert_eq!(in_work_text(&[]), "");
+        assert_eq!(in_work_text(&[PathBuf::from("plate/a.tif")]), "a.tif");
+        assert_eq!(
+            in_work_text(&[
+                PathBuf::from("plate/a.tif"),
+                PathBuf::from("b.tif"),
+                PathBuf::from("c.tif")
+            ]),
+            "a.tif (+2)"
+        );
     }
 
     #[test]
@@ -799,9 +851,9 @@ mod tests {
                 .get_eta_seconds_per_image()
                 .is_empty()
         );
-        // Apart from the mixed counter: the images, the one finished last.
+        // Apart from the mixed counter: the images; none in work at the end.
         assert_eq!(running.get_images_done(), running.get_images_total());
-        assert!(!running.get_last_image().is_empty());
+        assert!(running.get_current_image().is_empty());
         assert!(
             f.worker
                 .pipeline_controller

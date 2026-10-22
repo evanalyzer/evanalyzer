@@ -29,7 +29,7 @@ pub enum IntensityTransformMode {
 /// Configuration for adjusting image contrast and brightness.
 ///
 /// This transformation applies a linear mapping to pixel values.
-/// In [`Mode::Manual`], the output is typically calculated as:
+/// In manual mode, the output is typically calculated as:
 /// `output = input * contrast + brightness`.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
@@ -39,13 +39,13 @@ pub struct IntensityTransformation {
 
     /// Contrast multiplier (gain).
     ///
-    /// Only active in [`Mode::Manual`].
+    /// Only active in manual mode.
     /// Values > 1.0 increase contrast, while values < 1.0 decrease it.
     pub contrast: f32,
 
     /// Brightness offset (bias).
     ///
-    /// Only active in [`Mode::Manual`].
+    /// Only active in manual mode.
     /// Positive values brighten the image, negative values darken it.
     pub brightness: f32,
 }

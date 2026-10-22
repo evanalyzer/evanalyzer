@@ -88,7 +88,7 @@ pub struct Watershed {
     /// finds seeds as local maxima of the (optionally smoothed) grayscale
     /// image, restricted to each object's own footprint - a faithful port
     /// of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
-    /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
+    /// method,
     /// the fix for diffusely-connected regions whose *shape* has no separate
     /// peaks but whose *brightness* clearly does.
     #[cmdsmeta(default = SeedSource::DistanceMap, optional = true, visibility = Advanced)]

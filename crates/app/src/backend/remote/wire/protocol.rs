@@ -60,7 +60,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -364,6 +364,9 @@ pub(crate) enum WireProgressEvent {
         path: PathBuf,
     },
     Finished,
+    ImageStarted {
+        path: PathBuf,
+    },
     /// Blobs: `image`, then `segmentation` and `instances` if present.
     BreakpointReached {
         image: RawImageInfo,
@@ -403,6 +406,7 @@ pub(crate) fn event_to_wire(event: ProgressEvent) -> (WireProgressEvent, Vec<Vec
         ProgressEvent::ImageCompleted { index, total, path } => {
             WireProgressEvent::ImageCompleted { index, total, path }
         }
+        ProgressEvent::ImageStarted { path } => WireProgressEvent::ImageStarted { path },
         ProgressEvent::ImageFailed { path } => WireProgressEvent::ImageFailed { path },
         ProgressEvent::Finished => WireProgressEvent::Finished,
         ProgressEvent::BreakpointReached {
@@ -472,6 +476,7 @@ pub(crate) fn event_from_wire(
         WireProgressEvent::ImageCompleted { index, total, path } => {
             ProgressEvent::ImageCompleted { index, total, path }
         }
+        WireProgressEvent::ImageStarted { path } => ProgressEvent::ImageStarted { path },
         WireProgressEvent::ImageFailed { path } => ProgressEvent::ImageFailed { path },
         WireProgressEvent::Finished => ProgressEvent::Finished,
         WireProgressEvent::BreakpointReached {

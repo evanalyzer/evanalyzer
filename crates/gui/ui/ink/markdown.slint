@@ -1,0 +1,28 @@
+// ink/markdown.slint — help texts in markdown (**bold**, *italic*, `code`,
+// lists, links), drawn by Slint's `StyledText`. The app converts the text
+// (`InkMarkdown.render`): `@markdown` reads its string literal only, a
+// string from a property comes out as plain text.
+
+import { Ink } from "palette.slint";
+
+export global InkMarkdown {
+    /// The markdown `text` styled (plain text if it doesn't parse).
+    pure callback render(text: string) -> styled-text;
+    /// The markdown `text` without its marks - for one line of plain text.
+    pure callback plain(text: string) -> string;
+}
+
+/// A help text in markdown; links open in the browser. Wraps at its width.
+export component InkMarkdownText inherits StyledText {
+    in property <string> markdown;
+    text: InkMarkdown.render(root.markdown);
+    default-color: Ink.text;
+    default-font-size: Ink.fs-body;
+    link-color: Ink.focus;
+    // Read out without the marks.
+    accessible-role: text;
+    accessible-label: InkMarkdown.plain(root.markdown);
+    link-clicked(url) => {
+        Platform.open-url(url);
+    }
+}

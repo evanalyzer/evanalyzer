@@ -48,7 +48,7 @@ pub struct ImageMath {
     /// The specific mathematical or logical operator to apply.
     pub operand: Operand,
 
-    /// The address of the second image in the [`ImageCache`] to use for the operation.
+    /// The second image to use for the operation.
     pub second_image_address: ImageAddress,
 
     /// If false, the calculation is `(Current Image OP Cached Image)`.

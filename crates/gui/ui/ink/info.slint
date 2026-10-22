@@ -1,10 +1,11 @@
 // ink/info.slint — ⓘ next to a tricky setting: a click opens a small card
-// with its name, what it does, an optional sketch and a docs link.
+// with its name, what it does (markdown), an optional sketch and a docs link.
 
 import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 import { InkIconButton } from "button.slint";
 import { InkTipZone } from "tooltip.slint";
+import { InkMarkdownText } from "markdown.slint";
 
 /// The card itself, for a popup of one's own (e.g. opened from a menu):
 /// the name, what it does, a sketch, a docs link, ✕.
@@ -55,11 +56,8 @@ export component InkInfoCard inherits Rectangle {
             VerticalLayout {
                 padding-right: 8px;
                 spacing: 10px;
-                Text {
-                    text: root.text;
-                    font-size: Ink.fs-body;
-                    color: Ink.text;
-                    wrap: word-wrap;
+                InkMarkdownText {
+                    markdown: root.text;
                 }
                 if root.diagram.width > 0: Image {
                     source: root.diagram;
