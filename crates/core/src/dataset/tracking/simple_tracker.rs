@@ -371,6 +371,7 @@ mod store_tests {
     fn a_maximum_distance_of_zero_is_refused() {
         let exporter = crate::MemoryExporter {
             out_objects: Default::default(),
+            ..Default::default()
         };
         let mut ctx = DatasetContext {
             store: exporter.dataset_store().unwrap(),

@@ -125,6 +125,9 @@ pub struct JobOutput {
     /// which are sent *before* the whole-image phase's `TileMerge` ran and so
     /// still contain cross-tile fragments. `None` for analysis runs.
     pub preview_objects: Option<Vec<ObjectMetricSettings>>,
+    /// Preview runs only: the measurements, per plane - like the objects.
+    #[serde(default)]
+    pub preview_measurements: Option<Vec<evanalyzer_cfg::core_types::PipelineMeasurements>>,
 }
 
 /// An analysis a backend keeps track of: running, or finished not long ago.

@@ -1,0 +1,102 @@
+// editor/measurements_panel.slint — the Measurements panel on the right:
+// every measurement the preview made, by step - an overview across the
+// pipelines and the modules. A click shows the step. The preview measures
+// the visible tiles only, which the head says.
+
+import { ScrollView } from "std-widgets.slint";
+import { LayoutState } from "../api/layout.slint";
+import { MeasurementsState } from "../api/measurements.slint";
+import { Ink, InkPanelHead, InkHint, InkTipZone } from "../ink/ink.slint";
+
+export component MeasurementsPanel inherits Rectangle {
+    preferred-height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        spacing: 0px;
+
+        InkPanelHead {
+            title: "Measurements";
+            count: MeasurementsState.rows.length;
+            foldable: true;
+            folded: LayoutState.measurements-folded;
+            summary: "visible part";
+            fold-toggled => {
+                LayoutState.measurements-folded = !LayoutState.measurements-folded;
+                LayoutState.panels-changed();
+            }
+            close => {
+                LayoutState.measurements-open = false;
+                LayoutState.panels-changed();
+            }
+        }
+
+        if !LayoutState.measurements-folded && MeasurementsState.rows.length == 0: VerticalLayout {
+            padding: 12px;
+            InkHint {
+                text: "The preview measures the visible part of the image - its values show here.";
+            }
+        }
+
+        if !LayoutState.measurements-folded && MeasurementsState.rows.length > 0: ScrollView {
+            vertical-stretch: 1;
+            min-height: min(list.preferred-height, 64px);
+            preferred-height: min(list.preferred-height, 260px);
+            list := VerticalLayout {
+                padding: 4px;
+                spacing: 0px;
+                for row in MeasurementsState.rows: Rectangle {
+                    height: 44px;
+                    border-radius: 6px;
+                    background: ta.has-hover ? Ink.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: row.step + " " + row.name + " " + row.value + " " + row.of;
+                    accessible-action-default => {
+                        MeasurementsState.show-step(row.step);
+                    }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: row.name;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.step + " · " + row.of;
+                                font-size: Ink.fs-caption;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-mute;
+                                overflow: elide;
+                            }
+                        }
+                        Text {
+                            text: row.value;
+                            font-size: Ink.fs-body;
+                            font-family: Ink.font-mono;
+                            font-weight: 600;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                        }
+                    }
+                    ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            MeasurementsState.show-step(row.step);
+                        }
+                    }
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: ta.has-hover && !ta.pressed;
+                        text: "Show the step " + row.step;
+                    }
+                }
+            }
+        }
+    }
+}

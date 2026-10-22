@@ -1751,8 +1751,8 @@ fn doc_to_help(doc_comments: &[String]) -> Vec<String> {
         }
         if let Some(heading) = trimmed.strip_prefix('#') {
             let heading = heading.trim_start_matches('#').trim();
-            in_examples = heading.eq_ignore_ascii_case("examples")
-                || heading.eq_ignore_ascii_case("example");
+            in_examples =
+                heading.eq_ignore_ascii_case("examples") || heading.eq_ignore_ascii_case("example");
             if !in_examples {
                 out.push(format!("**{heading}**"));
             }
@@ -3381,8 +3381,15 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         let (summary, more) = split_first_sentence(&first);
         let description = std::iter::once(more.to_string())
             .filter(|more| !more.is_empty())
-            .chain(std::iter::once(String::new()).filter(|_| !more.is_empty() && split < help.len()))
-            .chain(help[split..].iter().skip_while(|s| s.trim().is_empty()).cloned())
+            .chain(
+                std::iter::once(String::new()).filter(|_| !more.is_empty() && split < help.len()),
+            )
+            .chain(
+                help[split..]
+                    .iter()
+                    .skip_while(|s| s.trim().is_empty())
+                    .cloned(),
+            )
             .map(|s| escape(&s))
             .collect::<Vec<_>>()
             .join("\\n");

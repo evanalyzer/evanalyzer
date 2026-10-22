@@ -284,6 +284,59 @@ fn remote_preview_returns_its_final_objects_from_wait() {
     assert!(matches!(output.preview_objects, Some(objects) if objects.is_empty()));
 }
 
+/// A preview's measurements come back over the connection like its objects.
+#[test]
+fn remote_preview_returns_its_measurements_too() {
+    use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, StepId};
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    use evanalyzer_cfg::settings::pipeline_settings::{
+        PipelineSettings, PipelineStepSettings, StepContent,
+    };
+    let remote = connect();
+    let (dir, mut settings) = project_with_fixture_image();
+    let mut pearson = PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+    *pearson.measurement_name_mut().unwrap() = "pearson_01".into();
+    settings.pipelines.push(PipelineSettings {
+        id: PipelineId(1),
+        name: "Coloc".into(),
+        description: None,
+        image_source: ImageAddress::Channel(0),
+        enabled: true,
+        steps: vec![PipelineStepSettings {
+            id: StepId(1),
+            enabled: true,
+            content: StepContent::Command(pearson),
+        }],
+    });
+    let job = remote
+        .start_preview(PreviewRequest {
+            settings,
+            project_path: dir.path().to_path_buf(),
+            viewport: PreviewViewport {
+                offset_x: 0.0,
+                offset_y: 0.0,
+                viewport_width: 256.0,
+                viewport_height: 256.0,
+                zoom: 1.0,
+            },
+            breakpoint: None,
+            max_visible_tiles: None,
+            breakpoint_tiles: 1,
+        })
+        .unwrap();
+    drain(&job);
+    let planes = job
+        .wait()
+        .unwrap()
+        .preview_measurements
+        .expect("measurements");
+    assert_eq!(planes.len(), 1);
+    assert_eq!(
+        planes[0].measurements[0].info.key,
+        "pearson_01/pearson/ch0_ch1"
+    );
+}
+
 #[test]
 fn a_remote_cancel_never_surfaces_as_a_different_error() {
     let remote = connect();

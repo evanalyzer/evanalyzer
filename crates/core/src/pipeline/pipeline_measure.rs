@@ -1,33 +1,6 @@
-use evanalyzer_cfg::core_types::{MeasurementInfo, ObjectClass, ObjectId};
+//! The measurements of a plane: the types live in `evanalyzer_cfg` (they
+//! travel to the app and over the server connection, like the objects).
 
-/// The measurements of one image plane (the pipeline cache is per plane).
-#[derive(Default, Clone)]
-pub struct PipelineMeasurements {
-    pub measurements: Vec<Measurement>,
-    /// The plane measured - set by the executor before the measurement
-    /// steps run.
-    pub z_stack: i32,
-    pub t_stack: i32,
-}
-
-/// One measurement (e.g. "Pearson ch1 × ch2" of step "nuclei_coloc") and its
-/// values.
-#[derive(Clone)]
-pub struct Measurement {
-    pub info: MeasurementInfo,
-    pub values: MeasurementValues,
-}
-
-/// Per object, or per image region - which one the info's `target` says.
-#[derive(Clone)]
-pub enum MeasurementValues {
-    Objects(Vec<(ObjectId, f64)>),
-    Image(Vec<(MeasurementRegion, f64)>),
-}
-
-/// Which pixels of the image an image measurement covers.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MeasurementRegion {
-    Image,
-    Class(ObjectClass),
-}
+pub use evanalyzer_cfg::core_types::{
+    Measurement, MeasurementRegion, MeasurementValues, PipelineMeasurements,
+};

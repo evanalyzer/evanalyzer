@@ -122,6 +122,8 @@ impl ObjectListController {
                 });
                 let model_rc = ModelRc::new(bridge);
                 ui.global::<ObjectListState>().set_object_list(model_rc);
+                // The preview's measurements go with its objects.
+                crate::editor::measurements_panel::sync(&ui, &bridge_ptr.app_state);
             }
         }) {
             warn!("Failed to sync ROIs to Slint: {}", e);

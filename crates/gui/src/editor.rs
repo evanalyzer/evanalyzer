@@ -25,6 +25,7 @@ pub mod focus_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
 pub mod images_list_controller;
+pub(crate) mod measurements_panel;
 pub mod object_list_controller;
 pub mod pipeline_task;
 pub mod pipeline_worker;

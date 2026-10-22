@@ -289,6 +289,10 @@ Decided - to build, in this order:
   - [ ] Benchmark object measurements on a big analysis (the value is a correlated subquery per object - DuckDB decorrelates it, unmeasured).
   - [ ] Look at the picker's "Measurements" group in the real app.
 - [x] Export (2026-10-22): measurement columns in the existing kinds (the dialog's column picker lists them; per image / plate / well the same values as the views; not in the image heatmap). New: "Measurements - one row per value" (`ResultExport::with_measurements`, `measurements.{csv,xlsx}`; the `measurements` table's columns, filtered by the chosen images, planes and measurement columns - none chosen: all; only offered when the analysis has measurements, `ResultsState.has-measurements`). Parquet also writes `measurements.parquet`. CLI: `export csv|xlsx --measurements`.
-- [ ] Preview: a "Measurements" panel on the right (under Classes / Image / Objects; foldable, Alt+5, in View, fold state per user) with every measurement of the preview - all pipelines, steps inside modules too; a click jumps to the step (opens the module); the step being edited is highlighted; "visible part" marked. Per-object values: a column in Objects, the panel shows their median. Optional: the value on the step card too. Needs the preview to bring the measurements back (`MemoryExporter` keeps objects only).
+- [x] Preview: a "Measurements" panel on the right (before Objects; foldable, closable, Alt+5, in View, open/fold state per user) with every measurement of the preview - all pipelines, steps inside modules too, by step; an image's value or the median of objects'; a click jumps to the step (opens the module). The preview brings the measurements back like its objects (`MemoryExporter.out_measurements` → `PreviewOutput` → `JobOutput.preview_measurements`, also over the network).
+  - [ ] The step being edited highlighted in the panel.
+  - [ ] Per-object values as a column in Objects (with the first per-object measurement).
+  - [ ] Optional: the value on the step card too.
+  - [ ] Look at the panel in the real app (screenshot).
 - [ ] Per-object measurements: the Arrow appender for `measurements` (row by row is too slow for many objects).
 - [ ] Next steps: Pearson per object / per class region, Manders M1/M2 (+ Costes), then quality control (focus, saturation, Flag images).

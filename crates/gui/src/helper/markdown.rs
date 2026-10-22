@@ -37,7 +37,11 @@ fn reflow(text: &str) -> String {
     for line in text.lines() {
         let blank = line.trim().is_empty();
         if !out.is_empty() {
-            out.push(if previous_blank || blank || starts_item(line) { '\n' } else { ' ' });
+            out.push(if previous_blank || blank || starts_item(line) {
+                '\n'
+            } else {
+                ' '
+            });
         }
         out.push_str(if blank { "" } else { line.trim() });
         previous_blank = blank;
@@ -52,10 +56,11 @@ pub(crate) fn plain(text: &str) -> String {
     let mut rest = text;
     while let Some(open) = rest.find('[') {
         let after = &rest[open + 1..];
-        match after
-            .find("](")
-            .and_then(|close| after[close + 2..].find(')').map(|end| (close, close + 2 + end)))
-        {
+        match after.find("](").and_then(|close| {
+            after[close + 2..]
+                .find(')')
+                .map(|end| (close, close + 2 + end))
+        }) {
             Some((close, end)) => {
                 out.push_str(&rest[..open]);
                 out.push_str(&after[..close]);
@@ -87,8 +92,8 @@ pub(crate) fn plain(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};
     use evanalyzer_cfg::settings::parameter_def::ParameterDef;
+    use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};
 
     #[test]
     fn a_paragraphs_lines_are_one_line_a_list_items_its_own() {
@@ -104,7 +109,10 @@ mod tests {
             plain("Runs a [Rhai](https://rhai.rs) script on **every** `tile`,\n*fast*."),
             "Runs a Rhai script on every tile, fast."
         );
-        assert_eq!(plain("output = input * contrast"), "output = input * contrast");
+        assert_eq!(
+            plain("output = input * contrast"),
+            "output = input * contrast"
+        );
         assert_eq!(plain("[1, 2] stays"), "[1, 2] stays");
     }
 

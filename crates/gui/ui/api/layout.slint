@@ -14,11 +14,14 @@ export global LayoutState {
     in-out property <bool> classes-open: true;
     in-out property <bool> image-open: true;
     in-out property <bool> objects-open: true;
+    // The Measurements panel (only offered when the project measures).
+    in-out property <bool> measurements-open: true;
     /// Folded to their head (a click on the title): Objects then takes the
     /// column's rest.
     in-out property <bool> classes-folded: false;
     in-out property <bool> image-folded: false;
     in-out property <bool> objects-folded: false;
+    in-out property <bool> measurements-folded: false;
     /// The navigator: 0 auto (only while zoomed in), 1 always, 2 never.
     in-out property <int> navigator-mode: 0;
     /// The step rows' values on a second line under the name (not

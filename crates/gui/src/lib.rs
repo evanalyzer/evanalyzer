@@ -944,9 +944,11 @@ pub(crate) fn apply_panels(ui: &AppWindow, ui_state: &UiState) {
     layout.set_classes_open(panels.classes_open);
     layout.set_image_open(panels.image_open);
     layout.set_objects_open(panels.objects_open);
+    layout.set_measurements_open(panels.measurements_open);
     layout.set_classes_folded(panels.classes_folded);
     layout.set_image_folded(panels.image_folded);
     layout.set_objects_folded(panels.objects_folded);
+    layout.set_measurements_folded(panels.measurements_folded);
     layout.set_stack_bar_folded(panels.image_bar_folded);
     layout.set_pipelines_list_open(panels.pipelines_list_open);
     layout.set_navigator_mode(match panels.navigator {
@@ -964,9 +966,11 @@ fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
         classes_open: layout.get_classes_open(),
         image_open: layout.get_image_open(),
         objects_open: layout.get_objects_open(),
+        measurements_open: layout.get_measurements_open(),
         classes_folded: layout.get_classes_folded(),
         image_folded: layout.get_image_folded(),
         objects_folded: layout.get_objects_folded(),
+        measurements_folded: layout.get_measurements_folded(),
         image_bar_folded: layout.get_stack_bar_folded(),
         pipelines_list_open: layout.get_pipelines_list_open(),
         navigator: match layout.get_navigator_mode() {

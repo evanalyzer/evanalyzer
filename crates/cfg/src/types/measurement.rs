@@ -1,6 +1,8 @@
 //! What a measurement step measures - the description of its values,
 //! shared by the steps (core), the results database and the results views.
 
+use crate::types::classes::ObjectClass;
+use crate::types::ids::ObjectId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -45,6 +47,39 @@ pub struct MeasurementInfo {
     pub range: Option<(f64, f64)>,
     /// Can be averaged per image or well.
     pub aggregatable: bool,
+}
+
+/// The measurements of one image plane - a run's per plane, also what a
+/// preview brings back (like its objects).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PipelineMeasurements {
+    pub measurements: Vec<Measurement>,
+    /// The plane measured - set by the executor before the measurement
+    /// steps run.
+    pub z_stack: i32,
+    pub t_stack: i32,
+}
+
+/// One measurement (e.g. "Pearson (channel 0 × channel 1)" of step
+/// "pearson_01") and its values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Measurement {
+    pub info: MeasurementInfo,
+    pub values: MeasurementValues,
+}
+
+/// Per object, or per image region - which one the info's `target` says.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MeasurementValues {
+    Objects(Vec<(ObjectId, f64)>),
+    Image(Vec<(MeasurementRegion, f64)>),
+}
+
+/// Which pixels of the image an image measurement covers.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MeasurementRegion {
+    Image,
+    Class(ObjectClass),
 }
 
 /// A measurement step's name is valid: letters, digits and `_` - it starts

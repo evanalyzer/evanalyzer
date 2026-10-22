@@ -1,0 +1,23 @@
+// api/measurements.slint — the Measurements panel (editor/measurements_panel.slint):
+// every measurement of the preview, all pipelines and steps inside modules
+// too. Filled by Rust (`editor/measurements_panel.rs`).
+
+/// One measurement of the preview.
+export struct MeasurementRow {
+    // The measurement step's name ("pearson_01").
+    step: string,
+    // "Pearson (channel 0 × channel 1)".
+    name: string,
+    // The value ("0.712"), for objects their median; "–" without one.
+    value: string,
+    // What it is of: "image", "median of 214 objects", "no value".
+    of: string,
+}
+
+export global MeasurementsState {
+    // The project has measurement steps: the panel is offered.
+    in property <bool> has-steps: false;
+    in property <[MeasurementRow]> rows;
+    // Shows the step that measured (opens its module).
+    callback show-step(string);
+}

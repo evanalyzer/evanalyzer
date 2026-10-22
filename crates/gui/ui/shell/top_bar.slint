@@ -819,6 +819,16 @@ export component TopBar inherits Rectangle {
                     }
                 }
                 InkMenuItem {
+                    text: "Measurements";
+                    checked: LayoutState.measurements-open;
+                    shortcut: "Alt 5";
+                    clicked => {
+                        LayoutState.measurements-open = !LayoutState.measurements-open;
+                        LayoutState.panels-hidden = false;
+                        LayoutState.panels-changed();
+                    }
+                }
+                InkMenuItem {
                     icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
                     text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
                     shortcut: "Tab";

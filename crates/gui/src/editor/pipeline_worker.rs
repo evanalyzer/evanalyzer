@@ -16,8 +16,8 @@ use evanalyzer_app::preview::StartPreviewError;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
-use std::path::PathBuf;
 use slint::ComponentHandle;
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Runs `$body` with `$state` the progress state of the job: the preview's
@@ -295,12 +295,9 @@ impl PipelineWorker {
                         // Clear any stale preview ROIs so the incremental tile updates
                         // start from a clean slate.
                         if is_preview {
-                            self_handle
-                                .app_state
-                                .get_project_write()
-                                .tmp_settings
-                                .preview_objects
-                                .clear();
+                            let mut project = self_handle.app_state.get_project_write();
+                            project.tmp_settings.preview_objects.clear();
+                            project.tmp_settings.preview_measurements.clear();
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total as i32;
@@ -527,6 +524,14 @@ impl PipelineWorker {
                             let mut project = self_handle.app_state.get_project_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_objects.extend(final_objects);
+                        }
+                        // Its measurements - like its objects.
+                        if let Some(measurements) = output.preview_measurements {
+                            self_handle
+                                .app_state
+                                .get_project_write()
+                                .tmp_settings
+                                .preview_measurements = measurements;
                         }
                         let previewed = self_handle
                             .app_state

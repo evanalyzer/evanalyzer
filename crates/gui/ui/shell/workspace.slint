@@ -18,6 +18,8 @@ import { ObjectDetails } from "../editor/object_details.slint";
 import { ObjectDetailsPlace } from "../editor/object_list_panel.slint";
 import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
+import { MeasurementsPanel } from "../editor/measurements_panel.slint";
+import { MeasurementsState } from "../api/measurements.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
 import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitSelection, SplitTracksBar } from "../results/results_split.slint";
@@ -46,7 +48,10 @@ export component Workspace inherits Rectangle {
     // column - away with Tab (`panels-hidden`).
     property <bool> left-shown: root.on-image && LayoutState.steps-open && !LayoutState.panels-hidden;
     property <bool> right-shown: root.on-image && !LayoutState.panels-hidden
-        && (LayoutState.classes-open || LayoutState.image-open || LayoutState.objects-open);
+        && (LayoutState.classes-open || LayoutState.image-open || LayoutState.objects-open
+            || root.measurements-shown);
+    // The Measurements panel: shown, and the project has measurement steps.
+    property <bool> measurements-shown: LayoutState.measurements-open && MeasurementsState.has-steps;
     property <bool> objects-in-column: LayoutState.objects-open && !LayoutState.objects-as-table;
     // The Tuning dock (pinned settings) at the bottom, between the panels -
     // the full width with them hidden.
@@ -269,6 +274,11 @@ export component Workspace inherits Rectangle {
                 in-split: root.split-image-panel;
                 vertical-stretch: 1;
             }
+        }
+
+        if root.measurements-shown && !root.split-image-panel: InkPanel {
+            vertical-stretch: 0;
+            MeasurementsPanel { }
         }
 
         if root.objects-in-column && !root.split-image-panel: InkPanel {
