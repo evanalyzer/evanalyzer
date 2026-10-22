@@ -812,6 +812,19 @@ impl From<PixelClassifierSettings> for PixelClassifier {
     }
 }
 
+impl From<PropagationSettings> for Propagation {
+    fn from(_s: PropagationSettings) -> Self {
+        Propagation {
+            seeds: _s.seeds,
+            growth_channel: _s.growth_channel,
+            mask: _s.mask,
+            regularization: _s.regularization.max(0.0),
+            output_class: _s.output_class,
+            exclude_at_edges: _s.exclude_at_edges,
+        }
+    }
+}
+
 impl From<RankFilterSettings> for RankFilter {
     fn from(_s: RankFilterSettings) -> Self {
         RankFilter {
@@ -1103,6 +1116,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         )),
         PipelineCommand::PixelClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::PixelClassifier::from(settings),
+        ))),
+        PipelineCommand::Propagation(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Propagation::from(settings),
         ))),
         PipelineCommand::RankFilter(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::RankFilter::from(settings),

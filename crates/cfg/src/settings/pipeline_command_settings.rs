@@ -2527,6 +2527,45 @@ impl Default for ObjectMathSettings {
     }
 }
 
+/// Grows a region around each seed object (e.g. a cell around its nucleus)
+/// through a channel (e.g. the cell stain), so neighbouring regions meet
+/// where the stain is dim. Each region is linked to its seed.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct PropagationSettings {
+    /// Objects carrying this class are the seeds (e.g. nuclei): each grows
+    /// into one region.
+    pub seeds: ObjectClass,
+    /// The channel the regions grow through (e.g. the cell or membrane
+    /// stain).
+    pub growth_channel: ImageChannelIdx,
+    /// Regions only cover pixels of objects carrying this class (e.g. the
+    /// thresholded cell stain). `Unset`: the whole image.
+    pub mask: ObjectClass,
+    /// How much plain distance counts against the change in brightness
+    /// (λ): larger values split more by distance, `0` by brightness only.
+    #[schemars(range(min = 0))]
+    pub regularization: f32,
+    /// The class the grown regions get.
+    pub output_class: ObjectClass,
+    /// Discard regions that touch the image border.
+    pub exclude_at_edges: bool,
+}
+
+impl Default for PropagationSettings {
+    fn default() -> Self {
+        Self {
+            seeds: ObjectClass::default(),
+            growth_channel: ImageChannelIdx::default(),
+            mask: ObjectClass::default(),
+            regularization: 0.05f32,
+            output_class: ObjectClass::default(),
+            exclude_at_edges: bool::default(),
+        }
+    }
+}
+
 /// Transforms given ROIs and either replaces the old ones or creates new ones.
 ///
 /// This command applies a geometric transform (scale, circle, fitted ellipse) to every object

@@ -4,6 +4,7 @@ pub mod coloc_objects;
 pub mod extract_objects;
 pub mod load_annotaed_objects;
 pub mod object_math;
+pub mod propagation;
 pub(crate) mod tile_merge;
 pub mod transform_objects;
 pub mod voronoi;
