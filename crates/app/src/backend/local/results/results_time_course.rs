@@ -101,7 +101,11 @@ impl<'a> TimeCourseQuery<'a> {
         let columns: Vec<&Column> = filter
             .columns
             .iter()
-            .filter(|column| column.is_aggregable() && **column != Column::Count)
+            .filter(|column| {
+                column.is_aggregable()
+                    && **column != Column::Count
+                    && !column.is_image_measurement()
+            })
             .collect();
         let stats = &filter.statistics;
         let normalized = filter.normalize == TimeCourseNormalize::RelativeToStart;

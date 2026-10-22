@@ -1,5 +1,5 @@
 {
-  "protocol_version": 25,
+  "protocol_version": 26,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -329,6 +329,13 @@
         "16": {
           "IntensityMax": {
             "NEWTYPE": "U32"
+          }
+        },
+        "17": {
+          "Measurement": {
+            "NEWTYPE": {
+              "TYPENAME": "MeasurementColumn"
+            }
           }
         }
       }
@@ -700,6 +707,22 @@
         },
         {
           "transpond_table": "BOOL"
+        }
+      ]
+    },
+    "MeasurementColumn": {
+      "STRUCT": [
+        {
+          "key": "STR"
+        },
+        {
+          "step": "STR"
+        },
+        {
+          "name": "STR"
+        },
+        {
+          "per_object": "BOOL"
         }
       ]
     },
