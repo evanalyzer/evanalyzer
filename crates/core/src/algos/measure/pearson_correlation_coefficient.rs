@@ -86,14 +86,8 @@ impl ImageAlgorithm for PearsonCorrelationCoefficient {
             range: Some((-1.0, 1.0)),
             aggregatable: true,
         };
-        cache.measurements.measurements.push(Measurement {
-            info,
-            // No value if a channel doesn't vary (e.g. an empty image).
-            values: MeasurementValues::Image(
-                r.map(|r| vec![(MeasurementRegion::Image, r)])
-                    .unwrap_or_default(),
-            ),
-        });
+        // No value if a channel doesn't vary (e.g. an empty image).
+        cache.add_image_measurement(info, r.map(|r| (MeasurementRegion::Image, r)));
         Ok(())
     }
 
@@ -102,7 +96,7 @@ impl ImageAlgorithm for PearsonCorrelationCoefficient {
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::DANMAYR]
+        vec![&PEARSON_1895]
     }
 
     /// The tiles of the whole image, after they are all read.
@@ -114,6 +108,18 @@ impl ImageAlgorithm for PearsonCorrelationCoefficient {
         true
     }
 }
+
+/// Where the coefficient was first published.
+const PEARSON_1895: CitationMetadata = CitationMetadata {
+    cite_key: "pearson1895notes",
+    title: "Notes on regression and inheritance in the case of two parents",
+    authors: &["Karl Pearson"],
+    year: 1895,
+    container: Some("Proceedings of the Royal Society of London"),
+    doi: Some("10.1098/rspl.1895.0041"),
+    url: Some("https://doi.org/10.1098/rspl.1895.0041"),
+    pages: Some("240-242"),
+};
 
 /// The sums Pearson needs over pixel pairs (x, y): their count, means and
 /// sums of squared deviations and of co-deviations. Two of them combine

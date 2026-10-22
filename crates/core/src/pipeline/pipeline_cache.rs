@@ -1,12 +1,17 @@
 use crate::image::Point2d;
-use crate::pipeline::pipeline_measure::PipelineMeasurements;
+use crate::pipeline::pipeline_measure::{
+    Measurement, MeasurementRegion, MeasurementValues, PipelineMeasurements,
+};
 use crate::pipeline::scope::{Scope, ScopeId};
 use crate::{
     ImageTile,
     image::{ImageContainer, PixelSizes},
     pipeline::{image_cache::ImageCache, object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
-use evanalyzer_cfg::core_types::{InternalErrors, MemoryId, MemorySlot, ObjectClass, ZProjection};
+use evanalyzer_cfg::core_types::{
+    InternalErrors, MeasurementInfo, MeasurementTarget, MemoryId, MemorySlot, ObjectClass,
+    ObjectId, ZProjection,
+};
 use kornia_image::{Image, ImageSize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -119,6 +124,35 @@ mod tests {
 }
 
 impl GlobalPipelineCache {
+    /// Adds a measurement of the image with its values per region (the whole
+    /// image, the pixels of a class) - none: it gave no number (e.g. Pearson
+    /// of a channel that doesn't vary). `info.target` is set to `Image`.
+    pub fn add_image_measurement(
+        &mut self,
+        mut info: MeasurementInfo,
+        values: impl IntoIterator<Item = (MeasurementRegion, f64)>,
+    ) {
+        info.target = MeasurementTarget::Image;
+        self.measurements.measurements.push(Measurement {
+            info,
+            values: MeasurementValues::Image(values.into_iter().collect()),
+        });
+    }
+
+    /// Adds a measurement with a value per object. `info.target` is set to
+    /// `Object`.
+    pub fn add_object_measurement(
+        &mut self,
+        mut info: MeasurementInfo,
+        values: impl IntoIterator<Item = (ObjectId, f64)>,
+    ) {
+        info.target = MeasurementTarget::Object;
+        self.measurements.measurements.push(Measurement {
+            info,
+            values: MeasurementValues::Objects(values.into_iter().collect()),
+        });
+    }
+
     /// After a pipeline: what only it could use goes - its memory slots
     /// (`PipelineContext`), its modules' slots, the scratchpad. The image
     /// channels and the shared slots (`ProjectCache`) stay for the pipelines
