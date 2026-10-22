@@ -27,9 +27,10 @@ use rayon::prelude::*;
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Image Intensity")]
 pub struct ImageIntensity {
-    /// The measurement's name - its values in the results start with it.
-    #[cmdsmeta(measurement_name = "intensity", summary = true)]
-    pub name: String,
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("intensity_01/...").
+    #[cmdsmeta(measurement_id = "intensity", display_name = "ID", summary = true)]
+    pub id: String,
 
     /// The channel to measure.
     #[cmdsmeta(summary = true)]
@@ -123,7 +124,7 @@ impl ImageAlgorithm for ImageIntensity {
 
     /// In gray values.
     fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
-        let outputs = Outputs::of(&self.name).about(format!("channel {}", self.channel));
+        let outputs = Outputs::of(&self.id).about(format!("channel {}", self.channel));
         [
             ("total", "Total intensity"),
             ("mean", "Mean intensity"),
@@ -401,7 +402,7 @@ mod tests {
         // 2, 4, 4, 4, 5, 5, 7, 9: mean 5, population std 2.
         let mut cache = cache_with_gray_tiles(&[&[2.0, 4.0, 4.0], &[4.0, 5.0, 5.0, 7.0, 9.0]]);
         let step = ImageIntensity {
-            name: "dapi".into(),
+            id: "dapi".into(),
             channel: ImageChannelIdx(0),
         };
         run(&step, &mut cache).unwrap();
@@ -441,7 +442,7 @@ mod tests {
     fn pixels_that_arent_numbers_are_left_out() {
         let mut cache = cache_with_gray_tiles(&[&[f32::NAN, 10.0, 20.0]]);
         let step = ImageIntensity {
-            name: "i".into(),
+            id: "i".into(),
             channel: ImageChannelIdx(0),
         };
         run(&step, &mut cache).unwrap();
@@ -458,7 +459,7 @@ mod tests {
     fn a_channel_the_image_lacks_is_an_error() {
         let mut cache = cache_with_gray_tiles(&[&[1.0]]);
         let step = ImageIntensity {
-            name: "i".into(),
+            id: "i".into(),
             channel: ImageChannelIdx(2),
         };
         let err = run(&step, &mut cache).unwrap_err().to_string();

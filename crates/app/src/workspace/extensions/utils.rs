@@ -1,4 +1,4 @@
-use evanalyzer_cfg::core_types::next_measurement_name;
+use evanalyzer_cfg::core_types::next_measurement_id;
 use evanalyzer_cfg::core_types::{InternalErrors, StepId};
 use evanalyzer_cfg::settings::modules::ModuleDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
@@ -145,11 +145,11 @@ pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
     assigned
 }
 
-/// Gives each measurement step without a name the next free one
+/// Gives each measurement step without an ID the next free one
 /// ("pearson_01", …) - in the pipelines and the module definitions: one set
 /// of names for the project. A name already given stays, also one used
 /// twice: the checks report that (`check_project`). How many got one.
-pub fn assign_measurement_names(project: &mut ProjectSettings) -> usize {
+pub fn assign_measurement_ids(project: &mut ProjectSettings) -> usize {
     let mut names: Vec<(&'static str, &mut String)> = project
         .pipelines
         .iter_mut()
@@ -157,18 +157,18 @@ pub fn assign_measurement_names(project: &mut ProjectSettings) -> usize {
         .chain(project.modules.iter_mut().flat_map(|m| m.steps.iter_mut()))
         .filter_map(|step| match &mut step.content {
             StepContent::Command(command) => {
-                let prefix = command.measurement_name_prefix()?;
-                command.measurement_name_mut().map(|name| (prefix, name))
+                let prefix = command.measurement_id_prefix()?;
+                command.measurement_id_mut().map(|name| (prefix, name))
             }
             StepContent::Module(_) => None,
         })
         .collect();
-    fill_measurement_names(&mut names)
+    fill_measurement_ids(&mut names)
 }
 
 /// The empty names of `names` (prefix, name) get the next free one of their
 /// prefix; how many did.
-fn fill_measurement_names(names: &mut [(&str, &mut String)]) -> usize {
+fn fill_measurement_ids(names: &mut [(&str, &mut String)]) -> usize {
     let mut taken: HashSet<String> = names
         .iter()
         .filter(|(_, name)| !name.trim().is_empty())
@@ -177,7 +177,7 @@ fn fill_measurement_names(names: &mut [(&str, &mut String)]) -> usize {
     let mut filled = 0;
     for (prefix, name) in names.iter_mut() {
         if name.trim().is_empty() {
-            **name = next_measurement_name(prefix, &taken);
+            **name = next_measurement_id(prefix, &taken);
             taken.insert(name.to_lowercase());
             filled += 1;
         }
@@ -380,12 +380,12 @@ mod tests {
 
     /// In a project: the pipelines' measurement steps, then the modules'.
     #[test]
-    fn a_projects_measurement_steps_without_a_name_get_one() {
+    fn a_projects_measurement_steps_without_an_id_get_one() {
         use evanalyzer_cfg::core_types::PipelineId;
         let pearson = |name: &str| {
             let mut command =
                 PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
-            *command.measurement_name_mut().unwrap() = name.into();
+            *command.measurement_id_mut().unwrap() = name.into();
             PipelineStepSettings {
                 id: StepId::UNASSIGNED,
                 enabled: true,
@@ -410,10 +410,10 @@ mod tests {
             origin: None,
         });
 
-        assert_eq!(assign_measurement_names(&mut project), 2);
+        assert_eq!(assign_measurement_ids(&mut project), 2);
         let name = |step: &PipelineStepSettings| {
             step.command()
-                .and_then(|c| c.measurement_name())
+                .and_then(|c| c.measurement_id())
                 .unwrap()
                 .to_string()
         };
@@ -429,7 +429,7 @@ mod tests {
     /// Empty names get the next free number of their kind; names already
     /// given stay - also one used twice (the checks report it).
     #[test]
-    fn empty_measurement_names_get_the_next_free_number() {
+    fn empty_measurement_ids_get_the_next_free_number() {
         let mut texts = [
             "".to_string(),
             "Pearson_02".into(),
@@ -447,7 +447,7 @@ mod tests {
             ("texture", e),
             ("texture", f),
         ];
-        assert_eq!(fill_measurement_names(&mut names), 3);
+        assert_eq!(fill_measurement_ids(&mut names), 3);
         assert_eq!(
             texts,
             [

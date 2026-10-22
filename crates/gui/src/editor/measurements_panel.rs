@@ -36,7 +36,7 @@ pub(crate) fn has_measurement_steps(project: &ProjectWithRuntime) -> bool {
         .flat_map(|p| p.steps.iter())
         .chain(project.modules.iter().flat_map(|m| m.steps.iter()))
         .any(|step| match &step.content {
-            StepContent::Command(command) => command.measurement_name().is_some(),
+            StepContent::Command(command) => command.measurement_id().is_some(),
             StepContent::Module(_) => false,
         })
 }

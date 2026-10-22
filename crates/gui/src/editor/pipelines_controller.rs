@@ -906,7 +906,7 @@ impl PipelinesController {
                                 // in `pipeline_settings_changed`).
                                 if let evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command) =
                                     &mut cloned.content
-                                    && let Some(name) = command.measurement_name_mut()
+                                    && let Some(name) = command.measurement_id_mut()
                                 {
                                     name.clear();
                                 }
@@ -3228,7 +3228,7 @@ impl PipelinesController {
         {
             let mut project = self.app_state.get_project_write();
             evanalyzer_app::modules::prune_module_values(&mut project);
-            evanalyzer_app::utils::assign_measurement_names(&mut project);
+            evanalyzer_app::utils::assign_measurement_ids(&mut project);
         }
         self.app_state.mark_dirty();
         self.focus_controller.refresh();
@@ -3952,7 +3952,7 @@ impl PipelinesController {
         self.show_step(pipeline_id, step_id, open);
     }
 
-    /// Shows the measurement step named `name` (`measurement_name`): its
+    /// Shows the measurement step named `name` (`measurement_id`): its
     /// pipeline, and the step - or, inside a module, the module opened.
     fn show_measurement_step(self: &Arc<Self>, name: &str) {
         let target = {
@@ -3961,7 +3961,7 @@ impl PipelinesController {
                 pipeline.steps.iter().find_map(|step| {
                     evanalyzer_app::modules::resolved_commands(step, &project.modules)
                         .iter()
-                        .any(|c| c.command.measurement_name() == Some(name))
+                        .any(|c| c.command.measurement_id() == Some(name))
                         .then(|| {
                             let in_module = matches!(step.content, StepContent::Module(_));
                             (pipeline.id, Some(step.id), in_module)
@@ -10911,7 +10911,7 @@ mod tests {
             .iter()
             .map(|s| {
                 s.command()
-                    .and_then(|c| c.measurement_name())
+                    .and_then(|c| c.measurement_id())
                     .unwrap()
                     .to_string()
             })

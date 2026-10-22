@@ -16,7 +16,7 @@ use crate::{
 use chrono::Utc;
 use evanalyzer_cfg::{
     PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
-    core_types::{ImageAddress, is_valid_measurement_name},
+    core_types::{ImageAddress, is_valid_measurement_id},
 };
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, StepId},
@@ -560,8 +560,8 @@ fn generate_job_from_project_settings_intenal(
 
     // Now generate the pipelines from the user settings
     let mut scopes = ScopeCounter::default();
-    // The measurement steps' names, with their pipeline's: unique in the run.
-    let mut measurement_names: Vec<(String, &str)> = Vec::new();
+    // The measurement steps' IDs, with their pipeline's: unique in the run.
+    let mut measurement_ids: Vec<(String, &str)> = Vec::new();
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
             continue;
@@ -595,8 +595,8 @@ fn generate_job_from_project_settings_intenal(
                 command,
             } in step_commands(&pipeline_setting.name, step, &config.modules, &mut scopes)?
             {
-                if let Some(name) = command.measurement_name() {
-                    measurement_names.push((name.to_string(), pipeline_setting.name.as_str()));
+                if let Some(name) = command.measurement_id() {
+                    measurement_ids.push((name.to_string(), pipeline_setting.name.as_str()));
                 }
                 let loads = loads_image(&command);
                 match into_pipeline_step(command)? {
@@ -638,26 +638,26 @@ fn generate_job_from_project_settings_intenal(
         job.add_pre_process_pipeline(pipeline_pre_process);
         job.add_post_process_pipeline(pipeline_post_process);
     }
-    check_measurement_names(&measurement_names)?;
+    check_measurement_ids(&measurement_ids)?;
 
     Ok(job)
 }
 
-/// Refuses a run with a measurement name that isn't valid or is used twice
+/// Refuses a run with a measurement ID that isn't valid or is used twice
 /// (`names`: each with its pipeline's name) - a name starts its
 /// measurements' keys. The editor reports the same while editing.
-fn check_measurement_names(names: &[(String, &str)]) -> Result<(), InternalErrors> {
+fn check_measurement_ids(names: &[(String, &str)]) -> Result<(), InternalErrors> {
     let mut seen = BTreeSet::new();
     for (name, pipeline) in names {
-        if !is_valid_measurement_name(name) {
+        if !is_valid_measurement_id(name) {
             return Err(InternalErrors::InvalidArgument(format!(
-                "Pipeline \"{pipeline}\": the measurement name \"{name}\" may only have \
+                "Pipeline \"{pipeline}\": the measurement ID \"{name}\" may only have \
                  letters, digits and _"
             )));
         }
         if !seen.insert(name.to_lowercase()) {
             return Err(InternalErrors::InvalidArgument(format!(
-                "Pipeline \"{pipeline}\": the measurement name \"{name}\" is used more than \
+                "Pipeline \"{pipeline}\": the measurement ID \"{name}\" is used more than \
                  once - each measurement step needs its own (a module used twice: make the \
                  name its parameter)"
             )));
@@ -1633,16 +1633,16 @@ mod tests {
         );
     }
 
-    /// Two measurement steps named the same can't run: their values would
+    /// Two measurement steps with the same ID can't run: their values would
     /// mix in the results.
     #[test]
-    fn a_job_with_two_measurement_steps_of_one_name_is_refused() {
+    fn a_job_with_two_measurement_steps_of_one_id_is_refused() {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
         let pearson = || {
             let mut command =
                 PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
-            *command.measurement_name_mut().unwrap() = "coloc".into();
+            *command.measurement_id_mut().unwrap() = "coloc".into();
             PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
@@ -1665,23 +1665,23 @@ mod tests {
     }
 
     #[test]
-    fn a_run_with_a_measurement_name_used_twice_or_not_valid_is_refused() {
+    fn a_run_with_a_measurement_id_used_twice_or_not_valid_is_refused() {
         let named = |names: &[&str]| -> Vec<(String, &'static str)> {
             names.iter().map(|n| (n.to_string(), "Nuclei")).collect()
         };
-        assert!(check_measurement_names(&named(&["pearson_01", "texture_01"])).is_ok());
-        let twice = check_measurement_names(&named(&["pearson_01", "PEARSON_01"]))
+        assert!(check_measurement_ids(&named(&["pearson_01", "texture_01"])).is_ok());
+        let twice = check_measurement_ids(&named(&["pearson_01", "PEARSON_01"]))
             .unwrap_err()
             .to_string();
         assert!(
             twice.contains("\"PEARSON_01\" is used more than once"),
             "{twice}"
         );
-        let bad = check_measurement_names(&named(&["coloc nuclei"]))
+        let bad = check_measurement_ids(&named(&["coloc nuclei"]))
             .unwrap_err()
             .to_string();
         assert!(bad.contains("only have letters, digits and _"), "{bad}");
-        assert!(check_measurement_names(&named(&[""])).is_err(), "no name");
+        assert!(check_measurement_ids(&named(&[""])).is_err(), "no ID");
     }
 
     #[test]

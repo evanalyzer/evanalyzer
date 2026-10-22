@@ -482,7 +482,7 @@ impl From<AiObjectClassifierSettings> for AiObjectClassifier {
 impl From<AreaOccupiedSettings> for AreaOccupied {
     fn from(_s: AreaOccupiedSettings) -> Self {
         AreaOccupied {
-            name: _s.name,
+            id: _s.id,
             object_class: _s.object_class,
         }
     }
@@ -724,7 +724,7 @@ impl From<ImageCacheSettings> for ImageCache {
 impl From<ImageIntensitySettings> for ImageIntensity {
     fn from(_s: ImageIntensitySettings) -> Self {
         ImageIntensity {
-            name: _s.name,
+            id: _s.id,
             channel: _s.channel,
         }
     }
@@ -743,7 +743,7 @@ impl From<ImageMathSettings> for ImageMath {
 impl From<ImageQualitySettings> for ImageQuality {
     fn from(_s: ImageQualitySettings) -> Self {
         ImageQuality {
-            name: _s.name,
+            id: _s.id,
             channel: _s.channel,
         }
     }
@@ -838,7 +838,7 @@ impl From<ObjectMathSettings> for ObjectMath {
 impl From<PearsonCorrelationCoefficientSettings> for PearsonCorrelationCoefficient {
     fn from(_s: PearsonCorrelationCoefficientSettings) -> Self {
         PearsonCorrelationCoefficient {
-            name: _s.name,
+            id: _s.id,
             channel_a: _s.channel_a,
             channel_b: _s.channel_b,
         }

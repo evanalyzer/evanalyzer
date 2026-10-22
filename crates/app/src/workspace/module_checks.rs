@@ -17,7 +17,7 @@ use crate::workspace::module_insights::{
 };
 use evanalyzer_cfg::{
     core_types::{
-        ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId, is_valid_measurement_name,
+        ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId, is_valid_measurement_id,
     },
     settings::{
         classification_settings::Class,
@@ -260,14 +260,14 @@ pub fn step_problem(project: &ProjectSettings, step: &PipelineStepSettings) -> O
 pub fn check_project(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = check_modules(project);
     problems.extend(check_steps(project));
-    problems.extend(check_measurement_names(project));
+    problems.extend(check_measurement_ids(project));
     problems
 }
 
-/// The measurement steps' names in what runs: each valid, none twice (a
+/// The measurement steps' IDs in what runs: each valid, none twice (a
 /// name starts its measurements' keys). A module used twice names its
 /// measurement the same both times unless the name is its parameter.
-fn check_measurement_names(project: &ProjectSettings) -> Vec<ModuleProblem> {
+fn check_measurement_ids(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = Vec::new();
     // (name, its step, where it is as a message says it, the module's key)
     let mut uses: Vec<(String, (PipelineId, StepId), String, Option<String>)> = Vec::new();
@@ -278,16 +278,16 @@ fn check_measurement_names(project: &ProjectSettings) -> Vec<ModuleProblem> {
                 StepContent::Command(_) => None,
             };
             for command in resolved_commands(step, &project.modules) {
-                let Some(name) = command.command.measurement_name() else {
+                let Some(name) = command.command.measurement_id() else {
                     continue;
                 };
                 let at = (pipeline.id, step.id);
-                if !is_valid_measurement_name(name) {
+                if !is_valid_measurement_id(name) {
                     problems.push(ModuleProblem::error(
                         None,
                         Some(at),
                         format!(
-                            "The measurement name “{name}” may only have letters, digits and _ - \
+                            "The measurement ID “{name}” may only have letters, digits and _ - \
                              it names the measurements' columns"
                         ),
                     ));
@@ -318,7 +318,7 @@ fn check_measurement_names(project: &ProjectSettings) -> Vec<ModuleProblem> {
                     )
                 }
                 _ => format!(
-                    "The measurement name “{name}” is also used by {} - each measurement \
+                    "The measurement ID “{name}” is also used by {} - each measurement \
                      step needs its own",
                     others.join(", ")
                 ),
@@ -1061,7 +1061,7 @@ mod tests {
     fn pearson(name: &str) -> PipelineCommand {
         let mut command =
             PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
-        *command.measurement_name_mut().unwrap() = name.into();
+        *command.measurement_id_mut().unwrap() = name.into();
         command
     }
 
@@ -1084,10 +1084,10 @@ mod tests {
             .collect()
     }
 
-    /// Each measurement step needs a name of its own (case aside) made of
+    /// Each measurement step needs an ID of its own (case aside) made of
     /// letters, digits and _.
     #[test]
-    fn a_measurement_name_used_twice_or_not_valid_is_reported_at_its_steps() {
+    fn a_measurement_id_used_twice_or_not_valid_is_reported_at_its_steps() {
         let mut project = ProjectSettings::default();
         project.pipelines.push(nuclei(vec![
             step(1, pearson("coloc")),
@@ -1098,7 +1098,7 @@ mod tests {
         assert_eq!(
             messages_at(&problems, 1),
             [
-                "The measurement name “coloc” is also used by step 2 of “Nuclei” - each \
+                "The measurement ID “coloc” is also used by step 2 of “Nuclei” - each \
               measurement step needs its own"
             ]
         );
