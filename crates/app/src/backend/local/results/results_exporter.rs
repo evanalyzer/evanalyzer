@@ -1698,7 +1698,12 @@ impl ResultExport {
                         .map_err(xlsx_err)?;
 
                     let mut row = 0u32;
-                    for column in self.columns.iter().filter(|column| column.is_aggregable()) {
+                    // An image measurement has no place within the image.
+                    for column in self
+                        .columns
+                        .iter()
+                        .filter(|column| column.is_aggregable() && !column.is_image_measurement())
+                    {
                         let column_label = column_display_name(column, &available_columns);
                         for aggregation in &self.aggregations {
                             let caption =

@@ -277,3 +277,18 @@ Kept private on purpose (one screen's own, not a copy of an Ink piece): the step
 ## Video
 
 - [ ] When video is running the auto preview should also update the detection if pc is fast enought
+## Measurements (decided 2026-10-22, design canvas "Measurements – display and export")
+
+Built: measurement steps (category Measure, after Object), `MeasurementInfo` (cfg), `PipelineMeasurements` + `cache.add_image_measurement` / `add_object_measurement`, a name per step (`#[cmdsmeta(measurement_name = "…")]`, unique in the project, filled as `pearson_01`, checked), the `measurements` table (one row per value, readable without a join) + `measurement_info` (the pickers' list), images without objects measured too. First step: Pearson Correlation (whole image).
+
+Decided - to build, in this order:
+- [x] Results (2026-10-22): `Column::Measurement(MeasurementColumn)` (key, step, name, per object or per image), listed under "Measurements" from `measurement_info` (`get_measurement_columns`; none in older results). Object list: each object's own value / its image plane's (one extra query per page). Per image, plate, well: an image measurement is the image's own value (`imm` / `plate_image_measurement_sql`: each image once, also without objects - not weighted by objects); an object measurement is aggregated over objects like Area. Charts: object measurements. GUI resolves picker keys via the open results' columns (`column_for_key`). Remote protocol 25 -> 26.
+  - [ ] Image measurements in Charts, Over time, the image heatmap and tracks: left out (`Column::is_image_measurement`) - over objects they'd count once per object and miss images without any; needs a per-image path there.
+  - [ ] Plate colour scale from the measurement's `range` (Pearson -1..1); today Auto.
+  - [ ] An empty cell says why (e.g. "a channel doesn't vary").
+  - [ ] Benchmark object measurements on a big analysis (the value is a correlated subquery per object - DuckDB decorrelates it, unmeasured).
+  - [ ] Look at the picker's "Measurements" group in the real app.
+- [ ] Export: measurement columns in the existing kinds (design A3) plus a "long" layout - one row per value, like the `measurements` table (from design B3).
+- [ ] Preview: a "Measurements" panel on the right (under Classes / Image / Objects; foldable, Alt+5, in View, fold state per user) with every measurement of the preview - all pipelines, steps inside modules too; a click jumps to the step (opens the module); the step being edited is highlighted; "visible part" marked. Per-object values: a column in Objects, the panel shows their median. Optional: the value on the step card too. Needs the preview to bring the measurements back (`MemoryExporter` keeps objects only).
+- [ ] Per-object measurements: the Arrow appender for `measurements` (row by row is too slow for many objects).
+- [ ] Next steps: Pearson per object / per class region, Manders M1/M2 (+ Costes), then quality control (focus, saturation, Flag images).

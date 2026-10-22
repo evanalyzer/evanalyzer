@@ -755,7 +755,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_list_columns_item_selected(move |key, selected| {
                     let classes = manager.classes.lock().expect("Poisened");
-                    let Some(column) = Column::from_key(key.as_str(), &classes) else {
+                    let Some(column) = manager.column_for_key(key.as_str(), &classes) else {
                         warn!("Unknown column key selected: {key}");
                         return;
                     };
@@ -914,7 +914,7 @@ impl ResultsStateController {
                         return;
                     };
                     let classes = manager.classes.lock().expect("Poisened");
-                    let Some(column) = Column::from_key(item.key.as_str(), &classes) else {
+                    let Some(column) = manager.column_for_key(item.key.as_str(), &classes) else {
                         warn!("Unknown matrix column key selected: {}", item.key);
                         return;
                     };
@@ -1625,7 +1625,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_chart_column_selected(move |key| {
                     let classes = manager.classes.lock().expect("Poisened");
-                    let Some(column) = Column::from_key(key.as_str(), &classes) else {
+                    let Some(column) = manager.column_for_key(key.as_str(), &classes) else {
                         warn!("Unknown chart column key selected: {key}");
                         return;
                     };
@@ -1638,7 +1638,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_chart_y_column_selected(move |key| {
                     let classes = manager.classes.lock().expect("Poisened");
-                    let Some(column) = Column::from_key(key.as_str(), &classes) else {
+                    let Some(column) = manager.column_for_key(key.as_str(), &classes) else {
                         warn!("Unknown chart Y column key selected: {key}");
                         return;
                     };
@@ -2208,6 +2208,14 @@ impl ResultsStateController {
         .ok();
     }
 
+    /// The column a picker's key (`Column::as_key`) stands for - a
+    /// measurement's from the open results' columns (its name isn't in the
+    /// key, see `Column::measurement_key`).
+    fn column_for_key(&self, key: &str, classes: &[Class]) -> Option<Column> {
+        let available = self.available_columns.lock().expect("Poisoned");
+        column_for_key(key, classes, &available)
+    }
+
     /// Whether `mode` is the tab on screen. If not, its view is only marked
     /// `stale` - refreshed once the tab is shown - so a hidden view never
     /// queries the database.
@@ -2291,7 +2299,10 @@ impl ResultsStateController {
         self.list_row_locations.lock().expect("Poisoned").clear();
         self.scatter_points.lock().expect("Poisoned").clear();
         *self.export_populated.lock().expect("Poisoned") = false;
-        self.export_image_selection.lock().expect("Poisoned").clear();
+        self.export_image_selection
+            .lock()
+            .expect("Poisoned")
+            .clear();
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -4549,7 +4560,8 @@ impl ResultsStateController {
         let class_list = self.classes.lock().expect("Poisened");
         let mut columns = Vec::new();
         for key in selected_keys(state.get_column_items()) {
-            let Some(column) = Column::from_key(key.as_str(), &class_list) else {
+            // `available_columns` is held already: not `self.column_for_key`.
+            let Some(column) = column_for_key(key.as_str(), &class_list, &available_columns) else {
                 return Err(format!("Unknown column \"{key}\" selected for export."));
             };
             columns.push(column);
@@ -4835,13 +4847,27 @@ fn column_items(
         .collect()
 }
 
+/// The column a picker's key (`Column::as_key`) stands for among
+/// `available` (the open results' columns) - a measurement's isn't made
+/// from its key alone (its name isn't in it).
+fn column_for_key(key: &str, classes: &[Class], available: &[ColumnEntry]) -> Option<Column> {
+    Column::from_key(key, classes).or_else(|| {
+        Column::measurement_key(key)?;
+        available
+            .iter()
+            .find(|entry| entry.key.as_key(classes) == key)
+            .map(|entry| entry.key.clone())
+    })
+}
+
 /// Whether `column` is something `chart_value_expr`/`column_aggregate_expr`
 /// (results_generator.rs) can resolve to a single per-object SQL
 /// expression — the exact same set that function accepts (the test
 /// `charts_offer_and_draw_the_intensities` draws every column offered). Unlike `Column::is_aggregable`, `Count` is
 /// also excluded here: it's a row tally (1 per object), not a per-object
 /// measurement, so charting it doesn't mean anything the way it does for
-/// Images-mode's own per-image counts.
+/// Images-mode's own per-image counts. Neither is an image measurement (a
+/// value per image, see `Column::is_image_measurement`).
 fn is_chartable_column(column: &Column) -> bool {
     !matches!(
         column,
@@ -4850,7 +4876,7 @@ fn is_chartable_column(column: &Column) -> bool {
             | Column::ImageName
             | Column::ObjectClass
             | Column::Count
-    )
+    ) && !column.is_image_measurement()
 }
 
 /// Whether `column` is a valid Matrix (Plate/Well/Heatmap) target — mirrors
@@ -8074,6 +8100,32 @@ pub(crate) mod tests {
         state.invoke_matrix_value_clicked();
 
         assert_eq!(matrix_filter_value(&o, |f| f.column.clone()), column);
+    }
+
+    /// A measurement's picker key resolves to its column among the open
+    /// results' (its name isn't in the key); other keys as before.
+    #[test]
+    fn a_measurement_key_resolves_among_the_available_columns() {
+        use evanalyzer_app::results::MeasurementColumn;
+        let pearson = Column::Measurement(MeasurementColumn {
+            key: "pearson_01/pearson/ch0_ch1".into(),
+            step: "pearson_01".into(),
+            name: "Pearson (channel 0 × channel 1)".into(),
+            per_object: false,
+        });
+        let available = vec![ColumnEntry {
+            display_name: pearson.display_label(&[]),
+            key: pearson.clone(),
+            group: "Measurements".into(),
+        }];
+        let key = pearson.as_key(&[]);
+        assert_eq!(column_for_key(&key, &[], &available), Some(pearson));
+        assert_eq!(column_for_key(&key, &[], &[]), None, "not in these results");
+        assert_eq!(
+            column_for_key("area_px", &[], &available),
+            Some(Column::AreaSizePx)
+        );
+        assert!(!is_chartable_column(&available[0].key), "a value per image");
     }
 
     /// Users missed them: a channel's intensities are charted like any

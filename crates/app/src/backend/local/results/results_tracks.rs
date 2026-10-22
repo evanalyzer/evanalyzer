@@ -56,7 +56,11 @@ impl<'a> TrackSummaryQuery<'a> {
         let columns: Vec<&Column> = filter
             .columns
             .iter()
-            .filter(|column| column.is_aggregable() && **column != Column::Count)
+            .filter(|column| {
+                column.is_aggregable()
+                    && **column != Column::Count
+                    && !column.is_image_measurement()
+            })
             .collect();
         let value_names: Vec<String> = columns
             .iter()

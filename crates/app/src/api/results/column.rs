@@ -1,6 +1,20 @@
 use evanalyzer_cfg::{core_types::ObjectClass, settings::classification_settings::Class};
 use serde::{Deserialize, Serialize};
 
+/// A measurement step's measurement as a column: its key in the
+/// `measurements` table and how it reads.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct MeasurementColumn {
+    /// The measurement's key ("pearson_01/pearson/ch0_ch1").
+    pub key: String,
+    /// The measurement step's name ("pearson_01").
+    pub step: String,
+    /// Readable ("Pearson (channel 0 × channel 1)").
+    pub name: String,
+    /// A value per object (else per image plane).
+    pub per_object: bool,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Column {
     // The order the List shows them in (`Ord`): the image first.
@@ -22,7 +36,12 @@ pub enum Column {
     IntensitySum(u32),
     IntensityMin(u32),
     IntensityMax(u32),
+    /// A measurement step's measurement (`measurements` table).
+    Measurement(MeasurementColumn),
 }
+
+/// How a measurement column's [`Column::as_key`] starts.
+const MEASUREMENT_KEY_PREFIX: &str = "measurement:";
 
 impl Column {
     /// Stable string key (matches the underlying database column name, with
@@ -65,7 +84,16 @@ impl Column {
             Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
             Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),
             Column::IntensityMax(channel) => format!("intensity_max_gray_ch{channel}"),
+            Column::Measurement(m) => format!("{MEASUREMENT_KEY_PREFIX}{}", m.key),
         }
+    }
+
+    /// The measurement key of a [`Column::as_key`] key - `None` if it isn't
+    /// a measurement's. [`Column::from_key`] can't make the column from it
+    /// alone (its name comes from the results' `measurement_info`): look it
+    /// up among the available columns.
+    pub fn measurement_key(key: &str) -> Option<&str> {
+        key.strip_prefix(MEASUREMENT_KEY_PREFIX)
     }
 
     /// Human-facing label for this column — every header/caption actually
@@ -104,6 +132,7 @@ impl Column {
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
             Column::IntensityMin(channel) => format!("Min Intensity (Ch {channel})"),
             Column::IntensityMax(channel) => format!("Max Intensity (Ch {channel})"),
+            Column::Measurement(m) => format!("{} · {}", m.step, m.name),
         }
     }
 
@@ -113,6 +142,14 @@ impl Column {
     /// the export's grouped/grid documents filter their columns with -
     /// must match what `column_aggregate_expr` (results_generator.rs)
     /// accepts, plus `Count` (aggregated as `COUNT(*)`).
+    /// A measurement with one value per image plane (not per object): the
+    /// per-image views take the image's own value; views over objects
+    /// (charts, over time, heatmap, tracks) leave it out for now - over
+    /// objects it would count once per object and miss images without any.
+    pub fn is_image_measurement(&self) -> bool {
+        matches!(self, Column::Measurement(m) if !m.per_object)
+    }
+
     pub fn is_aggregable(&self) -> bool {
         !matches!(
             self,

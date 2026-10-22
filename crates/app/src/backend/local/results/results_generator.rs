@@ -394,11 +394,12 @@ impl ResultsGenerator {
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let objects: Vec<ObjectRow> = stmt
+        let mut objects: Vec<ObjectRow> = stmt
             .query_map([], map_object_row)
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
+        self.add_measurement_values(objects.iter_mut(), &ordered_columns)?;
 
         let (row_names, rows, row_locations) = if details_active {
             self.build_coloc_detail_rows(
@@ -439,6 +440,75 @@ impl ResultsGenerator {
             source_object_count: objects.len(),
             row_locations,
         })
+    }
+
+    /// Reads the values of the measurement columns among `columns` for
+    /// `objects` (a page of the list): each object's own, or its image
+    /// plane's for an image measurement. One query for the page.
+    fn add_measurement_values<'a>(
+        &self,
+        objects: impl Iterator<Item = &'a mut ObjectRow>,
+        columns: &[Column],
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let keys = |per_object: bool| -> Vec<String> {
+            columns
+                .iter()
+                .filter_map(|c| match c {
+                    Column::Measurement(m) if m.per_object == per_object => Some(m.key.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (object_keys, image_keys) = (keys(true), keys(false));
+        if object_keys.is_empty() && image_keys.is_empty() {
+            return Ok(());
+        }
+        let mut objects: HashMap<String, &mut ObjectRow> =
+            objects.map(|o| (o.object_id.clone(), o)).collect();
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let ids = sql_string_in_list(&objects.keys().cloned().collect::<Vec<_>>());
+        let mut parts = Vec::new();
+        if !object_keys.is_empty() {
+            parts.push(format!(
+                "SELECT object_id::VARCHAR, key, value FROM measurements \
+                 WHERE region = 'object' AND value IS NOT NULL \
+                 AND key IN ({}) AND object_id IN ({ids})",
+                sql_string_in_list(&object_keys)
+            ));
+        }
+        if !image_keys.is_empty() {
+            parts.push(format!(
+                "SELECT o.object_id::VARCHAR, m.key, m.value FROM objects o \
+                 JOIN measurements m ON m.image_rel_path = o.image_rel_path \
+                 AND m.z_stack = o.z_stack AND m.t_stack = o.t_stack \
+                 WHERE m.region = 'image' AND m.value IS NOT NULL \
+                 AND m.key IN ({}) AND o.object_id IN ({ids})",
+                sql_string_in_list(&image_keys)
+            ));
+        }
+        let mut stmt = self
+            .database
+            .prepare(&parts.join(" UNION ALL "))
+            .map_err(err)?;
+        let values = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })
+            .map_err(err)?;
+        for value in values {
+            let (id, key, value) = value.map_err(err)?;
+            if let Some(object) = objects.get_mut(&id) {
+                object.measurements.insert(key, value);
+            }
+        }
+        Ok(())
     }
 
     /// Returns a list of (image, class) groups with the object metrics
@@ -576,6 +646,9 @@ impl ResultsGenerator {
             .iter()
             .enumerate()
             .map(|(i, (column, aggregation))| {
+                if is_image_measurement(column) {
+                    return format!("imm.m_{i}");
+                }
                 fill_zero_sql(
                     &format!("agg.value_{i}"),
                     column,
@@ -586,6 +659,13 @@ impl ResultsGenerator {
             })
             .collect::<Vec<_>>()
             .join(",\n                ");
+        let (imm_cte, imm_join) = match image_measurements_sql(&stats, &filter.plane) {
+            Some(sql) => (
+                format!("), imm AS (\n{sql}\n"),
+                "LEFT JOIN imm ON imm.image_rel_path = keys.image_rel_path\n",
+            ),
+            None => (String::new(), ""),
+        };
         // Every analysed image x every row class, plus whatever (image,
         // class) pairs actually have objects - the latter also covers an
         // image missing from `images` (a run that crashed before
@@ -613,7 +693,7 @@ impl ResultsGenerator {
              ), keys AS (\n\
                  {measured_keys}\
                  SELECT image_rel_path, class_id FROM agg\n\
-             )\n\
+             {imm_cte})\n\
              SELECT\n\
                  keys.image_rel_path,\n\
                  COALESCE(img.image_name, agg.image_name),\n\
@@ -624,6 +704,7 @@ impl ResultsGenerator {
              LEFT JOIN img ON img.image_rel_path = keys.image_rel_path\n\
              LEFT JOIN agg ON agg.image_rel_path = keys.image_rel_path\n\
                  AND agg.class_id = keys.class_id\n\
+             {imm_join}\
              WHERE {key_where}\n\
              ORDER BY keys.image_rel_path, keys.class_id\n\
              LIMIT {limit}"
@@ -748,10 +829,22 @@ impl ResultsGenerator {
         }
         let per_image_class = per_image_class_sql(stats, &pre, &post)?;
         let limit = filter.page.limit.max(0);
-        let values = (0..stats.len())
-            .map(|i| format!("agg.value_{i}"))
+        let values = stats
+            .iter()
+            .enumerate()
+            .map(|(i, (column, _))| match is_image_measurement(column) {
+                true => format!("imm.m_{i}"),
+                false => format!("agg.value_{i}"),
+            })
             .collect::<Vec<_>>()
             .join(", ");
+        let (imm_cte, imm_join) = match image_measurements_sql(stats, &filter.plane) {
+            Some(sql) => (
+                format!("), imm AS (\n{sql}\n"),
+                "LEFT JOIN imm ON imm.image_rel_path = page.image_rel_path\n",
+            ),
+            None => (String::new(), ""),
+        };
         // The page's images: every analysed one, plus any with objects (an
         // image missing from `images` - a run that crashed before
         // finalizing it - still shows), so an analysed image without
@@ -773,13 +866,14 @@ impl ResultsGenerator {
                  )\n\
                  ORDER BY image_rel_path\n\
                  LIMIT {limit}\n\
-             )\n\
+             {imm_cte})\n\
              SELECT page.image_rel_path, COALESCE(img.image_name, agg.image_name),\n\
                  COALESCE(img.failed, false), COALESCE(img.measured, false),\n\
                  agg.class_id, {values}\n\
              FROM page\n\
              LEFT JOIN img ON img.image_rel_path = page.image_rel_path\n\
              LEFT JOIN agg ON agg.image_rel_path = page.image_rel_path\n\
+             {imm_join}\
              ORDER BY page.image_rel_path",
             image_where = image_conditions.join(" AND "),
         );
@@ -1022,12 +1116,13 @@ impl ResultsGenerator {
             sql_string_in_list(&ids)
         );
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let objects: HashMap<String, ObjectRow> = stmt
+        let mut objects: HashMap<String, ObjectRow> = stmt
             .query_map([], map_object_row)
             .map_err(err)?
             .map(|row| row.map(|object| (object.object_id.clone(), object)))
             .collect::<Result<_, _>>()
             .map_err(err)?;
+        self.add_measurement_values(objects.values_mut(), &block_columns)?;
 
         let mut row_names = Vec::new();
         let mut rows: Vec<Vec<Cell>> = Vec::new();
@@ -1254,6 +1349,63 @@ impl ResultsGenerator {
         ))
     }
 
+    /// Per-well statistics over the *image measurements* of the well's
+    /// images - like `plate_count_sql`: each enabled, successfully analysed
+    /// image counts once, whatever its number of objects; one without a
+    /// value is left out. `values`: (output column name, measurement key,
+    /// SQL aggregate fn) per statistic.
+    fn plate_image_measurement_sql(
+        &self,
+        grouping: &GroupingSql,
+        plane: &PlaneFilter,
+        values: &[(String, String, &'static str)],
+    ) -> Result<String, InternalErrors> {
+        let measured = self.measured_on_plane_sql("i", plane)?;
+        let (group_col, regex_sql) = (grouping.column, grouping.regex.as_str());
+        let per_image = values
+            .iter()
+            .enumerate()
+            .map(|(j, (_, key, _))| {
+                format!(
+                    "AVG(value) FILTER (WHERE key = '{}') AS v_{j}",
+                    key.replace('\'', "''")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let image_values = (0..values.len())
+            .map(|j| format!("m.v_{j}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let aggregates = values
+            .iter()
+            .enumerate()
+            .map(|(j, (name, _, agg_fn))| format!("{agg_fn}(v_{j}) AS {name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "SELECT group_prefix, row, col, {aggregates}\n\
+             FROM (\n\
+                 SELECT\n\
+                     regexp_extract(i.{group_col}, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract(i.{group_col}, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract(i.{group_col}, '{regex_sql}', 3) AS col,\n\
+                     {image_values}\n\
+                 FROM images i\n\
+                 LEFT JOIN (\n\
+                     SELECT image_rel_path, {per_image}\n\
+                     FROM measurements\n\
+                     WHERE region = 'image' AND z_stack = {z} AND t_stack = {t}\n\
+                     GROUP BY image_rel_path\n\
+                 ) m ON m.image_rel_path = i.image_rel_path\n\
+                 WHERE NOT i.disabled AND i.successful AND {measured}\n\
+             )\n\
+             GROUP BY group_prefix, row, col",
+            z = plane.z_stack,
+            t = plane.t_stack,
+        ))
+    }
+
     pub fn get_group_by_plate(
         &self,
         filter: &PlateFilter,
@@ -1280,6 +1432,20 @@ impl ResultsGenerator {
                 &filter.plane,
                 filter.object_class,
                 &[("value".to_string(), aggregation_sql_fn(&filter.aggregation))],
+            )?;
+            ("agg.value".to_string(), agg_sql)
+        } else if let Column::Measurement(m) = &filter.column
+            && !m.per_object
+        {
+            // An image measurement: over the well's images' own values.
+            let agg_sql = self.plate_image_measurement_sql(
+                &grouping,
+                &filter.plane,
+                &[(
+                    "value".to_string(),
+                    m.key.clone(),
+                    aggregation_sql_fn(&filter.aggregation),
+                )],
             )?;
             ("agg.value".to_string(), agg_sql)
         } else {
@@ -1392,12 +1558,23 @@ impl ResultsGenerator {
         let mut value_cols: Vec<String> = Vec::new();
         let mut object_value_exprs: Vec<String> = Vec::new();
         let mut count_values: Vec<(String, &'static str)> = Vec::new();
+        // Per-image measurement statistics (an image's own value).
+        let mut image_values: Vec<(String, String, &'static str)> = Vec::new();
         for column in &filter.column {
             for aggregation in &filter.aggregation {
                 let k = value_cols.len();
                 if matches!(column, Column::Count) {
                     value_cols.push(format!("cnt.value_{k}"));
                     count_values.push((format!("value_{k}"), aggregation_sql_fn(aggregation)));
+                } else if let Column::Measurement(m) = column
+                    && !m.per_object
+                {
+                    value_cols.push(format!("imv.value_{k}"));
+                    image_values.push((
+                        format!("value_{k}"),
+                        m.key.clone(),
+                        aggregation_sql_fn(aggregation),
+                    ));
                 } else {
                     value_cols.push(fill_zero_sql(
                         &format!("agg.value_{k}"),
@@ -1461,6 +1638,19 @@ impl ResultsGenerator {
                 )
             };
 
+            // Image measurement statistics - the same for every class.
+            let imv_join = if image_values.is_empty() {
+                String::new()
+            } else {
+                let imv_sql =
+                    self.plate_image_measurement_sql(&grouping, &filter.plane, &image_values)?;
+                format!(
+                    "LEFT JOIN (\n{imv_sql}\n) imv\n\
+                         ON imv.group_prefix = img.group_prefix\n\
+                         AND imv.row = img.row AND imv.col = img.col\n"
+                )
+            };
+
             let sql = format!(
                 "SELECT img.group_prefix, img.row, img.col, {value_cols_sql}, img.any_disabled,\n\
                  img.any_failed\n\
@@ -1477,6 +1667,7 @@ impl ResultsGenerator {
                  ) img\n\
                  {agg_join}\
                  {cnt_join}\
+                 {imv_join}\
                  ORDER BY img.group_prefix"
             );
 
@@ -1574,13 +1765,25 @@ impl ResultsGenerator {
         // A field without objects gets a Count/Sum of 0 if it was analysed
         // on this plane (`fill_zero_sql`) - its own value, so disabled or
         // not doesn't matter here either.
-        let value = fill_zero_sql(
-            "agg.value",
-            &filter.column,
-            &filter.aggregation,
-            "agg.n_objects IS NULL",
-            &self.measured_on_plane_sql("i", &filter.plane)?,
-        );
+        let value = if is_image_measurement(&filter.column) {
+            "imm.m_0".to_string()
+        } else {
+            fill_zero_sql(
+                "agg.value",
+                &filter.column,
+                &filter.aggregation,
+                "agg.n_objects IS NULL",
+                &self.measured_on_plane_sql("i", &filter.plane)?,
+            )
+        };
+        // An image measurement: the image's own value (`imm`), not one over
+        // its objects.
+        let agg_value = match is_image_measurement(&filter.column) {
+            true => "NULL".to_string(),
+            false => format!("{agg_fn}({value_expr})"),
+        };
+        let imm_join =
+            image_measurement_join(&[(&filter.column, &filter.aggregation)], &filter.plane);
         let sql = format!(
             "SELECT\n\
                 regexp_extract(i.{group_col}, '{regex}', 4) AS idx,\n\
@@ -1591,11 +1794,12 @@ impl ResultsGenerator {
                 NOT i.successful\n\
              FROM images i\n\
              LEFT JOIN (\n\
-                 SELECT image_rel_path, COUNT(*) AS n_objects, {agg_fn}({value_expr}) AS value\n\
+                 SELECT image_rel_path, COUNT(*) AS n_objects, {agg_value} AS value\n\
                  FROM objects\n\
                  WHERE {object_where}\n\
                  GROUP BY image_rel_path\n\
              ) agg ON agg.image_rel_path = i.image_rel_path\n\
+             {imm_join}\
              WHERE regexp_extract(i.{group_col}, '{regex}', 1) = '{group_name}'\n\
              ORDER BY idx",
             group_name = filter.group_name.replace('\'', "''"),
@@ -1672,13 +1876,25 @@ impl ResultsGenerator {
         // objects filtered+aggregated before the join, disabled images
         // shown - not dropped - and flagged via `i.disabled`), just without
         // the single-well filter - every well's fields in one query.
-        let value = fill_zero_sql(
-            "agg.value",
-            &filter.column,
-            &filter.aggregation,
-            "agg.n_objects IS NULL",
-            &self.measured_on_plane_sql("i", &filter.plane)?,
-        );
+        let value = if is_image_measurement(&filter.column) {
+            "imm.m_0".to_string()
+        } else {
+            fill_zero_sql(
+                "agg.value",
+                &filter.column,
+                &filter.aggregation,
+                "agg.n_objects IS NULL",
+                &self.measured_on_plane_sql("i", &filter.plane)?,
+            )
+        };
+        // An image measurement: the image's own value (`imm`), not one over
+        // its objects.
+        let agg_value = match is_image_measurement(&filter.column) {
+            true => "NULL".to_string(),
+            false => format!("{agg_fn}({value_expr})"),
+        };
+        let imm_join =
+            image_measurement_join(&[(&filter.column, &filter.aggregation)], &filter.plane);
         let sql = format!(
             "SELECT\n\
                 regexp_extract(i.{group_col}, '{regex}', 1) AS group_prefix,\n\
@@ -1690,11 +1906,12 @@ impl ResultsGenerator {
                 NOT i.successful\n\
              FROM images i\n\
              LEFT JOIN (\n\
-                 SELECT image_rel_path, COUNT(*) AS n_objects, {agg_fn}({value_expr}) AS value\n\
+                 SELECT image_rel_path, COUNT(*) AS n_objects, {agg_value} AS value\n\
                  FROM objects\n\
                  WHERE {object_where}\n\
                  GROUP BY image_rel_path\n\
              ) agg ON agg.image_rel_path = i.image_rel_path\n\
+             {imm_join}\
              ORDER BY group_prefix, idx"
         );
 
@@ -1772,22 +1989,29 @@ impl ResultsGenerator {
         let measured = self.measured_on_plane_sql("i", &filter.plane)?;
         let mut value_exprs = Vec::with_capacity(filter.column.len() * filter.aggregation.len());
         let mut agg_value_cols = Vec::with_capacity(value_exprs.capacity());
+        let mut stats: Vec<(&Column, &Aggregation)> = Vec::new();
         for column in &filter.column {
             for aggregation in &filter.aggregation {
+                let k = agg_value_cols.len();
+                stats.push((column, aggregation));
+                // An image measurement: the image's own value (`imm`).
+                if is_image_measurement(column) {
+                    agg_value_cols.push(format!("imm.m_{k}"));
+                    value_exprs.push(format!("NULL AS value_{k}"));
+                    continue;
+                }
                 agg_value_cols.push(fill_zero_sql(
-                    &format!("agg.value_{}", agg_value_cols.len()),
+                    &format!("agg.value_{k}"),
                     column,
                     aggregation,
                     "agg.n_objects IS NULL",
                     &measured,
                 ));
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
-                value_exprs.push(format!(
-                    "{agg_fn}({value_expr}) AS value_{}",
-                    value_exprs.len()
-                ));
+                value_exprs.push(format!("{agg_fn}({value_expr}) AS value_{k}"));
             }
         }
+        let imm_join = image_measurement_join(&stats, &filter.plane);
         let n = value_exprs.len();
         let value_exprs_sql = value_exprs.join(",\n                ");
         let agg_value_cols = agg_value_cols.join(", ");
@@ -1827,6 +2051,7 @@ impl ResultsGenerator {
                      WHERE {object_where}\n\
                      GROUP BY image_rel_path\n\
                  ) agg ON agg.image_rel_path = i.image_rel_path\n\
+                 {imm_join}\
                  ORDER BY group_prefix, idx"
             );
 
@@ -2311,7 +2536,50 @@ impl ResultsGenerator {
             ret.push(entry(Column::IntensityMax(channel), "intensity"));
         }
 
+        // The measurement steps' measurements, by step.
+        for column in self.get_measurement_columns()? {
+            ret.push(entry(Column::Measurement(column), "Measurements"));
+        }
+
         Ok(ret)
+    }
+
+    /// The measurements of this analysis (`measurement_info`), by step and
+    /// name - none in results from before measurement steps existed.
+    pub fn get_measurement_columns(&self) -> Result<Vec<MeasurementColumn>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let exists: bool = self
+            .database
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.tables \
+                 WHERE table_name = 'measurement_info'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(err)?;
+        if !exists {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .database
+            .prepare(
+                "SELECT key, step, measurement, target = 'Object' FROM measurement_info \
+                 ORDER BY step, measurement, key",
+            )
+            .map_err(err)?;
+        let columns = stmt
+            .query_map([], |row| {
+                Ok(MeasurementColumn {
+                    key: row.get(0)?,
+                    step: row.get(1)?,
+                    name: row.get(2)?,
+                    per_object: row.get(3)?,
+                })
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(columns)
     }
 
     pub fn get_nr_of_c_stacks(&self) -> u32 {
@@ -2443,6 +2711,9 @@ struct ObjectRow {
     bbox_xmax_px: u32,
     bbox_ymax_px: u32,
     disabled: bool,
+    /// The selected measurements' values, by key - filled after the rows
+    /// are read (`ResultsGenerator::add_measurement_values`).
+    measurements: HashMap<String, f64>,
 }
 
 /// Which of `ObjectRow`'s source columns a given column selection actually
@@ -2617,6 +2888,7 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         bbox_ymax_px: row.get(21)?,
         disabled: row.get(22)?,
         track_id: row.get(23)?,
+        measurements: HashMap::new(),
     })
 }
 
@@ -2733,6 +3005,11 @@ fn per_image_class_sql(
 ) -> Result<String, InternalErrors> {
     let mut values = Vec::with_capacity(stats.len());
     for (i, (column, aggregation)) in stats.iter().enumerate() {
+        // An image's own value comes from `image_measurements_sql`.
+        if is_image_measurement(column) {
+            values.push(format!("NULL AS value_{i}"));
+            continue;
+        }
         let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
         values.push(format!("{agg_fn}({value_expr}) AS value_{i}"));
     }
@@ -2750,6 +3027,55 @@ fn per_image_class_sql(
         values = values.join(", "),
         per_class = objects_per_class_sql(&pre.join(" AND ")),
     ))
+}
+
+/// Whether `column` is a value per image plane (not per object).
+fn is_image_measurement(column: &Column) -> bool {
+    column.is_image_measurement()
+}
+
+/// The image measurements among `stats` per image of `plane` - one `m_{i}`
+/// per such statistic (its aggregation over the image's value: the value
+/// itself, no spread) - for the per-image views to join as `imm`. Also an
+/// image without objects has its value. `None` without image measurements.
+fn image_measurements_sql(
+    stats: &[(&Column, &Aggregation)],
+    plane: &PlaneFilter,
+) -> Option<String> {
+    let values: Vec<String> = stats
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (column, aggregation))| match column {
+            Column::Measurement(m) if !m.per_object => Some(format!(
+                "{}(value) FILTER (WHERE key = '{}') AS m_{i}",
+                aggregation_sql_fn(aggregation),
+                m.key.replace('\'', "''")
+            )),
+            _ => None,
+        })
+        .collect();
+    (!values.is_empty()).then(|| {
+        format!(
+            "SELECT image_rel_path, {}\n\
+             FROM measurements\n\
+             WHERE region = 'image' AND z_stack = {} AND t_stack = {}\n\
+             GROUP BY image_rel_path",
+            values.join(", "),
+            plane.z_stack,
+            plane.t_stack
+        )
+    })
+}
+
+/// For the views with a row per image (`images i`): the join adding the
+/// image measurements among `stats` as `imm.m_{i}` - empty without any.
+fn image_measurement_join(stats: &[(&Column, &Aggregation)], plane: &PlaneFilter) -> String {
+    match image_measurements_sql(stats, plane) {
+        Some(sql) => {
+            format!("LEFT JOIN (\n{sql}\n) imm ON imm.image_rel_path = i.image_rel_path\n")
+        }
+        None => String::new(),
+    }
 }
 
 /// Comma-joined integers for a SQL `IN (...)` list.
@@ -2975,6 +3301,13 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(object, IntensityStat::Max, *channel)),
             ..no_bg
         },
+        Column::Measurement(m) => Cell {
+            value: object
+                .measurements
+                .get(&m.key)
+                .map_or(CellValue::Empty, |v| CellValue::Float(*v as f32)),
+            ..no_bg
+        },
     }
 }
 
@@ -3046,6 +3379,7 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         Column::IntensityAvg(channel) => format!("intensity_mean_gray[{}]", channel + 1),
         Column::IntensityMin(channel) => format!("intensity_min_gray[{}]", channel + 1),
         Column::IntensityMax(channel) => format!("intensity_max_gray[{}]", channel + 1),
+        Column::Measurement(m) => measurement_value_expr(m),
         // Handled by `aggregate_sql` before this function is ever called
         // with `Column::Count` — `COUNT(*)` doesn't fit the "aggregate
         // function wraps a per-row scalar expression" shape every other
@@ -3067,6 +3401,28 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
             )));
         }
     })
+}
+
+/// A measurement's value for the object of the row - its own (a value per
+/// object) or its image plane's (a value per image). Refers to the row only
+/// by `object_id`, which no other table of these queries has, so it works
+/// whatever `objects` is called there (`o`, `objects`, joined with
+/// `images`). NULL without a value.
+fn measurement_value_expr(m: &MeasurementColumn) -> String {
+    let key = m.key.replace('\'', "''");
+    if m.per_object {
+        format!(
+            "(SELECT mv.v FROM (SELECT object_id AS oid, value AS v FROM measurements \
+             WHERE key = '{key}' AND region = 'object') mv WHERE mv.oid = object_id)"
+        )
+    } else {
+        format!(
+            "(SELECT mv.v FROM (SELECT ob.object_id AS oid, m.value AS v \
+             FROM objects ob JOIN measurements m ON m.image_rel_path = ob.image_rel_path \
+             AND m.z_stack = ob.z_stack AND m.t_stack = ob.t_stack \
+             WHERE m.key = '{key}' AND m.region = 'image') mv WHERE mv.oid = object_id)"
+        )
+    }
 }
 
 fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
@@ -3106,7 +3462,9 @@ fn aggregate_sql(
 /// (average, min, max, median, spread) doesn't exist without values and
 /// stays empty - a 0 there would be a made-up measurement.
 fn zero_when_no_objects(column: &Column, aggregation: &Aggregation) -> bool {
-    matches!(column, Column::Count) || matches!(aggregation, Aggregation::Sum)
+    // An image measurement is the image's own value, objects or not.
+    !is_image_measurement(column)
+        && (matches!(column, Column::Count) || matches!(aggregation, Aggregation::Sum))
 }
 
 /// `value` (an aggregate over a group's objects), but 0 instead of NULL
@@ -7135,5 +7493,281 @@ mod tests {
                 Some(300.0)
             ]
         );
+    }
+
+    // -- measurements -----------------------------------------------------
+
+    /// A plate of 3 images in A1 (A1_03 without objects) and 1 in B2, with
+    /// an image measurement `p` and an object measurement `q`:
+    ///
+    /// | image  | objects | p   | q per object |
+    /// |--------|---------|-----|--------------|
+    /// | A1_01  | 2       | 0.2 | 0.1, 0.3     |
+    /// | A1_02  | 1       | 0.4 | 0.6          |
+    /// | A1_03  | 0       | 0.9 | -            |
+    /// | B2_01  | 1       | 0.5 | 0.8          |
+    fn with_measurements() -> (ResultsGenerator, Column, Column) {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 30),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 40),
+        ]);
+        add_image(&generator, ImageRow::analysed("A1_03.tif"));
+        generator
+            .database
+            .execute_batch(
+                "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
+                 step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
+                 range_max DOUBLE, aggregatable BOOLEAN);
+                 CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+                 z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+                 object_class_name VARCHAR, object_class_id INTEGER[], step VARCHAR, \
+                 measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
+                 INSERT INTO measurement_info VALUES
+                     ('p_01/p', 'P', 'p_01', 'None', 'Image', -1, 1, true),
+                     ('q_01/q', 'Q', 'q_01', 'None', 'Object', -1, 1, true);
+                 INSERT INTO measurements (image_rel_path, z_stack, t_stack, region, key, value)
+                 VALUES ('A1_01.tif', 0, 0, 'image', 'p_01/p', 0.2),
+                        ('A1_02.tif', 0, 0, 'image', 'p_01/p', 0.4),
+                        ('A1_03.tif', 0, 0, 'image', 'p_01/p', 0.9),
+                        ('B2_01.tif', 0, 0, 'image', 'p_01/p', 0.5);",
+            )
+            .unwrap();
+        // q per object, in the order the objects were seeded.
+        let ids: Vec<String> = generator
+            .database
+            .prepare("SELECT object_id::VARCHAR FROM objects ORDER BY area_px")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for (id, q) in ids.iter().zip([0.1, 0.3, 0.6, 0.8]) {
+            generator
+                .database
+                .execute(
+                    "INSERT INTO measurements (image_rel_path, z_stack, t_stack, region, \
+                     object_id, key, value) VALUES ('', 0, 0, 'object', ?::UUID, 'q_01/q', ?)",
+                    duckdb::params![id, q],
+                )
+                .unwrap();
+        }
+        let column = |key: &str, step: &str, name: &str, per_object| {
+            Column::Measurement(MeasurementColumn {
+                key: key.into(),
+                step: step.into(),
+                name: name.into(),
+                per_object,
+            })
+        };
+        (
+            generator,
+            column("p_01/p", "p_01", "P", false),
+            column("q_01/q", "q_01", "Q", true),
+        )
+    }
+
+    fn rounded(value: Option<f64>) -> Option<f64> {
+        value.map(|v| (v * 1000.0).round() / 1000.0)
+    }
+
+    #[test]
+    fn measurements_are_columns_of_their_results() {
+        let (generator, p, q) = with_measurements();
+        let measurements: Vec<Column> = generator
+            .get_available_columns()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.group == "Measurements")
+            .map(|c| c.key)
+            .collect();
+        assert_eq!(measurements, [p.clone(), q.clone()]);
+        assert_eq!(p.display_label(&[]), "p_01 · P");
+        assert!(
+            open(&[]).get_measurement_columns().unwrap().is_empty(),
+            "older results"
+        );
+    }
+
+    /// Each object row: its image's value and its own.
+    #[test]
+    fn the_object_list_shows_the_images_and_the_objects_own_value() {
+        let (generator, p, q) = with_measurements();
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::AreaSizePx, p, q],
+                with_coloc_details: false,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let mut rows: Vec<(i32, Option<f64>, Option<f64>)> = result
+            .rows
+            .iter()
+            .map(|row| {
+                let CellValue::Integer(area) = row[0].value else {
+                    panic!("the area");
+                };
+                (
+                    area,
+                    rounded(as_float(&row[1].value)),
+                    rounded(as_float(&row[2].value)),
+                )
+            })
+            .collect();
+        rows.sort_by_key(|row| row.0);
+        assert_eq!(
+            rows,
+            [
+                (10, Some(0.2), Some(0.1)),
+                (20, Some(0.2), Some(0.3)),
+                (30, Some(0.4), Some(0.6)),
+                (40, Some(0.5), Some(0.8)),
+            ]
+        );
+    }
+
+    /// Per image: the image's own value - also without objects - and the
+    /// objects' average.
+    #[test]
+    fn per_image_an_image_measurement_is_the_images_value() {
+        let (generator, p, q) = with_measurements();
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![p, q],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let rows: Vec<(String, Option<f64>, Option<f64>)> = result
+            .rows
+            .iter()
+            .map(|row| {
+                (
+                    match &row[0].value {
+                        CellValue::String(s) => s.clone(),
+                        _ => panic!("the image's name"),
+                    },
+                    rounded(as_float(&row[2].value)),
+                    rounded(as_float(&row[3].value)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("A1_01.tif".to_string(), Some(0.2), Some(0.2)),
+                ("A1_02.tif".to_string(), Some(0.4), Some(0.6)),
+                ("A1_03.tif".to_string(), Some(0.9), None),
+                ("B2_01.tif".to_string(), Some(0.5), Some(0.8)),
+            ]
+        );
+    }
+
+    /// A well's image measurement is over its images (each once, also one
+    /// without objects); its object measurement over its objects.
+    #[test]
+    fn per_well_an_image_measurement_is_over_the_images() {
+        let (generator, p, q) = with_measurements();
+        let a1 =
+            |column: &Column| rounded(plate_value(&generator, &plate_filter(column.clone()), "A1"));
+        // (0.2 + 0.4 + 0.9) / 3 - not (2·0.2 + 0.4) / 3 over the objects.
+        assert_eq!(a1(&p), Some(0.5));
+        assert_eq!(a1(&q), Some(0.333));
+
+        let multi = generator
+            .get_group_by_plate_multi(
+                &PlateFilterMulti {
+                    plane: plane(),
+                    grouping: Grouping::Auto,
+                    aggregation: vec![Aggregation::Avg, Aggregation::Max],
+                    object_class: vec![ObjectClass::Unset],
+                    column: vec![p.clone(), q.clone()],
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    plate_size: PlateSize::Auto,
+                },
+                &View::List,
+            )
+            .unwrap();
+        let values: Vec<Option<f64>> = multi
+            .iter()
+            .map(|result| {
+                let idx = result.row_names.iter().position(|n| n == "A1").unwrap();
+                rounded(as_float(&result.rows[idx][1].value))
+            })
+            .collect();
+        // (p, Avg), (p, Max), (q, Avg), (q, Max)
+        assert_eq!(values, [Some(0.5), Some(0.9), Some(0.333), Some(0.6)]);
+
+        // A well's fields: each image's own value.
+        let fields = |result: &DatabaseResult| -> Vec<Option<f64>> {
+            result
+                .rows
+                .iter()
+                .map(|row| rounded(as_float(&row[1].value)))
+                .collect()
+        };
+        let well = generator
+            .get_group_by_well(&well_filter("A1", p.clone()), &View::List)
+            .unwrap();
+        assert_eq!(fields(&well), [Some(0.2), Some(0.4), Some(0.9)]);
+        let batched = generator
+            .get_wells_for_plate(&wells_batch_filter(p.clone()), &View::List)
+            .unwrap();
+        assert_eq!(fields(&batched["A1"]), fields(&well));
+        let multi = generator
+            .get_wells_for_plate_multi(
+                &WellsBatchFilterMulti {
+                    plane: plane(),
+                    grouping: Grouping::Auto,
+                    aggregation: vec![Aggregation::Avg],
+                    object_class: vec![ObjectClass::Unset],
+                    column: vec![q, p],
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    well_size: None,
+                    well_order: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+        assert_eq!(
+            fields(&multi[0]["A1"]),
+            [Some(0.2), Some(0.6), None],
+            "q: objects' average"
+        );
+        assert_eq!(fields(&multi[1]["A1"]), fields(&well), "p: the images' own");
+    }
+
+    /// An object measurement is charted like any per-object value.
+    #[test]
+    fn an_object_measurement_is_charted_over_the_objects() {
+        let (generator, _, q) = with_measurements();
+        let histogram = super::super::results_charts::ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: q,
+                    bins: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            (rounded(Some(histogram.min)), rounded(Some(histogram.max))),
+            (Some(0.1), Some(0.8))
+        );
+        assert_eq!(histogram.counts.iter().sum::<u64>(), 4, "one per object");
     }
 }
