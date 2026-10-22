@@ -902,6 +902,14 @@ impl PipelinesController {
                             if idx < steps.len() {
                                 let mut cloned = steps[idx].clone();
                                 cloned.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
+                                // A copy measures under a name of its own (given
+                                // in `pipeline_settings_changed`).
+                                if let evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command) =
+                                    &mut cloned.content
+                                    && let Some(name) = command.measurement_name_mut()
+                                {
+                                    name.clear();
+                                }
                                 steps.insert(idx + 1, cloned);
                                 evanalyzer_app::utils::assign_step_ids(steps);
                             }
@@ -2992,7 +3000,11 @@ impl PipelinesController {
     pub(crate) fn analysis_ended(&self, ui: &AppWindow) {
         ui.global::<PipelinesPanelState>().set_run_locked(false);
         if *self.auto_preview_enabled.lock().expect("Poisoned")
-            && self.app_state.get_project().get_current_image_path_cloned().is_some()
+            && self
+                .app_state
+                .get_project()
+                .get_current_image_path_cloned()
+                .is_some()
         {
             self.trigger_pipeline_preview_execution();
         }
@@ -3195,8 +3207,13 @@ impl PipelinesController {
     /// This avoids a flood of preview refreshes while the user is still typing.
     /// Connects the pipeline focus (see `focus_controller`).
     fn pipeline_settings_changed(self: &Arc<Self>) {
-        // Values for parameters a module no longer has go.
-        evanalyzer_app::modules::prune_module_values(&mut self.app_state.get_project_write());
+        // Values for parameters a module no longer has go; a measurement step
+        // added gets its name.
+        {
+            let mut project = self.app_state.get_project_write();
+            evanalyzer_app::modules::prune_module_values(&mut project);
+            evanalyzer_app::utils::assign_measurement_names(&mut project);
+        }
         self.app_state.mark_dirty();
         self.focus_controller.refresh();
         self.refresh_problems();
@@ -8887,7 +8904,11 @@ mod tests {
             slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0)
         };
         let help = crate::helper::markdown::plain(&param.description);
-        let card_open = || ElementHandle::find_by_accessible_label(&ui, &help).next().is_some();
+        let card_open = || {
+            ElementHandle::find_by_accessible_label(&ui, &help)
+                .next()
+                .is_some()
+        };
 
         // Over the row's name: the ⓘ shows; a click opens the card.
         let label = ElementHandle::find_by_element_type_name(&ui, "Text")
@@ -11329,7 +11350,10 @@ mod tests {
         assert_eq!(active_dialog(&ui), DialogType::None);
 
         controller.analysis_ended(&ui);
-        assert!(!panel.get_run_locked(), "unlocked at the end, not when the note closes");
+        assert!(
+            !panel.get_run_locked(),
+            "unlocked at the end, not when the note closes"
+        );
     }
 
     /// No preview ran during the locked run: at its end the shown image is
@@ -11340,8 +11364,7 @@ mod tests {
         {
             let mut project = ui_state.get_project_write();
             let mut with_image = crate::editor::test_support::project_with_one_image();
-            with_image.tmp_settings.current_project =
-                Some(PathBuf::from("/data/project.evaproj"));
+            with_image.tmp_settings.current_project = Some(PathBuf::from("/data/project.evaproj"));
             with_image.settings.pipelines = project.settings.pipelines.clone();
             *project = with_image;
         }

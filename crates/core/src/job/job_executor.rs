@@ -1294,6 +1294,7 @@ impl<'a> JobExecutor {
                 pixel_sizes,
             },
             object_cache: ObjectCache::default(),
+            measurements: Default::default(),
             image_rel_path: image_rel_path.into(),
             annotated_objects: Default::default(),
             class_colors: Arc::clone(&self.class_colors),
@@ -3966,6 +3967,7 @@ mod tile_merge_end_to_end_tests {
             image_cache: images,
 
             object_cache: Default::default(),
+            measurements: Default::default(),
             image_rel_path: PathBuf::new(),
             annotated_objects: Default::default(),
             class_colors: Default::default(),

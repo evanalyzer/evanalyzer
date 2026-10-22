@@ -16,7 +16,9 @@ use crate::workspace::module_insights::{
     image_channels, parameters_setting, read_classes, resolved_commands,
 };
 use evanalyzer_cfg::{
-    core_types::{ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId},
+    core_types::{
+        ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId, is_valid_measurement_name,
+    },
     settings::{
         classification_settings::Class,
         images_settings::{ZStackHandling, ZStackSettings},
@@ -258,7 +260,83 @@ pub fn step_problem(project: &ProjectSettings, step: &PipelineStepSettings) -> O
 pub fn check_project(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = check_modules(project);
     problems.extend(check_steps(project));
+    problems.extend(check_measurement_names(project));
     problems
+}
+
+/// The measurement steps' names in what runs: each valid, none twice (a
+/// name starts its measurements' keys). A module used twice names its
+/// measurement the same both times unless the name is its parameter.
+fn check_measurement_names(project: &ProjectSettings) -> Vec<ModuleProblem> {
+    let mut problems = Vec::new();
+    // (name, its step, where it is as a message says it, the module's key)
+    let mut uses: Vec<(String, (PipelineId, StepId), String, Option<String>)> = Vec::new();
+    for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
+        for (position, step) in pipeline.steps.iter().enumerate() {
+            let module = match &step.content {
+                StepContent::Module(instance) => Some(instance.key.clone()),
+                StepContent::Command(_) => None,
+            };
+            for command in resolved_commands(step, &project.modules) {
+                let Some(name) = command.command.measurement_name() else {
+                    continue;
+                };
+                let at = (pipeline.id, step.id);
+                if !is_valid_measurement_name(name) {
+                    problems.push(ModuleProblem::error(
+                        None,
+                        Some(at),
+                        format!(
+                            "The measurement name “{name}” may only have letters, digits and _ - \
+                             it names the measurements' columns"
+                        ),
+                    ));
+                }
+                let place = format!("step {} of “{}”", position + 1, pipeline.name);
+                uses.push((name.to_string(), at, place, module.clone()));
+            }
+        }
+    }
+    for group in same_names(&uses, |(name, ..)| name.as_str()) {
+        for &i in &group {
+            let (name, at, _, module) = &uses[i];
+            let others: Vec<&str> = group
+                .iter()
+                .filter(|&&j| j != i)
+                .map(|&j| uses[j].2.as_str())
+                .collect();
+            let message = match module {
+                Some(key)
+                    if group
+                        .iter()
+                        .any(|&j| j != i && uses[j].3.as_ref() == Some(key)) =>
+                {
+                    format!(
+                        "The module “{key}” is used more than once and names its measurement \
+                         “{name}” each time - make the name a module parameter, so each use \
+                         gets its own"
+                    )
+                }
+                _ => format!(
+                    "The measurement name “{name}” is also used by {} - each measurement \
+                     step needs its own",
+                    others.join(", ")
+                ),
+            };
+            problems.push(ModuleProblem::error(None, Some(*at), message));
+        }
+    }
+    problems
+}
+
+/// The groups (indexes into `items`) whose names are the same, case aside -
+/// only names used more than once.
+fn same_names<T>(items: &[T], name: impl Fn(&T) -> &str) -> Vec<Vec<usize>> {
+    let mut groups: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
+    for (i, item) in items.iter().enumerate() {
+        groups.entry(name(item).to_lowercase()).or_default().push(i);
+    }
+    groups.into_values().filter(|g| g.len() > 1).collect()
 }
 
 /// The problems at pipeline step `step_id` of pipeline `pipeline` among
@@ -927,6 +1005,23 @@ fn missing_created_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_used_more_than_once_are_grouped_whatever_their_case() {
+        let names = [
+            "pearson_01",
+            "texture_01",
+            "Pearson_01",
+            "x",
+            "PEARSON_01",
+            "X",
+        ];
+        assert_eq!(
+            same_names(&names, |n| n),
+            [vec![0, 2, 4], vec![3, 5]],
+            "texture_01 is used once"
+        );
+    }
     use crate::workspace::module_editing::{ClassRole, create_module, plan_module};
     use evanalyzer_cfg::core_types::{ModuleParamKey, SegmentationClass};
     use evanalyzer_cfg::settings::classification_settings::Class;
