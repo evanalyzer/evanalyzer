@@ -122,6 +122,24 @@
         }
       ]
     },
+    "AreaOccupiedSettings": {
+      "description": "Measures how much of the image the objects of a class cover: the area\nin pixels and µm² (with a known pixel size) and the part of the image\n(0..1). Where objects overlap, the area counts once.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The measurement's name - its values in the results start with it.",
+          "type": "string"
+        },
+        "objectClass": {
+          "description": "The objects whose area is measured.",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "name",
+        "objectClass"
+      ]
+    },
     "AuthorInformation": {
       "type": "object",
       "properties": {
@@ -1260,6 +1278,24 @@
         "fileSize",
         "selectedSeries",
         "series"
+      ]
+    },
+    "ImageIntensitySettings": {
+      "description": "Measures the brightness of a channel across the whole image: total, mean,\nstandard deviation, minimum, maximum, median, lower and upper quartile\nand median absolute deviation - in gray values, like the objects'\nintensities.\n\nIt uses every pixel of the image, the background too.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel to measure.",
+          "$ref": "#/$defs/ImageChannelIdx"
+        },
+        "name": {
+          "description": "The measurement's name - its values in the results start with it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "channel"
       ]
     },
     "ImageMathSettings": {
@@ -2558,6 +2594,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "AREA_OCCUPIED"
+            }
+          },
+          "$ref": "#/$defs/AreaOccupiedSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "BLUR"
             }
           },
@@ -2770,6 +2819,19 @@
             }
           },
           "$ref": "#/$defs/ImageCacheSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "IMAGE_INTENSITY"
+            }
+          },
+          "$ref": "#/$defs/ImageIntensitySettings",
           "required": [
             "type"
           ]
