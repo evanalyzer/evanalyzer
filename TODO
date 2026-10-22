@@ -300,8 +300,9 @@ Decided - to build, in this order:
   - [ ] Image Intensity "only inside class X" (e.g. intensity within a tissue mask).
 - [ ] CellProfiler parity (2026-10-22):
   - [x] Propagation (IdentifySecondaryObjects; Jones, Carpenter & Golland 2005) - 2026-10-22, a port of centrosome `_propagate.pyx` (same step cost, 8 neighbours, tie order); its own code, nothing shared with Voronoi/Watershed.
-    - [ ] Benchmark speed + RAM on a big image (~13 bytes/pixel + the queue; whole image in memory like Voronoi) → BENCHMARK.md RAM overview.
-    - [ ] Compare regions with CellProfiler's on the same image (and check the citation's DOI).
+    - [x] Benchmark (BENCHMARK.md › Propagation): 4096² 11 s / 438 MB, ~5× faster and ~40 % of CellProfiler's RAM; 67 MP 64 s / 1.7 GB.
+    - [x] Same regions as CellProfiler pixel for pixel (`same_regions_as_cellprofiler`, fixture from `crates/core/tests/propagation_centrosome.py`, incl. tie order); citation checked against Crossref.
+    - [x] Speed/RAM step: 4096² 13.8 → 10.4 s, 438 → 397 MB; 8192² 68 → 58 s, 1.71 → 1.55 GB (BENCHMARK.md). Still single-threaded; next would be a radix (monotone) queue keeping CellProfiler's tie order.
     - [ ] Optional: "watershed seeded by objects" (λ = 0 is close).
   - [ ] Expand objects without growing into neighbours (today `Expand` dilates each object alone, so neighbours overlap).
   - [ ] More object intensity statistics: std, median, quartiles (cheap); edge intensity, center of mass / mass displacement (niche).

@@ -4,7 +4,14 @@
 // Licenses (EVAnalyzer's own, then the third-party packages, searchable).
 // Only facts the app knows - no invented numbers.
 
-import { InkButton, InkButtonKind, InkIconButton, InkIcons, InkSearchField, InkDivider } from "../ink/ink.slint";
+import {
+    InkButton,
+    InkButtonKind,
+    InkIconButton,
+    InkIcons,
+    InkSearchField,
+    InkDivider,
+} from "../ink/ink.slint";
 import { AppInfoState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
@@ -23,10 +30,15 @@ global AboutData {
         {
             initials: "JD",
             name: "Joachim Danmayr",
-            role: "Creator and lead developer",
+            role: "Creator, pipeline developer and lead maintainer",
             tint: #2A6BDF
         },
-        { initials: "MS", name: "Melanie Schürz", role: "Scientific lead", tint: #E040E0 },
+        {
+            initials: "MS",
+            name: "Melanie Schürz",
+            role: "Pipeline developer, testing and scientific lead",
+            tint: #E040E0
+        },
     ];
     out property <[Person]> contributors: [
         { initials: "NM", name: "Nicole Meisner Kober", role: "Institue leader", tint: #E6C200 },
@@ -34,6 +46,7 @@ global AboutData {
         { initials: "MJ", name: "Maria Jaritsch", role: "Testing", tint: #3CB44B },
         { initials: "TP", name: "Tanja Plank", role: "Testing", tint: #33CFFF },
         { initials: "PH", name: "Patricia Hrasnova", role: "Testing", tint: #E6C200 },
+        { initials: "HZ", name: "Hanwen Zangth", role: "Testing", tint: #FB7185 },
     ];
 }
 

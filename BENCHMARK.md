@@ -381,6 +381,41 @@ dialog shown, a module or command picked in Add step), not per frame. Drawing
 was not measured separately - styled and plain text both go through the same
 text layout.
 
+### Propagation - cells grown from nuclei (2026-10-22)
+
+`BENCH_SIZE=<n> cargo test --release -p evanalyzer_core --lib bench_propagation -- --ignored --nocapture`
+(one size per process for its own peak): a synthetic n² cell stain with a
+nucleus (7 × 7 px) every 40 px, λ 0.05, no mask, 22 cores. CellProfiler's
+code (centrosome 1.3.4, `propagate()` on the same image and seeds, script
+in the session scratchpad) for comparison; its regions are identical
+(`same_regions_as_cellprofiler`).
+
+| Image | Nuclei | EVA | Peak RAM (before) | CellProfiler | Its peak RAM |
+|---|---|---|---|---|---|
+| 2048² (4.2 MP) | 2,601 | 1.9 s | 120 MB (32) | 8.9 s | 297 MB |
+| 4096² (16.8 MP) | 10,404 | 11.3 s | 438 MB (87) | 55.0 s | 1,117 MB |
+| 8192² (67 MP) | 42,025 | 64 s | 1,714 MB (310) | - | - |
+
+About 21 bytes per pixel on top of the image (values, read and mask flags,
+seed labels, labels, costs) plus the queue; the whole image is held at once,
+like Voronoi - not for whole-slide images. Single-threaded; time grows a
+little faster than the pixels (the queue's log n).
+
+After the speed/RAM step (same day; flags as bits, seeds as a list instead of
+a label per pixel, 16-byte queue entries, no border clamping away from the
+border) - old and new alternated with 10 s pauses, results still identical
+to CellProfiler's:
+
+| Image | Before | After |
+|---|---|---|
+| 4096² | 13.3 / 14.3 s, 438 MB | 10.1 / 10.7 s, 397 MB |
+| 8192² | 65.8 / 70.7 s, 1,714 MB | 58.4 / 57.5 s, 1,551 MB |
+
+The seed labels hardly counted before (an all-zero buffer's pages are never
+touched), so the RAM saved is the two flag arrays and the smaller queue:
+now ~18.5 bytes per pixel on top of the image at 8192²; the costs (`f64`,
+8 bytes) stay - `f32` would change sums and ties against CellProfiler.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -402,6 +437,7 @@ graphics driver).
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
+| Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 
