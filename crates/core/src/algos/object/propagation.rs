@@ -91,21 +91,18 @@ impl ImageAlgorithm for Propagation {
         }
 
         let allowed = self.allowed_pixels(&image, cache, ctx.scope);
-        // Label `i + 1` is `seeds[i]`; where seeds overlap, the first wins.
-        let mut seed_labels = vec![0u32; image.values.len()];
+        // Label `i + 1` is `seeds[i]`: a short list of their pixels, not a
+        // label per pixel of the image.
+        let mut seed_pixels = Vec::new();
         for (i, seed) in seeds.iter().enumerate() {
-            image.for_each_pixel_of(seed, |idx| {
-                if seed_labels[idx] == 0 {
-                    seed_labels[idx] = i as u32 + 1;
-                }
-            });
+            image.for_each_pixel_of(seed, |idx| seed_pixels.push((idx, i as u32 + 1)));
         }
         let labels = propagate(
             &image.values,
             image.width,
             image.height,
             &allowed,
-            &seed_labels,
+            &seed_pixels,
             self.regularization as f64,
         );
 
@@ -172,17 +169,17 @@ impl Propagation {
         image: &GrowthImage,
         cache: &GlobalPipelineCache,
         scope: Scope,
-    ) -> Vec<bool> {
+    ) -> BitVec<u64, Lsb0> {
         if self.mask == ObjectClass::Unset {
             return image.read.clone();
         }
-        let mut allowed = vec![false; image.values.len()];
+        let mut allowed = BitVec::repeat(false, image.values.len());
         for object in cache
             .object_cache
             .values()
             .filter(|o| o.is_of(&self.mask, scope))
         {
-            image.for_each_pixel_of(object, |idx| allowed[idx] = image.read[idx]);
+            image.for_each_pixel_of(object, |idx| allowed.set(idx, image.read[idx]));
         }
         allowed
     }
@@ -209,8 +206,8 @@ struct GrowthImage {
     height: usize,
     /// Normalized (0..1) pixel values; 0 where no tile was read.
     values: Vec<f32>,
-    /// A tile covered the pixel.
-    read: Vec<bool>,
+    /// A tile covered the pixel (one bit each).
+    read: BitVec<u64, Lsb0>,
 }
 
 impl GrowthImage {
@@ -242,7 +239,7 @@ impl GrowthImage {
             .unwrap_or(0);
         let (width, height) = (x1 - x0, y1 - y0);
         let mut values = vec![0.0f32; width * height];
-        let mut read = vec![false; width * height];
+        let mut read = BitVec::<u64, Lsb0>::repeat(false, width * height);
         for tile in &tiles {
             let container = cache
                 .image_cache
@@ -261,7 +258,7 @@ impl GrowthImage {
                     let idx = (tile.offset_y + ty - y0) * width + (tile.offset_x + tx - x0);
                     // A pixel that isn't a number can't be grown into.
                     values[idx] = if v.is_finite() { v } else { 0.0 };
-                    read[idx] = v.is_finite();
+                    read.set(idx, v.is_finite());
                 }
             }
         }
@@ -375,31 +372,43 @@ struct Region {
     touches_edge: bool,
 }
 
-/// Grows `seed_labels` (0: none) into the `allowed` pixels of a `width` ×
-/// `height` image: each pixel gets the label that reaches it cheapest (see
-/// [`step_cost`]); equally cheap ones go to the lower label, then the
-/// earlier pixel - CellProfiler's heap order. Seed pixels keep their label,
-/// also outside `allowed`; only seeds inside it grow.
+/// Grows the seeds (pixel index, label > 0; where seeds overlap, the first
+/// wins) into the `allowed` pixels of a `width` × `height` image: each pixel
+/// gets the label that reaches it cheapest (see [`step_cost`]); equally
+/// cheap ones go to the lower label, then the earlier pixel - CellProfiler's
+/// heap order. Seed pixels keep their label, also outside `allowed`; only
+/// seeds inside it grow.
+///
+/// Per pixel: its label (4 bytes) and cheapest cost (8 - an `f64` like
+/// CellProfiler's, so sums and ties come out the same).
 fn propagate(
     values: &[f32],
     width: usize,
     height: usize,
-    allowed: &[bool],
-    seed_labels: &[u32],
+    allowed: &BitSlice<u64, Lsb0>,
+    seeds: &[(usize, u32)],
     weight: f64,
 ) -> Vec<u32> {
+    // Queue entries hold the pixel as u32: 16 bytes instead of 24.
+    assert!(
+        values.len() <= u32::MAX as usize,
+        "Propagation: an image of more than 4 billion pixels"
+    );
     let mut labels = vec![0u32; values.len()];
     // The cheapest cost pushed so far; seeds cost 0.
-    let mut costs: Vec<f64> = seed_labels
-        .iter()
-        .map(|&l| if l > 0 { 0.0 } else { f64::INFINITY })
-        .collect();
+    let mut costs = vec![f64::INFINITY; values.len()];
+    let mut first_seeds = Vec::with_capacity(seeds.len());
+    for &(idx, label) in seeds {
+        if costs[idx] != 0.0 {
+            costs[idx] = 0.0;
+            first_seeds.push((idx, label));
+        }
+    }
     // Costs are >= 0, whose bit patterns sort like the numbers.
-    let mut queue: BinaryHeap<Reverse<(u64, u32, usize)>> = seed_labels
+    let mut queue: BinaryHeap<Reverse<(u64, u32, u32)>> = first_seeds
         .iter()
-        .enumerate()
-        .filter(|&(idx, &label)| label > 0 && allowed[idx])
-        .map(|(idx, &label)| Reverse((0f64.to_bits(), label, idx)))
+        .filter(|&&(idx, _)| allowed[idx])
+        .map(|&(idx, label)| Reverse((0f64.to_bits(), label, idx as u32)))
         .collect();
     const NEIGHBOURS: [(isize, isize); 8] = [
         (-1, -1),
@@ -412,6 +421,7 @@ fn propagate(
         (1, 1),
     ];
     while let Some(Reverse((_, label, idx))) = queue.pop() {
+        let idx = idx as usize;
         if labels[idx] != 0 {
             continue;
         }
@@ -430,14 +440,12 @@ fn propagate(
             let cost = base + step_cost(values, width, height, (row, col), (r, c), weight);
             if cost < costs[next] {
                 costs[next] = cost;
-                queue.push(Reverse((cost.to_bits(), label, next)));
+                queue.push(Reverse((cost.to_bits(), label, next as u32)));
             }
         }
     }
-    for (label, &seed) in labels.iter_mut().zip(seed_labels) {
-        if seed > 0 {
-            *label = seed;
-        }
+    for &(idx, label) in &first_seeds {
+        labels[idx] = label;
     }
     labels
 }
@@ -447,6 +455,9 @@ fn propagate(
 /// (pixels past the border repeat the border's) combined with their
 /// Manhattan distance weighted by `weight`²:
 /// `sqrt(diff² + manhattan · weight²)`.
+///
+/// Summed in CellProfiler's order (rows, then columns), so the result is
+/// the same to the last bit.
 fn step_cost(
     values: &[f32],
     width: usize,
@@ -455,15 +466,30 @@ fn step_cost(
     b: (isize, isize),
     weight: f64,
 ) -> f64 {
-    let at = |r: isize, c: isize| {
-        let r = r.clamp(0, height as isize - 1) as usize;
-        let c = c.clamp(0, width as isize - 1) as usize;
-        values[r * width + c] as f64
-    };
+    let (w, h) = (width as isize, height as isize);
+    let inside = |p: (isize, isize)| p.0 >= 1 && p.1 >= 1 && p.0 < h - 1 && p.1 < w - 1;
     let mut diff = 0.0;
-    for dr in -1..=1 {
-        for dc in -1..=1 {
-            diff += (at(a.0 + dr, a.1 + dc) - at(b.0 + dr, b.1 + dc)).abs();
+    if inside(a) && inside(b) {
+        // Away from the border (nearly every pixel): no clamping.
+        let (ia, ib) = ((a.0 * w + a.1) as usize, (b.0 * w + b.1) as usize);
+        for dr in [-w, 0, w] {
+            for dc in -1..=1 {
+                let offset = dr + dc;
+                let va = values[ia.wrapping_add_signed(offset)] as f64;
+                let vb = values[ib.wrapping_add_signed(offset)] as f64;
+                diff += (va - vb).abs();
+            }
+        }
+    } else {
+        let at = |r: isize, c: isize| {
+            let r = r.clamp(0, h - 1) as usize;
+            let c = c.clamp(0, w - 1) as usize;
+            values[r * width + c] as f64
+        };
+        for dr in -1..=1 {
+            for dc in -1..=1 {
+                diff += (at(a.0 + dr, a.1 + dc) - at(b.0 + dr, b.1 + dc)).abs();
+            }
         }
     }
     let manhattan = ((a.0 - b.0).abs() + (a.1 - b.1).abs()) as f64;
@@ -488,11 +514,13 @@ mod tests {
         weight: f64,
     ) -> Vec<Vec<u32>> {
         let values: Vec<f32> = image.iter().flatten().copied().collect();
-        let mut seed_labels = vec![0u32; 100];
-        for (i, (r, c)) in seeds.iter().enumerate() {
-            seed_labels[r * 10 + c] = i as u32 + 1;
-        }
-        propagate(&values, 10, 10, allowed, &seed_labels, weight)
+        let seeds: Vec<(usize, u32)> = seeds
+            .iter()
+            .enumerate()
+            .map(|(i, (r, c))| (r * 10 + c, i as u32 + 1))
+            .collect();
+        let allowed: BitVec<u64, Lsb0> = allowed.iter().collect();
+        propagate(&values, 10, 10, &allowed, &seeds, weight)
             .chunks(10)
             .map(|row| row.to_vec())
             .collect()
@@ -589,6 +617,54 @@ mod tests {
         spot[0] = 1.0;
         let cost = step_cost(&spot, 3, 3, (1, 1), (2, 2), 0.0);
         assert!((cost - 1.0).abs() < 1e-12, "{cost}");
+    }
+
+    /// Pixel for pixel what CellProfiler's own code gives
+    /// (`centrosome.propagate` 1.3.4 on Gaussian "cells" with noise; made by
+    /// `tests/propagation_centrosome.py`).
+    #[test]
+    fn same_regions_as_cellprofiler() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            width: usize,
+            height: usize,
+            weight: f64,
+            image: Vec<f64>,
+            seeds: Vec<u32>,
+            mask: Vec<bool>,
+            expected: Vec<u32>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/propagation_centrosome.json"
+        );
+        let fixture: Fixture =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(fixture.cases.len(), 5);
+        for case in fixture.cases {
+            let values: Vec<f32> = case.image.iter().map(|&v| v as f32).collect();
+            // CellProfiler's seed image as a list of seed pixels.
+            let seeds: Vec<(usize, u32)> = case
+                .seeds
+                .iter()
+                .enumerate()
+                .filter(|&(_, &label)| label > 0)
+                .map(|(idx, &label)| (idx, label))
+                .collect();
+            let mask: BitVec<u64, Lsb0> = case.mask.iter().collect();
+            let labels = propagate(&values, case.width, case.height, &mask, &seeds, case.weight);
+            let differing = labels
+                .iter()
+                .zip(&case.expected)
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differing, 0, "{}: {differing} pixels differ", case.name);
+        }
     }
 
     // The command on a cache.
@@ -749,5 +825,91 @@ mod tests {
         };
         let err = run(&missing, &mut cache).unwrap_err().to_string();
         assert!(err.contains("no channel 4"), "{err}");
+    }
+
+    /// Peak RSS of this process in MB (Linux).
+    fn peak_rss_mb() -> f64 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .and_then(|l| l.split_whitespace().nth(1)?.parse::<f64>().ok())
+            })
+            .map_or(0.0, |kb| kb / 1024.0)
+    }
+
+    /// Speed and peak RAM on a `BENCH_SIZE`² image (default 4096) with a
+    /// nucleus every 40 pixels in a cell stain - run in release, one size
+    /// per process:
+    /// `BENCH_SIZE=8192 cargo test --release -p evanalyzer_core --lib bench_propagation -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_propagation() {
+        let size: usize = std::env::var("BENCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4096);
+        let spacing = 40usize;
+        // Bright cells around each nucleus, dim gaps between them.
+        let values: Vec<f32> = (0..size * size)
+            .map(|i| {
+                let (x, y) = (i % size, i / size);
+                let dx = (x % spacing) as f32 - spacing as f32 / 2.0;
+                let dy = (y % spacing) as f32 - spacing as f32 / 2.0;
+                (-(dx * dx + dy * dy) / 200.0).exp()
+            })
+            .collect();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta.nr_of_bits = 16;
+        cache.add_to_channel_cache(
+            Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(
+                    ImageSize {
+                        width: size,
+                        height: size,
+                    },
+                    values,
+                )
+                .unwrap(),
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            })),
+            1,
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size,
+                height: size,
+            },
+        );
+        let mut id = 0;
+        for cy in (spacing / 2..size).step_by(spacing) {
+            for cx in (spacing / 2..size).step_by(spacing) {
+                id += 1;
+                let (x, y) = (cx as u32 - 3, cy as u32 - 3);
+                let nucleus = filled(id, [x, y, x + 6, y + 6], NUCLEUS);
+                cache.object_cache.insert(nucleus.id.clone(), nucleus);
+            }
+        }
+        let before_mb = peak_rss_mb();
+        let mut meta = PipelineImageMeta::default();
+        meta.full_image_width = ImageSize {
+            width: size,
+            height: size,
+        };
+        let mut ctx = PipelineContext::without_image(std::path::PathBuf::new(), meta).unwrap();
+        let start = std::time::Instant::now();
+        step().execute(&mut ctx, &mut cache).unwrap();
+        let elapsed = start.elapsed();
+        let cells = cells(&cache).len();
+        println!(
+            "propagation {size}x{size} ({:.1} MP), {id} nuclei -> {cells} cells: {:.2} s, \
+             peak RSS {:.0} MB (image + nuclei before: {before_mb:.0} MB)",
+            (size * size) as f64 / 1e6,
+            elapsed.as_secs_f64(),
+            peak_rss_mb()
+        );
+        assert_eq!(cells, id as usize);
     }
 }
