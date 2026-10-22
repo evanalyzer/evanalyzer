@@ -754,6 +754,11 @@ impl<'a> JobExecutor {
 
         // The user's hand-annotated objects of this image, for
         // `LoadAnnotatedObjects` - only gathered when a pipeline uses them.
+        // A measurement step measures every image, also one without objects.
+        let measures = self
+            .pipelines_post_process
+            .values()
+            .any(|p| p.commands.iter().any(|(_, _, c)| c.measures()));
         let loads_annotations = self.pipelines_post_process.values().any(|p| {
             p.commands
                 .iter()
@@ -994,8 +999,11 @@ impl<'a> JobExecutor {
 
                 let stack_merge_result = stack_result.and_then(|mut merged_cache| {
                     merged_cache.annotated_objects = plane_annotations;
+                    merged_cache.measurements.z_stack = z;
+                    merged_cache.measurements.t_stack = t;
                     if merged_cache.object_cache.is_empty()
                         && merged_cache.annotated_objects.is_empty()
+                        && !measures
                     {
                         // Object buffer is empty - no whole-image-scoped
                         // commands or export to run, but this stack's
@@ -2824,6 +2832,64 @@ mod full_run_integration_tests {
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
+    }
+
+    /// What reaches the exporter: per plane, its (t, z) and the values of
+    /// its measurements.
+    struct MeasurementRecorder(Mutex<Vec<((i32, i32), Vec<f64>)>>);
+
+    impl PipelineResultExporter for MeasurementRecorder {
+        fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            use crate::pipeline::pipeline_measure::MeasurementValues;
+            let values = cache
+                .measurements
+                .measurements
+                .iter()
+                .flat_map(|m| match &m.values {
+                    MeasurementValues::Image(values) => values.iter().map(|(_, v)| *v).collect(),
+                    MeasurementValues::Objects(_) => Vec::new(),
+                })
+                .collect();
+            let plane = (cache.measurements.t_stack, cache.measurements.z_stack);
+            self.0.lock().unwrap().push((plane, values));
+            Ok(())
+        }
+    }
+
+    /// A measurement step measures every plane of an image without any
+    /// objects too - the whole-image phase isn't skipped for it.
+    #[test]
+    fn an_image_without_objects_is_measured_on_every_plane() {
+        let recorder = Arc::new(MeasurementRecorder(Mutex::new(Vec::new())));
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        job.result_storage = recorder.clone();
+        job.pipelines_pre_process.clear();
+        let mut measure = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        measure.add_command(Box::new(crate::algos::PearsonCorrelationCoefficient {
+            name: "pearson_01".into(),
+            channel_a: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+            channel_b: evanalyzer_cfg::core_types::ImageChannelIdx(1),
+        }));
+        job.add_post_process_pipeline(measure);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+
+        let planes = recorder.0.lock().unwrap();
+        assert!(!planes.is_empty(), "no plane measured");
+        let mut seen = HashSet::new();
+        for (plane, values) in planes.iter() {
+            assert!(seen.insert(*plane), "plane {plane:?} twice");
+            let [r] = values[..] else {
+                panic!("plane {plane:?}: one value, got {values:?}");
+            };
+            assert!((-1.0..=1.0).contains(&r), "plane {plane:?}: {r}");
+        }
     }
 
     #[test]

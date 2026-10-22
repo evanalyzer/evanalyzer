@@ -485,7 +485,7 @@ fn command_docs() -> Vec<CommandDoc> {
             let cmd = PipelineCommand::default_for_key(key)?;
             if matches!(
                 cmd.category(),
-                CommandCategory::Object | CommandCategory::Dataset
+                CommandCategory::Object | CommandCategory::Measure | CommandCategory::Dataset
             ) {
                 return None;
             }

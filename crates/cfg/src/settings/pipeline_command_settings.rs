@@ -2599,6 +2599,36 @@ pub struct VoronoiSettings {
     pub exclude_areas_with_no_center: bool,
 }
 
+// ============ MEASURE ============
+
+/// Measures how two channels go together across the whole image: the
+/// Pearson correlation coefficient, from -1 (one bright where the other is
+/// dark) over 0 (unrelated) to 1 (bright together).
+///
+/// It uses every pixel of the image, the background too - a large dark
+/// background raises it.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct PearsonCorrelationCoefficientSettings {
+    /// The measurement's name - its values in the results start with it.
+    pub name: String,
+    /// The first channel.
+    pub channel_a: ImageChannelIdx,
+    /// The second channel.
+    pub channel_b: ImageChannelIdx,
+}
+
+impl Default for PearsonCorrelationCoefficientSettings {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            channel_a: ImageChannelIdx::default(),
+            channel_b: ImageChannelIdx(1),
+        }
+    }
+}
+
 // ============ DATASET ============
 
 /// Links each object to the nearest one in the next frame.

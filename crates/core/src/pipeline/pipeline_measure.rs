@@ -4,6 +4,10 @@ use evanalyzer_cfg::core_types::{MeasurementInfo, ObjectClass, ObjectId};
 #[derive(Default, Clone)]
 pub struct PipelineMeasurements {
     pub measurements: Vec<Measurement>,
+    /// The plane measured - set by the executor before the measurement
+    /// steps run.
+    pub z_stack: i32,
+    pub t_stack: i32,
 }
 
 /// One measurement (e.g. "Pearson ch1 × ch2" of step "nuclei_coloc") and its

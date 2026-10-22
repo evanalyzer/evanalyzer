@@ -44,6 +44,7 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-extract;
     in property <[CommandDef]> shown-modules;
@@ -55,6 +56,7 @@ export global CommandPickerState {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-mea;
     in property <int> cat-count-dat;
     in property <int> cat-count-ext;
     in property <int> cat-count-grp;
@@ -76,6 +78,7 @@ export global CommandPickerState {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-ext: false;
     in-out property <bool> fcat-cls: false;
+    in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-modules: false;
     in-out property <int> selected-id: -1;
@@ -113,6 +116,9 @@ export global PickerStyle {
         if c == StepCategory.extract {
             return Ink.cat-extract;
         }
+        if c == StepCategory.measure {
+            return Ink.cat-measure;
+        }
         if c == StepCategory.dataset {
             return Ink.cat-dataset;
         }
@@ -136,6 +142,9 @@ export global PickerStyle {
         }
         if c == StepCategory.extract {
             return "Extract";
+        }
+        if c == StepCategory.measure {
+            return "Measure";
         }
         if c == StepCategory.dataset {
             return "Dataset";

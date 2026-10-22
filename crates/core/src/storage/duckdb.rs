@@ -1,5 +1,6 @@
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, MeasurementValues};
 use crate::storage::stored_object::{ObjectFilter, StoredObject};
 use crate::storage::{DatasetStore, ImageSummary, PipelineResultExporter};
 use duckdb::arrow::array::{
@@ -255,6 +256,129 @@ impl DuckDbExporter {
             )
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(exporter)
+    }
+
+    /// The measurements of `cache`'s plane: each measurement's description
+    /// (once per key, in `measurement_info`) and its values (`measurements`,
+    /// a row each with its image, plane, region and classes).
+    ///
+    /// Row by row: fine for image values (one per measurement and plane).
+    /// Many objects' values want the Arrow appender `objects` uses.
+    fn write_measurements(
+        &self,
+        tx: &duckdb::Transaction<'_>,
+        cache: &GlobalPipelineCache,
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let measured = &cache.measurements;
+        if measured.measurements.is_empty() {
+            return Ok(());
+        }
+        let image_rel = cache.image_rel_path.display().to_string();
+        let image_name = image_display_name(&cache.image_rel_path);
+        let mut info = tx
+            .prepare(
+                "INSERT OR IGNORE INTO measurement_info \
+                 (key, measurement, step, unit, target, range_min, range_max, aggregatable) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(err)?;
+        let mut value_row = tx
+            .prepare(
+                "INSERT INTO measurements (image_name, image_rel_path, z_stack, t_stack, \
+                 region, object_id, object_class_name, object_class_id, step, measurement, \
+                 unit, key, value) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), ?, ?, ?, ?, ?)",
+            )
+            .map_err(err)?;
+        // The classes as `objects` has them: names (a JSON list) and ids.
+        let classes = |classes: &[ObjectClass]| {
+            let names: Vec<String> = classes
+                .iter()
+                .filter(|c| **c != ObjectClass::Unset)
+                .map(|c| self.class_label(c))
+                .collect();
+            let ids: Vec<i32> = classes
+                .iter()
+                .filter_map(|c| match c {
+                    ObjectClass::Global(n) => Some(*n as i32),
+                    _ => None,
+                })
+                .collect();
+            (Some(json_string_array(&names)), Some(format!("{ids:?}")))
+        };
+        for Measurement { info: i, values } in &measured.measurements {
+            let unit = format!("{:?}", i.unit);
+            info.execute(params![
+                i.key,
+                i.name,
+                i.step,
+                unit,
+                format!("{:?}", i.target),
+                i.range.map(|r| r.0),
+                i.range.map(|r| r.1),
+                i.aggregatable
+            ])
+            .map_err(err)?;
+            let mut insert = |region: &str,
+                              object: Option<String>,
+                              (class_names, class_ids): (Option<String>, Option<String>),
+                              value: f64| {
+                value_row
+                    .execute(params![
+                        image_name,
+                        image_rel,
+                        measured.z_stack,
+                        measured.t_stack,
+                        region,
+                        object,
+                        class_names,
+                        class_ids,
+                        i.step,
+                        i.name,
+                        unit,
+                        i.key,
+                        value.is_finite().then_some(value)
+                    ])
+                    .map(|_| ())
+                    .map_err(err)
+            };
+            match values {
+                MeasurementValues::Image(values) => {
+                    for (region, value) in values {
+                        match region {
+                            MeasurementRegion::Image => {
+                                insert("image", None, (None, None), *value)?
+                            }
+                            MeasurementRegion::Class(class) => {
+                                insert("class", None, classes(&[*class]), *value)?
+                            }
+                        }
+                    }
+                }
+                MeasurementValues::Objects(values) => {
+                    for (object_id, value) in values {
+                        let object_classes = cache
+                            .object_cache
+                            .get(object_id)
+                            .map(|o| {
+                                let mut sorted: Vec<ObjectClass> =
+                                    o.object_classes().iter().copied().collect();
+                                sorted.sort();
+                                classes(&sorted)
+                            })
+                            .unwrap_or((None, None));
+                        insert(
+                            "object",
+                            Some(object_id.to_string()),
+                            object_classes,
+                            *value,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn class_label(&self, class: &ObjectClass) -> String {
@@ -678,6 +802,41 @@ CREATE TABLE IF NOT EXISTS classes (
     color     UINTEGER
 );
 
+-- What the measurement steps measured: one row per measurement (its key
+-- starts with the step's name, e.g. 'pearson_01/pearson/ch0×ch1').
+CREATE TABLE IF NOT EXISTS measurement_info (
+    key           VARCHAR NOT NULL PRIMARY KEY,
+    measurement   VARCHAR NOT NULL,
+    step          VARCHAR NOT NULL,
+    unit          VARCHAR NOT NULL,
+    target        VARCHAR NOT NULL,   -- 'Object' or 'Image'
+    range_min     DOUBLE,
+    range_max     DOUBLE,
+    aggregatable  BOOLEAN NOT NULL
+);
+
+-- The measurements' values, one row each with what it is about - like
+-- `objects`, readable without a join: per image plane, of the whole image
+-- (region 'image'), of the pixels of a class ('class', the class in
+-- `object_class_*`) or of an object ('object': `object_id`, its classes).
+-- NULL `value`: no number (e.g. Pearson of a channel that doesn't vary).
+-- `measurement_info` lists each measurement once (the results' pickers).
+CREATE TABLE IF NOT EXISTS measurements (
+    image_name         VARCHAR NOT NULL,
+    image_rel_path     VARCHAR NOT NULL,
+    z_stack            INTEGER NOT NULL,
+    t_stack            INTEGER NOT NULL,
+    region             VARCHAR NOT NULL,
+    object_id          UUID,
+    object_class_name  VARCHAR,
+    object_class_id    INTEGER[],
+    step               VARCHAR NOT NULL,
+    measurement        VARCHAR NOT NULL,
+    unit               VARCHAR NOT NULL,
+    key                VARCHAR NOT NULL,
+    value              DOUBLE
+);
+
 -- How the analysis run that wrote this file ended: 'running' from its start
 -- until 'finished', 'cancelled' or 'failed' (with `message`). Still
 -- 'running' afterwards means it was interrupted (crash, killed process).
@@ -922,6 +1081,8 @@ impl PipelineResultExporter for DuckDbExporter {
                     .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
         }
+
+        self.write_measurements(&tx, cache)?;
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -1376,6 +1537,124 @@ mod tests {
 
     /// Each image's analysed time points and z-planes are kept - also ones
     /// without objects.
+    /// Each value is a row with what it is about - readable without a join;
+    /// a measurement's description is written once; a value that isn't a
+    /// number is NULL.
+    #[test]
+    fn measurements_are_rows_readable_without_a_join() {
+        use crate::pipeline::pipeline_measure::PipelineMeasurements;
+        use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let names = HashMap::from([(ObjectClass::Global(1), ("Nucleus".to_string(), 0))]);
+        let exporter = DuckDbExporter::new(&path, names, &MetaData::default()).unwrap();
+        let info = MeasurementInfo {
+            key: "pearson_01/pearson/ch0_ch1".into(),
+            name: "Pearson (channel 0 × channel 1)".into(),
+            step: "pearson_01".into(),
+            unit: MeasurementUnit::None,
+            target: MeasurementTarget::Image,
+            range: Some((-1.0, 1.0)),
+            aggregatable: true,
+        };
+        for (t, value) in [(0, 0.5), (1, f64::NAN)] {
+            // Object 1, in class 1 ("Nucleus").
+            let mut cache = cache_with_objects("plate/a.tif", 1);
+            cache.measurements = PipelineMeasurements {
+                measurements: vec![
+                    Measurement {
+                        info: info.clone(),
+                        values: MeasurementValues::Image(vec![
+                            (MeasurementRegion::Image, value),
+                            (MeasurementRegion::Class(ObjectClass::Global(1)), 0.75),
+                        ]),
+                    },
+                    Measurement {
+                        info: MeasurementInfo {
+                            key: "pearson_01/pearson/ch0_ch1/objects".into(),
+                            target: MeasurementTarget::Object,
+                            ..info.clone()
+                        },
+                        values: MeasurementValues::Objects(vec![(ObjectId(1), 0.25)]),
+                    },
+                ],
+                z_stack: 0,
+                t_stack: t,
+            };
+            exporter.export(&cache).unwrap();
+        }
+
+        let conn = exporter.conn.lock().unwrap();
+        let described: i64 = conn
+            .query_row("SELECT count(*) FROM measurement_info", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(described, 2, "each measurement described once");
+        let mut stmt = conn
+            .prepare(
+                "SELECT image_name, t_stack, region, object_id IS NOT NULL, object_class_name, \
+                 object_class_id::VARCHAR, step, measurement, unit, value \
+                 FROM measurements ORDER BY t_stack, region",
+            )
+            .unwrap();
+        type Row = (
+            String,
+            i32,
+            String,
+            bool,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            String,
+            Option<f64>,
+        );
+        let rows: Vec<Row> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let row = |t, region: &str, object, class: bool, value| -> Row {
+            (
+                "a.tif".into(),
+                t,
+                region.into(),
+                object,
+                class.then(|| "[\"Nucleus\"]".into()),
+                class.then(|| "[1]".into()),
+                "pearson_01".into(),
+                "Pearson (channel 0 × channel 1)".into(),
+                "None".into(),
+                value,
+            )
+        };
+        assert_eq!(
+            rows,
+            [
+                row(0, "class", false, true, Some(0.75)),
+                row(0, "image", false, false, Some(0.5)),
+                row(0, "object", true, true, Some(0.25)),
+                row(1, "class", false, true, Some(0.75)),
+                row(1, "image", false, false, None),
+                row(1, "object", true, true, Some(0.25)),
+            ]
+        );
+    }
+
     #[test]
     fn the_analysed_planes_of_each_image_are_kept() {
         let dir = tempfile::tempdir().unwrap();

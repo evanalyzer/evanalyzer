@@ -4,7 +4,7 @@
 import { Ink } from "../ink/palette.slint";
 import { ClassItemData } from "classification.slint";
 
-export enum StepCategory { preprocess, segment, instance-segmentation, extract, object, dataset, module }
+export enum StepCategory { preprocess, segment, instance-segmentation, extract, object, measure, dataset, module }
 
 export enum PipelineStatus { idle, queued, running, done, error }
 
@@ -216,6 +216,9 @@ export global Cat {
             if c == StepCategory.extract {
                 return Ink.cat-extract;
             }
+            if c == StepCategory.measure {
+                return Ink.cat-measure;
+            }
             if c == StepCategory.dataset {
                 return Ink.cat-dataset;
             }
@@ -239,6 +242,9 @@ export global Cat {
             }
             if c == StepCategory.extract {
                 return "Extract";
+            }
+            if c == StepCategory.measure {
+                return "Measure";
             }
             if c == StepCategory.dataset {
                 return "Dataset";

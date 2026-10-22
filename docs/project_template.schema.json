@@ -2077,6 +2077,27 @@
         }
       ]
     },
+    "PearsonCorrelationCoefficientSettings": {
+      "description": "Measures how two channels go together across the whole image: the\nPearson correlation coefficient, from -1 (one bright where the other is\ndark) over 0 (unrelated) to 1 (bright together).\n\nIt uses every pixel of the image, the background too - a large dark\nbackground raises it.",
+      "type": "object",
+      "properties": {
+        "channelA": {
+          "description": "The first channel.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "channelB": {
+          "description": "The second channel.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 1
+        },
+        "name": {
+          "description": "The measurement's name - its values in the results start with it.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
     "PipelineCommand": {
       "oneOf": [
         {
@@ -2413,6 +2434,19 @@
             }
           },
           "$ref": "#/$defs/ObjectMathSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "PEARSON_CORRELATION_COEFFICIENT"
+            }
+          },
+          "$ref": "#/$defs/PearsonCorrelationCoefficientSettings",
           "required": [
             "type"
           ]
