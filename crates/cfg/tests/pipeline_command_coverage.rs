@@ -264,13 +264,14 @@ fn command_category_helpers_cover_every_variant() {
         CommandCategory::InstanceSegmentation,
         CommandCategory::Extract,
         CommandCategory::Object,
+        CommandCategory::Measure,
         CommandCategory::Dataset,
     ];
     for cat in categories {
         // These are `#[allow(dead_code)]` (unused outside tests currently),
         // which is exactly why they were at 0% coverage.
         let order = cat.display_order();
-        assert!(order <= 5);
+        assert!(order <= 6);
         let _ = cat.allowed_after();
         let _ = cat.suggested_next();
     }
@@ -295,7 +296,8 @@ fn command_category_display_order_is_sequential_by_pipeline_stage() {
     assert_eq!(CommandCategory::InstanceSegmentation.display_order(), 2);
     assert_eq!(CommandCategory::Extract.display_order(), 3);
     assert_eq!(CommandCategory::Object.display_order(), 4);
-    assert_eq!(CommandCategory::Dataset.display_order(), 5);
+    assert_eq!(CommandCategory::Measure.display_order(), 5);
+    assert_eq!(CommandCategory::Dataset.display_order(), 6);
 }
 
 #[test]
@@ -326,12 +328,22 @@ fn command_category_allowed_after_matches_expected_predecessors() {
         CommandCategory::Object.allowed_after(),
         &[CommandCategory::Extract, CommandCategory::Object]
     );
+    // Measurement steps measure the final objects (or the image).
+    assert_eq!(
+        CommandCategory::Measure.allowed_after(),
+        &[
+            CommandCategory::Extract,
+            CommandCategory::Object,
+            CommandCategory::Measure
+        ]
+    );
     // Dataset steps need extracted objects, like Object steps.
     assert_eq!(
         CommandCategory::Dataset.allowed_after(),
         &[
             CommandCategory::Extract,
             CommandCategory::Object,
+            CommandCategory::Measure,
             CommandCategory::Dataset
         ]
     );
@@ -361,6 +373,10 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
         CommandCategory::Object.suggested_next(),
         CommandCategory::Object
     );
+    assert_eq!(
+        CommandCategory::Measure.suggested_next(),
+        CommandCategory::Measure
+    );
     // Dataset steps come last: only more dataset steps may follow.
     assert_eq!(
         CommandCategory::Dataset.suggested_next(),
@@ -371,21 +387,21 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    // Wherever an Object step may follow, a dataset step may too: both
-    // need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 41] = [
-        ("AI Object Classifier", &[Object, Dataset]),
+    // Wherever an Object step may follow, a measurement and a dataset step
+    // may too: they need extracted objects.
+    let expected: [(&str, &[CommandCategory]); 42] = [
+        ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
-        ("ClassifyObjects", &[Object, Dataset]),
-        ("Colocalization", &[Object, Dataset]),
+        ("ClassifyObjects", &[Object, Measure, Dataset]),
+        ("Colocalization", &[Object, Measure, Dataset]),
         ("ColorFilterCommand", &[Segment, Preprocess]),
         ("ConnectedComponents", &[InstanceSegmentation, Extract]),
         ("DistanceTransform", &[Segment, Preprocess]),
         ("EdgeDetectionCanny", &[Segment, Preprocess]),
         ("EdgeDetectionSobel", &[Segment, Preprocess]),
         ("EnhanceContrast", &[Segment, Preprocess]),
-        ("ExtractObjects", &[Object, Dataset]),
+        ("ExtractObjects", &[Object, Measure, Dataset]),
         // Not `default_next_for_category("InstanceSegmentation")`
         // (`[Extract, InstanceSegmentation]`) - pinned to just
         // `[InstanceSegmentation]`: `Extract`-stage commands like
@@ -403,10 +419,12 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
         ("Laplacian", &[Segment, Preprocess]),
-        ("LoadAnnotatedObjects", &[Object, Dataset]),
+        ("LoadAnnotatedObjects", &[Object, Measure, Dataset]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
-        ("ObjectMath", &[Object, Dataset]),
+        // Measurements first, then dataset steps (which run after every image).
+        ("Pearson Correlation", &[Measure, Dataset]),
+        ("ObjectMath", &[Object, Measure, Dataset]),
         ("AI Pixel Classifier", &[InstanceSegmentation]),
         ("RankFilter", &[Segment, Preprocess]),
         ("Rolling Ball", &[Segment, Preprocess]),
@@ -420,6 +438,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
                 InstanceSegmentation,
                 Extract,
                 Object,
+                Measure,
                 Dataset,
             ],
         ),
@@ -431,10 +450,10 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         // `Threshold`'s own `Segment` category) so instance labeling
         // (ConnectedComponents) is suggested right after it.
         ("Threshold", &[InstanceSegmentation]),
-        ("TransformObjects", &[Object, Dataset]),
+        ("TransformObjects", &[Object, Measure, Dataset]),
         ("AI UNet Segmentation", &[InstanceSegmentation]),
         ("AI YOLOv5 Segmentation", &[Extract]),
-        ("Voronoi", &[Object, Dataset]),
+        ("Voronoi", &[Object, Measure, Dataset]),
         ("Watershed", &[Extract]),
         ("WeightedDeviation", &[Segment, Preprocess]),
     ];

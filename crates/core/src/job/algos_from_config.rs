@@ -771,6 +771,16 @@ impl From<ObjectMathSettings> for ObjectMath {
     }
 }
 
+impl From<PearsonCorrelationCoefficientSettings> for PearsonCorrelationCoefficient {
+    fn from(_s: PearsonCorrelationCoefficientSettings) -> Self {
+        PearsonCorrelationCoefficient {
+            name: _s.name,
+            channel_a: _s.channel_a,
+            channel_b: _s.channel_b,
+        }
+    }
+}
+
 impl From<PixelClassifierSettings> for PixelClassifier {
     fn from(_s: PixelClassifierSettings) -> Self {
         PixelClassifier {
@@ -1064,6 +1074,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::ObjectMath(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ObjectMath::from(settings),
         ))),
+        PipelineCommand::PearsonCorrelationCoefficient(settings) => Ok(PipelineStep::Image(
+            Box::new(crate::algos::PearsonCorrelationCoefficient::from(settings)),
+        )),
         PipelineCommand::PixelClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::PixelClassifier::from(settings),
         ))),

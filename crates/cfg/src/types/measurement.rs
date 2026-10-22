@@ -28,16 +28,16 @@ pub enum MeasurementTarget {
     Image,
 }
 
-/// One measurement of a step, e.g. "Pearson (ch1 × ch2)" of the step
-/// "Coloc nuclei".
+/// One measurement of a step, e.g. "Pearson (channel 0 × channel 1)" of the
+/// step "pearson_01".
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementInfo {
-    /// Stable and unique, e.g. "coloc_3/pearson/ch1×ch2".
+    /// Stable and unique, e.g. "pearson_01/pearson/ch0_ch1".
     pub key: String,
-    /// Shown in the results, e.g. "Pearson (ch1 × ch2)".
+    /// Shown in the results, e.g. "Pearson (channel 0 × channel 1)".
     pub name: String,
-    /// The results' pickers group by it, e.g. "Colocalization · Coloc nuclei".
-    pub group: String,
+    /// The step's name, e.g. "pearson_01" - the results group by it.
+    pub step: String,
     pub unit: MeasurementUnit,
     pub target: MeasurementTarget,
     /// The values' range, if fixed (Pearson -1..1, Manders 0..1): the

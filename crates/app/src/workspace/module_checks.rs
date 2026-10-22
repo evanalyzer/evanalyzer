@@ -1058,6 +1058,82 @@ mod tests {
         PipelineCommand::Blur(BlurSettings::default())
     }
 
+    fn pearson(name: &str) -> PipelineCommand {
+        let mut command =
+            PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+        *command.measurement_name_mut().unwrap() = name.into();
+        command
+    }
+
+    fn nuclei(steps: Vec<PipelineStepSettings>) -> PipelineSettings {
+        PipelineSettings {
+            id: PipelineId(1),
+            name: "Nuclei".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps,
+        }
+    }
+
+    fn messages_at(problems: &[ModuleProblem], step: u32) -> Vec<&str> {
+        problems
+            .iter()
+            .filter(|p| p.step == Some((PipelineId(1), StepId(step))))
+            .map(|p| p.message.as_str())
+            .collect()
+    }
+
+    /// Each measurement step needs a name of its own (case aside) made of
+    /// letters, digits and _.
+    #[test]
+    fn a_measurement_name_used_twice_or_not_valid_is_reported_at_its_steps() {
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(nuclei(vec![
+            step(1, pearson("coloc")),
+            step(2, pearson("COLOC")),
+            step(3, pearson("bad name")),
+        ]));
+        let problems = check_project(&project);
+        assert_eq!(
+            messages_at(&problems, 1),
+            [
+                "The measurement name “coloc” is also used by step 2 of “Nuclei” - each \
+              measurement step needs its own"
+            ]
+        );
+        assert!(messages_at(&problems, 2)[0].contains("also used by step 1 of “Nuclei”"));
+        assert!(messages_at(&problems, 3)[0].contains("may only have letters, digits and _"));
+    }
+
+    /// A module used twice names its measurement the same both times - the
+    /// message says how each use gets its own.
+    #[test]
+    fn a_module_measuring_used_twice_is_told_to_make_the_name_a_parameter() {
+        let mut project = ProjectSettings::default();
+        project.modules.push(ModuleDefinition {
+            key: "COLOC".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![step(1, pearson("coloc"))],
+            parameters: vec![],
+            origin: None,
+        });
+        project
+            .pipelines
+            .push(nuclei(vec![uses(4, "COLOC", &[]), uses(9, "COLOC", &[])]));
+        let problems = check_project(&project);
+        for at in [4, 9] {
+            let [message] = messages_at(&problems, at)[..] else {
+                panic!("step {at}: one problem, got {problems:?}");
+            };
+            assert!(
+                message.contains("make the name a module parameter"),
+                "{message}"
+            );
+        }
+    }
+
     /// Module SMOOTH (a blur, its kernel size parameter 1) used by pipeline 1.
     fn project() -> ProjectSettings {
         let mut project = ProjectSettings::default();

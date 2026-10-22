@@ -21,6 +21,7 @@ pub use self::ai_segmentation::unet::UNetOutputMode;
 pub use self::ai_segmentation::yolov5::YoloClassMapping;
 pub use self::ai_segmentation::yolov5::Yolov5;
 
+pub use self::measure::pearson_correlation_coefficient::PearsonCorrelationCoefficient;
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
 pub use self::filters::color_filter::ColorFilterCommand;
@@ -129,6 +130,13 @@ pub trait ImageAlgorithm: Send + Sync {
     /// only runs the whole-image phase without any segmented objects, when a
     /// job contains such a command.
     fn uses_annotated_objects(&self) -> bool {
+        false
+    }
+
+    /// `true` for measurement steps: they measure every image, also one
+    /// without objects - the executor then still runs the whole-image phase
+    /// and exports the image's measurements.
+    fn measures(&self) -> bool {
         false
     }
 

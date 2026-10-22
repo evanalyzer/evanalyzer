@@ -1623,6 +1623,37 @@ mod tests {
         );
     }
 
+    /// Two measurement steps named the same can't run: their values would
+    /// mix in the results.
+    #[test]
+    fn a_job_with_two_measurement_steps_of_one_name_is_refused() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let pearson = || {
+            let mut command =
+                PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+            *command.measurement_name_mut().unwrap() = "coloc".into();
+            PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command),
+            }
+        };
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![pearson(), pearson()])],
+        );
+        let Err(err) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into())
+        else {
+            panic!("refused");
+        };
+        assert!(
+            err.to_string().contains("\"coloc\" is used more than once"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn a_run_with_a_measurement_name_used_twice_or_not_valid_is_refused() {
         let named = |names: &[&str]| -> Vec<(String, &'static str)> {

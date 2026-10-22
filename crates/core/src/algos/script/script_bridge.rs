@@ -709,11 +709,14 @@ mod tests {
     /// command outside the Object category; that must be exactly the
     /// commands a script can run.
     #[test]
-    fn object_category_is_exactly_the_whole_image_commands() {
+    fn object_and_measure_categories_are_exactly_the_whole_image_commands() {
         use evanalyzer_cfg::settings::pipeline_command::CommandCategory;
         for key in PipelineCommand::KEYS.iter().filter(|k| **k != "script") {
             let cmd = PipelineCommand::default_for_key(key).unwrap();
-            let is_object = matches!(cmd.category(), CommandCategory::Object);
+            let is_object = matches!(
+                cmd.category(),
+                CommandCategory::Object | CommandCategory::Measure
+            );
             let Ok(algo) = into_algorithm(cmd) else {
                 continue; // feature-gated (ai) command not in this build
             };

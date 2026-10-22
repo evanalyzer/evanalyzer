@@ -378,6 +378,54 @@ mod tests {
 
     use super::*;
 
+    /// In a project: the pipelines' measurement steps, then the modules'.
+    #[test]
+    fn a_projects_measurement_steps_without_a_name_get_one() {
+        use evanalyzer_cfg::core_types::PipelineId;
+        let pearson = |name: &str| {
+            let mut command =
+                PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+            *command.measurement_name_mut().unwrap() = name.into();
+            PipelineStepSettings {
+                id: StepId::UNASSIGNED,
+                enabled: true,
+                content: StepContent::Command(command),
+            }
+        };
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: String::new(),
+            description: None,
+            image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![pearson(""), pearson("pearson_01")],
+        });
+        project.modules.push(ModuleDefinition {
+            key: "COLOC".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![pearson("")],
+            parameters: vec![],
+            origin: None,
+        });
+
+        assert_eq!(assign_measurement_names(&mut project), 2);
+        let name = |step: &PipelineStepSettings| {
+            step.command()
+                .and_then(|c| c.measurement_name())
+                .unwrap()
+                .to_string()
+        };
+        let names: Vec<String> = project.pipelines[0]
+            .steps
+            .iter()
+            .chain(&project.modules[0].steps)
+            .map(name)
+            .collect();
+        assert_eq!(names, ["pearson_02", "pearson_01", "pearson_03"]);
+    }
+
     /// Empty names get the next free number of their kind; names already
     /// given stay - also one used twice (the checks report it).
     #[test]

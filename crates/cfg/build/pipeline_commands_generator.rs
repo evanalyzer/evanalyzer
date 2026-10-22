@@ -418,6 +418,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         "InstanceSegmentation",
         "Extract",
         "Object",
+        "Measure",
         "Dataset",
         "Other",
     ] {
@@ -1160,6 +1161,7 @@ fn normalize_category(raw: &str) -> String {
         "segment" | "segmentation" | "ai_segmentation" => "Segmentation".to_string(),
         "instance_segmentation" => "InstanceSegmentation".to_string(),
         "extract" => "Extract".to_string(),
+        "measure" => "Measure".to_string(),
         "object" | "classify" | "classification" => "Object".to_string(),
         "dataset" => "Dataset".to_string(),
         _ => "Other".to_string(),
@@ -3218,6 +3220,7 @@ fn category_to_enum_variant(category: &str) -> &str {
         "Segmentation" => "Segment",
         "InstanceSegmentation" => "InstanceSegmentation",
         "Extract" => "Extract",
+        "Measure" => "Measure",
         "Object" => "Object",
         "Dataset" => "Dataset",
         _ => "Preprocess",
@@ -3242,6 +3245,7 @@ fn default_next_for_category(variant: &str) -> &'static [&'static str] {
         "InstanceSegmentation" => &["Extract", "InstanceSegmentation"],
         "Extract" => &["Object", "Extract"],
         "Object" => &["Object"],
+        "Measure" => &["Measure", "Dataset"],
         "Dataset" => &["Dataset"],
         _ => &["Segment"],
     }
@@ -3276,6 +3280,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("    InstanceSegmentation,\n");
     out.push_str("    Extract,\n");
     out.push_str("    Object,\n");
+    out.push_str("    /// Measures objects or the image (once its objects are final).\n");
+    out.push_str("    Measure,\n");
     out.push_str("    /// Runs once after every image, on the objects of all of them.\n");
     out.push_str("    Dataset,\n");
     out.push_str("}\n\n");
@@ -3291,7 +3297,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::InstanceSegmentation => 2,\n");
     out.push_str("            Self::Extract              => 3,\n");
     out.push_str("            Self::Object               => 4,\n");
-    out.push_str("            Self::Dataset              => 5,\n");
+    out.push_str("            Self::Measure              => 5,\n");
+    out.push_str("            Self::Dataset              => 6,\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// Which categories are valid immediately before this one in a pipeline.\n");
     out.push_str("    /// An empty slice means this category can start a pipeline.\n");
@@ -3307,7 +3314,10 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         "            Self::Extract              => &[Self::InstanceSegmentation, Self::Extract],\n",
     );
     out.push_str("            Self::Object               => &[Self::Extract, Self::Object],\n");
-    out.push_str("            Self::Dataset              => &[Self::Extract, Self::Object, Self::Dataset],\n");
+    out.push_str(
+        "            Self::Measure              => &[Self::Extract, Self::Object, Self::Measure],\n",
+    );
+    out.push_str("            Self::Dataset              => &[Self::Extract, Self::Object, Self::Measure, Self::Dataset],\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// The natural next category after this one, used to pre-filter the command picker.\n");
     out.push_str("#[allow(dead_code)]\n");
@@ -3318,6 +3328,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::InstanceSegmentation => Self::Extract,\n");
     out.push_str("            Self::Extract              => Self::Object,\n");
     out.push_str("            Self::Object               => Self::Object,\n");
+    out.push_str("            Self::Measure              => Self::Measure,\n");
     out.push_str("            Self::Dataset              => Self::Dataset,\n");
     out.push_str("        }\n    }\n");
     out.push_str("}\n\n");
@@ -3479,13 +3490,15 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
                 .map(|c| format!("CommandCategory::{c}"))
                 .collect(),
         };
-        // A dataset step may follow wherever an object step may - both need
-        // extracted objects. It runs after every image anyway, wherever it sits.
-        let dataset = "CommandCategory::Dataset".to_string();
-        if next_variants.contains(&"CommandCategory::Object".to_string())
-            && !next_variants.contains(&dataset)
-        {
-            next_variants.push(dataset);
+        // A measurement and a dataset step may follow wherever an object
+        // step may - they need extracted objects (a measurement the final
+        // ones). A dataset step runs after every image anyway, wherever it sits.
+        if next_variants.contains(&"CommandCategory::Object".to_string()) {
+            for later in ["CommandCategory::Measure", "CommandCategory::Dataset"] {
+                if !next_variants.iter().any(|v| v == later) {
+                    next_variants.push(later.to_string());
+                }
+            }
         }
         out.push_str(&format!(
             "            Self::{}(_) => &[{}],\n",
