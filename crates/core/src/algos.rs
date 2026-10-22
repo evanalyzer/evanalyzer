@@ -76,6 +76,7 @@ pub use self::object::extract_objects::{ExtractClassMapping, ExtractObjects};
 pub use self::object::load_annotaed_objects::LoadAnnotatedObjects;
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;
+pub use self::object::propagation::Propagation;
 pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_edge};
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;

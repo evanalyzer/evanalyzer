@@ -2531,6 +2531,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "PROPAGATION"
+            }
+          },
+          "$ref": "#/$defs/PropagationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "RANK_FILTER"
             }
           },
@@ -2880,6 +2893,44 @@
         "PLATE32X48",
         "PLATE48X72"
       ]
+    },
+    "PropagationSettings": {
+      "description": "Grows a region around each seed object (e.g. a cell around its nucleus)\nthrough a channel (e.g. the cell stain), so neighbouring regions meet\nwhere the stain is dim. Each region is linked to its seed.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel the regions grow through (e.g. the cell or membrane\nstain).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "excludeAtEdges": {
+          "description": "Discard regions that touch the image border.",
+          "type": "boolean",
+          "default": false
+        },
+        "mask": {
+          "description": "Regions only cover pixels of objects carrying this class (e.g. the\nthresholded cell stain). `Unset`: the whole image.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "outputClass": {
+          "description": "The class the grown regions get.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "regularization": {
+          "description": "How much plain distance counts against the change in brightness\n(λ): larger values split more by distance, `0` by brightness only.",
+          "type": "number",
+          "format": "float",
+          "default": 0.05000000074505806,
+          "minimum": 0
+        },
+        "seeds": {
+          "description": "Objects carrying this class are the seeds (e.g. nuclei): each grows\ninto one region.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
     },
     "RankFilterSettings": {
       "description": "A filter that transforms pixels based on the statistical rank of their neighbors.\n\nRank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",

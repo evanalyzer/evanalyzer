@@ -215,6 +215,8 @@ pub enum PipelineCommand {
         alias = "pixel_classifier"
     )]
     PixelClassifier(PixelClassifierSettings),
+    #[serde(alias = "propagation")]
+    Propagation(PropagationSettings),
     #[serde(alias = "rank-filter", alias = "rankFilter", alias = "rank_filter")]
     RankFilter(RankFilterSettings),
     #[serde(alias = "rolling-ball", alias = "rollingBall", alias = "rolling_ball")]
@@ -485,97 +487,104 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 30,
+            name: "Propagation",
+            category: CommandCategory::Object,
+            summary: "Grows a region around each seed object (e.g.",
+            description: "a cell around its nucleus) through a channel (e.g. the cell stain), so neighbouring regions meet where the stain is dim. Each region is linked to its seed.",
+        },
+        CommandMeta {
+            id: 31,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 31,
+            id: 32,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 32,
+            id: 33,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 33,
+            id: 34,
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 34,
+            id: 35,
             name: "SimpleTracker",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 35,
+            id: 36,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 36,
+            id: 37,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 37,
+            id: 38,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 38,
+            id: 39,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 39,
+            id: 40,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 40,
+            id: 41,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 41,
+            id: 42,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 42,
+            id: 43,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 43,
+            id: 44,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -659,28 +668,29 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         29 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        30 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        31 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        32 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        33 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        34 => Some(PipelineCommand::SimpleTracker(
+        30 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
+        31 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        32 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        33 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        34 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        35 => Some(PipelineCommand::SimpleTracker(
             SimpleTrackerSettings::default(),
         )),
-        35 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        36 => Some(PipelineCommand::StructureTensor(
+        36 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        37 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        37 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        38 => Some(PipelineCommand::TransformObjects(
+        38 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        39 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        39 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        40 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        41 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        42 => Some(PipelineCommand::WeightedDeviation(
+        40 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        41 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        42 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        43 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        43 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        44 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -720,6 +730,7 @@ impl PipelineCommand {
         "object_math",
         "pearson_correlation_coefficient",
         "pixel_classifier",
+        "propagation",
         "rank_filter",
         "rolling_ball",
         "save_image",
@@ -769,6 +780,7 @@ impl PipelineCommand {
             Self::ObjectMath(_) => "object_math",
             Self::PearsonCorrelationCoefficient(_) => "pearson_correlation_coefficient",
             Self::PixelClassifier(_) => "pixel_classifier",
+            Self::Propagation(_) => "propagation",
             Self::RankFilter(_) => "rank_filter",
             Self::RollingBall(_) => "rolling_ball",
             Self::SaveImage(_) => "save_image",
@@ -841,6 +853,7 @@ impl PipelineCommand {
                 PearsonCorrelationCoefficientSettings::default(),
             )),
             "pixel_classifier" => Some(Self::PixelClassifier(PixelClassifierSettings::default())),
+            "propagation" => Some(Self::Propagation(PropagationSettings::default())),
             "rank_filter" => Some(Self::RankFilter(RankFilterSettings::default())),
             "rolling_ball" => Some(Self::RollingBall(RollingBallSettings::default())),
             "save_image" => Some(Self::SaveImage(SaveImageSettings::default())),
@@ -895,6 +908,7 @@ impl PipelineCommand {
             Self::ObjectMath(_) => "ObjectMath",
             Self::PearsonCorrelationCoefficient(_) => "Pearson Correlation",
             Self::PixelClassifier(_) => "AI Pixel Classifier",
+            Self::Propagation(_) => "Propagation",
             Self::RankFilter(_) => "RankFilter",
             Self::RollingBall(_) => "Rolling Ball",
             Self::SaveImage(_) => "SaveImage",
@@ -944,6 +958,7 @@ impl PipelineCommand {
             Self::ObjectMath(_) => &CommandCategory::Object,
             Self::PearsonCorrelationCoefficient(_) => &CommandCategory::Measure,
             Self::PixelClassifier(_) => &CommandCategory::Segment,
+            Self::Propagation(_) => &CommandCategory::Object,
             Self::RankFilter(_) => &CommandCategory::Preprocess,
             Self::RollingBall(_) => &CommandCategory::Preprocess,
             Self::SaveImage(_) => &CommandCategory::Preprocess,
@@ -1029,6 +1044,11 @@ impl PipelineCommand {
                 &[CommandCategory::Measure, CommandCategory::Dataset]
             }
             Self::PixelClassifier(_) => &[CommandCategory::InstanceSegmentation],
+            Self::Propagation(_) => &[
+                CommandCategory::Object,
+                CommandCategory::Measure,
+                CommandCategory::Dataset,
+            ],
             Self::RankFilter(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::RollingBall(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::SaveImage(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
@@ -1094,6 +1114,7 @@ impl PipelineCommand {
             Self::ObjectMath(_s) => [vec![ParameterDef { name: "operation".to_string(), display_name: "Operation".to_string(), description: "Boolean set operation to apply".to_string(), value: match _s.operation { ObjectObjectMathObjectSetOperationSettings::And => "And".to_string(), ObjectObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ObjectObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ObjectObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }, param_type: ParamType::Dropdown, options: vec!["And".to_string(), "Or".to_string(), "Xor".to_string(), "Subtract".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectObjectMathObjectSetOperationSettings::default()) { ObjectObjectMathObjectSetOperationSettings::And => "And".to_string(), ObjectObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ObjectObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ObjectObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }], vec![ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "ROIs carrying this class are the left-hand operand (\"A\").".to_string(), value: _s.input_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "other_class".to_string(), display_name: "Other Class".to_string(), description: "ROIs carrying this class are the right-hand operand (\"B\").".to_string(), value: _s.other_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "other_filter_classes".to_string(), display_name: "Other Filter Classes".to_string(), description: "Optional additional label filters applied to `other_class` objects.\n\nOnly `other_class` objects that carry all listed classes are used.".to_string(), value: _s.other_filter_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.other_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for `min_overlap_area`".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_overlap_area".to_string(), display_name: "Min Overlap Area".to_string(), description: "Minimum overlap area before an `other_class` object is treated as a partner\nof an input object; objects overlapping less than this are ignored.".to_string(), value: format!("{}", _s.min_overlap_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "If unset, the result replaces the input object in place.\n\nIf set, a new object carrying this class is created for each input object instead,\nleaving the input object untouched.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "keep_unmatched".to_string(), display_name: "Keep Unmatched".to_string(), description: "When an input object has no qualifying overlapping partner: keep it unchanged in\nthe output (true), or drop it entirely - no output for it at all - (false).\n\nNote this is a policy override, not the literal mathematical result: e.g. for\n`And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\nstill leaves A untouched rather than emitting a zero-area object.".to_string(), value: format!("{}", _s.keep_unmatched), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::PearsonCorrelationCoefficient(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "The measurement's name - its values in the results start with it.".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_a".to_string(), display_name: "Channel A".to_string(), description: "The first channel.".to_string(), value: _s.channel_a.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_b".to_string(), display_name: "Channel B".to_string(), description: "The second channel.".to_string(), value: _s.channel_b.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (1)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::PixelClassifier(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a trained pixel classifier model, saved from the AI training dialog.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["evamodel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_mapping".to_string(), display_name: "Segmentation Mapping".to_string(), description: "Maps the model's predicted classes to this project's segmentation classes.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.segmentation_mapping.iter().map(|__item| [vec![ParameterDef { name: "model_class".to_string(), display_name: "Model Class".to_string(), description: "The class the classifier model predicts.".to_string(), value: format!("{}", __item.model_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (ModelSegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The project's own segmentation class pixels predicted as\n`model_class` are written as.".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::Propagation(_s) => [vec![ParameterDef { name: "seeds".to_string(), display_name: "Seeds".to_string(), description: "Objects carrying this class are the seeds (e.g. nuclei): each grows\ninto one region.".to_string(), value: _s.seeds.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "growth_channel".to_string(), display_name: "Growth Channel".to_string(), description: "The channel the regions grow through (e.g. the cell or membrane\nstain).".to_string(), value: _s.growth_channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask".to_string(), display_name: "Mask".to_string(), description: "Regions only cover pixels of objects carrying this class (e.g. the\nthresholded cell stain). `Unset`: the whole image.".to_string(), value: _s.mask.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "regularization".to_string(), display_name: "Regularization".to_string(), description: "How much plain distance counts against the change in brightness\n(λ): larger values split more by distance, `0` by brightness only.".to_string(), value: format!("{}", _s.regularization), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "The class the grown regions get.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_at_edges".to_string(), display_name: "Exclude At Edges".to_string(), description: "Discard regions that touch the image border.".to_string(), value: format!("{}", _s.exclude_at_edges), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::RankFilter(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRankFilterRankFilterTypeSettings::default()) { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false], section: String::new() }], match &_s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => vec![], FiltersRankFilterRankFilterTypeSettings::Min => vec![], FiltersRankFilterRankFilterTypeSettings::Max => vec![], FiltersRankFilterRankFilterTypeSettings::Mean => vec![], FiltersRankFilterRankFilterTypeSettings::Outliers(__inner) => vec![ParameterDef { name: "filter_type.0".to_string(), display_name: "Outliers".to_string(), description: "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }].concat(),
             Self::RollingBall(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the ball or paraboloid in pixels.\n\nThis should be at least as large as the radius of the largest\nobject in the image that is not part of the background.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 64.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (4.0f64)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: match _s.ball_type { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRollingBallBallTypeSettings::default()) { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::SaveImage(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "Name the image should be stord under".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "display_classes".to_string(), display_name: "Display Classes".to_string(), description: "Shows the selected classes in the image".to_string(), value: _s.display_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.display_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Which image from the pipeline should be stored".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSaveImageImageSourceSettings :: Image) { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "opacity".to_string(), display_name: "Opacity".to_string(), description: "Opacity in percent of the filled `display_classes` objects (0 = only\nthe contours, 100 = solid). Contours are always drawn opaque.".to_string(), value: format!("{}", _s.opacity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 5.0000f32, groups: vec![], default_value: format!("{}", (50u32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1161,6 +1182,7 @@ impl PipelineCommand {
             ),
             Self::PearsonCorrelationCoefficient(s) => format!("Name: {}", s.name.clone()),
             Self::PixelClassifier(_) => String::new(),
+            Self::Propagation(_) => String::new(),
             Self::RankFilter(_) => String::new(),
             Self::RollingBall(_) => String::new(),
             Self::SaveImage(_) => String::new(),
@@ -1342,6 +1364,11 @@ impl PipelineCommand {
                         item0.segmentation_class,
                     ));
                 }
+            }
+            Self::Propagation(s) => {
+                classes.push(s.seeds);
+                classes.push(s.mask);
+                classes.push(s.output_class);
             }
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
@@ -2248,6 +2275,36 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::Propagation(s) => {
+                if param_name == "seeds" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.seeds = v;
+                    }
+                }
+                if param_name == "growth_channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.growth_channel = ImageChannelIdx(v);
+                    }
+                }
+                if param_name == "mask" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.mask = v;
+                    }
+                }
+                if param_name == "regularization" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.regularization = v;
+                    }
+                }
+                if param_name == "output_class" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.output_class = v;
+                    }
+                }
+                if param_name == "exclude_at_edges" {
+                    s.exclude_at_edges = value == "true";
+                }
+            }
             Self::RankFilter(s) => {
                 if param_name == "radius" {
                     if let Ok(v) = value.parse::<f64>() {
@@ -2895,6 +2952,7 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::Propagation(_) => {}
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
@@ -2976,6 +3034,7 @@ impl PipelineCommand {
                     s.segmentation_mapping.remove(idx);
                 }
             }
+            Self::Propagation(_) => {}
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
