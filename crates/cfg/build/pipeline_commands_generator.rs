@@ -416,7 +416,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         "Preprocessing",
         "Segmentation",
         "InstanceSegmentation",
-        "Measure",
+        "Extract",
         "Object",
         "Dataset",
         "Other",
@@ -863,11 +863,11 @@ struct StructMetadata {
     /// shown in the command picker/header instead of the bare struct name.
     display_name: Option<String>,
     /// Explicit list of categories that may follow this command, from
-    /// #[cmdsmeta(next = "measure,classify")]. Overrides the category-derived
+    /// #[cmdsmeta(next = "extract,classify")]. Overrides the category-derived
     /// default successors (see `default_next_for_category`). Used to decouple a
     /// command's display `category` from what is allowed to come after it — e.g.
     /// StarDist/Cellpose live in `segment` for grouping but flow straight to
-    /// `measure`, while U-Net (also `segment`) flows to `object`.
+    /// `extract`, while U-Net (also `segment`) flows to `object`.
     next: Option<Vec<String>>,
     /// Stable serialized/script name from #[cmdsmeta(key = "...")] (snake_case).
     /// `None` keeps deriving it from the struct name; set it before renaming a
@@ -1154,7 +1154,7 @@ fn normalize_category(raw: &str) -> String {
         "Preprocessing" | "preprocessing" => "Preprocessing".to_string(),
         "segment" | "segmentation" | "ai_segmentation" => "Segmentation".to_string(),
         "instance_segmentation" => "InstanceSegmentation".to_string(),
-        "measure" | "measurement" => "Measure".to_string(),
+        "extract" => "Extract".to_string(),
         "object" | "classify" | "classification" => "Object".to_string(),
         "dataset" => "Dataset".to_string(),
         _ => "Other".to_string(),
@@ -3209,7 +3209,7 @@ fn category_to_enum_variant(category: &str) -> &str {
         "Preprocessing" => "Preprocess",
         "Segmentation" => "Segment",
         "InstanceSegmentation" => "InstanceSegmentation",
-        "Measure" => "Measure",
+        "Extract" => "Extract",
         "Object" => "Object",
         "Dataset" => "Dataset",
         _ => "Preprocess",
@@ -3218,21 +3218,21 @@ fn category_to_enum_variant(category: &str) -> &str {
 
 /// Default successor categories for a command that does not declare an explicit
 /// `#[cmdsmeta(next = "...")]`. Mirrors the linear pipeline order
-/// (Preprocess → Segment → InstanceSegmentation → Measure → Object) but lets a
+/// (Preprocess → Segment → InstanceSegmentation → Extract → Object) but lets a
 /// stage repeat (e.g. InstanceSegmentation → InstanceSegmentation so Watershed
 /// can follow ConnectedComponents).
 ///
 /// Ordering is significant: the **first** entry is the *suggested* next category
 /// (the command picker pre-selects its chip), the rest are merely allowed. So the
-/// default after an InstanceSegmentation step suggests Measure but still permits
+/// default after an InstanceSegmentation step suggests Extract but still permits
 /// another InstanceSegmentation step; ConnectedComponents overrides this to
 /// suggest InstanceSegmentation (Watershed) first.
 fn default_next_for_category(variant: &str) -> &'static [&'static str] {
     match variant {
         "Preprocess" => &["Segment", "Preprocess"],
         "Segment" => &["InstanceSegmentation"],
-        "InstanceSegmentation" => &["Measure", "InstanceSegmentation"],
-        "Measure" => &["Object", "Measure"],
+        "InstanceSegmentation" => &["Extract", "InstanceSegmentation"],
+        "Extract" => &["Object", "Extract"],
         "Object" => &["Object"],
         "Dataset" => &["Dataset"],
         _ => &["Segment"],
@@ -3266,7 +3266,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("    Preprocess,\n");
     out.push_str("    Segment,\n");
     out.push_str("    InstanceSegmentation,\n");
-    out.push_str("    Measure,\n");
+    out.push_str("    Extract,\n");
     out.push_str("    Object,\n");
     out.push_str("    /// Runs once after every image, on the objects of all of them.\n");
     out.push_str("    Dataset,\n");
@@ -3281,7 +3281,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::Preprocess           => 0,\n");
     out.push_str("            Self::Segment              => 1,\n");
     out.push_str("            Self::InstanceSegmentation => 2,\n");
-    out.push_str("            Self::Measure              => 3,\n");
+    out.push_str("            Self::Extract              => 3,\n");
     out.push_str("            Self::Object               => 4,\n");
     out.push_str("            Self::Dataset              => 5,\n");
     out.push_str("        }\n    }\n\n");
@@ -3296,10 +3296,10 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         "            Self::InstanceSegmentation => &[Self::Segment, Self::InstanceSegmentation],\n",
     );
     out.push_str(
-        "            Self::Measure              => &[Self::InstanceSegmentation, Self::Measure],\n",
+        "            Self::Extract              => &[Self::InstanceSegmentation, Self::Extract],\n",
     );
-    out.push_str("            Self::Object               => &[Self::Measure, Self::Object],\n");
-    out.push_str("            Self::Dataset              => &[Self::Measure, Self::Object, Self::Dataset],\n");
+    out.push_str("            Self::Object               => &[Self::Extract, Self::Object],\n");
+    out.push_str("            Self::Dataset              => &[Self::Extract, Self::Object, Self::Dataset],\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// The natural next category after this one, used to pre-filter the command picker.\n");
     out.push_str("#[allow(dead_code)]\n");
@@ -3307,8 +3307,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        match self {\n");
     out.push_str("            Self::Preprocess           => Self::Segment,\n");
     out.push_str("            Self::Segment              => Self::InstanceSegmentation,\n");
-    out.push_str("            Self::InstanceSegmentation => Self::Measure,\n");
-    out.push_str("            Self::Measure              => Self::Object,\n");
+    out.push_str("            Self::InstanceSegmentation => Self::Extract,\n");
+    out.push_str("            Self::Extract              => Self::Object,\n");
     out.push_str("            Self::Object               => Self::Object,\n");
     out.push_str("            Self::Dataset              => Self::Dataset,\n");
     out.push_str("        }\n    }\n");
@@ -3450,7 +3450,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // pipeline. Defaults to the category's natural successors, but a command can
     // override this via #[cmdsmeta(next = "...")] to decouple display grouping
     // from flow — e.g. StarDist/Cellpose are shown under `segment` yet flow
-    // straight to `measure`, while U-Net (also `segment`) flows to `object`.
+    // straight to `extract`, while U-Net (also `segment`) flows to `object`.
     out.push_str("    /// Categories that may be inserted immediately after this command.\n");
     out.push_str("    pub fn allowed_next(&self) -> &'static [CommandCategory] {\n");
     out.push_str("        match self {\n");

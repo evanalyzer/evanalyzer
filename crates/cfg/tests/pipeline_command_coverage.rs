@@ -262,7 +262,7 @@ fn command_category_helpers_cover_every_variant() {
         CommandCategory::Preprocess,
         CommandCategory::Segment,
         CommandCategory::InstanceSegmentation,
-        CommandCategory::Measure,
+        CommandCategory::Extract,
         CommandCategory::Object,
         CommandCategory::Dataset,
     ];
@@ -293,7 +293,7 @@ fn command_category_display_order_is_sequential_by_pipeline_stage() {
     assert_eq!(CommandCategory::Preprocess.display_order(), 0);
     assert_eq!(CommandCategory::Segment.display_order(), 1);
     assert_eq!(CommandCategory::InstanceSegmentation.display_order(), 2);
-    assert_eq!(CommandCategory::Measure.display_order(), 3);
+    assert_eq!(CommandCategory::Extract.display_order(), 3);
     assert_eq!(CommandCategory::Object.display_order(), 4);
     assert_eq!(CommandCategory::Dataset.display_order(), 5);
 }
@@ -316,21 +316,21 @@ fn command_category_allowed_after_matches_expected_predecessors() {
         ]
     );
     assert_eq!(
-        CommandCategory::Measure.allowed_after(),
+        CommandCategory::Extract.allowed_after(),
         &[
             CommandCategory::InstanceSegmentation,
-            CommandCategory::Measure
+            CommandCategory::Extract
         ]
     );
     assert_eq!(
         CommandCategory::Object.allowed_after(),
-        &[CommandCategory::Measure, CommandCategory::Object]
+        &[CommandCategory::Extract, CommandCategory::Object]
     );
     // Dataset steps need extracted objects, like Object steps.
     assert_eq!(
         CommandCategory::Dataset.allowed_after(),
         &[
-            CommandCategory::Measure,
+            CommandCategory::Extract,
             CommandCategory::Object,
             CommandCategory::Dataset
         ]
@@ -349,10 +349,10 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
     );
     assert_eq!(
         CommandCategory::InstanceSegmentation.suggested_next(),
-        CommandCategory::Measure
+        CommandCategory::Extract
     );
     assert_eq!(
-        CommandCategory::Measure.suggested_next(),
+        CommandCategory::Extract.suggested_next(),
         CommandCategory::Object
     );
     // Object is the terminal stage: it suggests itself rather than looping
@@ -376,25 +376,25 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     let expected: [(&str, &[CommandCategory]); 41] = [
         ("AI Object Classifier", &[Object, Dataset]),
         ("Blur", &[Segment, Preprocess]),
-        ("AI Cellpose Segmentation", &[Measure]),
+        ("AI Cellpose Segmentation", &[Extract]),
         ("ClassifyObjects", &[Object, Dataset]),
         ("Colocalization", &[Object, Dataset]),
         ("ColorFilterCommand", &[Segment, Preprocess]),
-        ("ConnectedComponents", &[InstanceSegmentation, Measure]),
+        ("ConnectedComponents", &[InstanceSegmentation, Extract]),
         ("DistanceTransform", &[Segment, Preprocess]),
         ("EdgeDetectionCanny", &[Segment, Preprocess]),
         ("EdgeDetectionSobel", &[Segment, Preprocess]),
         ("EnhanceContrast", &[Segment, Preprocess]),
         ("ExtractObjects", &[Object, Dataset]),
         // Not `default_next_for_category("InstanceSegmentation")`
-        // (`[Measure, InstanceSegmentation]`) - pinned to just
-        // `[InstanceSegmentation]`: `Measure`-stage commands like
+        // (`[Extract, InstanceSegmentation]`) - pinned to just
+        // `[InstanceSegmentation]`: `Extract`-stage commands like
         // ExtractObjects expect instance IDs from ConnectedComponents/
         // Watershed, which haven't run yet right after FillHoles.
         ("FillHoles", &[InstanceSegmentation]),
-        // After filling, only Extract Objects (Measure) makes sense - object
+        // After filling, only Extract Objects (Extract) makes sense - object
         // commands need extracted objects.
-        ("FillObjectHoles", &[Measure]),
+        ("FillObjectHoles", &[Extract]),
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),
@@ -418,14 +418,14 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
                 Preprocess,
                 Segment,
                 InstanceSegmentation,
-                Measure,
+                Extract,
                 Object,
                 Dataset,
             ],
         ),
         // Only dataset steps may follow a dataset step.
         ("SimpleTracker", &[Dataset]),
-        ("AI Stardist Segmentation", &[Measure]),
+        ("AI Stardist Segmentation", &[Extract]),
         ("StructureTensor", &[Segment, Preprocess]),
         // Pinned to `[InstanceSegmentation]` (same as the default for
         // `Threshold`'s own `Segment` category) so instance labeling
@@ -433,9 +433,9 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Threshold", &[InstanceSegmentation]),
         ("TransformObjects", &[Object, Dataset]),
         ("AI UNet Segmentation", &[InstanceSegmentation]),
-        ("AI YOLOv5 Segmentation", &[Measure]),
+        ("AI YOLOv5 Segmentation", &[Extract]),
         ("Voronoi", &[Object, Dataset]),
-        ("Watershed", &[Measure]),
+        ("Watershed", &[Extract]),
         ("WeightedDeviation", &[Segment, Preprocess]),
     ];
     assert_eq!(

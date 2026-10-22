@@ -4352,15 +4352,15 @@ impl PipelinesController {
         // Per-category chip state (multi-select). When no chip is active the
         // picker shows every category ("All").
         let picker_state = ui.global::<CommandPickerState>();
-        let (fc_pre, fc_seg, fc_obj, fc_mea, fc_cls, fc_dat) = (
+        let (fc_pre, fc_seg, fc_obj, fc_ext, fc_cls, fc_dat) = (
             picker_state.get_fcat_pre(),
             picker_state.get_fcat_seg(),
             picker_state.get_fcat_obj(),
-            picker_state.get_fcat_mea(),
+            picker_state.get_fcat_ext(),
             picker_state.get_fcat_cls(),
             picker_state.get_fcat_dat(),
         );
-        let any_active = fc_pre || fc_seg || fc_obj || fc_mea || fc_cls || fc_dat;
+        let any_active = fc_pre || fc_seg || fc_obj || fc_ext || fc_cls || fc_dat;
         let cat_enabled = move |target: CommandCategory| -> bool {
             if !any_active {
                 return true;
@@ -4369,7 +4369,7 @@ impl PipelinesController {
                 CommandCategory::Preprocess => fc_pre,
                 CommandCategory::Segment => fc_seg,
                 CommandCategory::InstanceSegmentation => fc_obj,
-                CommandCategory::Measure => fc_mea,
+                CommandCategory::Extract => fc_ext,
                 CommandCategory::Object => fc_cls,
                 CommandCategory::Dataset => fc_dat,
             }
@@ -4404,14 +4404,14 @@ impl PipelinesController {
             })
             .map(|m| make(m, StepCategory::InstanceSegmentation))
             .collect();
-        let mea: Vec<CommandDef> = metas
+        let ext: Vec<CommandDef> = metas
             .iter()
             .filter(|m| {
-                matches!(m.category, CommandCategory::Measure)
+                matches!(m.category, CommandCategory::Extract)
                     && cat_enabled(m.category)
                     && text_matches(m)
             })
-            .map(|m| make(m, StepCategory::Measure))
+            .map(|m| make(m, StepCategory::Extract))
             .collect();
         let cls: Vec<CommandDef> = metas
             .iter()
@@ -4495,17 +4495,17 @@ impl PipelinesController {
             (pre.len()
                 + seg.len()
                 + obj.len()
-                + mea.len()
+                + ext.len()
                 + cls.len()
                 + dat.len()
                 + modules.len()
                 + library_modules.len()) as i32
         };
-        let (cp, cs, co, cm, cc, cd) = (
+        let (cp, cs, co, ce, cc, cd) = (
             pre.len() as i32,
             seg.len() as i32,
             obj.len() as i32,
-            mea.len() as i32,
+            ext.len() as i32,
             cls.len() as i32,
             dat.len() as i32,
         );
@@ -4513,7 +4513,7 @@ impl PipelinesController {
         picker.set_shown_preprocess(ModelRc::new(VecModel::from(pre)));
         picker.set_shown_segment(ModelRc::new(VecModel::from(seg)));
         picker.set_shown_object(ModelRc::new(VecModel::from(obj)));
-        picker.set_shown_measure(ModelRc::new(VecModel::from(mea)));
+        picker.set_shown_extract(ModelRc::new(VecModel::from(ext)));
         picker.set_shown_classify(ModelRc::new(VecModel::from(cls)));
         picker.set_shown_dataset(ModelRc::new(VecModel::from(dat)));
         picker.set_shown_modules(ModelRc::new(VecModel::from(modules)));
@@ -4528,7 +4528,7 @@ impl PipelinesController {
         picker.set_cat_count_pre(cp);
         picker.set_cat_count_seg(cs);
         picker.set_cat_count_obj(co);
-        picker.set_cat_count_mea(cm);
+        picker.set_cat_count_ext(ce);
         picker.set_cat_count_cls(cc);
         picker.set_cat_count_dat(cd);
     }
@@ -4780,9 +4780,9 @@ impl PipelinesController {
                     .filter(|m| matches!(m.category, CommandCategory::InstanceSegmentation))
                     .map(to_command_def)
                     .collect();
-                let shown_mea: Vec<CommandDef> = raw
+                let shown_ext: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Measure))
+                    .filter(|m| matches!(m.category, CommandCategory::Extract))
                     .map(to_command_def)
                     .collect();
                 let shown_cls: Vec<CommandDef> = raw
@@ -4796,11 +4796,11 @@ impl PipelinesController {
                     .map(to_command_def)
                     .collect();
                 let total = all.len() as i32;
-                let (cp, cs, co, cm, cc, cd) = (
+                let (cp, cs, co, ce, cc, cd) = (
                     shown_pre.len() as i32,
                     shown_seg.len() as i32,
                     shown_obj.len() as i32,
-                    shown_mea.len() as i32,
+                    shown_ext.len() as i32,
                     shown_cls.len() as i32,
                     shown_dat.len() as i32,
                 );
@@ -4809,14 +4809,14 @@ impl PipelinesController {
                 picker.set_shown_preprocess(ModelRc::new(VecModel::from(shown_pre)));
                 picker.set_shown_segment(ModelRc::new(VecModel::from(shown_seg)));
                 picker.set_shown_object(ModelRc::new(VecModel::from(shown_obj)));
-                picker.set_shown_measure(ModelRc::new(VecModel::from(shown_mea)));
+                picker.set_shown_extract(ModelRc::new(VecModel::from(shown_ext)));
                 picker.set_shown_classify(ModelRc::new(VecModel::from(shown_cls)));
                 picker.set_shown_dataset(ModelRc::new(VecModel::from(shown_dat)));
                 picker.set_total_shown(total);
                 picker.set_cat_count_pre(cp);
                 picker.set_cat_count_seg(cs);
                 picker.set_cat_count_obj(co);
-                picker.set_cat_count_mea(cm);
+                picker.set_cat_count_ext(ce);
                 picker.set_cat_count_cls(cc);
                 picker.set_cat_count_dat(cd);
             }
@@ -6167,7 +6167,7 @@ fn step_category(category: CommandCategory) -> StepCategory {
         CommandCategory::Preprocess => StepCategory::Preprocess,
         CommandCategory::Segment => StepCategory::Segment,
         CommandCategory::InstanceSegmentation => StepCategory::InstanceSegmentation,
-        CommandCategory::Measure => StepCategory::Measure,
+        CommandCategory::Extract => StepCategory::Extract,
         CommandCategory::Object => StepCategory::Object,
         CommandCategory::Dataset => StepCategory::Dataset,
     }
@@ -6399,7 +6399,7 @@ fn category_name(category: CommandCategory) -> &'static str {
         CommandCategory::Preprocess => "Preprocess",
         CommandCategory::Segment => "Segment",
         CommandCategory::InstanceSegmentation => "Instance Seg.",
-        CommandCategory::Measure => "Measure",
+        CommandCategory::Extract => "Extract",
         CommandCategory::Object => "Object",
         CommandCategory::Dataset => "Dataset",
     }
@@ -6733,7 +6733,7 @@ fn move_step<T>(steps: &mut [T], idx: i32, delta: i32) -> bool {
 /// that step's category (-1 none) and the categories that may follow it -
 /// the chips pre-selected. *All* the categories its `allowed_next` names,
 /// which is decoupled from the display `category` (ConnectedComponents
-/// suggests Object + Measure, so Watershed and ExtractObjects are both in
+/// suggests Object + Extract, so Watershed and ExtractObjects are both in
 /// view). Only suggestions: any chip can be toggled, none shows all. A
 /// module suggests nothing (yet).
 fn picker_suggestion(steps: &[PipelineStepSettings], after_idx: i32) -> (i32, [bool; 6]) {
@@ -6759,7 +6759,7 @@ fn set_picker_suggestion(picker: &CommandPickerState<'_>, context_cat: i32, flag
     picker.set_fcat_pre(flags[0]);
     picker.set_fcat_seg(flags[1]);
     picker.set_fcat_obj(flags[2]);
-    picker.set_fcat_mea(flags[3]);
+    picker.set_fcat_ext(flags[3]);
     picker.set_fcat_cls(flags[4]);
     picker.set_fcat_dat(flags[5]);
 }
@@ -7097,7 +7097,7 @@ mod tests {
                 CommandCategory::Preprocess => StepCategory::Preprocess,
                 CommandCategory::Segment => StepCategory::Segment,
                 CommandCategory::InstanceSegmentation => StepCategory::InstanceSegmentation,
-                CommandCategory::Measure => StepCategory::Measure,
+                CommandCategory::Extract => StepCategory::Extract,
                 CommandCategory::Object => StepCategory::Object,
                 CommandCategory::Dataset => StepCategory::Dataset,
             };
@@ -7417,7 +7417,7 @@ mod tests {
             picker.get_cat_count_pre()
                 + picker.get_cat_count_seg()
                 + picker.get_cat_count_obj()
-                + picker.get_cat_count_mea()
+                + picker.get_cat_count_ext()
                 + picker.get_cat_count_cls()
                 + picker.get_cat_count_dat(),
         );
@@ -10844,7 +10844,7 @@ mod tests {
         let any_chip = picker.get_fcat_pre()
             || picker.get_fcat_seg()
             || picker.get_fcat_obj()
-            || picker.get_fcat_mea()
+            || picker.get_fcat_ext()
             || picker.get_fcat_cls();
         assert!(any_chip, "suggested follow-up categories are pre-selected");
         assert!(picker.get_total_shown() > 0);
@@ -10988,7 +10988,7 @@ mod tests {
         let per_category = picker.get_cat_count_pre()
             + picker.get_cat_count_seg()
             + picker.get_cat_count_obj()
-            + picker.get_cat_count_mea()
+            + picker.get_cat_count_ext()
             + picker.get_cat_count_cls()
             + picker.get_cat_count_dat();
         assert_eq!(per_category as usize, all);

@@ -45,7 +45,7 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
     in property <[CommandDef]> shown-dataset;
-    in property <[CommandDef]> shown-measure;
+    in property <[CommandDef]> shown-extract;
     in property <[CommandDef]> shown-modules;
     in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;
@@ -56,7 +56,7 @@ export global CommandPickerState {
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
     in property <int> cat-count-dat;
-    in property <int> cat-count-mea;
+    in property <int> cat-count-ext;
     in property <int> cat-count-grp;
     /// The project's modules no pipeline uses ("Remove N unused").
     in property <int> unused-module-count;
@@ -74,7 +74,7 @@ export global CommandPickerState {
     in-out property <bool> fcat-pre: false;
     in-out property <bool> fcat-seg: false;
     in-out property <bool> fcat-obj: false;
-    in-out property <bool> fcat-mea: false;
+    in-out property <bool> fcat-ext: false;
     in-out property <bool> fcat-cls: false;
     in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-modules: false;
@@ -110,8 +110,8 @@ export global PickerStyle {
         if c == StepCategory.instance-segmentation {
             return Ink.cat-object;
         }
-        if c == StepCategory.measure {
-            return Ink.cat-measure;
+        if c == StepCategory.extract {
+            return Ink.cat-extract;
         }
         if c == StepCategory.dataset {
             return Ink.cat-dataset;
@@ -134,8 +134,8 @@ export global PickerStyle {
         if c == StepCategory.instance-segmentation {
             return "Instance Seg.";
         }
-        if c == StepCategory.measure {
-            return "Measure";
+        if c == StepCategory.extract {
+            return "Extract";
         }
         if c == StepCategory.dataset {
             return "Dataset";

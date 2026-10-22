@@ -36,7 +36,7 @@ use std::sync::Arc;
 /// are merged, and a constrained flood draws 1-pixel watershed lines between the
 /// surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "instance_segmentation", next = "measure")]
+#[cmdsmeta(category = "instance_segmentation", next = "extract")]
 pub struct Watershed {
     /// Prominence tolerance for the maximum finder, in pixels of distance -
     /// **or**, when `seed_source == Intensity`, CellProfiler's "typical

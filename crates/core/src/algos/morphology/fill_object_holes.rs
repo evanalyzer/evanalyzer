@@ -28,7 +28,7 @@ use macros::CommandsMeta;
 /// Use Fill Holes instead to fill holes in the segmentation map before the
 /// objects are created (e.g. right after a Threshold).
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", next = "measure")]
+#[cmdsmeta(category = "extract", next = "extract")]
 pub struct FillObjectHoles {}
 
 impl ImageAlgorithm for FillObjectHoles {

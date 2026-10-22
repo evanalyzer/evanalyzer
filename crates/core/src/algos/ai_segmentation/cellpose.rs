@@ -36,7 +36,7 @@ use crate::{
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "segment",
-    next = "measure",
+    next = "extract",
     display_name = "AI Cellpose Segmentation"
 )]
 pub struct Cellpose {

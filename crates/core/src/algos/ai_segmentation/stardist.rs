@@ -42,7 +42,7 @@ use crate::{
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "segment",
-    next = "measure",
+    next = "extract",
     display_name = "AI Stardist Segmentation"
 )]
 pub struct Stardist {

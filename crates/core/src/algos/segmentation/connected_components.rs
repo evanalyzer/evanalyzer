@@ -21,7 +21,7 @@ use crate::{
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "instance_segmentation",
-    next = "instance_segmentation,measure"
+    next = "instance_segmentation,extract"
 )]
 pub struct ConnectedComponents {
     /// Minimum object size, in pixels, an object must have to be kept.
