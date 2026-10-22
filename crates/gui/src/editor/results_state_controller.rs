@@ -446,7 +446,7 @@ pub struct ResultsStateController {
     // `well_cells`/`image_heatmap_cells` are, so `on_list_row_clicked` can
     // navigate to a clicked object's own image without re-querying the
     // database.
-    list_row_locations: Mutex<Vec<(String, [u32; 4])>>,
+    list_row_locations: Mutex<Vec<(String, Option<[u32; 4]>)>>,
     /// The scatter's points (0..1, as drawn) and their objects' image and
     /// box - for a click on a point.
     scatter_points: Mutex<Vec<(f32, f32, String, [u32; 4])>>,
@@ -887,9 +887,17 @@ impl ResultsStateController {
                         warn!("No location cached for clicked list row {index}");
                         return;
                     };
-                    manager
-                        .image_list_controller
-                        .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, false);
+                    // An object row: marked on its image; an image row: the
+                    // image.
+                    let rel_path = PathBuf::from(rel_path);
+                    match bbox_px {
+                        Some(bbox_px) => manager
+                            .image_list_controller
+                            .open_image_and_highlight_object(&rel_path, bbox_px, false),
+                        None => manager
+                            .image_list_controller
+                            .open_new_image_from_rel_path(&rel_path),
+                    }
                     let rows = manager.list_row_locations.lock().expect("Poisned").len();
                     manager.peek(index, format!("Row {} of {rows}", index + 1), true);
                 });
@@ -6267,10 +6275,14 @@ pub(crate) mod tests {
         assert!(!controller.list_filter.lock().unwrap().transpond);
 
         state.invoke_list_group_by_selected("images".into());
-        assert_eq!(
-            controller.list_row_locations.lock().unwrap().len(),
-            0,
-            "grouped view has no per-object rows"
+        assert!(
+            controller
+                .list_row_locations
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, bbox)| bbox.is_none()),
+            "a row per image points at its image, not at an object"
         );
         state.invoke_list_group_by_selected("objects".into());
 
@@ -8478,7 +8490,7 @@ pub(crate) mod tests {
             .results_overlay()
             .expect("the analysis' objects on the image");
         assert_eq!(overlay.objects.len(), 1, "the one object of {rel_path}");
-        assert_eq!(overlay.objects[0].0, bbox);
+        assert_eq!(Some(overlay.objects[0].0), bbox);
         assert_eq!(controller.split.lock().unwrap().selected, Some(0));
         let sel = state.get_split_sel();
         assert!(sel.active);
@@ -8514,6 +8526,41 @@ pub(crate) mod tests {
         // Leaving the split: the project's objects again.
         state.invoke_split_shown(false);
         assert!(controller.viewport().results_overlay().is_none());
+    }
+
+    /// A row per image: the row selected, then the split on - its whole
+    /// image with its objects, none of them selected.
+    #[test]
+    fn split_a_row_per_image_shows_that_image_with_its_objects() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.set_split(false);
+        state.invoke_list_group_by_selected("images".into());
+        drain_ui_queue();
+        let locations = controller.list_row_locations.lock().unwrap().clone();
+        assert!(!locations.is_empty(), "every image row can be clicked");
+        assert!(locations.iter().all(|(_, bbox)| bbox.is_none()));
+        let (rel_path, _) = locations[1].clone();
+
+        state.set_list_selected_row(1);
+        state.set_split(true);
+        state.invoke_split_changed(true);
+        drain_ui_queue();
+
+        assert_eq!(state.get_split_title(), rel_path.as_str());
+        let overlay = controller
+            .viewport()
+            .results_overlay()
+            .expect("the image's objects");
+        assert!(!overlay.objects.is_empty());
+        assert_eq!(controller.split.lock().unwrap().selected, None);
+
+        // Another image row: that image.
+        let (other, _) = locations[0].clone();
+        state.set_list_selected_row(0);
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        assert_eq!(state.get_split_title(), other.as_str());
     }
 
     #[test]
