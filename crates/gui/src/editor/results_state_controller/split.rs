@@ -667,12 +667,42 @@ impl ResultsStateController {
                 self.tracks_load(image.clone());
             }
         }
-        self.split_reload_objects(image);
+        self.split_reload_objects(image, false);
     }
 
-    /// The image's objects again (another plane): the selected track's, if
-    /// any, selected - else none.
-    fn split_reload_objects(self: &Arc<Self>, rel_path: String) {
+    /// The plate shows another value: "Color by value" colors by it - if it
+    /// is a value of each object (not, say, a count), else the button is
+    /// off - and the image shown is read again with it.
+    pub(super) fn split_value_column_changed(self: &Arc<Self>) {
+        let per_object = self
+            .matrix_filter
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+            .is_some_and(|filter| is_chartable_column(&filter.column));
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_split_values(per_object);
+            }
+        })
+        .ok();
+        let image = {
+            let split = self.split.lock().expect("Poisoned");
+            match split.shown {
+                true => split.image.clone(),
+                false => None,
+            }
+        };
+        if let Some(image) = image.filter(|rel| self.split_in_viewer(rel)) {
+            self.split_reload_objects(image, true);
+        }
+    }
+
+    /// The image's objects again: another plane (`keep_selected` false: the
+    /// selected track's, if any, selected - else none) or another value
+    /// (the same objects, the selected one stays).
+    fn split_reload_objects(self: &Arc<Self>, rel_path: String, keep_selected: bool) {
         let generation = {
             let mut split = self.split.lock().expect("Poisoned");
             split.generation += 1;
@@ -714,7 +744,13 @@ impl ResultsStateController {
                 if split.generation != generation {
                     return;
                 }
-                split.selected = None;
+                let selected_id = split
+                    .selected
+                    .filter(|_| keep_selected)
+                    .and_then(|i| split.objects.get(i))
+                    .map(|o| o.object_id.clone());
+                split.selected =
+                    selected_id.and_then(|id| objects.iter().position(|o| o.object_id == id));
                 split.objects = Arc::new(objects);
             }
             manager.tracks_objects_loaded();

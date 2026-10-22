@@ -201,6 +201,9 @@ export global ResultsState {
     in-out property <bool> split-follow: true;
     // Plate: the objects colored by the plate's property (else by class).
     in-out property <bool> split-by-value: false;
+    // The plate's property is a value of each object (not a count): only
+    // then can they be colored by it.
+    in-out property <bool> split-values: false;
     // The image shown ("Well C3 · D3_03.vsi"), its name (the filmstrip's
     // accent), the selected object of how many ("n / total").
     in-out property <string> split-title;

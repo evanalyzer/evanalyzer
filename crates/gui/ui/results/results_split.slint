@@ -6,7 +6,7 @@
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { ViewportState } from "../api/viewport.slint";
 import { ChannelState } from "../api/state.slint";
-import { Ink, InkIcons } from "../ink/ink.slint";
+import { Ink, InkIcons, InkTipZone } from "../ink/ink.slint";
 
 // Floats on the image: dark in every scheme, as the image is.
 component Hud inherits Rectangle {
@@ -22,6 +22,8 @@ component HudButton inherits Rectangle {
     in property <bool> on: false;
     in property <bool> enabled: true;
     in property <image> icon;
+    // Hovered, also while disabled (for a tooltip saying why).
+    out property <bool> hovered: ta.has-hover && !ta.pressed;
     callback clicked;
 
     height: 26px;
@@ -55,10 +57,11 @@ component HudButton inherits Rectangle {
     }
 
     ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => {
-            root.clicked();
+            if root.enabled {
+                root.clicked();
+            }
         }
     }
 }
@@ -114,7 +117,7 @@ export component SplitImageHead inherits Hud {
                 padding: 2px;
                 HudButton {
                     text: "Class";
-                    on: !ResultsState.split-by-value;
+                    on: !ResultsState.split-by-value || !ResultsState.split-values;
                     clicked => {
                         ResultsState.split-by-value = false;
                         ResultsState.split-by-value-changed(false);
@@ -122,10 +125,19 @@ export component SplitImageHead inherits Hud {
                 }
                 HudButton {
                     text: "Value";
-                    on: ResultsState.split-by-value;
+                    on: ResultsState.split-by-value && ResultsState.split-values;
+                    enabled: ResultsState.split-values;
                     clicked => {
                         ResultsState.split-by-value = true;
                         ResultsState.split-by-value-changed(true);
+                    }
+                    // Also while disabled: why.
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: parent.hovered;
+                        text: ResultsState.split-values ? "Color the objects by " + ResultsState.matrix-column-summary
+                            : "Pick a value of each object in the plate (not Count) to color by it";
                     }
                 }
             }
