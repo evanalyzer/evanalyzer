@@ -246,12 +246,6 @@ pub struct ViewportMemorySettings {
     /// gets that RAM; they fill up again as the viewport is used.
     pub free_caches_on_analysis: bool,
 
-    /// While an analysis runs, the steps can still be edited and previewed
-    /// (the run uses a copy; edits apply to the next run). Off: the steps
-    /// start locked and no preview runs (for a computer whose RAM the
-    /// analysis needs all of) - the Steps panel can switch it during a run.
-    pub edit_during_analysis: bool,
-
     /// The objects open as a table at the bottom, not as a list in the
     /// right panel (its ⋯ still switches).
     pub objects_as_table: bool,
@@ -367,7 +361,6 @@ impl Default for ViewportMemorySettings {
             tile_cache_mb: Self::DEFAULT_TILE_CACHE_MB,
             overview_cache_mb: Self::DEFAULT_OVERVIEW_CACHE_MB,
             free_caches_on_analysis: true,
-            edit_during_analysis: true,
             objects_as_table: false,
             auto_scale_new_images: true,
             color_channels_without_wavelength: false,
