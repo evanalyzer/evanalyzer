@@ -224,6 +224,19 @@ pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
     Background,
 }
 
+/// How the rules combine.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeasureExcludeImageExcludeWhenSettings {
+    /// One rule met is enough.
+    #[default]
+    #[serde(alias = "any-rule", alias = "anyRule", alias = "any_rule")]
+    AnyRule,
+    /// Every rule must be met.
+    #[serde(alias = "all-rules", alias = "allRules", alias = "all_rules")]
+    AllRules,
+}
+
 /// Specifies the feature extraction method for the Hessian matrix.
 ///
 /// The Hessian matrix describes the local second-order structure of an image,
@@ -518,6 +531,19 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     /// by more than the specified threshold.
     #[serde(alias = "outliers")]
     Outliers(f32),
+}
+
+/// Which side of the value meets a rule.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeasureExcludeImageRuleComparisonSettings {
+    /// Met below the value (e.g. a focus score too low).
+    #[default]
+    #[serde(alias = "below")]
+    Below,
+    /// Met above the value (e.g. too many saturated pixels).
+    #[serde(alias = "above")]
+    Above,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
@@ -2657,6 +2683,24 @@ pub struct AreaOccupiedSettings {
     pub object_class: ObjectClass,
 }
 
+/// Leaves an image out of the results when its measurements say it's bad.
+///
+/// Each rule compares a measurement of an earlier step (e.g. Image
+/// Quality's focus score) with a value. When the rules are met, the image
+/// is analysed to the end but disabled in the results, with the reason - to
+/// check it by hand and enable it again if it's fine. The rules are checked
+/// on every plane; one plane meeting them excludes the whole image. A
+/// measurement without a value (e.g. the slope of a flat image) doesn't
+/// meet a rule.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludeImageSettings {
+    /// Excluded when one rule is met, or only when all of them are.
+    pub exclude_when: MeasureExcludeImageExcludeWhenSettings,
+    /// The rules: a measurement below or above a value.
+    pub rules: Vec<ExcludeRuleSettings>,
+}
+
 /// Measures the brightness of a channel across the whole image.
 ///
 /// Total, mean, standard deviation, minimum, maximum, median, lower and
@@ -2666,6 +2710,24 @@ pub struct AreaOccupiedSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageIntensitySettings {
+    /// The measurement's name - its values in the results start with it.
+    pub name: String,
+    /// The channel to measure.
+    pub channel: ImageChannelIdx,
+}
+
+/// Measures how usable a channel of the image is: sharp, not noisy, not
+/// overexposed.
+///
+/// Focus score (the variance over the mean - low: blurry), power log-log
+/// slope (how fast fine detail fades - more negative: blurrier), the
+/// percent of pixels at the image's maximum and minimum (high: saturated or
+/// clipped) - all as CellProfiler gives them - and the noise (σ in gray
+/// values, Immerkær's estimate). Use them with "Exclude Image" to leave bad
+/// images out of the results.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageQualitySettings {
     /// The measurement's name - its values in the results start with it.
     pub name: String,
     /// The channel to measure.
@@ -2730,4 +2792,18 @@ impl Default for SimpleTrackerSettings {
             max_distance: 10000.0f32,
         }
     }
+}
+
+// ============ OTHER ============
+
+/// One rule: a measurement compared with a value.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludeRuleSettings {
+    /// The measurement, made by an earlier step.
+    pub measurement: String,
+    /// Met when the measurement is below or above the value.
+    pub comparison: MeasureExcludeImageRuleComparisonSettings,
+    /// The value, in the measurement's unit.
+    pub value: f64,
 }

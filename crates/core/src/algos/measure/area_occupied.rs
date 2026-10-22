@@ -9,7 +9,7 @@
 
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::object::Object;
-use crate::pipeline::pipeline_measure::MeasurementRegion;
+use crate::pipeline::pipeline_measure::{MeasurementRegion, Outputs};
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, MeasurementInfo, MeasurementTarget, MeasurementUnit,
     ObjectClass,
@@ -57,39 +57,15 @@ impl ImageAlgorithm for AreaOccupied {
             .then(|| px.px_size_x as f64 * px.px_size_y as f64 / 1e6);
 
         let values = [
-            (
-                "area_px",
-                "Area occupied",
-                MeasurementUnit::SquarePixels,
-                None,
-                Some(covered_px),
-            ),
-            (
-                "area_um2",
-                "Area occupied",
-                MeasurementUnit::SquareMicrometers,
-                None,
-                um2_per_px.map(|f| covered_px * f),
-            ),
-            (
-                "fraction",
-                "Part of the image occupied",
-                MeasurementUnit::Fraction,
-                Some((0.0, 1.0)),
-                (image_px > 0.0).then(|| covered_px / image_px),
-            ),
+            ("area_px", Some(covered_px)),
+            ("area_um2", um2_per_px.map(|f| covered_px * f)),
+            ("fraction", (image_px > 0.0).then(|| covered_px / image_px)),
         ];
-        for (key, name, unit, range, value) in values {
-            let info = MeasurementInfo {
-                key: format!("{}/area_occupied/{key}", self.name),
-                name: name.into(),
-                step: self.name.clone(),
-                unit,
-                target: MeasurementTarget::Image,
-                range,
-                aggregatable: true,
-            };
-            cache.add_image_measurement(info, value.map(|v| (MeasurementRegion::Image, v)));
+        for (id, value) in values {
+            cache.add_image_measurement(
+                self.measurement_output(id),
+                value.map(|v| (MeasurementRegion::Image, v)),
+            );
         }
         Ok(())
     }
@@ -109,6 +85,25 @@ impl ImageAlgorithm for AreaOccupied {
 
     fn measures(&self) -> bool {
         true
+    }
+
+    fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
+        let outputs = Outputs::of(&self.name);
+        vec![
+            outputs.image("area_px", "Area occupied", MeasurementUnit::SquarePixels),
+            outputs.image(
+                "area_um2",
+                "Area occupied",
+                MeasurementUnit::SquareMicrometers,
+            ),
+            outputs
+                .image(
+                    "fraction",
+                    "Part of the image occupied",
+                    MeasurementUnit::Fraction,
+                )
+                .range(0.0, 1.0),
+        ]
     }
 }
 
@@ -284,9 +279,9 @@ mod tests {
         assert_eq!(
             values,
             [
-                ("nuclei_area/area_occupied/area_px".into(), Some(20.0)),
-                ("nuclei_area/area_occupied/area_um2".into(), Some(20.0)),
-                ("nuclei_area/area_occupied/fraction".into(), Some(0.2)),
+                ("nuclei_area/area_px".into(), Some(20.0)),
+                ("nuclei_area/area_um2".into(), Some(20.0)),
+                ("nuclei_area/fraction".into(), Some(0.2)),
             ]
         );
     }

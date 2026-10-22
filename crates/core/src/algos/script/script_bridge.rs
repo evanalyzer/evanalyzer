@@ -527,7 +527,8 @@ fn checked_value(def: &ParameterDef, value: &str) -> Result<String, String> {
             .ok_or_else(|| {
                 format!("expected an image like \"channel:0\", \"memory:1\" or \"scratchpad\", got `{value}`")
             }),
-        ParamType::Text | ParamType::FilePath => Ok(value.to_string()),
+        // A measurement by its key, e.g. "quality_01/focus_score".
+        ParamType::Text | ParamType::FilePath | ParamType::Measurement => Ok(value.to_string()),
         ParamType::Group => Err("is a list; set its entries as `name.index.field`".into()),
         ParamType::Label => Err("is read-only".into()),
         ParamType::Script => Err("can't be set from a script".into()),

@@ -185,6 +185,7 @@ fn main() {
                     t_stacks_analyzed: &analysed_t,
                     z_stacks_analyzed: &[0],
                     frame_interval_s: Some(frame_interval),
+                    excluded: None,
                 },
                 None,
             )

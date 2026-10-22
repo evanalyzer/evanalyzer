@@ -79,7 +79,7 @@ fn create_schema(conn: &Connection) {
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
             successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
-            disabled BOOLEAN NOT NULL DEFAULT false,
+            disabled BOOLEAN NOT NULL DEFAULT false, disabled_reason VARCHAR,
             width UINTEGER NOT NULL, height UINTEGER NOT NULL,
             c_stacks UINTEGER NOT NULL, z_stacks UINTEGER NOT NULL, t_stacks UINTEGER NOT NULL
         );

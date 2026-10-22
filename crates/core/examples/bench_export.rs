@@ -150,6 +150,7 @@ fn main() {
                     t_stacks_analyzed: &[0],
                     z_stacks_analyzed: &[0],
                     frame_interval_s: None,
+                    excluded: None,
                 },
                 None,
             )

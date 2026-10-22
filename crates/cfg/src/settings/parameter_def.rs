@@ -39,6 +39,10 @@ pub enum ParamType {
     /// `String` holding a Rhai script (`#[cmdsmeta(script)]`), edited in the
     /// script editor dialog instead of a single-line text field.
     Script,
+    /// `String` holding a measurement's key (`#[cmdsmeta(measurement)]`),
+    /// picked from the measurements the project's steps make (the editor
+    /// shows them by label, see `measurement_outputs::label`).
+    Measurement,
 }
 
 #[allow(dead_code)]

@@ -368,6 +368,10 @@ pub struct ImageEntry {
     pub name: String,
     pub rel_path: PathBuf,
     pub disabled: bool,
+    /// Why the run disabled it ("Exclude Image"); `None`: not by the run
+    /// (or enabled again by hand).
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

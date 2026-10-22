@@ -9,7 +9,7 @@
 
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
-use crate::pipeline::pipeline_measure::MeasurementRegion;
+use crate::pipeline::pipeline_measure::{MeasurementRegion, Outputs};
 use crate::{ImageTile, image::ImageContainer};
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, MeasurementTarget,
@@ -83,50 +83,23 @@ impl ImageAlgorithm for ImageIntensity {
             )
             .try_reduce(|| IntensityStats::new(bins), |a, b| Ok(a.merge(b)))?;
 
-        let gray_range = Some((0.0, bit_max));
         let values = [
-            ("total", "Total intensity", None, stats.total()),
-            ("mean", "Mean intensity", gray_range, stats.mean()),
-            ("std", "Standard deviation of intensity", None, stats.std()),
-            ("min", "Minimum intensity", gray_range, stats.min()),
-            ("max", "Maximum intensity", gray_range, stats.max()),
-            (
-                "median",
-                "Median intensity",
-                gray_range,
-                stats.quantile(0.5),
-            ),
-            (
-                "lower_quartile",
-                "Lower quartile intensity",
-                gray_range,
-                stats.quantile(0.25),
-            ),
-            (
-                "upper_quartile",
-                "Upper quartile intensity",
-                gray_range,
-                stats.quantile(0.75),
-            ),
-            (
-                "mad",
-                "Median absolute deviation of intensity",
-                None,
-                stats.median_absolute_deviation(),
-            ),
+            ("total", stats.total()),
+            ("mean", stats.mean()),
+            ("std", stats.std()),
+            ("min", stats.min()),
+            ("max", stats.max()),
+            ("median", stats.quantile(0.5)),
+            ("lower_quartile", stats.quantile(0.25)),
+            ("upper_quartile", stats.quantile(0.75)),
+            ("mad", stats.median_absolute_deviation()),
         ];
-        for (key, name, range, value) in values {
-            let info = MeasurementInfo {
-                key: format!("{}/intensity/ch{channel}/{key}", self.name),
-                name: format!("{name} (channel {channel})"),
-                step: self.name.clone(),
-                unit: MeasurementUnit::Intensity,
-                target: MeasurementTarget::Image,
-                range,
-                aggregatable: true,
-            };
+        for (id, value) in values {
             // No value for an image without pixels.
-            cache.add_image_measurement(info, value.map(|v| (MeasurementRegion::Image, v)));
+            cache.add_image_measurement(
+                self.measurement_output(id),
+                value.map(|v| (MeasurementRegion::Image, v)),
+            );
         }
         Ok(())
     }
@@ -146,6 +119,25 @@ impl ImageAlgorithm for ImageIntensity {
 
     fn measures(&self) -> bool {
         true
+    }
+
+    /// In gray values.
+    fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
+        let outputs = Outputs::of(&self.name).about(format!("channel {}", self.channel));
+        [
+            ("total", "Total intensity"),
+            ("mean", "Mean intensity"),
+            ("std", "Standard deviation of intensity"),
+            ("min", "Minimum intensity"),
+            ("max", "Maximum intensity"),
+            ("median", "Median intensity"),
+            ("lower_quartile", "Lower quartile intensity"),
+            ("upper_quartile", "Upper quartile intensity"),
+            ("mad", "Median absolute deviation of intensity"),
+        ]
+        .into_iter()
+        .map(|(id, name)| outputs.image(id, name, MeasurementUnit::Intensity))
+        .collect()
     }
 }
 
@@ -429,7 +421,7 @@ mod tests {
         ];
         assert_eq!(values.len(), expected.len());
         for ((key, value), (stat, want)) in values.iter().zip(expected) {
-            assert_eq!(key, &format!("dapi/intensity/ch0/{stat}"));
+            assert_eq!(key, &format!("dapi/{stat}"));
             let value = value.unwrap();
             // Pixels are f32 (0..1): gray values come back to ~1e-7.
             assert!((value - want).abs() < 1e-4, "{stat}: {value} != {want}");
@@ -454,7 +446,7 @@ mod tests {
         };
         run(&step, &mut cache).unwrap();
         let values = values_by_key(&cache);
-        assert_eq!(values[1].0, "i/intensity/ch0/mean");
+        assert_eq!(values[1].0, "i/mean");
         assert!((values[1].1.unwrap() - 15.0).abs() < 1e-4);
 
         let mut cache = cache_with_gray_tiles(&[&[f32::NAN]]);

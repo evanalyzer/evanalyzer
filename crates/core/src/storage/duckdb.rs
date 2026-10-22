@@ -786,6 +786,7 @@ CREATE TABLE IF NOT EXISTS images (
     successful      BOOLEAN NOT NULL DEFAULT true,
     error_message   VARCHAR,
     disabled        BOOLEAN NOT NULL DEFAULT false,
+    disabled_reason VARCHAR,
     width           UINTEGER NOT NULL,
     height          UINTEGER NOT NULL,
     c_stacks        UINTEGER NOT NULL,
@@ -803,7 +804,7 @@ CREATE TABLE IF NOT EXISTS classes (
 );
 
 -- What the measurement steps measured: one row per measurement (its key
--- starts with the step's name, e.g. 'pearson_01/pearson/ch0×ch1').
+-- starts with the step's name, e.g. 'pearson_01/pearson').
 CREATE TABLE IF NOT EXISTS measurement_info (
     key           VARCHAR NOT NULL PRIMARY KEY,
     measurement   VARCHAR NOT NULL,
@@ -1115,7 +1116,7 @@ impl PipelineResultExporter for DuckDbExporter {
         let list = |values: &[i32]| format!("{values:?}");
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed, frame_interval_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]), ?)",
+            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed, frame_interval_s, disabled, disabled_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]), ?, ?, ?)",
             params![
                 image_name,
                 image_rel,
@@ -1128,7 +1129,9 @@ impl PipelineResultExporter for DuckDbExporter {
                 summary.nr_t_stacks,
                 list(summary.t_stacks_analyzed),
                 list(summary.z_stacks_analyzed),
-                summary.frame_interval_s
+                summary.frame_interval_s,
+                summary.excluded.is_some(),
+                summary.excluded
             ],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -1532,7 +1535,50 @@ mod tests {
             t_stacks_analyzed: t_stacks,
             z_stacks_analyzed: z_stacks,
             frame_interval_s: None,
+            excluded: None,
         }
+    }
+
+    /// An image Exclude Image left out: disabled, with why - the others
+    /// not.
+    #[test]
+    fn an_excluded_image_is_written_disabled_with_its_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = DuckDbExporter::new(
+            dir.path().join("r.evadb"),
+            HashMap::new(),
+            &MetaData::default(),
+        )
+        .unwrap();
+        let reason = "Focus score (channel 0) of quality_01 = 0.09, below 0.15";
+        exporter
+            .finalize_image(
+                Path::new("blurry.tif"),
+                &ImageSummary {
+                    excluded: Some(reason),
+                    ..summary(&[0], &[0])
+                },
+                None,
+            )
+            .unwrap();
+        exporter
+            .finalize_image(Path::new("sharp.tif"), &summary(&[0], &[0]), None)
+            .unwrap();
+        let conn = exporter.lock_conn();
+        let rows: Vec<(String, bool, Option<String>)> = conn
+            .prepare("SELECT image_rel_path, disabled, disabled_reason FROM images ORDER BY 1")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("blurry.tif".into(), true, Some(reason.into())),
+                ("sharp.tif".into(), false, None),
+            ]
+        );
     }
 
     /// Each image's analysed time points and z-planes are kept - also ones
@@ -1580,6 +1626,7 @@ mod tests {
                 ],
                 z_stack: 0,
                 t_stack: t,
+                excluded: None,
             };
             exporter.export(&cache).unwrap();
         }

@@ -566,6 +566,7 @@ fn param_type_doc(def: &ParameterDef) -> String {
         ParamType::ImageChannel => "channel index".into(),
         ParamType::ImageAddress => "\"channel:N\", \"memory:N\" or \"scratchpad\"".into(),
         ParamType::Text | ParamType::FilePath => "text".into(),
+        ParamType::Measurement => "a measurement's key, e.g. \"quality_01/focus_score\"".into(),
         ParamType::Group | ParamType::Label | ParamType::Script => String::new(),
     }
 }

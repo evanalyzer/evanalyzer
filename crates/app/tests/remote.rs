@@ -331,10 +331,7 @@ fn remote_preview_returns_its_measurements_too() {
         .preview_measurements
         .expect("measurements");
     assert_eq!(planes.len(), 1);
-    assert_eq!(
-        planes[0].measurements[0].info.key,
-        "pearson_01/pearson/ch0_ch1"
-    );
+    assert_eq!(planes[0].measurements[0].info.key, "pearson_01/pearson");
 }
 
 #[test]

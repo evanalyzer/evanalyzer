@@ -53,6 +53,9 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "file_extensions",
         // `String` field holding a Rhai script - edited in the script editor.
         "script",
+        // `String` field holding a measurement's key - picked from the
+        // measurements the project's steps make.
+        "measurement",
         // Shown, not editable (the generator renders it as a label).
         "read_only",
         // Section the setting is shown in, e.g. "Detection" - settings of

@@ -55,7 +55,9 @@ pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
 pub use self::measure::area_occupied::AreaOccupied;
+pub use self::measure::exclude_image::{ExcludeImage, ExcludeRule, ExcludeWhen, RuleComparison};
 pub use self::measure::image_intensity::ImageIntensity;
+pub use self::measure::image_quality::ImageQuality;
 pub use self::measure::pearson_correlation_coefficient::PearsonCorrelationCoefficient;
 pub use self::morphology::fill_holes::FillHoles;
 pub use self::morphology::fill_object_holes::FillObjectHoles;
@@ -141,6 +143,24 @@ pub trait ImageAlgorithm: Send + Sync {
     /// and exports the image's measurements.
     fn measures(&self) -> bool {
         false
+    }
+
+    /// What a measurement step measures - one entry per value, built with
+    /// [`Outputs`](crate::pipeline::pipeline_measure::Outputs). The editor
+    /// offers them (e.g. to "Exclude Image"), the step reports its values
+    /// under them ([`Self::measurement_output`]).
+    fn measurement_outputs(&self) -> Vec<evanalyzer_cfg::core_types::MeasurementInfo> {
+        Vec::new()
+    }
+
+    /// Its output `id` (see [`Self::measurement_outputs`]) - the
+    /// description its value is reported under.
+    fn measurement_output(&self, id: &str) -> evanalyzer_cfg::core_types::MeasurementInfo {
+        let suffix = format!("/{id}");
+        self.measurement_outputs()
+            .into_iter()
+            .find(|output| output.key.ends_with(&suffix))
+            .unwrap_or_else(|| panic!("{} measures no {id:?}", self.name()))
     }
 
     /// The channel this command reads with its own z-projection or z-plane

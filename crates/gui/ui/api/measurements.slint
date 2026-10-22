@@ -18,6 +18,9 @@ export global MeasurementsState {
     // The project has measurement steps: the panel is offered.
     in property <bool> has-steps: false;
     in property <[MeasurementRow]> rows;
+    // "Exclude Image" would leave this image out of the results: why;
+    // "" not.
+    in property <string> excluded;
     // Shows the step that measured (opens its module).
     callback show-step(string);
 }

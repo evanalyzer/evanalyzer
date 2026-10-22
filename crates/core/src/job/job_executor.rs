@@ -779,6 +779,8 @@ impl<'a> JobExecutor {
             ZStackHandling::AllStacks | ZStackHandling::SingleStack
         );
 
+        // "Exclude Image": the planes that excluded the image, with why.
+        let mut exclusions: Vec<(i32, i32, String)> = Vec::new();
         'stacks: for &t in &t_stacks {
             // A channel variant is the same image on every z-plane of this
             // t: with several planes, read once per tile and reused.
@@ -1081,6 +1083,9 @@ impl<'a> JobExecutor {
                         .object_cache
                         .retain(|_, object| object.scope() == Scope::Global);
                     exporter.export(&merged_cache)?;
+                    if let Some(reason) = &merged_cache.measurements.excluded {
+                        exclusions.push((t, z, reason.clone()));
+                    }
 
                     if let Some(sender) = &progress {
                         let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1120,6 +1125,7 @@ impl<'a> JobExecutor {
                 t_stacks_analyzed: &t_stacks,
                 z_stacks_analyzed: &z_stacks,
                 frame_interval_s,
+                excluded: exclusion_reason(&exclusions, t_stacks.len() * z_stacks.len()).as_deref(),
             },
             combined_error.as_deref(),
         );
@@ -1755,6 +1761,17 @@ fn check_channel_variant_planes(
         ))),
         None => Ok(()),
     }
+}
+
+/// Why the image is excluded (`None`: it isn't): the first plane's reason -
+/// with its plane and how many more planes, when there are several.
+fn exclusion_reason(exclusions: &[(i32, i32, String)], planes: usize) -> Option<String> {
+    let (t, z, reason) = exclusions.first()?;
+    Some(match (planes > 1, exclusions.len() - 1) {
+        (false, _) => reason.clone(),
+        (true, 0) => format!("t {t}, z {z}: {reason}"),
+        (true, more) => format!("t {t}, z {z}: {reason} (and {more} more planes)"),
+    })
 }
 
 #[cfg(test)]
@@ -2961,6 +2978,102 @@ mod full_run_integration_tests {
                 "{fraction} != {expected}"
             );
         }
+    }
+
+    /// Several planes: the first one's reason with its plane, and how many
+    /// more excluded it.
+    #[test]
+    fn an_exclusion_names_its_plane_when_there_are_several() {
+        let one = vec![(0, 0, "a".to_string())];
+        assert_eq!(super::exclusion_reason(&one, 1).as_deref(), Some("a"));
+        assert_eq!(
+            super::exclusion_reason(&one, 4).as_deref(),
+            Some("t 0, z 0: a")
+        );
+        let three = vec![
+            (2, 1, "b".to_string()),
+            (3, 1, "c".to_string()),
+            (4, 1, "d".to_string()),
+        ];
+        assert_eq!(
+            super::exclusion_reason(&three, 10).as_deref(),
+            Some("t 2, z 1: b (and 2 more planes)")
+        );
+        assert_eq!(super::exclusion_reason(&[], 10), None);
+    }
+
+    /// What `finalize_image` was told about exclusion.
+    #[derive(Default)]
+    struct ExclusionRecorder(Mutex<Vec<Option<String>>>);
+
+    impl PipelineResultExporter for ExclusionRecorder {
+        fn export(&self, _cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            Ok(())
+        }
+
+        fn finalize_image(
+            &self,
+            _image_rel_path: &std::path::Path,
+            summary: &ImageSummary,
+            _error: Option<&str>,
+        ) -> Result<(), InternalErrors> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(summary.excluded.map(str::to_string));
+            Ok(())
+        }
+    }
+
+    /// Image Quality, then Exclude Image: a rule the plane meets excludes
+    /// the image, one it doesn't meet doesn't - the image is analysed either
+    /// way.
+    #[test]
+    fn exclude_image_excludes_the_image_in_a_run() {
+        use crate::algos::{ExcludeImage, ExcludeRule, ExcludeWhen, ImageQuality, RuleComparison};
+        let run = |comparison: RuleComparison| {
+            let recorder = Arc::new(ExclusionRecorder::default());
+            let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+            job.result_storage = recorder.clone();
+            job.pipelines_pre_process.clear();
+            let mut check = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Scratchpad,
+                },
+            );
+            check.add_command(Box::new(ImageQuality {
+                name: "quality_01".into(),
+                channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+            }));
+            check.add_command(Box::new(ExcludeImage {
+                exclude_when: ExcludeWhen::AnyRule,
+                rules: vec![ExcludeRule {
+                    measurement: "quality_01/percent_maximal".into(),
+                    comparison,
+                    // Some pixel is always at the maximum: above 0 %, never below.
+                    value: 0.0,
+                }],
+            }));
+            job.add_post_process_pipeline(check);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            let excluded = recorder.0.lock().unwrap().clone();
+            excluded
+        };
+
+        let [excluded] = &run(RuleComparison::Above)[..] else {
+            panic!("one image");
+        };
+        let reason = excluded.as_deref().expect("excluded");
+        // One plane analysed: no plane in the reason.
+        assert!(
+            reason.starts_with("Pixels at the maximum (channel 0) of quality_01 = ")
+                && reason.ends_with(", above 0"),
+            "{reason}"
+        );
+
+        assert_eq!(run(RuleComparison::Below), [None], "not excluded");
     }
 
     /// In a real run Propagation grows the objects the pipelines before it

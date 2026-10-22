@@ -790,6 +790,9 @@ struct FieldMetadata {
     /// `#[cmdsmeta(script)]` on a `String` field: a Rhai script, edited in
     /// the script editor (`ParamType::Script`) instead of a text field.
     script: bool,
+    /// `#[cmdsmeta(measurement)]` on a `String` field: a measurement's key,
+    /// picked from the project's measurements (`ParamType::Measurement`).
+    measurement: bool,
     /// `#[cmdsmeta(read_only)]`: shown, not editable (`ParamType::Label`) -
     /// e.g. a value that comes from elsewhere. On a data-carrying enum it's
     /// the variant choice that's fixed; the variant's own value stays
@@ -854,6 +857,7 @@ impl Default for FieldMetadata {
             visibility: Visibility::Default,
             file_extensions: None,
             script: false,
+            measurement: false,
             read_only: false,
             section: None,
             measurement_name: None,
@@ -1479,6 +1483,8 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                 } else if meta.path.is_ident("measurement_name") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.measurement_name = Some(value.value());
+                } else if meta.path.is_ident("measurement") {
+                    metadata.measurement = true;
                 } else if meta.path.is_ident("script") {
                     metadata.script = true;
                     if let Ok(stream) = meta.value() {
@@ -2061,6 +2067,8 @@ fn leaf_parts(
         "String" => (
             if meta.script {
                 "ParamType::Script"
+            } else if meta.measurement {
+                "ParamType::Measurement"
             } else {
                 "ParamType::Text"
             },

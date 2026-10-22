@@ -484,6 +484,8 @@ export global ResultsState {
     // True when the selected well/field's value was computed while
     // ignoring at least one disabled image - see `MatrixCell.disabled`.
     in-out property <bool> active-well-disabled: false;
+    // Why the run left the image out ("Exclude Image"); "" not by the run.
+    in-out property <string> active-well-disabled-reason;
     // Plate level: the images of the selected well (its well-level cells).
     in-out property <[MatrixCell]> active-well-images: [];
     // Leaves an image (its name) out of the results, or takes it back in -

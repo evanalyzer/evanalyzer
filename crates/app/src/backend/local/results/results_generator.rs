@@ -2391,7 +2391,10 @@ impl ResultsGenerator {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self
             .database
-            .prepare("SELECT image_name, image_rel_path, disabled FROM images ORDER BY image_name")
+            .prepare(
+                "SELECT image_name, image_rel_path, disabled, disabled_reason FROM images \
+                 ORDER BY image_name",
+            )
             .map_err(err)?;
         let map = stmt
             .query_map([], |row| {
@@ -2399,6 +2402,7 @@ impl ResultsGenerator {
                     name: row.get(0)?,
                     rel_path: PathBuf::from(row.get::<_, String>(1)?),
                     disabled: row.get(2)?,
+                    disabled_reason: row.get(3)?,
                 })
             })
             .map_err(err)?
@@ -2412,12 +2416,13 @@ impl ResultsGenerator {
     /// everywhere it appears, but is excluded from any aggregate combining
     /// it with other images (see `get_group_by_plate`'s `value`/
     /// `any_disabled` and `Cell::disabled`). A no-op if `image_rel_path`
-    /// doesn't match any row.
+    /// doesn't match any row. The run's reason for disabling it ("Exclude
+    /// Image") goes: the user decided.
     pub fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         self.database
             .execute(
-                "UPDATE images SET disabled = ? WHERE image_rel_path = ?",
+                "UPDATE images SET disabled = ?, disabled_reason = NULL WHERE image_rel_path = ?",
                 duckdb::params![disable, image_rel_path],
             )
             .map_err(err)?;
@@ -4150,6 +4155,47 @@ mod tests {
             start.elapsed(),
             per_image.len()
         );
+    }
+
+    /// The run's reason for leaving an image out is read; enabling the
+    /// image by hand takes it away.
+    #[test]
+    fn an_excluded_images_reason_is_read_and_goes_when_enabled_by_hand() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        {
+            let old = duckdb::Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE images (image_name VARCHAR, image_rel_path VARCHAR PRIMARY KEY, \
+                 disabled BOOLEAN NOT NULL DEFAULT false, disabled_reason VARCHAR); \
+                 INSERT INTO images VALUES ('a', 'a.tif', false, NULL), ('b', 'b.tif', true, NULL);",
+            )
+            .unwrap();
+        }
+        let results = ResultsGenerator::open_database(path).unwrap();
+        let reasons = |results: &ResultsGenerator| -> Vec<(bool, Option<String>)> {
+            results
+                .get_images()
+                .unwrap()
+                .into_iter()
+                .map(|image| (image.disabled, image.disabled_reason))
+                .collect()
+        };
+        assert_eq!(reasons(&results), [(false, None), (true, None)]);
+
+        results
+            .connection()
+            .execute_batch(
+                "UPDATE images SET disabled = true, disabled_reason = 'Focus score low' \
+                 WHERE image_rel_path = 'a.tif'",
+            )
+            .unwrap();
+        assert_eq!(
+            reasons(&results)[0],
+            (true, Some("Focus score low".to_string()))
+        );
+        results.enable_image("a.tif", false).unwrap();
+        assert_eq!(reasons(&results)[0], (false, None), "the user decided");
     }
 
     /// Opening results the analysis in this process just wrote must reuse

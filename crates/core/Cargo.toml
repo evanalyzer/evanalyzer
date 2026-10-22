@@ -22,6 +22,7 @@ log = { workspace = true }
 bioformats = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }
+rustfft = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 indexmap = { workspace = true, features = ["serde", "rayon"] }
 bitvec = { workspace = true, features = ["serde", "alloc", "atomic", "std"] }
