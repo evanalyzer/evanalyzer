@@ -18,12 +18,12 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 use rayon::prelude::*;
 
-/// Measures the brightness of a channel across the whole image: total, mean,
-/// standard deviation, minimum, maximum, median, lower and upper quartile
-/// and median absolute deviation - in gray values, like the objects'
-/// intensities.
+/// Measures the brightness of a channel across the whole image.
 ///
-/// It uses every pixel of the image, the background too.
+/// Total, mean, standard deviation, minimum, maximum, median, lower and
+/// upper quartile and median absolute deviation - in gray values, like the
+/// objects' intensities. It uses every pixel of the image, the background
+/// too.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Image Intensity")]
 pub struct ImageIntensity {

@@ -17,9 +17,10 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 use std::collections::{HashMap, HashSet};
 
-/// Measures how much of the image the objects of a class cover: the area
-/// in pixels and µm² (with a known pixel size) and the part of the image
-/// (0..1). Where objects overlap, the area counts once.
+/// Measures how much of the image the objects of a class cover.
+///
+/// The area in pixels and µm² (with a known pixel size) and the part of the
+/// image (0..1). Where objects overlap, the area counts once.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Area Occupied")]
 pub struct AreaOccupied {

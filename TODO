@@ -299,7 +299,10 @@ Decided - to build, in this order:
 - [x] Image Intensity (channel → total, mean, std, min, max, median, quartiles, MAD in gray values; exact histogram up to 16 bit, 65536 bins above) and Area Occupied (class → px², µm², part of the image; overlaps count once) - 2026-10-22.
   - [ ] Image Intensity "only inside class X" (e.g. intensity within a tissue mask).
 - [ ] CellProfiler parity (2026-10-22):
-  - [ ] Propagation (IdentifySecondaryObjects; Jones, Carpenter & Golland 2005): nuclei (seeds) + cell stain (+ mask) in, one cell per nucleus out; λ weighs intensity change vs distance. Could also offer "watershed seeded by objects".
+  - [x] Propagation (IdentifySecondaryObjects; Jones, Carpenter & Golland 2005) - 2026-10-22, a port of centrosome `_propagate.pyx` (same step cost, 8 neighbours, tie order); its own code, nothing shared with Voronoi/Watershed.
+    - [ ] Benchmark speed + RAM on a big image (~13 bytes/pixel + the queue; whole image in memory like Voronoi) → BENCHMARK.md RAM overview.
+    - [ ] Compare regions with CellProfiler's on the same image (and check the citation's DOI).
+    - [ ] Optional: "watershed seeded by objects" (λ = 0 is close).
   - [ ] Expand objects without growing into neighbours (today `Expand` dilates each object alone, so neighbours overlap).
   - [ ] More object intensity statistics: std, median, quartiles (cheap); edge intensity, center of mass / mass displacement (niche).
   - [ ] Image quality (focus, saturation, power-log-log slope) + Flag images.

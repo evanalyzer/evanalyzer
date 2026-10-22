@@ -2963,6 +2963,49 @@ mod full_run_integration_tests {
         }
     }
 
+    /// In a real run Propagation grows the objects the pipelines before it
+    /// found: each region holds its seed, is linked to it and has the
+    /// output class.
+    #[test]
+    fn propagation_grows_the_objects_of_the_run() {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        let mut grow = Pipeline::new(
+            PipelineId(2),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        grow.add_command(Box::new(crate::algos::Propagation {
+            seeds: ObjectClass::Global(1),
+            growth_channel: evanalyzer_cfg::core_types::ImageChannelIdx(1),
+            mask: ObjectClass::Unset,
+            regularization: 0.05,
+            output_class: ObjectClass::Global(2),
+            exclude_at_edges: false,
+        }));
+        job.add_post_process_pipeline(grow);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+
+        let objects = out_objects.lock().unwrap();
+        let has = |o: &ObjectMetricSettings, class: u32| {
+            o.object_class.contains(&ObjectClass::Global(class))
+        };
+        let seeds: Vec<_> = objects.iter().filter(|o| has(o, 1)).collect();
+        let grown: Vec<_> = objects.iter().filter(|o| has(o, 2)).collect();
+        assert!(!seeds.is_empty(), "the run found seeds");
+        assert_eq!(grown.len(), seeds.len(), "one region per seed");
+        for region in &grown {
+            let seed = seeds
+                .iter()
+                .find(|s| Some(&s.id) == region.parent_id.as_ref())
+                .expect("linked to a seed");
+            assert!(region.area >= seed.area, "holds its seed");
+        }
+    }
+
     #[test]
     fn a_pipeline_reading_a_channel_the_image_lacks_fails_with_a_clear_message() {
         // What the pre-start check catches for images with stored channel
