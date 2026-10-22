@@ -101,7 +101,7 @@
       ]
     },
     "AreaOccupiedSettings": {
-      "description": "Measures how much of the image the objects of a class cover: the area\nin pixels and µm² (with a known pixel size) and the part of the image\n(0..1). Where objects overlap, the area counts once.",
+      "description": "Measures how much of the image the objects of a class cover.\n\nThe area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
       "type": "object",
       "properties": {
         "name": {
@@ -1071,7 +1071,7 @@
       "minimum": 0
     },
     "ImageIntensitySettings": {
-      "description": "Measures the brightness of a channel across the whole image: total, mean,\nstandard deviation, minimum, maximum, median, lower and upper quartile\nand median absolute deviation - in gray values, like the objects'\nintensities.\n\nIt uses every pixel of the image, the background too.",
+      "description": "Measures the brightness of a channel across the whole image.\n\nTotal, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
       "type": "object",
       "properties": {
         "channel": {
@@ -2114,7 +2114,7 @@
       ]
     },
     "PearsonCorrelationCoefficientSettings": {
-      "description": "Measures how two channels go together across the whole image: the\nPearson correlation coefficient, from -1 (one bright where the other is\ndark) over 0 (unrelated) to 1 (bright together).\n\nIt uses every pixel of the image, the background too - a large dark\nbackground raises it.",
+      "description": "Measures how two channels go together across the whole image.\n\nThe Pearson correlation coefficient, from -1 (one bright where the other\nis dark) over 0 (unrelated) to 1 (bright together). It uses every pixel\nof the image, the background too - a large dark background raises it.",
       "type": "object",
       "properties": {
         "channelA": {
@@ -2895,18 +2895,18 @@
       ]
     },
     "PropagationSettings": {
-      "description": "Grows a region around each seed object (e.g. a cell around its nucleus)\nthrough a channel (e.g. the cell stain), so neighbouring regions meet\nwhere the stain is dim. Each region is linked to its seed.",
+      "description": "Grows a region around each seed object through a channel.\n\nE.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels and is linked to it (its parent).",
       "type": "object",
       "properties": {
-        "channel": {
-          "description": "The channel the regions grow through (e.g. the cell or membrane\nstain).",
-          "$ref": "#/$defs/ImageChannelIdx",
-          "default": 0
-        },
         "excludeAtEdges": {
           "description": "Discard regions that touch the image border.",
           "type": "boolean",
           "default": false
+        },
+        "growthChannel": {
+          "description": "The channel the regions grow through (e.g. the cell or membrane\nstain).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
         },
         "mask": {
           "description": "Regions only cover pixels of objects carrying this class (e.g. the\nthresholded cell stain). `Unset`: the whole image.",

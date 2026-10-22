@@ -2527,9 +2527,13 @@ impl Default for ObjectMathSettings {
     }
 }
 
-/// Grows a region around each seed object (e.g. a cell around its nucleus)
-/// through a channel (e.g. the cell stain), so neighbouring regions meet
-/// where the stain is dim. Each region is linked to its seed.
+/// Grows a region around each seed object through a channel.
+///
+/// E.g. a cell around its nucleus through the cell stain: every pixel goes
+/// to the seed it is reached from at the lowest cost, a step costing more
+/// the more the stain's brightness changes - so neighbouring cells meet
+/// where the stain is dim, not halfway between their nuclei. Each region
+/// keeps its seed's pixels and is linked to it (its parent).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -2640,9 +2644,10 @@ pub struct VoronoiSettings {
 
 // ============ MEASURE ============
 
-/// Measures how much of the image the objects of a class cover: the area
-/// in pixels and µm² (with a known pixel size) and the part of the image
-/// (0..1). Where objects overlap, the area counts once.
+/// Measures how much of the image the objects of a class cover.
+///
+/// The area in pixels and µm² (with a known pixel size) and the part of the
+/// image (0..1). Where objects overlap, the area counts once.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AreaOccupiedSettings {
@@ -2652,12 +2657,12 @@ pub struct AreaOccupiedSettings {
     pub object_class: ObjectClass,
 }
 
-/// Measures the brightness of a channel across the whole image: total, mean,
-/// standard deviation, minimum, maximum, median, lower and upper quartile
-/// and median absolute deviation - in gray values, like the objects'
-/// intensities.
+/// Measures the brightness of a channel across the whole image.
 ///
-/// It uses every pixel of the image, the background too.
+/// Total, mean, standard deviation, minimum, maximum, median, lower and
+/// upper quartile and median absolute deviation - in gray values, like the
+/// objects' intensities. It uses every pixel of the image, the background
+/// too.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageIntensitySettings {
@@ -2667,12 +2672,11 @@ pub struct ImageIntensitySettings {
     pub channel: ImageChannelIdx,
 }
 
-/// Measures how two channels go together across the whole image: the
-/// Pearson correlation coefficient, from -1 (one bright where the other is
-/// dark) over 0 (unrelated) to 1 (bright together).
+/// Measures how two channels go together across the whole image.
 ///
-/// It uses every pixel of the image, the background too - a large dark
-/// background raises it.
+/// The Pearson correlation coefficient, from -1 (one bright where the other
+/// is dark) over 0 (unrelated) to 1 (bright together). It uses every pixel
+/// of the image, the background too - a large dark background raises it.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]

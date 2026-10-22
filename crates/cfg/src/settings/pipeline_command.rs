@@ -286,8 +286,8 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             id: 1,
             name: "Area Occupied",
             category: CommandCategory::Measure,
-            summary: "Measures how much of the image the objects of a class cover: the area in pixels and µm² (with a known pixel size) and the part of the image (0..1).",
-            description: "Where objects overlap, the area counts once.",
+            summary: "Measures how much of the image the objects of a class cover.",
+            description: "The area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
         },
         CommandMeta {
             id: 2,
@@ -412,8 +412,8 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             id: 19,
             name: "Image Intensity",
             category: CommandCategory::Measure,
-            summary: "Measures the brightness of a channel across the whole image: total, mean, standard deviation, minimum, maximum, median, lower and upper quartile and median absolute deviation - in gray values, like the objects' intensities.",
-            description: "It uses every pixel of the image, the background too.",
+            summary: "Measures the brightness of a channel across the whole image.",
+            description: "Total, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
         },
         CommandMeta {
             id: 20,
@@ -475,8 +475,8 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             id: 28,
             name: "Pearson Correlation",
             category: CommandCategory::Measure,
-            summary: "Measures how two channels go together across the whole image: the Pearson correlation coefficient, from -1 (one bright where the other is dark) over 0 (unrelated) to 1 (bright together).",
-            description: "It uses every pixel of the image, the background too - a large dark\nbackground raises it.",
+            summary: "Measures how two channels go together across the whole image.",
+            description: "The Pearson correlation coefficient, from -1 (one bright where the other\nis dark) over 0 (unrelated) to 1 (bright together). It uses every pixel\nof the image, the background too - a large dark background raises it.",
         },
         CommandMeta {
             id: 29,
@@ -489,8 +489,8 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             id: 30,
             name: "Propagation",
             category: CommandCategory::Object,
-            summary: "Grows a region around each seed object (e.g.",
-            description: "a cell around its nucleus) through a channel (e.g. the cell stain), so neighbouring regions meet where the stain is dim. Each region is linked to its seed.",
+            summary: "Grows a region around each seed object through a channel.",
+            description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels and is linked to it (its parent).",
         },
         CommandMeta {
             id: 31,

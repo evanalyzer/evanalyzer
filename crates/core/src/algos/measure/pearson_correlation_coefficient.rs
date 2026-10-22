@@ -19,12 +19,11 @@ use macros::CommandsMeta;
 use rayon::prelude::*;
 use std::sync::Arc;
 
-/// Measures how two channels go together across the whole image: the
-/// Pearson correlation coefficient, from -1 (one bright where the other is
-/// dark) over 0 (unrelated) to 1 (bright together).
+/// Measures how two channels go together across the whole image.
 ///
-/// It uses every pixel of the image, the background too - a large dark
-/// background raises it.
+/// The Pearson correlation coefficient, from -1 (one bright where the other
+/// is dark) over 0 (unrelated) to 1 (bright together). It uses every pixel
+/// of the image, the background too - a large dark background raises it.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", display_name = "Pearson Correlation")]
 pub struct PearsonCorrelationCoefficient {
