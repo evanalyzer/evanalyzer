@@ -380,8 +380,10 @@ pub struct DatabaseResult {
     pub max: f32,
     /// How many source rows this page's query actually matched
     pub source_object_count: usize,
-    /// For navigation
-    pub row_locations: Vec<(String, [u32; 4])>,
+    /// Per row, where clicking it goes: its image (rel path) and, for a row
+    /// that is an object, the object's pixel box - `None` for a row that is
+    /// an image (or a time point without objects): the whole image.
+    pub row_locations: Vec<(String, Option<[u32; 4]>)>,
 }
 /// One histogram: `column`'s value distribution across every object
 /// matching `plane`/`images`/`object_classes`, bucketed into `bins`

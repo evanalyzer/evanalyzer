@@ -275,7 +275,8 @@ impl ResultsStateController {
         }
     }
 
-    /// A List row selected: its object, on its image.
+    /// A List row selected: its object on its image - a row per image: the
+    /// whole image with its objects.
     fn split_select_row(self: &Arc<Self>, row: i32) {
         let location = self
             .list_row_locations
@@ -286,7 +287,7 @@ impl ResultsStateController {
         let Some((rel_path, bbox)) = location.filter(|_| row >= 0) else {
             return;
         };
-        self.split_show_image(rel_path, Some(bbox), None);
+        self.split_show_image(rel_path, bbox, None);
     }
 
     /// ‹ › and ↑ ↓: List the next row, Plate the next object of the image
@@ -364,7 +365,7 @@ impl ResultsStateController {
             .lock()
             .expect("Poisoned")
             .iter()
-            .position(|(rel, b)| *rel == rel_path && *b == bbox)
+            .position(|(rel, b)| *rel == rel_path && *b == Some(bbox))
             .map_or(-1, |row| row as i32);
         if let Some(ui) = self.ui.upgrade() {
             ui.global::<ResultsState>().set_list_selected_row(row);

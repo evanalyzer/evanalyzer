@@ -391,9 +391,11 @@
               "TUPLE": [
                 "STR",
                 {
-                  "TUPLEARRAY": {
-                    "CONTENT": "U32",
-                    "SIZE": 4
+                  "OPTION": {
+                    "TUPLEARRAY": {
+                      "CONTENT": "U32",
+                      "SIZE": 4
+                    }
                   }
                 }
               ]

@@ -729,6 +729,11 @@ impl ResultsGenerator {
             .iter()
             .map(|(rel_path, _, class_id, _, _)| format!("{rel_path}\u{1}{class_id}"))
             .collect();
+        // A row is an image: clicking it shows the whole image.
+        let row_locations = groups
+            .iter()
+            .map(|(rel_path, ..)| (rel_path.clone(), None))
+            .collect();
         let source_object_count = groups.len();
         let rows: Vec<Vec<Cell>> = groups
             .into_iter()
@@ -778,7 +783,7 @@ impl ResultsGenerator {
             min,
             max,
             source_object_count,
-            row_locations: Vec::new(),
+            row_locations,
         })
     }
 
@@ -943,6 +948,11 @@ impl ResultsGenerator {
 
         let (min, max) = value_range(groups.iter().flat_map(|(_, _, _, values)| values.iter()));
         let row_names = groups.iter().map(|(path, ..)| path.clone()).collect();
+        // A row is an image: clicking it shows the whole image.
+        let row_locations = groups
+            .iter()
+            .map(|(path, ..)| (path.clone(), None))
+            .collect();
         let source_object_count = groups.len();
         let rows = groups
             .into_iter()
@@ -972,7 +982,7 @@ impl ResultsGenerator {
             min,
             max,
             source_object_count,
-            row_locations: Vec::new(),
+            row_locations,
         })
     }
 
@@ -1158,7 +1168,7 @@ impl ResultsGenerator {
             // Clicking a row opens its image at the row's first object.
             row_locations.push(match row_objects.first() {
                 Some((_, object)) => object_location(object),
-                None => (image_rel_path.clone(), [0; 4]),
+                None => (image_rel_path.clone(), None),
             });
             row_names.push(format!("{image_rel_path}\u{1}{rn}"));
             rows.push(cells);
@@ -1190,7 +1200,8 @@ impl ResultsGenerator {
         coloc_class_columns: &[ObjectClass],
         metric_columns: &[Column],
         classes: &[Class],
-    ) -> Result<(Vec<String>, Vec<Vec<Cell>>, Vec<(String, [u32; 4])>), InternalErrors> {
+    ) -> Result<(Vec<String>, Vec<Vec<Cell>>, Vec<(String, Option<[u32; 4]>)>), InternalErrors>
+    {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let dash = |alternating_color: bool, disabled: bool| Cell {
             value: CellValue::String("-".to_string()),
@@ -2895,15 +2906,15 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
 /// `DatabaseResult::row_locations`' entry for `object` — its source image
 /// (by rel path) and pixel bounding box, for the GUI to navigate to and
 /// highlight it.
-fn object_location(object: &ObjectRow) -> (String, [u32; 4]) {
+fn object_location(object: &ObjectRow) -> (String, Option<[u32; 4]>) {
     (
         object.image_rel_path.clone(),
-        [
+        Some([
             object.bbox_xmin_px,
             object.bbox_ymin_px,
             object.bbox_xmax_px,
             object.bbox_ymax_px,
-        ],
+        ]),
     )
 }
 
