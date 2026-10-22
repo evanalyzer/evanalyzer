@@ -122,4 +122,67 @@ mod tests {
         // No pipelines configured, so no objects - but the preview store is there.
         assert!(matches!(output.preview_objects, Some(objects) if objects.is_empty()));
     }
+
+    /// A preview brings its measurements back with its objects.
+    #[test]
+    fn start_preview_returns_the_measurements_too() {
+        use evanalyzer_cfg::core_types::{
+            ImageAddress, MeasurementRegion, MeasurementValues, PipelineId, StepId,
+        };
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let (dir, mut settings) = project_with_fixture_image();
+        let mut pearson =
+            PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+        *pearson.measurement_name_mut().unwrap() = "pearson_01".into();
+        settings.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Coloc".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: StepId(1),
+                enabled: true,
+                content: StepContent::Command(pearson),
+            }],
+        });
+
+        let job = start_preview(PreviewRequest {
+            settings,
+            project_path: dir.path().to_path_buf(),
+            viewport: PreviewViewport {
+                offset_x: 0.0,
+                offset_y: 0.0,
+                viewport_width: 256.0,
+                viewport_height: 256.0,
+                zoom: 1.0,
+            },
+            breakpoint: None,
+            max_visible_tiles: None,
+            breakpoint_tiles: 1,
+        })
+        .unwrap();
+        drain(&job);
+        let output = job.wait().unwrap();
+        let planes = output
+            .preview_measurements
+            .expect("a preview's measurements");
+        let [plane] = &planes[..] else {
+            panic!("one plane, got {}", planes.len());
+        };
+        let [measurement] = &plane.measurements[..] else {
+            panic!("one measurement");
+        };
+        assert_eq!(measurement.info.key, "pearson_01/pearson/ch0_ch1");
+        let MeasurementValues::Image(values) = &measurement.values else {
+            panic!("an image measurement");
+        };
+        assert!(
+            matches!(values[..], [(MeasurementRegion::Image, r)] if (-1.0..=1.0).contains(&r)),
+            "{values:?}"
+        );
+    }
 }

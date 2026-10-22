@@ -21,7 +21,6 @@ pub use self::ai_segmentation::unet::UNetOutputMode;
 pub use self::ai_segmentation::yolov5::YoloClassMapping;
 pub use self::ai_segmentation::yolov5::Yolov5;
 
-pub use self::measure::pearson_correlation_coefficient::PearsonCorrelationCoefficient;
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
 pub use self::filters::color_filter::ColorFilterCommand;
@@ -55,6 +54,7 @@ pub use self::math::load_channel::LoadChannel;
 pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
+pub use self::measure::pearson_correlation_coefficient::PearsonCorrelationCoefficient;
 pub use self::morphology::fill_holes::FillHoles;
 pub use self::morphology::fill_object_holes::FillObjectHoles;
 pub use self::morphology::morphological_transformation::KernelShapes;

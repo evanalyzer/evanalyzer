@@ -8,7 +8,7 @@ use log::{debug, error};
 /// final merged objects are returned by [`RunningJob::wait`] in
 /// [`JobOutput::preview_objects`](super::JobOutput::preview_objects).
 pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
-    let (mut job, out_objects) = evanalyzer_core::generate_preview_job_from_project_settings(
+    let (mut job, output) = evanalyzer_core::generate_preview_job_from_project_settings(
         request.settings,
         request.project_path,
     )?;
@@ -47,5 +47,5 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
     job.breakpoint_tiles = request.breakpoint_tiles.max(1) as usize;
 
     let parallelism = evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes());
-    Ok(spawn_job(job, parallelism, Some(out_objects)))
+    Ok(spawn_job(job, parallelism, Some(output)))
 }

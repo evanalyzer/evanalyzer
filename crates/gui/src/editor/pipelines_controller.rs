@@ -1105,6 +1105,11 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>()
                 .on_show_problem(move |index| manager.show_problem(index as usize));
 
+            // A row of the Measurements panel: the step that measured it.
+            let manager = self.clone();
+            ui.global::<crate::MeasurementsState>()
+                .on_show_step(move |name| manager.show_measurement_step(&name));
+
             // ▸ / ▾ of a module card's section: open or close it - in
             // place, the card isn't rebuilt.
             let manager = self.clone();
@@ -3217,6 +3222,9 @@ impl PipelinesController {
         self.app_state.mark_dirty();
         self.focus_controller.refresh();
         self.refresh_problems();
+        if let Some(ui) = self.ui.upgrade() {
+            crate::editor::measurements_panel::sync(&ui, &self.app_state);
+        }
 
         self.schedule_auto_preview();
     }
@@ -3916,9 +3924,6 @@ impl PipelinesController {
         else {
             return;
         };
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
         let target: Option<(PipelineId, Option<StepId>, bool)> =
             match (problem.step, &problem.module) {
                 (Some((pipeline, step)), _) => Some((pipeline, Some(step), false)),
@@ -3931,6 +3936,37 @@ impl PipelinesController {
                 (None, None) => None,
             };
         let Some((pipeline_id, step_id, open)) = target else {
+            return;
+        };
+        self.show_step(pipeline_id, step_id, open);
+    }
+
+    /// Shows the measurement step named `name` (`measurement_name`): its
+    /// pipeline, and the step - or, inside a module, the module opened.
+    fn show_measurement_step(self: &Arc<Self>, name: &str) {
+        let target = {
+            let project = self.app_state.get_project();
+            project.pipelines.iter().find_map(|pipeline| {
+                pipeline.steps.iter().find_map(|step| {
+                    evanalyzer_app::modules::resolved_commands(step, &project.modules)
+                        .iter()
+                        .any(|c| c.command.measurement_name() == Some(name))
+                        .then(|| {
+                            let in_module = matches!(step.content, StepContent::Module(_));
+                            (pipeline.id, Some(step.id), in_module)
+                        })
+                })
+            })
+        };
+        if let Some((pipeline_id, step_id, open)) = target {
+            self.show_step(pipeline_id, step_id, open);
+        }
+    }
+
+    /// Shows step `step_id` of pipeline `pipeline_id`: the pipeline, the
+    /// step's card unfolded - or, `open`, its module opened in the panel.
+    fn show_step(self: &Arc<Self>, pipeline_id: PipelineId, step_id: Option<StepId>, open: bool) {
+        let Some(ui) = self.ui.upgrade() else {
             return;
         };
         self.close_open_module();

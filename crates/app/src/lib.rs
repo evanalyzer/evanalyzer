@@ -48,7 +48,7 @@ pub mod modules {
     };
     pub use crate::workspace::module_insights::{
         ImageChannels, image_channels, parameter_key, parameter_wiring, rekey_parameters,
-        setting_wiring,
+        resolved_commands, setting_wiring,
     };
     pub use crate::workspace::module_library::{
         content_hash, insert_module_template, library_name, merge_module_definitions,
@@ -86,7 +86,6 @@ pub mod results {
     pub use crate::api::ColorScale;
     pub use crate::api::ColorSchema;
     pub use crate::api::Column;
-    pub use crate::api::MeasurementColumn;
     pub use crate::api::ColumnEntry;
     pub use crate::api::DatabaseResult;
     pub use crate::api::DrawnImages;
@@ -98,6 +97,7 @@ pub mod results {
     pub use crate::api::ImageEntry;
     pub use crate::api::ImageHeatmapFilter;
     pub use crate::api::ListFilter;
+    pub use crate::api::MeasurementColumn;
     pub use crate::api::Pagination;
     pub use crate::api::PlaneFilter;
     pub use crate::api::PlateFilter;

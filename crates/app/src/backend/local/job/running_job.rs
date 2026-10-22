@@ -1,25 +1,27 @@
 use crate::api::{CancelHandle, JobCompletion, JobOutput, RunningJob};
-use evanalyzer_cfg::{core_types::InternalErrors, settings::object_settings::ObjectMetricSettings};
-use evanalyzer_core::JobExecutor;
-use std::{
-    any::Any,
-    sync::{Arc, Mutex},
-    thread::JoinHandle,
-};
+use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_core::{JobExecutor, PreviewOutput};
+use std::{any::Any, sync::Mutex, thread::JoinHandle};
 
 /// Runs `job` on its own thread in this process.
+/// What a finished job left in `values` (a preview's objects, measurements).
+fn read<T: Clone>(values: &Mutex<Vec<T>>) -> Vec<T> {
+    values.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 pub(crate) fn spawn_job(
     job: JobExecutor,
     parallelism: usize,
-    preview_objects: Option<Arc<Mutex<Vec<ObjectMetricSettings>>>>,
+    preview: Option<PreviewOutput>,
 ) -> RunningJob {
     let output_path = job.output_path.clone();
     let (handle, events, cancel) = job.run_async(parallelism);
     let completion: JobCompletion = Box::new(move || {
         join_job(handle, "Pipeline worker")?;
-        let preview_objects = preview_objects
-            .map(|objects| objects.lock().unwrap_or_else(|e| e.into_inner()).clone());
-        Ok(JobOutput { preview_objects })
+        Ok(JobOutput {
+            preview_objects: preview.as_ref().map(|p| read(&p.objects)),
+            preview_measurements: preview.as_ref().map(|p| read(&p.measurements)),
+        })
     });
     RunningJob::from_parts(
         events,

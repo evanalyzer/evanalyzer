@@ -82,6 +82,8 @@ pub struct ProjectTmpSettings {
 
     /// The regions of interest from the preview run
     pub preview_objects: Vec<ObjectMetricSettings>,
+    /// The preview's measurements, per plane - they go with its objects.
+    pub preview_measurements: Vec<evanalyzer_cfg::core_types::PipelineMeasurements>,
 
     pub selected_object: Option<ObjectId>,
 
@@ -106,6 +108,7 @@ impl Default for ProjectTmpSettings {
             current_image: None,
             selected_object_class: ObjectClass::default(),
             preview_objects: Vec::new(),
+            preview_measurements: Vec::new(),
             selected_object: None,
             hidden_classes: HashSet::new(),
             hide_unclassified_objects: true,
@@ -377,6 +380,7 @@ impl ProjectWithRuntime {
             self.tmp_settings.selected_object = None;
         }
         self.tmp_settings.preview_objects.clear();
+        self.tmp_settings.preview_measurements.clear();
     }
 
     pub fn set_selected_object(&mut self, object_id: Option<ObjectId>) {

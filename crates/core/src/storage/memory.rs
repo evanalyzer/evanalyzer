@@ -2,7 +2,7 @@ use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::stored_object::{ObjectFilter, StoredObject};
 use crate::storage::{DatasetStore, PipelineResultExporter};
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, ObjectClass, ObjectId, TrackId},
+    core_types::{InternalErrors, ObjectClass, ObjectId, PipelineMeasurements, TrackId},
     settings::object_settings::ObjectMetricSettings,
 };
 use std::sync::{Arc, Mutex};
@@ -16,8 +16,11 @@ use std::sync::{Arc, Mutex};
 /// - **Intensity metrics**: mean, median, std dev, min, max, integrated density across channels
 /// - **Classification & Lineage**: segmentation class, object class labels
 /// - **Colocalization metrics**: Dynamic columns for each `ObjectClass`, containing comma-separated lists of overlapping `ObjectId`s
+#[derive(Default)]
 pub struct MemoryExporter {
     pub out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>>,
+    /// The measurements, per plane - like the objects, for a preview.
+    pub out_measurements: Arc<Mutex<Vec<PipelineMeasurements>>>,
 }
 
 impl PipelineResultExporter for MemoryExporter {
@@ -38,8 +41,17 @@ impl PipelineResultExporter for MemoryExporter {
             .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
 
         mut_cache.extend(object_settings);
+        drop(mut_cache);
 
-        Ok(()) // Lock is released immediately here
+        if !cache.measurements.measurements.is_empty() {
+            self.out_measurements
+                .lock()
+                .map_err(|_| {
+                    InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string())
+                })?
+                .push(cache.measurements.clone());
+        }
+        Ok(())
     }
 
     fn dataset_store(&self) -> Option<&dyn DatasetStore> {
@@ -168,6 +180,7 @@ mod tests {
 
         let exporter = MemoryExporter {
             out_objects: Arc::new(Mutex::new(Vec::new())),
+            ..Default::default()
         };
         exporter.export(&cache).unwrap();
 
@@ -193,6 +206,7 @@ mod tests {
 
         let exporter = MemoryExporter {
             out_objects: Arc::new(Mutex::new(vec![])),
+            ..Default::default()
         };
         exporter.export(&cache).unwrap();
         exporter.export(&cache).unwrap(); // second tile's export call
@@ -231,6 +245,7 @@ mod tests {
         }
         let exporter = MemoryExporter {
             out_objects: Arc::new(Mutex::new(Vec::new())),
+            ..Default::default()
         };
         exporter.export(&cache).unwrap();
         let store = exporter.dataset_store().unwrap();

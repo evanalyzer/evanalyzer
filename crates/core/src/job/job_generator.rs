@@ -51,12 +51,13 @@ use std::{
 pub fn generate_preview_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
-) -> Result<(JobExecutor, Arc<Mutex<Vec<ObjectMetricSettings>>>), InternalErrors> {
+) -> Result<(JobExecutor, PreviewOutput), InternalErrors> {
     check_series(&config)?;
     check_pipeline_channels(&config)?;
-    let out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>> = Arc::new(Mutex::new(vec![]));
+    let output = PreviewOutput::default();
     let memory_storage = Arc::new(MemoryExporter {
-        out_objects: out_objects.clone(),
+        out_objects: output.objects.clone(),
+        out_measurements: output.measurements.clone(),
     });
 
     let output_path = project_path.join("results").join("preview");
@@ -75,7 +76,15 @@ pub fn generate_preview_job_from_project_settings(
     // step over all images and frames, which would only show a misleading
     // result (e.g. a tracker with nothing to link).
     job.dataset_steps.clear();
-    Ok((job, out_objects))
+    Ok((job, output))
+}
+
+/// What a preview job leaves in memory (see `MemoryExporter`): its final
+/// objects and its measurements per plane - read once the job finished.
+#[derive(Clone, Default)]
+pub struct PreviewOutput {
+    pub objects: Arc<Mutex<Vec<ObjectMetricSettings>>>,
+    pub measurements: Arc<Mutex<Vec<evanalyzer_cfg::core_types::PipelineMeasurements>>>,
 }
 
 /// Generates a job for a full analysis.
@@ -1574,6 +1583,7 @@ mod tests {
             dir.path().to_path_buf(),
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
         )
         .unwrap();
@@ -1901,7 +1911,7 @@ mod tests {
         job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
             .unwrap();
 
-        let objects = out_objects.lock().unwrap();
+        let objects = out_objects.objects.lock().unwrap();
         assert!(!objects.is_empty(), "the fixture image has objects");
         for object in objects.iter() {
             assert_eq!(
@@ -2021,7 +2031,7 @@ mod tests {
         job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
             .unwrap();
 
-        let objects = out_objects.lock().unwrap();
+        let objects = out_objects.objects.lock().unwrap();
         assert!(
             !objects.is_empty(),
             "the objects survive the nested module's end"

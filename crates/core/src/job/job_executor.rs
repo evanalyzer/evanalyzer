@@ -1783,6 +1783,7 @@ mod z_t_stack_precedence_tests {
             global_image_settings,
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -2007,6 +2008,7 @@ mod preview_visible_tile_count_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -2094,6 +2096,7 @@ mod preview_tile_size_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -2165,6 +2168,7 @@ mod tile_iterator_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -2326,6 +2330,7 @@ mod z_stack_iterator_tests {
             global_image_settings,
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -2468,6 +2473,7 @@ mod execution_order_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -2826,7 +2832,10 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(MemoryExporter { out_objects }),
+            Arc::new(MemoryExporter {
+                out_objects,
+                ..Default::default()
+            }),
             None,
             Default::default(),
         );
@@ -3430,7 +3439,10 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(MemoryExporter { out_objects }),
+            Arc::new(MemoryExporter {
+                out_objects,
+                ..Default::default()
+            }),
             None,
             Default::default(),
         );
@@ -3873,6 +3885,7 @@ mod full_run_integration_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter {
                 out_objects: out_objects.clone(),
+                ..Default::default()
             }),
             None,
             Default::default(),
@@ -4466,6 +4479,7 @@ mod estimate_ram_per_worker_bytes_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
+                ..Default::default()
             }),
             None,
             Default::default(),
