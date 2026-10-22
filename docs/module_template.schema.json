@@ -69,7 +69,7 @@
   ],
   "$defs": {
     "AiObjectClassifierSettings": {
-      "description": "An object classifier trained via the app's AI training dialog (an\n`.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),\napplied here as a pipeline classification step: every object already\npresent in `PipelineCache::object_cache` matching `origin_segmentation`/\n`input_classes` is scored independently (reusing the same feature recipe\nused at training time), then remapped through `segmentation_mapping` into\nthis project's own classes and applied via `match_handling` - the same\ninput selection `ClassifyObjects` uses, but the output class comes from\nthe model's prediction instead of a fixed rule.\n\nPredicted classes with no matching `segmentation_mapping` entry leave the\nobject untouched, mirroring how `PixelClassifier` leaves unmapped\npredictions as background - mapping only the classes you care about is a\ndeliberate simplification, not an oversight.",
+      "description": "Classifies objects with a model trained in the AI training dialog (an\n`.evamodel` file).\n\nEvery object found so far that matches the input classes is scored on\nits own, with the same features as in training. The predicted class is\nmapped to one of this project's classes and applied as set under\n**Match handling** - the same input selection as **Classify Objects**,\nbut the class comes from the model's prediction instead of a fixed rule.\n\nA predicted class without a mapping leaves the object untouched (like\nunmapped classes of the pixel classifier stay background): map only the\nclasses you care about.",
       "type": "object",
       "properties": {
         "inputClasses": {
@@ -482,7 +482,7 @@
       }
     },
     "ColorFilterCommandSettings": {
-      "description": "A command that filters an image based on a specific HSV color range.\n\nPixels falling outside the provided [`HsvRange`] are masked\nout by setting to black.\n\n# Examples\n\n```\n# use imagec::backend::algos::{ColorFilterCommand, HsvRange};\nlet range = HsvRange {\nmin_h: 0.0,   max_h: 30.0, // Red tones\nmin_s: 0.5,   max_s: 1.0,\nmin_v: 0.5,   max_v: 1.0,\n};\n\nlet command = ColorFilterCommand { range };\n```",
+      "description": "A command that filters an image based on a specific HSV color range.\n\nPixels falling outside the HSV range are masked\nout by setting to black.\n\n# Examples\n\n```\n# use imagec::backend::algos::{ColorFilterCommand, HsvRange};\nlet range = HsvRange {\nmin_h: 0.0,   max_h: 30.0, // Red tones\nmin_s: 0.5,   max_s: 1.0,\nmin_v: 0.5,   max_v: 1.0,\n};\n\nlet command = ColorFilterCommand { range };\n```",
       "type": "object",
       "properties": {
         "range": {
@@ -942,7 +942,7 @@
       }
     },
     "IlluminationCorrectionSettings": {
-      "description": "Use this when your images are brighter in the middle and dimmer toward\nthe edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse [`super::rolling_ball::RollingBall`] instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
+      "description": "Use this when your images are brighter in the middle and dimmer toward\nthe edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse **Rolling Ball** instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
       "type": "object",
       "properties": {
         "applyMethod": {
@@ -1050,7 +1050,7 @@
           "$ref": "#/$defs/MathImageMathOperandSettings"
         },
         "secondImageAddress": {
-          "description": "The address of the second image in the [`ImageCache`] to use for the operation.",
+          "description": "The second image to use for the operation.",
           "$ref": "#/$defs/ImageAddress"
         },
         "swapOperands": {
@@ -1099,16 +1099,16 @@
       }
     },
     "IntensityTransformationSettings": {
-      "description": "Configuration for adjusting image contrast and brightness.\n\nThis transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`.",
+      "description": "Configuration for adjusting image contrast and brightness.\n\nThis transformation applies a linear mapping to pixel values.\nIn manual mode, the output is typically calculated as:\n`output = input * contrast + brightness`.",
       "type": "object",
       "properties": {
         "brightness": {
-          "description": "Brightness offset (bias).\n\nOnly active in [`Mode::Manual`].\nPositive values brighten the image, negative values darken it.",
+          "description": "Brightness offset (bias).\n\nOnly active in manual mode.\nPositive values brighten the image, negative values darken it.",
           "type": "number",
           "format": "float"
         },
         "contrast": {
-          "description": "Contrast multiplier (gain).\n\nOnly active in [`Mode::Manual`].\nValues > 1.0 increase contrast, while values < 1.0 decrease it.",
+          "description": "Contrast multiplier (gain).\n\nOnly active in manual mode.\nValues > 1.0 increase contrast, while values < 1.0 decrease it.",
           "type": "number",
           "format": "float"
         },
@@ -3289,7 +3289,7 @@
       }
     },
     "ThresholdSettings": {
-      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `segmentation_class` it belongs to.",
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
       "type": "object",
       "properties": {
         "thresholds": {
@@ -3329,7 +3329,7 @@
       }
     },
     "UNetSettings": {
-      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
+      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
       "type": "object",
       "properties": {
         "boundaryChannel": {
@@ -3462,7 +3462,7 @@
           "minimum": 0
         },
         "seedSource": {
-          "description": "What surface local maxima are seeded from. The watershed *flood*\nitself is unaffected either way - it always runs on the distance\nmap, matching CellProfiler's \"Shape\" watershed method.\n\n`DistanceMap` (default) emulates ImageJ's watershed implementation:\nseeds and flood both come from the distance map. `Intensity` instead\nfinds seeds as local maxima of the (optionally smoothed) grayscale\nimage, restricted to each object's own footprint - a faithful port\nof CellProfiler `IdentifyPrimaryObjects`' \"Intensity\" unclumping\nmethod (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),\nthe fix for diffusely-connected regions whose *shape* has no separate\npeaks but whose *brightness* clearly does.",
+          "description": "What surface local maxima are seeded from. The watershed *flood*\nitself is unaffected either way - it always runs on the distance\nmap, matching CellProfiler's \"Shape\" watershed method.\n\n`DistanceMap` (default) emulates ImageJ's watershed implementation:\nseeds and flood both come from the distance map. `Intensity` instead\nfinds seeds as local maxima of the (optionally smoothed) grayscale\nimage, restricted to each object's own footprint - a faithful port\nof CellProfiler `IdentifyPrimaryObjects`' \"Intensity\" unclumping\nmethod,\nthe fix for diffusely-connected regions whose *shape* has no separate\npeaks but whose *brightness* clearly does.",
           "$ref": "#/$defs/SegmentationWatershedSeedSourceSettings",
           "default": "DISTANCE_MAP"
         },

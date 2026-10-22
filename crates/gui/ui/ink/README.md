@@ -64,5 +64,6 @@ reads (14 MB more generated code, and the work at runtime).
 | `settings.slint` | settings dialogs: `InkNavItem`, `InkSettingsHead`, `InkSettingsCard`, `InkSettingRow`, `InkSettingBlock` |
 | `picker.slint` | the closed "pick one" field and its popup rows: `InkPickerField`, `InkPickerRow`, `InkSwatchName` |
 | `multi_select.slint` | `InkMultiSelect` (one or many of a list, with search) and its `MultiSelectItem` |
+| `markdown.slint` | `InkMarkdownText`: a help text in markdown (bold, italic, `code`, lists, links), converted by the app through the `InkMarkdown` global (`helper/markdown.rs`) |
 | `std_compat.slint` | `LineEdit`, `ComboBox`, `CheckBox`, `Switch`, `SpinBox` with the std-widgets API, drawn in Ink |
 | `gallery.slint` | every component on one page, for screenshots |

@@ -77,6 +77,7 @@ import {
     InkTipZone,
     InkInfoButton,
     InkInfoCard,
+    InkMarkdownText,
 } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
@@ -3682,8 +3683,10 @@ export component StepSettingsDialog inherits InkDialog {
                         alignment: start;
 
                         // What the command does - on its first tab.
-                        if cmd.help != "" && !root.searching && root.current == 0: InkHint {
-                            text: cmd.help;
+                        if cmd.help != "" && !root.searching && root.current == 0: InkMarkdownText {
+                            markdown: cmd.help;
+                            default-color: Ink.text-mute;
+                            default-font-size: Ink.fs-secondary;
                             height: self.preferred-height;
                         }
 

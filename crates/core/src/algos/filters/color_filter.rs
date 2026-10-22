@@ -91,7 +91,7 @@ pub struct HsvRange {
 
 /// A command that filters an image based on a specific HSV color range.
 ///
-/// Pixels falling outside the provided [`HsvRange`] are masked
+/// Pixels falling outside the HSV range are masked
 /// out by setting to black.
 ///
 /// # Examples

@@ -152,7 +152,7 @@ impl ProjectController {
         // Another project: nothing of the last one shown.
         self.pipelines_controller.project_switched();
         self.image_list_controller.clear_shown_image();
-        self.results_list_controller.sync_results_files_to_slint();
+        self.results_list_controller.project_switched();
         // A brand-new project has no unsaved changes yet - also updates the
         // window title to the "untitled" state (see `clear_dirty`).
         self.app_state.clear_dirty();
@@ -211,7 +211,7 @@ impl ProjectController {
         // Another project: nothing of the last one shown.
         self.pipelines_controller.project_switched();
         self.image_list_controller.clear_shown_image();
-        self.results_list_controller.sync_results_files_to_slint();
+        self.results_list_controller.project_switched();
         // A freshly opened project has no unsaved changes yet - also updates
         // the window title to the newly opened file (see `clear_dirty`).
         self.app_state.clear_dirty();
@@ -290,7 +290,7 @@ impl ProjectController {
         // Another project: nothing of the last one shown.
         self.pipelines_controller.project_switched();
         self.image_list_controller.clear_shown_image();
-        self.results_list_controller.sync_results_files_to_slint();
+        self.results_list_controller.project_switched();
 
         if let Some(root) = image_root_dir {
             let ui_weak = self.ui.clone();
@@ -984,12 +984,8 @@ impl ProjectController {
             let Some(ui) = manager.ui.upgrade() else {
                 return;
             };
+            // The other backend's results are closed by `create_new_project`.
             crate::apply_appearance(&ui, &manager.app_state);
-            // The results of the other backend's project are gone.
-            let layout = ui.global::<crate::LayoutState>();
-            if layout.get_mode() == crate::WorkspaceMode::Results {
-                layout.set_mode(crate::WorkspaceMode::Pipelines);
-            }
         })
         .ok();
         self.pipelines_controller.follow_server_analyses();
@@ -1672,6 +1668,89 @@ pub(crate) mod tests {
             Some(&path)
         );
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// A window with results open (`x.evadb`, shown, "Back to results" on
+    /// the image) - and its controller.
+    fn with_results_open() -> (AppWindow, Arc<ProjectController>, tempfile::TempDir) {
+        use crate::editor::test_support::{test_ui_window, ui_state_with_window};
+        use crate::helper::ui_thread::drain_ui_queue;
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let (_, controller) = make_controller_on(ui.as_weak(), ui_state);
+        let results = &controller.results_list_controller.results_state_controller;
+        results.attach_callbacks();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("x.evadb");
+        crate::editor::results_state_controller::tests::seed_test_db(&db);
+        results.open_database(db);
+        drain_ui_queue();
+        let state = ui.global::<crate::ResultsState>();
+        assert_eq!(state.get_database_name(), "x.evadb");
+        assert_eq!(
+            ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Results
+        );
+        state.set_peek(true);
+        ui.global::<crate::ResultsListState>()
+            .set_selected_result_index(0);
+        (ui, controller, dir)
+    }
+
+    /// Nothing of the results open before is left.
+    fn assert_no_results_open(ui: &AppWindow, controller: &ProjectController) {
+        let state = ui.global::<crate::ResultsState>();
+        assert_eq!(state.get_database_name(), "", "no analysis open");
+        assert!(!state.get_peek(), "no \"Back to results\"");
+        assert_ne!(
+            ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Results
+        );
+        assert_eq!(
+            ui.global::<crate::ResultsListState>()
+                .get_selected_result_index(),
+            -1
+        );
+        assert!(
+            !controller
+                .results_list_controller
+                .results_state_controller
+                .has_open_database()
+        );
+    }
+
+    #[test]
+    fn opening_another_project_closes_the_open_results() {
+        let (ui, controller, _dir) = with_results_open();
+        let path = temp_project_file(&Default::default());
+
+        controller.clone().open_new_project(&path);
+        crate::helper::ui_thread::drain_ui_queue();
+
+        assert_no_results_open(&ui, &controller);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_new_project_closes_the_open_results_and_lists_none() {
+        use slint::Model;
+        let (ui, controller, _dir) = with_results_open();
+        ui.global::<crate::ResultsListState>()
+            .set_results_list(slint::ModelRc::new(slint::VecModel::from(vec![
+                crate::ResultItemData::default(),
+            ])));
+
+        controller.clone().create_new_project();
+        crate::helper::ui_thread::drain_ui_queue();
+
+        assert_no_results_open(&ui, &controller);
+        assert_eq!(
+            ui.global::<crate::ResultsListState>()
+                .get_results_list()
+                .row_count(),
+            0,
+            "not the last project's results"
+        );
     }
 
     #[test]

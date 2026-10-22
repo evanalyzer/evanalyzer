@@ -83,7 +83,7 @@ export component BottomBar inherits Rectangle {
                     icon: InkIcons.busy;
                     mono: true;
                     text: "Analyzing"
-                        + (PipelineRunningState.last-image != "" ? " · last " + PipelineRunningState.last-image : "")
+                        + (PipelineRunningState.current-image != "" ? " · " + PipelineRunningState.current-image : "")
                         + (PipelineRunningState.images-total <= 1 && PipelineRunningState.tiles-total > 0 ? " · tile " + PipelineRunningState.tiles-done + " / " + PipelineRunningState.tiles-total : "")
                         + (PipelineRunningState.images-total > 0 ? " · image " + PipelineRunningState.images-done + " / " + PipelineRunningState.images-total : "");
                 }

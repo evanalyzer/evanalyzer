@@ -669,6 +669,7 @@ fn run(
     startup_phase("GUI start");
     choose_renderer();
     let ui = AppWindow::new()?;
+    crate::helper::markdown::attach(&ui);
     let ui_handle = ui.as_weak();
     startup_phase("window created");
     load_about_dialog_information(&ui);

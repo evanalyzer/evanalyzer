@@ -71,6 +71,8 @@ struct Snapshot {
     /// Images done, and the latest of them.
     done: usize,
     last_image: Option<PathBuf>,
+    /// The images started and not yet done, in the order they started.
+    in_work: Vec<PathBuf>,
     failed: Vec<PathBuf>,
     /// Tile progress of the image in work: (completed, total).
     tiles: Option<(usize, usize)>,
@@ -91,14 +93,17 @@ impl Snapshot {
                 completed,
                 total_tiles,
             } => self.tiles = Some((*completed, *total_tiles)),
+            ProgressEvent::ImageStarted { path } => self.in_work.push(path.clone()),
             ProgressEvent::ImageCompleted { index, total, path } => {
                 self.done = *index;
                 self.total = Some(*total);
                 self.last_image = Some(path.clone());
+                self.in_work.retain(|p| p != path);
                 self.tiles = None;
             }
             ProgressEvent::ImageFailed { path } => {
                 self.failed.push(path.clone());
+                self.in_work.retain(|p| p != path);
                 self.tiles = None;
             }
             ProgressEvent::Finished => self.finished = true,
@@ -125,6 +130,11 @@ impl Snapshot {
                 path: path.clone(),
             });
         }
+        events.extend(
+            self.in_work
+                .iter()
+                .map(|path| ProgressEvent::ImageStarted { path: path.clone() }),
+        );
         if let Some((completed, total_tiles)) = self.tiles {
             events.push(ProgressEvent::TilesScheduled { total_tiles });
             if completed > 0 {
@@ -464,6 +474,7 @@ mod tests {
             WireProgressEvent::ImageCompleted { index, total, .. } => {
                 format!("image {index}/{total}")
             }
+            WireProgressEvent::ImageStarted { path } => format!("in work {}", path.display()),
             WireProgressEvent::ImageFailed { path } => format!("failed {}", path.display()),
             WireProgressEvent::Finished => "finished".into(),
             _ => "other".into(),
@@ -536,10 +547,17 @@ mod tests {
         let registry = JobRegistry::default();
         let (entry, control) = start(&registry);
         control.event(ProgressEvent::Started { total: 3 });
+        let started = |path: &str| ProgressEvent::ImageStarted {
+            path: PathBuf::from(path),
+        };
+        control.event(started("/images/broken.tif"));
         control.event(ProgressEvent::ImageFailed {
             path: PathBuf::from("/images/broken.tif"),
         });
+        control.event(started("/images/1.tif"));
         control.event(image_done(1));
+        control.event(started("/images/b.tif"));
+        control.event(started("/images/c.tif"));
         control.event(ProgressEvent::TilesScheduled { total_tiles: 8 });
         control.event(ProgressEvent::TileCompleted {
             tile_index: 5,
@@ -564,6 +582,9 @@ mod tests {
             "started 3",
             "failed /images/broken.tif",
             "image 1/3",
+            // Only the images still in work, not the done or failed ones.
+            "in work /images/b.tif",
+            "in work /images/c.tif",
             "tiles 0/8",
             "tiles 5/8",
         ] {

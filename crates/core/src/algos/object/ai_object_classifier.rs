@@ -44,20 +44,18 @@ pub enum AiClassifyMatchHandling {
     ReclassifyIfMatch,
 }
 
-/// An object classifier trained via the app's AI training dialog (an
-/// `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),
-/// applied here as a pipeline classification step: every object already
-/// present in `PipelineCache::object_cache` matching `origin_segmentation`/
-/// `input_classes` is scored independently (reusing the same feature recipe
-/// used at training time), then remapped through `segmentation_mapping` into
-/// this project's own classes and applied via `match_handling` - the same
-/// input selection `ClassifyObjects` uses, but the output class comes from
-/// the model's prediction instead of a fixed rule.
+/// Classifies objects with a model trained in the AI training dialog (an
+/// `.evamodel` file).
 ///
-/// Predicted classes with no matching `segmentation_mapping` entry leave the
-/// object untouched, mirroring how `PixelClassifier` leaves unmapped
-/// predictions as background - mapping only the classes you care about is a
-/// deliberate simplification, not an oversight.
+/// Every object found so far that matches the input classes is scored on
+/// its own, with the same features as in training. The predicted class is
+/// mapped to one of this project's classes and applied as set under
+/// **Match handling** - the same input selection as **Classify Objects**,
+/// but the class comes from the model's prediction instead of a fixed rule.
+///
+/// A predicted class without a mapping leaves the object untouched (like
+/// unmapped classes of the pixel classifier stay background): map only the
+/// classes you care about.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "object", display_name = "AI Object Classifier")]
 pub struct AiObjectClassifier {

@@ -75,7 +75,7 @@ pub enum ApplyMethod {
 /// unreliable, even though it rarely stops segmentation from finding
 /// objects on its own.
 ///
-/// Use [`super::rolling_ball::RollingBall`] instead when the problem is a
+/// Use **Rolling Ball** instead when the problem is a
 /// *local* background glow or halo under/around individual objects (e.g.
 /// out-of-focus light, autofluorescence, uneven staining) that differs from
 /// image to image rather than being tied to the acquisition setup -

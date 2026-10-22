@@ -878,7 +878,7 @@ impl Default for BlurSettings {
 
 /// A command that filters an image based on a specific HSV color range.
 ///
-/// Pixels falling outside the provided [`HsvRange`] are masked
+/// Pixels falling outside the HSV range are masked
 /// out by setting to black.
 ///
 /// # Examples
@@ -1075,7 +1075,7 @@ impl Default for HsvRangeSettings {
 /// unreliable, even though it rarely stops segmentation from finding
 /// objects on its own.
 ///
-/// Use [`super::rolling_ball::RollingBall`] instead when the problem is a
+/// Use **Rolling Ball** instead when the problem is a
 /// *local* background glow or halo under/around individual objects (e.g.
 /// out-of-focus light, autofluorescence, uneven staining) that differs from
 /// image to image rather than being tied to the acquisition setup -
@@ -1150,7 +1150,7 @@ pub struct ImageCacheSettings {
 pub struct ImageMathSettings {
     /// The specific mathematical or logical operator to apply.
     pub operand: MathImageMathOperandSettings,
-    /// The address of the second image in the [`ImageCache`] to use for the operation.
+    /// The second image to use for the operation.
     pub second_image_address: ImageAddress,
     /// If false, the calculation is `(Current Image OP Cached Image)`.
     /// If true, the calculation is `(Cached Image OP Current Image)`.
@@ -1162,7 +1162,7 @@ pub struct ImageMathSettings {
 /// Configuration for adjusting image contrast and brightness.
 ///
 /// This transformation applies a linear mapping to pixel values.
-/// In [`Mode::Manual`], the output is typically calculated as:
+/// In manual mode, the output is typically calculated as:
 /// `output = input * contrast + brightness`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1171,12 +1171,12 @@ pub struct IntensityTransformationSettings {
     pub mode: FiltersIntensityTransformIntensityTransformModeSettings,
     /// Contrast multiplier (gain).
     ///
-    /// Only active in [`Mode::Manual`].
+    /// Only active in manual mode.
     /// Values > 1.0 increase contrast, while values < 1.0 decrease it.
     pub contrast: f32,
     /// Brightness offset (bias).
     ///
-    /// Only active in [`Mode::Manual`].
+    /// Only active in manual mode.
     /// Positive values brighten the image, negative values darken it.
     pub brightness: f32,
 }
@@ -1653,9 +1653,9 @@ impl Default for StardistSettings {
 
 /// A filter that segments an image into discrete classes based on intensity.
 ///
-/// This supports "Multi-Otsu" style behavior by allowing a vector of
-/// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-/// determine which `segmentation_class` it belongs to.
+/// This supports "Multi-Otsu" style behavior by allowing several
+/// thresholds. Each pixel is evaluated against them to determine which
+/// segmentation class it belongs to.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdSettings {
@@ -1719,7 +1719,7 @@ impl Default for ThresholdEntrySettings {
 /// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
 /// applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
 /// channel, in which case `output_mode` and `foreground_channel` decide how the
-/// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
+/// foreground probability is extracted. Runs on GPU
 /// automatically if CUDA is available in the linked libtorch build, otherwise
 /// falls back to CPU.
 ///
@@ -2002,7 +2002,7 @@ pub struct WatershedSettings {
     /// finds seeds as local maxima of the (optionally smoothed) grayscale
     /// image, restricted to each object's own footprint - a faithful port
     /// of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
-    /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
+    /// method,
     /// the fix for diffusely-connected regions whose *shape* has no separate
     /// peaks but whose *brightness* clearly does.
     #[serde(default = "_serde_default_watershed_seed_source")]
@@ -2079,20 +2079,18 @@ pub struct FillObjectHolesSettings {}
 
 // ============ OBJECT ============
 
-/// An object classifier trained via the app's AI training dialog (an
-/// `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),
-/// applied here as a pipeline classification step: every object already
-/// present in `PipelineCache::object_cache` matching `origin_segmentation`/
-/// `input_classes` is scored independently (reusing the same feature recipe
-/// used at training time), then remapped through `segmentation_mapping` into
-/// this project's own classes and applied via `match_handling` - the same
-/// input selection `ClassifyObjects` uses, but the output class comes from
-/// the model's prediction instead of a fixed rule.
+/// Classifies objects with a model trained in the AI training dialog (an
+/// `.evamodel` file).
 ///
-/// Predicted classes with no matching `segmentation_mapping` entry leave the
-/// object untouched, mirroring how `PixelClassifier` leaves unmapped
-/// predictions as background - mapping only the classes you care about is a
-/// deliberate simplification, not an oversight.
+/// Every object found so far that matches the input classes is scored on
+/// its own, with the same features as in training. The predicted class is
+/// mapped to one of this project's classes and applied as set under
+/// **Match handling** - the same input selection as **Classify Objects**,
+/// but the class comes from the model's prediction instead of a fixed rule.
+///
+/// A predicted class without a mapping leaves the object untouched (like
+/// unmapped classes of the pixel classifier stay background): map only the
+/// classes you care about.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]

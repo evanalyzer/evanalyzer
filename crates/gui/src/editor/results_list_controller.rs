@@ -81,29 +81,46 @@ impl ResultsListController {
         }
     }
 
+    /// Another project: its results list, nothing of the last one's open
+    /// or selected results.
+    pub fn project_switched(&self) {
+        *self.last_analysis_results.lock().expect("Poisoned") = None;
+        self.results_state_controller.close_database();
+        let ui_handle = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.global::<ResultsListState>()
+                    .set_selected_result_index(-1);
+            }
+        });
+        self.sync_results_files_to_slint();
+    }
+
     /// Recursively scans `<project_dir>/results/` for `*.RESULTS_FILE_EXTENSION`
     /// files and pushes them to the Slint results list, sorted by modification
     /// time (newest first).
     pub fn sync_results_files_to_slint(&self) {
         let project = self.app_state.get_project();
 
-        let Some(current_project) = &project.tmp_settings.current_project else {
-            warn!("No project open cannot scan results folder");
-            return;
-        };
-        let Some(project_dir) = current_project.parent() else {
-            return;
-        };
-        let results_dir = project_dir.join("results");
+        // A project not saved yet has no results folder: an empty list (not
+        // the last project's).
+        let results_dir = project
+            .tmp_settings
+            .current_project
+            .as_ref()
+            .and_then(|current_project| current_project.parent())
+            .map(|project_dir| project_dir.join("results"));
 
         // Drop the read lock before doing file I/O
         drop(project);
 
         let mut items: Vec<(i64, ResultItemData)> = Vec::new();
-        let backend = self.app_state.backend();
-        let files = backend.files();
-        if matches!(files.stat(&results_dir), Ok(Some(entry)) if entry.is_dir) {
-            collect_results_files(files, &results_dir, &mut items);
+        if let Some(results_dir) = results_dir {
+            let backend = self.app_state.backend();
+            let files = backend.files();
+            if matches!(files.stat(&results_dir), Ok(Some(entry)) if entry.is_dir) {
+                collect_results_files(files, &results_dir, &mut items);
+            }
         }
 
         // Newest first

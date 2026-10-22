@@ -371,3 +371,46 @@ mod editor_new_tests {
         let _editor = Editor::new(slint::Weak::default(), ui_state);
     }
 }
+
+#[cfg(test)]
+mod tooltip_tests {
+    use crate::editor::test_support::test_ui_window;
+    use crate::{AppWindow, InkTip, InkTipSide};
+    use slint::platform::WindowEvent;
+    use slint::{ComponentHandle, LogicalPosition, ModelRc};
+
+    fn move_to(ui: &AppWindow, x: f32, y: f32) {
+        ui.window().dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(x, y),
+        });
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// A control that goes away while hovered never releases its tip: the
+    /// tip goes as soon as the pointer is outside the control.
+    #[test]
+    fn a_tip_goes_once_the_pointer_leaves_its_control() {
+        let ui = test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        move_to(&ui, 110.0, 110.0);
+        let tip = ui.global::<InkTip>();
+        // The control at 100,100 (40 × 20) asks for a tip - and never lets go.
+        tip.invoke_request(
+            "Tip".into(),
+            ModelRc::default(),
+            "".into(),
+            100.0,
+            100.0,
+            40.0,
+            20.0,
+            InkTipSide::Below,
+        );
+        assert!(tip.get_pending());
+
+        move_to(&ui, 130.0, 115.0);
+        assert!(tip.get_pending(), "still over the control");
+
+        move_to(&ui, 600.0, 400.0);
+        assert!(!tip.get_pending(), "the pointer left the control");
+    }
+}
