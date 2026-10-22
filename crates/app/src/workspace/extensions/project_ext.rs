@@ -542,15 +542,19 @@ impl ProjectExt for ProjectWithRuntime {
         histograms
     }
 
-    /// Returns histogram settings for the selected image channel
+    /// The scaling the selected channel is drawn with: the image's own, else
+    /// the project's (see `get_image_channel_histograms`).
     fn get_histograms_from_selected_channel(&self) -> Option<&HistogramSettings> {
-        if let Some((_, series)) = self.get_current_image_channel_settings() {
-            let channel = series
+        let (_, series) = self.get_current_image_channel_settings()?;
+        let idx = self.get_selected_image_channel_idx();
+        let channel = series.channels.get(&idx)?;
+        channel.histogram.as_ref().or_else(|| {
+            self.images
+                .settings
                 .channels
-                .get(&self.get_selected_image_channel_idx())?;
-            return channel.histogram.as_ref();
-        }
-        None
+                .get(&idx)
+                .and_then(|c| c.histogram.as_ref())
+        })
     }
 
     /// Returns the index of the currently selected series.
@@ -3060,6 +3064,24 @@ mod tests {
             0.2
         );
         assert!(project.get_image_channel_histograms()[&0].is_none());
+    }
+
+    /// The histogram shows the scaling the image is drawn with: after "Use
+    /// for all images" the project's (no image has its own any more).
+    #[test]
+    fn the_histogram_shows_the_projects_scaling_after_use_for_all_images() {
+        let mut project = project_with_one_image();
+        project.set_image_histogram_settings_for_channel(0, 0.1, 0.9, 0.0, 1.0);
+        project.apply_histograms_to_all_images();
+
+        let shown = project
+            .get_histograms_from_selected_channel()
+            .expect("the project's scaling");
+        assert_eq!((shown.min, shown.max), (0.1, 0.9));
+        // The image's own still wins.
+        project.set_image_histogram_settings_for_channel(0, 0.3, 0.6, 0.0, 1.0);
+        let shown = project.get_histograms_from_selected_channel().unwrap();
+        assert_eq!((shown.min, shown.max), (0.3, 0.6));
     }
 
     #[test]
