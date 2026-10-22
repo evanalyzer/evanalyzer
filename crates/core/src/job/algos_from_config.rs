@@ -134,6 +134,15 @@ impl From<FiltersIlluminationCorrectionCorrectionMethodSettings> for CorrectionM
     }
 }
 
+impl From<MeasureExcludeImageExcludeWhenSettings> for ExcludeWhen {
+    fn from(_s: MeasureExcludeImageExcludeWhenSettings) -> Self {
+        match _s {
+            MeasureExcludeImageExcludeWhenSettings::AnyRule => ExcludeWhen::AnyRule,
+            MeasureExcludeImageExcludeWhenSettings::AllRules => ExcludeWhen::AllRules,
+        }
+    }
+}
+
 impl From<FiltersHessianHessianModeSettings> for HessianMode {
     fn from(_s: FiltersHessianHessianModeSettings) -> Self {
         match _s {
@@ -280,6 +289,15 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
             FiltersRankFilterRankFilterTypeSettings::Max => RankFilterType::Max,
             FiltersRankFilterRankFilterTypeSettings::Mean => RankFilterType::Mean,
             FiltersRankFilterRankFilterTypeSettings::Outliers(v) => RankFilterType::Outliers(v),
+        }
+    }
+}
+
+impl From<MeasureExcludeImageRuleComparisonSettings> for RuleComparison {
+    fn from(_s: MeasureExcludeImageRuleComparisonSettings) -> Self {
+        match _s {
+            MeasureExcludeImageRuleComparisonSettings::Below => RuleComparison::Below,
+            MeasureExcludeImageRuleComparisonSettings::Above => RuleComparison::Above,
         }
     }
 }
@@ -603,6 +621,25 @@ impl From<EnhanceContrastSettings> for EnhanceContrast {
     }
 }
 
+impl From<ExcludeImageSettings> for ExcludeImage {
+    fn from(_s: ExcludeImageSettings) -> Self {
+        ExcludeImage {
+            exclude_when: ExcludeWhen::from(_s.exclude_when),
+            rules: _s.rules.into_iter().map(|v| v.into()).collect(),
+        }
+    }
+}
+
+impl From<ExcludeRuleSettings> for ExcludeRule {
+    fn from(_s: ExcludeRuleSettings) -> Self {
+        ExcludeRule {
+            measurement: _s.measurement,
+            comparison: RuleComparison::from(_s.comparison),
+            value: _s.value,
+        }
+    }
+}
+
 impl From<ExtractClassMappingSettings> for ExtractClassMapping {
     fn from(_s: ExtractClassMappingSettings) -> Self {
         ExtractClassMapping {
@@ -699,6 +736,15 @@ impl From<ImageMathSettings> for ImageMath {
             operand: Operand::from(_s.operand),
             second_image_address: _s.second_image_address,
             swap_operands: _s.swap_operands,
+        }
+    }
+}
+
+impl From<ImageQualitySettings> for ImageQuality {
+    fn from(_s: ImageQualitySettings) -> Self {
+        ImageQuality {
+            name: _s.name,
+            channel: _s.channel,
         }
     }
 }
@@ -1063,6 +1109,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::EnhanceContrast(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::EnhanceContrast::from(settings),
         ))),
+        PipelineCommand::ExcludeImage(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ExcludeImage::from(settings),
+        ))),
         PipelineCommand::ExtractObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ExtractObjects::from(settings),
         ))),
@@ -1089,6 +1138,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::ImageMath(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ImageMath::from(settings),
+        ))),
+        PipelineCommand::ImageQuality(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ImageQuality::from(settings),
         ))),
         PipelineCommand::IntensityTransformation(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::IntensityTransformation::from(settings),

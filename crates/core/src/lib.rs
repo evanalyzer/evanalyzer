@@ -56,6 +56,21 @@ pub use crate::algos::{
     declared_script_params, script_syntax_error,
 };
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
+
+/// What `command` measures (its `ImageAlgorithm::measurement_outputs`) -
+/// none for a step that doesn't measure. The settings become the step for
+/// it: a plain copy, nothing is loaded.
+pub fn measurement_outputs(
+    command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
+) -> Vec<evanalyzer_cfg::core_types::MeasurementInfo> {
+    use evanalyzer_cfg::settings::pipeline_command::CommandCategory;
+    if *command.category() != CommandCategory::Measure {
+        return Vec::new();
+    }
+    into_algorithm(command.clone())
+        .map(|step| step.measurement_outputs())
+        .unwrap_or_default()
+}
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;
 pub use crate::job::job_executor::ProgressEvent;

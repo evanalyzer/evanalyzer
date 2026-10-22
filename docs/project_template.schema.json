@@ -601,6 +601,51 @@
         "equalizeHistogram"
       ]
     },
+    "ExcludeImageSettings": {
+      "description": "Leaves an image out of the results when its measurements say it's bad.\n\nEach rule compares a measurement of an earlier step (e.g. Image\nQuality's focus score) with a value. When the rules are met, the image\nis analysed to the end but disabled in the results, with the reason - to\ncheck it by hand and enable it again if it's fine. The rules are checked\non every plane; one plane meeting them excludes the whole image. A\nmeasurement without a value (e.g. the slope of a flat image) doesn't\nmeet a rule.",
+      "type": "object",
+      "properties": {
+        "excludeWhen": {
+          "description": "Excluded when one rule is met, or only when all of them are.",
+          "$ref": "#/$defs/MeasureExcludeImageExcludeWhenSettings"
+        },
+        "rules": {
+          "description": "The rules: a measurement below or above a value.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExcludeRuleSettings"
+          }
+        }
+      },
+      "required": [
+        "excludeWhen",
+        "rules"
+      ]
+    },
+    "ExcludeRuleSettings": {
+      "description": "One rule: a measurement compared with a value.",
+      "type": "object",
+      "properties": {
+        "comparison": {
+          "description": "Met when the measurement is below or above the value.",
+          "$ref": "#/$defs/MeasureExcludeImageRuleComparisonSettings"
+        },
+        "measurement": {
+          "description": "The measurement, made by an earlier step.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value, in the measurement's unit.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "measurement",
+        "comparison",
+        "value"
+      ]
+    },
     "ExtractClassMappingSettings": {
       "description": "The object class the objects of one segmentation class get.",
       "type": "object",
@@ -1111,6 +1156,24 @@
         "swapOperands"
       ]
     },
+    "ImageQualitySettings": {
+      "description": "Measures how usable a channel of the image is: sharp, not noisy, not\noverexposed.\n\nFocus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel to measure.",
+          "$ref": "#/$defs/ImageChannelIdx"
+        },
+        "name": {
+          "description": "The measurement's name - its values in the results start with it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "channel"
+      ]
+    },
     "IntensityFilterSettings": {
       "description": "One intensity criterion of [`ClassifyObjects`], e.g. \"average intensity\nin channel 1 brighter than 1200\".",
       "type": "object",
@@ -1335,6 +1398,36 @@
         "IMAGE",
         "INSTANCE_MAP",
         "SEGMENTATION_MASK"
+      ]
+    },
+    "MeasureExcludeImageExcludeWhenSettings": {
+      "description": "How the rules combine.",
+      "oneOf": [
+        {
+          "description": "One rule met is enough.",
+          "type": "string",
+          "const": "ANY_RULE"
+        },
+        {
+          "description": "Every rule must be met.",
+          "type": "string",
+          "const": "ALL_RULES"
+        }
+      ]
+    },
+    "MeasureExcludeImageRuleComparisonSettings": {
+      "description": "Which side of the value meets a rule.",
+      "oneOf": [
+        {
+          "description": "Met below the value (e.g. a focus score too low).",
+          "type": "string",
+          "const": "BELOW"
+        },
+        {
+          "description": "Met above the value (e.g. too many saturated pixels).",
+          "type": "string",
+          "const": "ABOVE"
+        }
       ]
     },
     "MedianSubtractSettings": {
@@ -2297,6 +2390,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "EXCLUDE_IMAGE"
+            }
+          },
+          "$ref": "#/$defs/ExcludeImageSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "EXTRACT_OBJECTS"
             }
           },
@@ -2405,6 +2511,19 @@
             }
           },
           "$ref": "#/$defs/ImageMathSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "IMAGE_QUALITY"
+            }
+          },
+          "$ref": "#/$defs/ImageQualitySettings",
           "required": [
             "type"
           ]

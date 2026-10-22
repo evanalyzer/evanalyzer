@@ -12,6 +12,7 @@ pub mod export;
 pub mod extensions;
 pub mod frontend;
 pub mod images;
+pub mod measurement_choices;
 pub mod module_checks;
 pub mod module_editing;
 pub mod module_insights;

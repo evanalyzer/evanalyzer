@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// `measurements` table and how it reads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MeasurementColumn {
-    /// The measurement's key ("pearson_01/pearson/ch0_ch1").
+    /// The measurement's key ("pearson_01/pearson").
     pub key: String,
     /// The measurement step's name ("pearson_01").
     pub step: String,

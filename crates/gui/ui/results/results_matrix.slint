@@ -2,7 +2,7 @@
 // (single image + detected-object markers), all three drill levels driven
 // by ResultsState.matrix-level so the breadcrumb + this one view swap in
 // place rather than opening new windows.
-import { InkButton, InkButtonKind, InkCaption, InkHint, InkIcons, InkListRow } from "../ink/ink.slint";
+import { InkBanner, InkButton, InkButtonKind, InkCaption, InkHint, InkIcons, InkListRow, InkTone } from "../ink/ink.slint";
 import { ListView } from "std-widgets.slint";
 import { LineEdit } from "../ink/std_compat.slint";
 import { MatrixCell, MatrixLevel, ObjectMarker, ResultsState } from "../api/results.slint";
@@ -448,6 +448,11 @@ component SelectedCellCard inherits Rectangle {
             }
         }
         // Only at the well level a cell is one image.
+        // Left out by the run: why - to check it by hand.
+        if ResultsState.matrix-level == MatrixLevel.well && ResultsState.active-well-disabled && ResultsState.active-well-disabled-reason != "": InkBanner {
+            tone: InkTone.warn;
+            text: "Excluded by the pipeline: " + ResultsState.active-well-disabled-reason;
+        }
         if ResultsState.matrix-level == MatrixLevel.well: InkButton {
             small: true;
             text: ResultsState.active-well-disabled ? "Use this image in the results" : "Leave this image out of the results";

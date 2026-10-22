@@ -568,6 +568,11 @@
         },
         {
           "disabled": "BOOL"
+        },
+        {
+          "disabled_reason": {
+            "OPTION": "STR"
+          }
         }
       ]
     },

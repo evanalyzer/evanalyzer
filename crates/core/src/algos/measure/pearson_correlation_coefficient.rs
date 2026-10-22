@@ -9,7 +9,9 @@
 
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
-use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, MeasurementValues};
+use crate::pipeline::pipeline_measure::{
+    Measurement, MeasurementRegion, MeasurementValues, Outputs,
+};
 use crate::{ImageTile, image::ImageContainer};
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, MeasurementTarget,
@@ -76,17 +78,11 @@ impl ImageAlgorithm for PearsonCorrelationCoefficient {
         }
 
         let r = sums.and_then(|s| s.pearson());
-        let info = MeasurementInfo {
-            key: format!("{}/pearson/ch{a}_ch{b}", self.name),
-            name: format!("Pearson (channel {a} × channel {b})"),
-            step: self.name.clone(),
-            unit: MeasurementUnit::None,
-            target: MeasurementTarget::Image,
-            range: Some((-1.0, 1.0)),
-            aggregatable: true,
-        };
         // No value if a channel doesn't vary (e.g. an empty image).
-        cache.add_image_measurement(info, r.map(|r| (MeasurementRegion::Image, r)));
+        cache.add_image_measurement(
+            self.measurement_output("pearson"),
+            r.map(|r| (MeasurementRegion::Image, r)),
+        );
         Ok(())
     }
 
@@ -105,6 +101,16 @@ impl ImageAlgorithm for PearsonCorrelationCoefficient {
 
     fn measures(&self) -> bool {
         true
+    }
+
+    fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
+        let about = format!("channel {} × channel {}", self.channel_a, self.channel_b);
+        vec![
+            Outputs::of(&self.name)
+                .about(about)
+                .image("pearson", "Pearson", MeasurementUnit::None)
+                .range(-1.0, 1.0),
+        ]
     }
 }
 
@@ -299,7 +305,7 @@ mod tests {
         let [measurement] = &cache.measurements.measurements[..] else {
             panic!("one measurement");
         };
-        assert_eq!(measurement.info.key, "nuclei_coloc/pearson/ch0_ch1");
+        assert_eq!(measurement.info.key, "nuclei_coloc/pearson");
         assert_eq!(measurement.info.step, "nuclei_coloc");
         let expected = pearson(
             &[0.1, 0.4, 0.2, 0.9, 0.5, 0.7],

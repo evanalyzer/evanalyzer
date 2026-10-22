@@ -6,7 +6,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { LayoutState } from "../api/layout.slint";
 import { MeasurementsState } from "../api/measurements.slint";
-import { Ink, InkPanelHead, InkHint, InkTipZone } from "../ink/ink.slint";
+import { Ink, InkPanelHead, InkHint, InkTipZone, InkBanner, InkTone } from "../ink/ink.slint";
 
 export component MeasurementsPanel inherits Rectangle {
     preferred-height: layout.preferred-height;
@@ -27,6 +27,15 @@ export component MeasurementsPanel inherits Rectangle {
             close => {
                 LayoutState.measurements-open = false;
                 LayoutState.panels-changed();
+            }
+        }
+
+        // Exclude Image: this image would be left out of the results.
+        if !LayoutState.measurements-folded && MeasurementsState.excluded != "": VerticalLayout {
+            padding: 6px;
+            InkBanner {
+                tone: InkTone.warn;
+                text: "Excluded from the results: " + MeasurementsState.excluded;
             }
         }
 

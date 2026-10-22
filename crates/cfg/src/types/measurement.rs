@@ -11,8 +11,10 @@ use std::collections::HashSet;
 pub enum MeasurementUnit {
     /// Without a unit (Pearson, ratios).
     None,
-    /// 0..1 (Manders, saturation).
+    /// 0..1 (Manders, the part of the image occupied).
     Fraction,
+    /// 0..100 (the pixels at the image's maximum, as CellProfiler gives it).
+    Percent,
     /// Gray values.
     Intensity,
     Pixels,
@@ -34,7 +36,7 @@ pub enum MeasurementTarget {
 /// step "pearson_01".
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementInfo {
-    /// Stable and unique, e.g. "pearson_01/pearson/ch0_ch1".
+    /// Stable and unique, e.g. "pearson_01/pearson" (the step's name, then the value's id).
     pub key: String,
     /// Shown in the results, e.g. "Pearson (channel 0 × channel 1)".
     pub name: String,
@@ -49,6 +51,14 @@ pub struct MeasurementInfo {
     pub aggregatable: bool,
 }
 
+impl MeasurementInfo {
+    /// With its values' fixed range (e.g. Pearson -1..1).
+    pub fn range(mut self, min: f64, max: f64) -> Self {
+        self.range = Some((min, max));
+        self
+    }
+}
+
 /// The measurements of one image plane - a run's per plane, also what a
 /// preview brings back (like its objects).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -58,6 +68,10 @@ pub struct PipelineMeasurements {
     /// steps run.
     pub z_stack: i32,
     pub t_stack: i32,
+    /// Why "Exclude Image" excluded the image on this plane (`None`: not
+    /// excluded) - the run disables the image in the results with it.
+    #[serde(default)]
+    pub excluded: Option<String>,
 }
 
 /// One measurement (e.g. "Pearson (channel 0 × channel 1)" of step
@@ -95,6 +109,17 @@ pub fn next_measurement_name(prefix: &str, taken: &HashSet<String>) -> String {
         .map(|n| format!("{prefix}_{n:02}"))
         .find(|name| !taken.contains(&name.to_lowercase()))
         .expect("a free number")
+}
+
+/// How a measurement is offered to pick: "step · name", e.g.
+/// "quality_01 · Focus score (channel 0)" - unique, as step names are and a
+/// step's names are (two areas differing by unit get it added).
+pub fn measurement_label(info: &MeasurementInfo) -> String {
+    match info.unit {
+        MeasurementUnit::SquarePixels => format!("{} · {} (px²)", info.step, info.name),
+        MeasurementUnit::SquareMicrometers => format!("{} · {} (µm²)", info.step, info.name),
+        _ => format!("{} · {}", info.step, info.name),
+    }
 }
 
 #[cfg(test)]

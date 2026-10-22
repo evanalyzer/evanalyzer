@@ -24,6 +24,9 @@ pub mod ai {
 /// A step's settings as the editor shows and changes them - the generated
 /// ones, and a Script step's `param`s (declared in its script).
 pub mod settings_of {
+    pub use crate::workspace::measurement_choices::{
+        MeasurementChoice, measurement_choices, measurement_setting_text, show_measurement_choices,
+    };
     pub use evanalyzer_core::{
         apply_command_param, command_parameters, declared_script_params, script_syntax_error,
     };

@@ -176,7 +176,7 @@ mod tests {
         let [measurement] = &plane.measurements[..] else {
             panic!("one measurement");
         };
-        assert_eq!(measurement.info.key, "pearson_01/pearson/ch0_ch1");
+        assert_eq!(measurement.info.key, "pearson_01/pearson");
         let MeasurementValues::Image(values) = &measurement.values else {
             panic!("an image measurement");
         };

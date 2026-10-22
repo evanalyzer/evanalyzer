@@ -136,6 +136,12 @@ pub enum PipelineCommand {
     )]
     EnhanceContrast(EnhanceContrastSettings),
     #[serde(
+        alias = "exclude-image",
+        alias = "excludeImage",
+        alias = "exclude_image"
+    )]
+    ExcludeImage(ExcludeImageSettings),
+    #[serde(
         alias = "extract-objects",
         alias = "extractObjects",
         alias = "extract_objects"
@@ -173,6 +179,12 @@ pub enum PipelineCommand {
     ImageIntensity(ImageIntensitySettings),
     #[serde(alias = "image-math", alias = "imageMath", alias = "image_math")]
     ImageMath(ImageMathSettings),
+    #[serde(
+        alias = "image-quality",
+        alias = "imageQuality",
+        alias = "image_quality"
+    )]
+    ImageQuality(ImageQualitySettings),
     #[serde(
         alias = "intensity-transformation",
         alias = "intensityTransformation",
@@ -361,230 +373,244 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 12,
+            name: "Exclude Image",
+            category: CommandCategory::Measure,
+            summary: "Leaves an image out of the results when its measurements say it's bad.",
+            description: "Each rule compares a measurement of an earlier step (e.g. Image\nQuality's focus score) with a value. When the rules are met, the image\nis analysed to the end but disabled in the results, with the reason - to\ncheck it by hand and enable it again if it's fine. The rules are checked\non every plane; one plane meeting them excludes the whole image. A\nmeasurement without a value (e.g. the slope of a flat image) doesn't\nmeet a rule.",
+        },
+        CommandMeta {
+            id: 13,
             name: "ExtractObjects",
             category: CommandCategory::Extract,
             summary: "Represents a bounded object extracted from a labeled image.",
             description: "A command to extract spatial statistics and bounding boxes from labeled objects.",
         },
         CommandMeta {
-            id: 13,
+            id: 14,
             name: "FillHoles",
             category: CommandCategory::InstanceSegmentation,
             summary: "Fills enclosed background holes in the segmentation map.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nA direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nWhich pixels count as a \"hole\" is decided the same way ImageJ does it:\nevery non-background pixel is \"foreground\" regardless of its actual\nlabel/class value, so a background pocket enclosed by *any* mix of labels\nis still a hole. Unlike ImageJ, each hole is then attributed back to the\nclass that actually encloses it - every enclosed background region is\ngrouped into a connected component, and that component is filled with\nwhichever label is most common among its immediately bordering pixels\n(falling back to `FILL_VALUE` only in the degenerate case of a hole with\nno foreground neighbor at all). This keeps multi-class segmentation maps\ncorrect: a hole inside a class-2 object is filled with 2, not merged with\na fixed value that happens to collide with an unrelated class elsewhere\nin the image.",
         },
         CommandMeta {
-            id: 14,
+            id: 15,
             name: "FillObjectHoles",
             category: CommandCategory::Extract,
             summary: "Fills the holes inside every object, one object at a time.",
             description: "[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
         },
         CommandMeta {
-            id: 15,
+            id: 16,
             name: "GaussianBlur",
             category: CommandCategory::Preprocess,
             summary: "Smooths an image and reduces background noise using a Gaussian kernel.",
             description: "This algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.",
         },
         CommandMeta {
-            id: 16,
+            id: 17,
             name: "Hessian",
             category: CommandCategory::Preprocess,
             summary: "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.",
             description: "This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.",
         },
         CommandMeta {
-            id: 17,
+            id: 18,
             name: "IlluminationCorrection",
             category: CommandCategory::Preprocess,
             summary: "Use this when your images are brighter in the middle and dimmer toward the edges/corners (vignetting), or show any other smooth shading pattern that repeats the same way across every tile or every image from the same microscope/camera setup - a consequence of the optics or illumination, not the sample.",
             description: "Left uncorrected, that shading makes intensity comparisons between regions of an image (or between images/wells) unreliable, even though it rarely stops segmentation from finding objects on its own.\n\nUse **Rolling Ball** instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n**How it works**\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
         },
         CommandMeta {
-            id: 18,
+            id: 19,
             name: "ImageCache",
             category: CommandCategory::Preprocess,
             summary: "A filter that acts as a synchronization point between the pipeline and a storage backend.",
             description: "`ImageCache` allows the pipeline to branch or \"undo\" operations by saving\nstates to a named address and reloading them as needed.",
         },
         CommandMeta {
-            id: 19,
+            id: 20,
             name: "Image Intensity",
             category: CommandCategory::Measure,
             summary: "Measures the brightness of a channel across the whole image.",
             description: "Total, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
         },
         CommandMeta {
-            id: 20,
+            id: 21,
             name: "ImageMath",
             category: CommandCategory::Preprocess,
             summary: "A filter that performs pixel-wise mathematical operations between the current pipeline image and a secondary image stored in the cache.",
             description: "This command allows for complex image blending, masking, and comparison.",
         },
         CommandMeta {
-            id: 21,
+            id: 22,
+            name: "Image Quality",
+            category: CommandCategory::Measure,
+            summary: "Measures how usable a channel of the image is: sharp, not noisy, not overexposed.",
+            description: "Focus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
+        },
+        CommandMeta {
+            id: 23,
             name: "IntensityTransformation",
             category: CommandCategory::Preprocess,
             summary: "Configuration for adjusting image contrast and brightness.",
             description: "This transformation applies a linear mapping to pixel values.\nIn manual mode, the output is typically calculated as:\n`output = input * contrast + brightness`.",
         },
         CommandMeta {
-            id: 22,
+            id: 24,
             name: "Laplacian",
             category: CommandCategory::Preprocess,
             summary: "Configuration for the Laplacian edge detection filter.",
             description: "The Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.",
         },
         CommandMeta {
-            id: 23,
+            id: 25,
             name: "LoadAnnotatedObjects",
             category: CommandCategory::Object,
             summary: "Loads the hand-annotated objects of the image into the pipeline.",
             description: "Every loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
         },
         CommandMeta {
-            id: 24,
+            id: 26,
             name: "LoadChannel",
             category: CommandCategory::Preprocess,
             summary: "Loads an image channel as the image the following steps work on.",
             description: "Replaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na module that detects nuclei in one channel and cells in another.\n\nProjection: Auto loads the channel as the project's z-stack setting does.\nAny other choice loads it with its own z-projection, or one z-plane (None).\nUse it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.\nObjects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.",
         },
         CommandMeta {
-            id: 25,
+            id: 27,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
         },
         CommandMeta {
-            id: 26,
+            id: 28,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.",
         },
         CommandMeta {
-            id: 27,
+            id: 29,
             name: "ObjectMath",
             category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by object pair.",
             description: "When more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 28,
+            id: 30,
             name: "Pearson Correlation",
             category: CommandCategory::Measure,
             summary: "Measures how two channels go together across the whole image.",
             description: "The Pearson correlation coefficient, from -1 (one bright where the other\nis dark) over 0 (unrelated) to 1 (bright together). It uses every pixel\nof the image, the background too - a large dark background raises it.",
         },
         CommandMeta {
-            id: 29,
+            id: 31,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "Segments the image with a pixel classifier trained in the AI training dialog.",
             description: "[Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nTrain a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.\nThe classifier assigns every pixel of the image to a class, producing a segmented image.\nThe segmentation mapping translates the model's classes into this project's segmentation classes.\n\nUse a pixel classifier in place of a threshold step.\nLike a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.",
         },
         CommandMeta {
-            id: 30,
+            id: 32,
             name: "Propagation",
             category: CommandCategory::Object,
             summary: "Grows a region around each seed object through a channel.",
             description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels and is linked to it (its parent).",
         },
         CommandMeta {
-            id: 31,
+            id: 33,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 32,
+            id: 34,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 33,
+            id: 35,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 34,
+            id: 36,
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 35,
+            id: 37,
             name: "SimpleTracker",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 36,
+            id: 38,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 37,
+            id: 39,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 38,
+            id: 40,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 39,
+            id: 41,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 40,
+            id: 42,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 41,
+            id: 43,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 42,
+            id: 44,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 43,
+            id: 45,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 44,
+            id: 46,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -628,69 +654,75 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         11 => Some(PipelineCommand::EnhanceContrast(
             EnhanceContrastSettings::default(),
         )),
-        12 => Some(PipelineCommand::ExtractObjects(
+        12 => Some(PipelineCommand::ExcludeImage(
+            ExcludeImageSettings::default(),
+        )),
+        13 => Some(PipelineCommand::ExtractObjects(
             ExtractObjectsSettings::default(),
         )),
-        13 => Some(PipelineCommand::FillHoles(FillHolesSettings::default())),
-        14 => Some(PipelineCommand::FillObjectHoles(
+        14 => Some(PipelineCommand::FillHoles(FillHolesSettings::default())),
+        15 => Some(PipelineCommand::FillObjectHoles(
             FillObjectHolesSettings::default(),
         )),
-        15 => Some(PipelineCommand::GaussianBlur(
+        16 => Some(PipelineCommand::GaussianBlur(
             GaussianBlurSettings::default(),
         )),
-        16 => Some(PipelineCommand::Hessian(HessianSettings::default())),
-        17 => Some(PipelineCommand::IlluminationCorrection(
+        17 => Some(PipelineCommand::Hessian(HessianSettings::default())),
+        18 => Some(PipelineCommand::IlluminationCorrection(
             IlluminationCorrectionSettings::default(),
         )),
-        18 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
-        19 => Some(PipelineCommand::ImageIntensity(
+        19 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
+        20 => Some(PipelineCommand::ImageIntensity(
             ImageIntensitySettings::default(),
         )),
-        20 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
-        21 => Some(PipelineCommand::IntensityTransformation(
+        21 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
+        22 => Some(PipelineCommand::ImageQuality(
+            ImageQualitySettings::default(),
+        )),
+        23 => Some(PipelineCommand::IntensityTransformation(
             IntensityTransformationSettings::default(),
         )),
-        22 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        23 => Some(PipelineCommand::LoadAnnotatedObjects(
+        24 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
+        25 => Some(PipelineCommand::LoadAnnotatedObjects(
             LoadAnnotatedObjectsSettings::default(),
         )),
-        24 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
-        25 => Some(PipelineCommand::MedianSubtract(
+        26 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
+        27 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        26 => Some(PipelineCommand::MorphologicalCommand(
+        28 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        27 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        28 => Some(PipelineCommand::PearsonCorrelationCoefficient(
+        29 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        30 => Some(PipelineCommand::PearsonCorrelationCoefficient(
             PearsonCorrelationCoefficientSettings::default(),
         )),
-        29 => Some(PipelineCommand::PixelClassifier(
+        31 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        30 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
-        31 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        32 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        33 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        34 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        35 => Some(PipelineCommand::SimpleTracker(
+        32 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
+        33 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        34 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        35 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        36 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        37 => Some(PipelineCommand::SimpleTracker(
             SimpleTrackerSettings::default(),
         )),
-        36 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        37 => Some(PipelineCommand::StructureTensor(
+        38 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        39 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        38 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        39 => Some(PipelineCommand::TransformObjects(
+        40 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        41 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        40 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        41 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        42 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        43 => Some(PipelineCommand::WeightedDeviation(
+        42 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        43 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        44 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        45 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        44 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        46 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -712,6 +744,7 @@ impl PipelineCommand {
         "edge_detection_canny",
         "edge_detection_sobel",
         "enhance_contrast",
+        "exclude_image",
         "extract_objects",
         "fill_holes",
         "fill_object_holes",
@@ -721,6 +754,7 @@ impl PipelineCommand {
         "image_cache",
         "image_intensity",
         "image_math",
+        "image_quality",
         "intensity_transformation",
         "laplacian",
         "load_annotated_objects",
@@ -762,6 +796,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => "edge_detection_canny",
             Self::EdgeDetectionSobel(_) => "edge_detection_sobel",
             Self::EnhanceContrast(_) => "enhance_contrast",
+            Self::ExcludeImage(_) => "exclude_image",
             Self::ExtractObjects(_) => "extract_objects",
             Self::FillHoles(_) => "fill_holes",
             Self::FillObjectHoles(_) => "fill_object_holes",
@@ -771,6 +806,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => "image_cache",
             Self::ImageIntensity(_) => "image_intensity",
             Self::ImageMath(_) => "image_math",
+            Self::ImageQuality(_) => "image_quality",
             Self::IntensityTransformation(_) => "intensity_transformation",
             Self::Laplacian(_) => "laplacian",
             Self::LoadAnnotatedObjects(_) => "load_annotated_objects",
@@ -825,6 +861,7 @@ impl PipelineCommand {
                 EdgeDetectionSobelSettings::default(),
             )),
             "enhance_contrast" => Some(Self::EnhanceContrast(EnhanceContrastSettings::default())),
+            "exclude_image" => Some(Self::ExcludeImage(ExcludeImageSettings::default())),
             "extract_objects" => Some(Self::ExtractObjects(ExtractObjectsSettings::default())),
             "fill_holes" => Some(Self::FillHoles(FillHolesSettings::default())),
             "fill_object_holes" => Some(Self::FillObjectHoles(FillObjectHolesSettings::default())),
@@ -836,6 +873,7 @@ impl PipelineCommand {
             "image_cache" => Some(Self::ImageCache(ImageCacheSettings::default())),
             "image_intensity" => Some(Self::ImageIntensity(ImageIntensitySettings::default())),
             "image_math" => Some(Self::ImageMath(ImageMathSettings::default())),
+            "image_quality" => Some(Self::ImageQuality(ImageQualitySettings::default())),
             "intensity_transformation" => Some(Self::IntensityTransformation(
                 IntensityTransformationSettings::default(),
             )),
@@ -890,6 +928,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => "EdgeDetectionCanny",
             Self::EdgeDetectionSobel(_) => "EdgeDetectionSobel",
             Self::EnhanceContrast(_) => "EnhanceContrast",
+            Self::ExcludeImage(_) => "Exclude Image",
             Self::ExtractObjects(_) => "ExtractObjects",
             Self::FillHoles(_) => "FillHoles",
             Self::FillObjectHoles(_) => "FillObjectHoles",
@@ -899,6 +938,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => "ImageCache",
             Self::ImageIntensity(_) => "Image Intensity",
             Self::ImageMath(_) => "ImageMath",
+            Self::ImageQuality(_) => "Image Quality",
             Self::IntensityTransformation(_) => "IntensityTransformation",
             Self::Laplacian(_) => "Laplacian",
             Self::LoadAnnotatedObjects(_) => "LoadAnnotatedObjects",
@@ -940,6 +980,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => &CommandCategory::Preprocess,
             Self::EdgeDetectionSobel(_) => &CommandCategory::Preprocess,
             Self::EnhanceContrast(_) => &CommandCategory::Preprocess,
+            Self::ExcludeImage(_) => &CommandCategory::Measure,
             Self::ExtractObjects(_) => &CommandCategory::Extract,
             Self::FillHoles(_) => &CommandCategory::InstanceSegmentation,
             Self::FillObjectHoles(_) => &CommandCategory::Extract,
@@ -949,6 +990,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => &CommandCategory::Preprocess,
             Self::ImageIntensity(_) => &CommandCategory::Measure,
             Self::ImageMath(_) => &CommandCategory::Preprocess,
+            Self::ImageQuality(_) => &CommandCategory::Measure,
             Self::IntensityTransformation(_) => &CommandCategory::Preprocess,
             Self::Laplacian(_) => &CommandCategory::Preprocess,
             Self::LoadAnnotatedObjects(_) => &CommandCategory::Object,
@@ -1006,6 +1048,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EdgeDetectionSobel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::ExcludeImage(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::ExtractObjects(_) => &[
                 CommandCategory::Object,
                 CommandCategory::Measure,
@@ -1021,6 +1064,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ImageIntensity(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::ImageMath(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::ImageQuality(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::IntensityTransformation(_) => {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
@@ -1096,6 +1140,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_s) => [vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "Size of the Gaussian smoothing kernel.\n\nMust be an odd number (e.g., 3, 5). Larger values reduce\nnoise but can blur fine edge details.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "threshold_min".to_string(), display_name: "Threshold Min".to_string(), description: "Lower bound for hysteresis thresholding [0.0, 1.0].\n\nEdges with a gradient intensity below this value are discarded.".to_string(), value: format!("{}", _s.threshold_min), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "threshold_max".to_string(), display_name: "Threshold Max".to_string(), description: "Upper bound for hysteresis thresholding [0.0, 1.0].\n\nEdges with a gradient intensity above this value are considered\n\"strong\" and are automatically preserved.".to_string(), value: format!("{}", _s.threshold_max), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::EdgeDetectionSobel(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the Sobel operator window.\n\nTypically 3. Larger values (5, 7) provide a more smoothed\ngradient but result in \"thicker\" edges. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::EnhanceContrast(_s) => [vec![ParameterDef { name: "saturated_pixels".to_string(), display_name: "Saturated Pixels".to_string(), description: "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nIn percent (0 - 100), split evenly between the darkest and the\nbrightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small\nvalue (ImageJ's default is 0.35) ignores hot/dead pixels that would\notherwise prevent effective contrast stretching.".to_string(), value: format!("{}", _s.saturated_pixels), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "normalize".to_string(), display_name: "Normalize".to_string(), description: "Whether to linearly stretch the remaining pixel intensities to fill\nthe full [0.0, 1.0] range.".to_string(), value: format!("{}", _s.normalize), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "equalize_histogram".to_string(), display_name: "Equalize Histogram".to_string(), description: "Whether to apply Histogram Equalization.\n\nThis redistributes pixel intensities to achieve a uniform distribution,\nwhich is highly effective for images with low contrast but high noise.".to_string(), value: format!("{}", _s.equalize_histogram), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::ExcludeImage(_s) => [vec![ParameterDef { name: "exclude_when".to_string(), display_name: "Exclude When".to_string(), description: "Excluded when one rule is met, or only when all of them are.".to_string(), value: match _s.exclude_when { MeasureExcludeImageExcludeWhenSettings::AnyRule => "Any Rule".to_string(), MeasureExcludeImageExcludeWhenSettings::AllRules => "All Rules".to_string() }, param_type: ParamType::Dropdown, options: vec!["Any Rule".to_string(), "All Rules".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureExcludeImageExcludeWhenSettings::default()) { MeasureExcludeImageExcludeWhenSettings::AnyRule => "Any Rule".to_string(), MeasureExcludeImageExcludeWhenSettings::AllRules => "All Rules".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "rules".to_string(), display_name: "Rules".to_string(), description: "The rules: a measurement below or above a value.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.rules.iter().map(|__item| [vec![ParameterDef { name: "measurement".to_string(), display_name: "Measurement".to_string(), description: "The measurement, made by an earlier step.".to_string(), value: __item.measurement.clone(), param_type: ParamType::Measurement, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "comparison".to_string(), display_name: "Comparison".to_string(), description: "Met when the measurement is below or above the value.".to_string(), value: match __item.comparison { MeasureExcludeImageRuleComparisonSettings::Below => "Below".to_string(), MeasureExcludeImageRuleComparisonSettings::Above => "Above".to_string() }, param_type: ParamType::Dropdown, options: vec!["Below".to_string(), "Above".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureExcludeImageRuleComparisonSettings::default()) { MeasureExcludeImageRuleComparisonSettings::Below => "Below".to_string(), MeasureExcludeImageRuleComparisonSettings::Above => "Above".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "value".to_string(), display_name: "Value".to_string(), description: "The value, in the measurement's unit.".to_string(), value: format!("{}", __item.value), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ExtractObjects(_s) => [vec![ParameterDef { name: "max_objects_before_fail".to_string(), display_name: "Max Objects Before Fail".to_string(), description: "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.".to_string(), value: format!("{}", _s.max_objects_before_fail), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100000i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "class_mapping".to_string(), display_name: "Class Mapping".to_string(), description: "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na module, map to one of the module's own classes to keep the\nobjects internal to the module.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.class_mapping.iter().map(|__item| [vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The segmentation class, as set by Threshold, Pixel classifier, ...".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "The object class its objects get: a project class, or inside a\nmodule one of the module's own classes.".to_string(), value: __item.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::FillHoles(_s) => vec![],
             Self::FillObjectHoles(_s) => vec![],
@@ -1105,6 +1150,7 @@ impl PipelineCommand {
             Self::ImageCache(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Whether to save the current state to the cache or load a state from it.".to_string(), value: match _s.mode { MathImageCacheImageCacheModeSettings::Store => "Store".to_string(), MathImageCacheImageCacheModeSettings::Load => "Load".to_string() }, param_type: ParamType::Dropdown, options: vec!["Store".to_string(), "Load".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathImageCacheImageCacheModeSettings::default()) { MathImageCacheImageCacheModeSettings::Store => "Store".to_string(), MathImageCacheImageCacheModeSettings::Load => "Load".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "address".to_string(), display_name: "Address".to_string(), description: "The unique identifier or memory slot where the image is stored.".to_string(), value: _s.address.to_param_value(), param_type: ParamType::ImageAddress, options: { let (kind, nr) = _s.address.param_parts(); vec![kind.to_string(), nr.to_string()] }, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageAddress::default()).to_param_value(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ImageIntensity(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "The measurement's name - its values in the results start with it.".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ImageMath(_s) => [vec![ParameterDef { name: "operand".to_string(), display_name: "Operand".to_string(), description: "The specific mathematical or logical operator to apply.".to_string(), value: match _s.operand { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Invert".to_string(), "Add".to_string(), "Subtract".to_string(), "Multiply".to_string(), "Divide".to_string(), "And".to_string(), "Or".to_string(), "Xor".to_string(), "Min".to_string(), "Max".to_string(), "Average".to_string(), "Difference Type".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathImageMathOperandSettings::default()) { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false, false, false, false, false, false], section: String::new() }], vec![ParameterDef { name: "second_image_address".to_string(), display_name: "Second Image Address".to_string(), description: "The second image to use for the operation.".to_string(), value: _s.second_image_address.to_param_value(), param_type: ParamType::ImageAddress, options: { let (kind, nr) = _s.second_image_address.param_parts(); vec![kind.to_string(), nr.to_string()] }, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageAddress::default()).to_param_value(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "swap_operands".to_string(), display_name: "Swap Operands".to_string(), description: "If false, the calculation is `(Current Image OP Cached Image)`.\nIf true, the calculation is `(Cached Image OP Current Image)`.\n\nThis is critical for non-commutative operations like Subtraction or Division.".to_string(), value: format!("{}", _s.swap_operands), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::ImageQuality(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "The measurement's name - its values in the results start with it.".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::IntensityTransformation(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines whether to use automated enhancement or user-defined values.".to_string(), value: match _s.mode { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, param_type: ParamType::Dropdown, options: vec!["Automatic".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersIntensityTransformIntensityTransformModeSettings::default()) { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "contrast".to_string(), display_name: "Contrast".to_string(), description: "Contrast multiplier (gain).\n\nOnly active in manual mode.\nValues > 1.0 increase contrast, while values < 1.0 decrease it.".to_string(), value: format!("{}", _s.contrast), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "brightness".to_string(), display_name: "Brightness".to_string(), description: "Brightness offset (bias).\n\nOnly active in manual mode.\nPositive values brighten the image, negative values darken it.".to_string(), value: format!("{}", _s.brightness), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Laplacian(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::LoadAnnotatedObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "keep_annotated_classes".to_string(), display_name: "Keep Annotated Classes".to_string(), description: "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.".to_string(), value: format!("{}", _s.keep_annotated_classes), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (false)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1152,6 +1198,13 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => String::new(),
             Self::EdgeDetectionSobel(_) => String::new(),
             Self::EnhanceContrast(_) => String::new(),
+            Self::ExcludeImage(s) => format!(
+                "Exclude When: {}",
+                match s.exclude_when {
+                    MeasureExcludeImageExcludeWhenSettings::AnyRule => "Any Rule".to_string(),
+                    MeasureExcludeImageExcludeWhenSettings::AllRules => "All Rules".to_string(),
+                }
+            ),
             Self::ExtractObjects(_) => String::new(),
             Self::FillHoles(_) => String::new(),
             Self::FillObjectHoles(_) => String::new(),
@@ -1165,6 +1218,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => String::new(),
             Self::ImageIntensity(s) => format!("Name: {}", s.name.clone()),
             Self::ImageMath(_) => String::new(),
+            Self::ImageQuality(s) => format!("Name: {}", s.name.clone()),
             Self::IntensityTransformation(_) => String::new(),
             Self::Laplacian(_) => String::new(),
             Self::LoadAnnotatedObjects(_) => String::new(),
@@ -1240,6 +1294,7 @@ impl PipelineCommand {
         match self {
             Self::AreaOccupied(s) => Some(s.name.as_str()),
             Self::ImageIntensity(s) => Some(s.name.as_str()),
+            Self::ImageQuality(s) => Some(s.name.as_str()),
             Self::PearsonCorrelationCoefficient(s) => Some(s.name.as_str()),
             _ => None,
         }
@@ -1250,6 +1305,7 @@ impl PipelineCommand {
         match self {
             Self::AreaOccupied(s) => Some(&mut s.name),
             Self::ImageIntensity(s) => Some(&mut s.name),
+            Self::ImageQuality(s) => Some(&mut s.name),
             Self::PearsonCorrelationCoefficient(s) => Some(&mut s.name),
             _ => None,
         }
@@ -1261,6 +1317,7 @@ impl PipelineCommand {
         match self {
             Self::AreaOccupied(_) => Some("area_occupied"),
             Self::ImageIntensity(_) => Some("intensity"),
+            Self::ImageQuality(_) => Some("quality"),
             Self::PearsonCorrelationCoefficient(_) => Some("pearson"),
             _ => None,
         }
@@ -1326,6 +1383,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => {}
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
+            Self::ExcludeImage(_) => {}
             Self::ExtractObjects(s) => {
                 for item0 in s.class_mapping.iter() {
                     classes.push(ObjectClass::from_segmentation_class(
@@ -1342,6 +1400,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => {}
             Self::ImageIntensity(_) => {}
             Self::ImageMath(_) => {}
+            Self::ImageQuality(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(s) => {
@@ -1891,6 +1950,40 @@ impl PipelineCommand {
                     s.equalize_histogram = value == "true";
                 }
             }
+            Self::ExcludeImage(s) => {
+                if param_name == "exclude_when" {
+                    s.exclude_when = match value {
+                        "Any Rule" => MeasureExcludeImageExcludeWhenSettings::AnyRule,
+                        "All Rules" => MeasureExcludeImageExcludeWhenSettings::AllRules,
+                        _ => (s.exclude_when).clone(),
+                    };
+                }
+                if param_name.starts_with("rules.") {
+                    let rest = &param_name[6..];
+                    let mut _p = rest.splitn(2, '.');
+                    if let (Some(_i), Some(nested_name)) = (_p.next(), _p.next()) {
+                        if let Ok(_idx) = _i.parse::<usize>() {
+                            if let Some(item) = s.rules.get_mut(_idx) {
+                                if nested_name == "measurement" {
+                                    item.measurement = value.to_string();
+                                }
+                                if nested_name == "comparison" {
+                                    item.comparison = match value {
+                                        "Below" => MeasureExcludeImageRuleComparisonSettings::Below,
+                                        "Above" => MeasureExcludeImageRuleComparisonSettings::Above,
+                                        _ => (item.comparison).clone(),
+                                    };
+                                }
+                                if nested_name == "value" {
+                                    if let Ok(v) = value.parse::<f64>() {
+                                        item.value = v;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Self::ExtractObjects(s) => {
                 if param_name == "max_objects_before_fail" {
                     if let Ok(v) = value.parse::<i32>() {
@@ -2055,6 +2148,16 @@ impl PipelineCommand {
                 }
                 if param_name == "swap_operands" {
                     s.swap_operands = value == "true";
+                }
+            }
+            Self::ImageQuality(s) => {
+                if param_name == "name" {
+                    s.name = value.to_string();
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
+                    }
                 }
             }
             Self::IntensityTransformation(s) => {
@@ -2917,6 +3020,15 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => {}
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
+            Self::ExcludeImage(s) => {
+                if param_name == "rules" {
+                    if let Some(last) = s.rules.last().cloned() {
+                        s.rules.push(last);
+                    } else {
+                        s.rules.push(ExcludeRuleSettings::default());
+                    }
+                }
+            }
             Self::ExtractObjects(s) => {
                 if param_name == "class_mapping" {
                     if let Some(last) = s.class_mapping.last().cloned() {
@@ -2934,6 +3046,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => {}
             Self::ImageIntensity(_) => {}
             Self::ImageMath(_) => {}
+            Self::ImageQuality(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
@@ -3008,6 +3121,11 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => {}
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
+            Self::ExcludeImage(s) => {
+                if param_name == "rules" && idx < s.rules.len() {
+                    s.rules.remove(idx);
+                }
+            }
             Self::ExtractObjects(s) => {
                 if param_name == "class_mapping" && idx < s.class_mapping.len() {
                     s.class_mapping.remove(idx);
@@ -3021,6 +3139,7 @@ impl PipelineCommand {
             Self::ImageCache(_) => {}
             Self::ImageIntensity(_) => {}
             Self::ImageMath(_) => {}
+            Self::ImageQuality(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}

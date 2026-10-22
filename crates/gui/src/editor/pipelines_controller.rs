@@ -2259,6 +2259,9 @@ impl PipelinesController {
                     let (new_summary, params_now, needs_full_resync) = {
                         let mut project = manager.app_state.get_project_write();
                         let definitions = project.modules.clone();
+                        // A measurement setting is picked by label.
+                        let measurements =
+                            evanalyzer_app::settings_of::measurement_choices(&project);
                         let Some(step) = manager
                             .shown_steps_mut(&mut project, pipeline_id)
                             .and_then(|steps| steps.get_mut(step_idx as usize))
@@ -2300,6 +2303,12 @@ impl PipelinesController {
                         let Some(command) = step.command_mut() else {
                             return;
                         };
+                        let value_str = evanalyzer_app::settings_of::measurement_setting_text(
+                            command,
+                            &param_name,
+                            &value_str,
+                            &measurements,
+                        );
                         evanalyzer_app::settings_of::apply_command_param(
                             command,
                             &param_name,
@@ -2345,11 +2354,13 @@ impl PipelinesController {
                                 script_problem = Some(e);
                             }
                         }
-                        let mut result = (
-                            command.to_summary(),
-                            evanalyzer_app::settings_of::command_parameters(command),
-                            needs_full_resync,
+                        let mut parameters =
+                            evanalyzer_app::settings_of::command_parameters(command);
+                        evanalyzer_app::settings_of::show_measurement_choices(
+                            &mut parameters,
+                            &measurements,
                         );
+                        let mut result = (command.to_summary(), parameters, needs_full_resync);
                         // A setting of the opened module a parameter sets: the
                         // new value becomes the parameter's default (else it
                         // would never run), and the other settings it sets
@@ -5076,6 +5087,7 @@ impl PipelinesController {
             total_enabled_across_all,
         ): (String, String, Vec<StepData>, i32, i32, i32) = {
             let project = self.app_state.get_project();
+            let measurements = evanalyzer_app::settings_of::measurement_choices(&project);
             let total_enabled_across_all = project
                 .pipelines
                 .iter()
@@ -5145,9 +5157,17 @@ impl PipelinesController {
                                 },
                                 category: step_category(*command.category()),
                                 enabled: step.enabled,
-                                parameters: evanalyzer_app::settings_of::command_parameters(
-                                    command,
-                                ),
+                                parameters: {
+                                    let mut parameters =
+                                        evanalyzer_app::settings_of::command_parameters(command);
+                                    // Measurement settings: the project's
+                                    // measurements, by label.
+                                    evanalyzer_app::settings_of::show_measurement_choices(
+                                        &mut parameters,
+                                        &measurements,
+                                    );
+                                    parameters
+                                },
                                 exposed: open_definition
                                     .map(|d| evanalyzer_app::modules::exposed_settings(d, step.id))
                                     .unwrap_or_default(),
@@ -6503,6 +6523,9 @@ fn map_cfg_param_type(t: CfgParamType) -> ParamType {
         CfgParamType::ImageAddress => ParamType::ImageAddress,
         CfgParamType::ImageChannel => ParamType::ImageChannel,
         CfgParamType::Script => ParamType::Script,
+        // Shown as a dropdown of the project's measurements (see
+        // `show_measurement_choices`) - reached only unconverted.
+        CfgParamType::Measurement => ParamType::Dropdown,
     }
 }
 

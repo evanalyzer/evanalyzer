@@ -26,6 +26,9 @@ pub struct ImageSummary<'a> {
     /// Seconds between two time points: the project's frame interval, else
     /// the image's own (its metadata); `None` unknown.
     pub frame_interval_s: Option<f64>,
+    /// Why "Exclude Image" excluded the image (`None`: it isn't) - it is
+    /// written disabled, with this reason.
+    pub excluded: Option<&'a str>,
 }
 
 pub trait PipelineResultExporter: Send + Sync {

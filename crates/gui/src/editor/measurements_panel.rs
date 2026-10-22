@@ -13,16 +13,19 @@ use std::rc::Rc;
 /// Fills the panel from the project: whether it measures, and the
 /// preview's values. On the UI thread.
 pub(crate) fn sync(ui: &AppWindow, app_state: &UiState) {
-    let (has_steps, rows) = {
+    let (has_steps, rows, excluded) = {
         let project = app_state.get_project();
+        let planes = &project.tmp_settings.preview_measurements;
         (
             has_measurement_steps(&project),
-            rows(&project.tmp_settings.preview_measurements),
+            rows(planes),
+            excluded(planes),
         )
     };
     let state = ui.global::<MeasurementsState>();
     state.set_has_steps(has_steps);
     state.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+    state.set_excluded(excluded.into());
 }
 
 /// The project has a measurement step - in a pipeline or a module.
@@ -81,6 +84,16 @@ pub(crate) fn rows(planes: &[PipelineMeasurements]) -> Vec<MeasurementRow> {
     rows
 }
 
+/// Why "Exclude Image" would leave the image out of the results ("" it
+/// wouldn't): the preview's planes' reasons.
+pub(crate) fn excluded(planes: &[PipelineMeasurements]) -> String {
+    planes
+        .iter()
+        .filter_map(|plane| plane.excluded.as_deref())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn format_value(value: f64) -> String {
     if value.is_finite() {
         format!("{value:.3}")
@@ -128,6 +141,19 @@ mod tests {
 
     /// An image's value, the median of objects', a missing one - by step.
     #[test]
+    fn the_preview_says_why_the_image_would_be_excluded() {
+        let plane = |excluded: Option<&str>| PipelineMeasurements {
+            excluded: excluded.map(str::to_string),
+            ..Default::default()
+        };
+        assert_eq!(excluded(&[plane(None)]), "");
+        assert_eq!(
+            excluded(&[plane(Some("Focus score low")), plane(None)]),
+            "Focus score low"
+        );
+    }
+
+    #[test]
     fn a_row_per_measurement_by_step() {
         let plane = PipelineMeasurements {
             measurements: vec![
@@ -149,6 +175,7 @@ mod tests {
             ],
             z_stack: 0,
             t_stack: 0,
+            excluded: None,
         };
         let rows: Vec<(String, String, String)> = rows(&[plane])
             .into_iter()

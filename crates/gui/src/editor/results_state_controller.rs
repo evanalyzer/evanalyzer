@@ -1214,6 +1214,7 @@ impl ResultsStateController {
                     state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
                     state.set_active_well_disabled(cell.disabled);
+                    state.set_active_well_disabled_reason("".into());
                 });
 
             // A row of the well card's images: leave it out / take it in.
@@ -1244,6 +1245,7 @@ impl ResultsStateController {
                             .find(|image| image.name == image_name.as_str())
                         {
                             image.disabled = disable;
+                            image.disabled_reason = None;
                         }
                         state.set_analysis_summary(analysis_summary(&images).into());
                     }
@@ -1351,6 +1353,10 @@ impl ResultsStateController {
                     if state.get_split() {
                         manager.split_show_image_named(&key);
                     }
+                    // Left out by the run ("Exclude Image"): why.
+                    state.set_active_well_disabled_reason(
+                        manager.disabled_reason(key.as_str()).into(),
+                    );
                     state.set_active_well(key);
                     // `exists` (not `has_value`): the user must be able to
                     // select/open a well or field even when it has no
@@ -1445,8 +1451,10 @@ impl ResultsStateController {
                     };
                     let disable = !state.get_active_well_disabled();
                     // Shown right away; the write and the refresh run on the
-                    // database thread.
+                    // database thread. The run's reason goes: the user decided.
                     state.set_active_well_disabled(disable);
+                    state.set_active_well_disabled_reason("".into());
+                    manager.forget_disabled_reason(image_name.as_str());
                     let level = state.get_matrix_level();
                     manager.run_db_job(move |manager| {
                         let toggled = {
@@ -1521,6 +1529,7 @@ impl ResultsStateController {
                     state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
                     state.set_active_well_disabled(cell.disabled);
+                    state.set_active_well_disabled_reason("".into());
                 });
 
             // "Show on image" (or a double click): the tile on its image.
@@ -2180,6 +2189,32 @@ impl ResultsStateController {
     /// A result's object shown on its image (`row`: the List row, -1 none):
     /// the window goes to the image, a bar on it says which (`label`) and
     /// leads back - `can_step`: ‹ › to the next row's (see `ResultsPeek`).
+    /// Why the run left image `name` out ("Exclude Image"); "" not by the
+    /// run.
+    fn disabled_reason(&self, name: &str) -> String {
+        self.images
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .find(|image| image.name == name)
+            .and_then(|image| image.disabled_reason.clone())
+            .unwrap_or_default()
+    }
+
+    /// Image `name` was enabled or disabled by hand: no run's reason any
+    /// more (`enable_image` removes it from the file too).
+    fn forget_disabled_reason(&self, name: &str) {
+        if let Some(image) = self
+            .images
+            .lock()
+            .expect("Poisoned")
+            .iter_mut()
+            .find(|image| image.name == name)
+        {
+            image.disabled_reason = None;
+        }
+    }
+
     fn peek(&self, row: i32, label: String, can_step: bool) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -5697,7 +5732,7 @@ pub(crate) mod tests {
             CREATE TABLE images (
                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
                 successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
-                disabled BOOLEAN NOT NULL DEFAULT false,
+                disabled BOOLEAN NOT NULL DEFAULT false, disabled_reason VARCHAR,
                 width UINTEGER NOT NULL, height UINTEGER NOT NULL,
                 c_stacks UINTEGER NOT NULL, z_stacks UINTEGER NOT NULL, t_stacks UINTEGER NOT NULL
             );
@@ -6182,16 +6217,19 @@ pub(crate) mod tests {
                 name: "A1_01.tif".into(),
                 rel_path: PathBuf::from("A1_01.tif"),
                 disabled: false,
+                disabled_reason: None,
             },
             ImageEntry {
                 name: "A1_02.tif".into(),
                 rel_path: PathBuf::from("A1_02.tif"),
                 disabled: false,
+                disabled_reason: None,
             },
             ImageEntry {
                 name: "A2_01.tif".into(),
                 rel_path: PathBuf::from("A2_01.tif"),
                 disabled: false,
+                disabled_reason: None,
             },
         ];
         let selected_paths = vec![PathBuf::from("A1_01.tif")];
@@ -6304,6 +6342,7 @@ pub(crate) mod tests {
             name: name.into(),
             rel_path: name.into(),
             disabled,
+            disabled_reason: None,
         };
         assert_eq!(analysis_summary(&[image("a", false)]), "1 image");
         assert_eq!(
