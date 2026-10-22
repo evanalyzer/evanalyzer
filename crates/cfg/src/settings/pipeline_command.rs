@@ -19,7 +19,7 @@ pub enum CommandCategory {
     Preprocess,
     Segment,
     InstanceSegmentation,
-    Measure,
+    Extract,
     Object,
     /// Runs once after every image, on the objects of all of them.
     Dataset,
@@ -33,7 +33,7 @@ impl CommandCategory {
             Self::Preprocess => 0,
             Self::Segment => 1,
             Self::InstanceSegmentation => 2,
-            Self::Measure => 3,
+            Self::Extract => 3,
             Self::Object => 4,
             Self::Dataset => 5,
         }
@@ -47,9 +47,9 @@ impl CommandCategory {
             Self::Preprocess => &[Self::Preprocess],
             Self::Segment => &[Self::Preprocess, Self::Segment],
             Self::InstanceSegmentation => &[Self::Segment, Self::InstanceSegmentation],
-            Self::Measure => &[Self::InstanceSegmentation, Self::Measure],
-            Self::Object => &[Self::Measure, Self::Object],
-            Self::Dataset => &[Self::Measure, Self::Object, Self::Dataset],
+            Self::Extract => &[Self::InstanceSegmentation, Self::Extract],
+            Self::Object => &[Self::Extract, Self::Object],
+            Self::Dataset => &[Self::Extract, Self::Object, Self::Dataset],
         }
     }
 
@@ -59,8 +59,8 @@ impl CommandCategory {
         match self {
             Self::Preprocess => Self::Segment,
             Self::Segment => Self::InstanceSegmentation,
-            Self::InstanceSegmentation => Self::Measure,
-            Self::Measure => Self::Object,
+            Self::InstanceSegmentation => Self::Extract,
+            Self::Extract => Self::Object,
             Self::Object => Self::Object,
             Self::Dataset => Self::Dataset,
         }
@@ -330,7 +330,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 11,
             name: "ExtractObjects",
-            category: CommandCategory::Measure,
+            category: CommandCategory::Extract,
             summary: "Represents a bounded object extracted from a labeled image.",
             description: "A command to extract spatial statistics and bounding boxes from labeled objects.",
         },
@@ -344,7 +344,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 13,
             name: "FillObjectHoles",
-            category: CommandCategory::Measure,
+            category: CommandCategory::Extract,
             summary: "Fills the holes inside every object, one object at a time.",
             description: "[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
         },
@@ -858,9 +858,9 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => &CommandCategory::Preprocess,
             Self::EdgeDetectionSobel(_) => &CommandCategory::Preprocess,
             Self::EnhanceContrast(_) => &CommandCategory::Preprocess,
-            Self::ExtractObjects(_) => &CommandCategory::Measure,
+            Self::ExtractObjects(_) => &CommandCategory::Extract,
             Self::FillHoles(_) => &CommandCategory::InstanceSegmentation,
-            Self::FillObjectHoles(_) => &CommandCategory::Measure,
+            Self::FillObjectHoles(_) => &CommandCategory::Extract,
             Self::GaussianBlur(_) => &CommandCategory::Preprocess,
             Self::Hessian(_) => &CommandCategory::Preprocess,
             Self::IlluminationCorrection(_) => &CommandCategory::Preprocess,
@@ -896,13 +896,13 @@ impl PipelineCommand {
         match self {
             Self::AiObjectClassifier(_) => &[CommandCategory::Object, CommandCategory::Dataset],
             Self::Blur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::Cellpose(_) => &[CommandCategory::Measure],
+            Self::Cellpose(_) => &[CommandCategory::Extract],
             Self::ClassifyObjects(_) => &[CommandCategory::Object, CommandCategory::Dataset],
             Self::Colocalization(_) => &[CommandCategory::Object, CommandCategory::Dataset],
             Self::ColorFilterCommand(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ConnectedComponents(_) => &[
                 CommandCategory::InstanceSegmentation,
-                CommandCategory::Measure,
+                CommandCategory::Extract,
             ],
             Self::DistanceTransform(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EdgeDetectionCanny(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
@@ -910,7 +910,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ExtractObjects(_) => &[CommandCategory::Object, CommandCategory::Dataset],
             Self::FillHoles(_) => &[CommandCategory::InstanceSegmentation],
-            Self::FillObjectHoles(_) => &[CommandCategory::Measure],
+            Self::FillObjectHoles(_) => &[CommandCategory::Extract],
             Self::GaussianBlur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Hessian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::IlluminationCorrection(_) => {
@@ -937,20 +937,20 @@ impl PipelineCommand {
                 CommandCategory::Preprocess,
                 CommandCategory::Segment,
                 CommandCategory::InstanceSegmentation,
-                CommandCategory::Measure,
+                CommandCategory::Extract,
                 CommandCategory::Object,
                 CommandCategory::Dataset,
             ],
             Self::SimpleTracker(_) => &[CommandCategory::Dataset],
-            Self::Stardist(_) => &[CommandCategory::Measure],
+            Self::Stardist(_) => &[CommandCategory::Extract],
             Self::StructureTensor(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Threshold(_) => &[CommandCategory::InstanceSegmentation],
             Self::TransformObjects(_) => &[CommandCategory::Object, CommandCategory::Dataset],
             Self::UNet(_) => &[CommandCategory::InstanceSegmentation],
             Self::Voronoi(_) => &[CommandCategory::Object, CommandCategory::Dataset],
-            Self::Watershed(_) => &[CommandCategory::Measure],
+            Self::Watershed(_) => &[CommandCategory::Extract],
             Self::WeightedDeviation(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::Yolov5(_) => &[CommandCategory::Measure],
+            Self::Yolov5(_) => &[CommandCategory::Extract],
         }
     }
 

@@ -14,7 +14,7 @@ import { Places } from "../api/layout.slint";
 //   ├------------------------------------------------------------------┤
 //   │  🔍  Search commands…                                            │   ← search
 //   │                                                                  │
-//   │  All · Preprocess · Segment · Instance Seg. · Measure · Object   │   ← filter chips (40)
+//   │  All · Preprocess · Segment · Instance Seg. · Extract · Object   │   ← filter chips (40)
 //   ├----------------------------┬-------------------------------------┤
 //   │ PREPROCESS  ---------------│   Gaussian Blur                     │
 //   │ ƒ Gaussian Blur     σ ▸    │   ------------------------------    │
@@ -24,7 +24,7 @@ import { Places } from "../api/layout.slint";
 //   │ ƒ Threshold (Otsu)         │                                     │
 //   │ ƒ Watershed                │   DEFAULT PARAMETERS                │
 //   │ ƒ Cellpose            ★    │     σ              2.0  px          │
-//   │ MEASURE     ---------------│     Per channel    on               │
+//   │ EXTRACT     ---------------│     Per channel    on               │
 //   │ ƒ Intensity Stats          │     Edge handling  reflect          │
 //   │ ƒ Area & Perimeter         │                                     │
 //   │                            │   Category   Preprocess             │
@@ -321,7 +321,7 @@ component CommandRow inherits Rectangle {
             background: fav-ta.has-hover ? Ink.ground : transparent;
             Text {
                 text: cmd.favorite ? "★" : "☆";
-                color: cmd.favorite ? Ink.cat-measure : Ink.text-faint;
+                color: cmd.favorite ? Ink.favorite : Ink.text-faint;
                 font-size: Ink.fs-heading;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -540,7 +540,7 @@ export component CommandSelectionDialog inherits InkDialog {
     in-out property <bool> fcat-pre: false;
     in-out property <bool> fcat-seg: false;
     in-out property <bool> fcat-obj: false;
-    in-out property <bool> fcat-mea: false;
+    in-out property <bool> fcat-ext: false;
     in-out property <bool> fcat-cls: false;
     in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-modules: false;
@@ -556,7 +556,7 @@ export component CommandSelectionDialog inherits InkDialog {
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
     in property <[CommandDef]> shown-dataset;
-    in property <[CommandDef]> shown-measure;
+    in property <[CommandDef]> shown-extract;
     in property <[CommandDef]> shown-modules;
     in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;            // command for selected-id (or default)
@@ -567,7 +567,7 @@ export component CommandSelectionDialog inherits InkDialog {
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
     in property <int> cat-count-dat;
-    in property <int> cat-count-mea;
+    in property <int> cat-count-ext;
     in property <int> cat-count-grp;
     /// The project's modules no pipeline uses ("Remove N unused").
     in property <int> unused-module-count;
@@ -689,12 +689,12 @@ export component CommandSelectionDialog inherits InkDialog {
                         label: "All";
                         count: total-shown;
                         tinted: false;
-                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !fcat-dat && !filter-modules && !filter-recents;
+                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-ext && !fcat-cls && !fcat-dat && !filter-modules && !filter-recents;
                         clicked => {
                             root.fcat-pre = false;
                             root.fcat-seg = false;
                             root.fcat-obj = false;
-                            root.fcat-mea = false;
+                            root.fcat-ext = false;
                             root.fcat-cls = false;
                             root.fcat-dat = false;
                             root.filter-modules = false;
@@ -743,12 +743,12 @@ export component CommandSelectionDialog inherits InkDialog {
                     }
 
                     FilterChip {
-                        label: "Measure";
-                        count: cat-count-mea;
-                        tint: Ink.cat-measure;
-                        active: fcat-mea;
+                        label: "Extract";
+                        count: cat-count-ext;
+                        tint: Ink.cat-extract;
+                        active: fcat-ext;
                         clicked => {
-                            root.fcat-mea = !fcat-mea;
+                            root.fcat-ext = !fcat-ext;
                             root.filter-modules = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -947,15 +947,15 @@ export component CommandSelectionDialog inherits InkDialog {
                                     }
                                 }
 
-                                // Measure
-                            if shown-measure.length > 0 && !filter-modules: VerticalLayout {
+                                // Extract
+                            if shown-extract.length > 0 && !filter-modules: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
-                                        category: StepCategory.measure;
-                                        count: shown-measure.length;
+                                        category: StepCategory.extract;
+                                        count: shown-extract.length;
                                     }
 
-                                    for c in shown-measure: CommandRow {
+                                    for c in shown-extract: CommandRow {
                                         cmd: c;
                                         selected: c.id == selected-id;
                                         clicked => {
@@ -1296,7 +1296,7 @@ export component CommandPickerModal inherits Rectangle {
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
     in property <[CommandDef]> shown-dataset;
-    in property <[CommandDef]> shown-measure;
+    in property <[CommandDef]> shown-extract;
     in property <[CommandDef]> shown-modules;
     in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;
@@ -1307,7 +1307,7 @@ export component CommandPickerModal inherits Rectangle {
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
     in property <int> cat-count-dat;
-    in property <int> cat-count-mea;
+    in property <int> cat-count-ext;
     in property <int> cat-count-grp;
     /// The project's modules no pipeline uses ("Remove N unused").
     in property <int> unused-module-count;
@@ -1319,7 +1319,7 @@ export component CommandPickerModal inherits Rectangle {
     in-out property <bool> fcat-pre: false;
     in-out property <bool> fcat-seg: false;
     in-out property <bool> fcat-obj: false;
-    in-out property <bool> fcat-mea: false;
+    in-out property <bool> fcat-ext: false;
     in-out property <bool> fcat-cls: false;
     in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-modules: false;
@@ -1349,7 +1349,7 @@ export component CommandPickerModal inherits Rectangle {
         shown-object: root.shown-object;
         shown-classify: root.shown-classify;
         shown-dataset: root.shown-dataset;
-        shown-measure: root.shown-measure;
+        shown-extract: root.shown-extract;
         shown-modules: root.shown-modules;
         shown-library-modules: root.shown-library-modules;
         detail: root.detail;
@@ -1360,7 +1360,7 @@ export component CommandPickerModal inherits Rectangle {
         cat-count-obj: root.cat-count-obj;
         cat-count-cls: root.cat-count-cls;
         cat-count-dat: root.cat-count-dat;
-        cat-count-mea: root.cat-count-mea;
+        cat-count-ext: root.cat-count-ext;
         cat-count-grp: root.cat-count-grp;
         unused-module-count: root.unused-module-count;
         detail-removable: root.detail-removable;
@@ -1369,7 +1369,7 @@ export component CommandPickerModal inherits Rectangle {
         fcat-pre <=> root.fcat-pre;
         fcat-seg <=> root.fcat-seg;
         fcat-obj <=> root.fcat-obj;
-        fcat-mea <=> root.fcat-mea;
+        fcat-ext <=> root.fcat-ext;
         fcat-cls <=> root.fcat-cls;
         fcat-dat <=> root.fcat-dat;
         filter-modules <=> root.filter-modules;

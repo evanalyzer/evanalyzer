@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 /// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", next = "object")]
+#[cmdsmeta(category = "extract", next = "object")]
 pub struct ExtractObjects {
     /// Maximum allowed ROIs to extract.
     ///

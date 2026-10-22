@@ -38,7 +38,7 @@ const MAX_MAP_SIZE: usize = 10_000;
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "Preprocessing",
-    next = "preprocessing,segment,instance_segmentation,measure,object"
+    next = "preprocessing,segment,instance_segmentation,extract,object"
 )]
 pub struct Script {
     /// Object classes the script creates or uses. Commands the script runs

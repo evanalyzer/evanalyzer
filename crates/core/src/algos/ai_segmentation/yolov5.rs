@@ -46,7 +46,7 @@ pub struct YoloClassMapping {
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "segment",
-    next = "measure",
+    next = "extract",
     display_name = "AI YOLOv5 Segmentation"
 )]
 pub struct Yolov5 {

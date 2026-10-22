@@ -4,7 +4,7 @@
 import { Ink } from "../ink/palette.slint";
 import { ClassItemData } from "classification.slint";
 
-export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, module }
+export enum StepCategory { preprocess, segment, instance-segmentation, extract, object, dataset, module }
 
 export enum PipelineStatus { idle, queued, running, done, error }
 
@@ -213,8 +213,8 @@ export global Cat {
             if c == StepCategory.instance-segmentation {
                 return Ink.cat-object;
             }
-            if c == StepCategory.measure {
-                return Ink.cat-measure;
+            if c == StepCategory.extract {
+                return Ink.cat-extract;
             }
             if c == StepCategory.dataset {
                 return Ink.cat-dataset;
@@ -237,8 +237,8 @@ export global Cat {
             if c == StepCategory.instance-segmentation {
                 return "Instance Seg.";
             }
-            if c == StepCategory.measure {
-                return "Measure";
+            if c == StepCategory.extract {
+                return "Extract";
             }
             if c == StepCategory.dataset {
                 return "Dataset";
@@ -311,7 +311,7 @@ export global PipelinesPanelState {
         in property <int> cat-count-preprocess;
         in property <int> cat-count-segment;
         in property <int> cat-count-classify;
-        in property <int> cat-count-measure;
+        in property <int> cat-count-extract;
 
         // -- User selection state --
     // -1: none shown (the steps panel lists the pipelines to pick one).
