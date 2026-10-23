@@ -173,6 +173,19 @@ pub fn change_class_id(
                         .collect();
                     change.references += 1;
                 }
+                if object.parents.contains_key(&ObjectClass::Global(from)) {
+                    object.parents = std::mem::take(&mut object.parents)
+                        .into_iter()
+                        .map(|(class, id)| {
+                            if class == ObjectClass::Global(from) {
+                                (ObjectClass::Global(to), id)
+                            } else {
+                                (class, id)
+                            }
+                        })
+                        .collect();
+                    change.references += 1;
+                }
             }
         }
     }
@@ -494,6 +507,9 @@ mod tests {
         object
             .colocalized_with
             .insert(ObjectClass::Global(3), vec![]);
+        object
+            .parents
+            .insert(ObjectClass::Global(3), evanalyzer_cfg::core_types::ObjectId(7));
         let mut series = evanalyzer_cfg::settings::images_settings::SeriesSettings::default();
         series.objects.push(object);
         let mut image = evanalyzer_cfg::settings::images_settings::ImageEntry::default();
@@ -513,6 +529,10 @@ mod tests {
             keys,
             [ObjectClass::Global(1), ObjectClass::Global(5)],
             "same order"
+        );
+        assert_eq!(
+            object.parents.get(&ObjectClass::Global(5)),
+            Some(&evanalyzer_cfg::core_types::ObjectId(7))
         );
     }
 

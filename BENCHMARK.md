@@ -416,6 +416,23 @@ touched), so the RAM saved is the two flag arrays and the smaller queue:
 now ~18.5 bytes per pixel on top of the image at 8192²; the costs (`f64`,
 8 bytes) stay - `f32` would change sums and ties against CellProfiler.
 
+### Relate Objects - spots linked to cells (2026-10-23)
+
+`BENCH_SIZE=8192 BENCH_RULE=centre|overlap cargo test --release -p evanalyzer_core --lib bench_relate_objects -- --ignored --nocapture`
+(one rule per process): a cell (40 × 40 px) every 40 px on an 8192² image,
+10 spots (3 × 3 px) per cell along its diagonal, the last one across the
+border. "It overlaps the parent most" gives the same parents as
+CellProfiler's RelateObjects (`largest_overlap_matches_cellprofiler`).
+
+| Rule | Cells | Spots | Time | Peak RAM (objects before) |
+|---|---|---|---|---|
+| Its centre is in the parent | 41,616 | 416,160 | 0.42 s | 577 MB (475) |
+| It overlaps the parent most | 41,616 | 416,160 | 0.31 s | 577 MB (475) |
+
+Single-threaded; a grid over the parents' boxes, so each spot is tested
+against a handful of cells. The ~100 MB on top of the objects are the
+grid, the id lists and the links before they are written.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -438,6 +455,7 @@ graphics driver).
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
+| Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 

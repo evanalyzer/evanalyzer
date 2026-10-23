@@ -3111,10 +3111,11 @@ mod full_run_integration_tests {
         assert!(!seeds.is_empty(), "the run found seeds");
         assert_eq!(grown.len(), seeds.len(), "one region per seed");
         for region in &grown {
-            let seed = seeds
-                .iter()
-                .find(|s| Some(&s.id) == region.parent_id.as_ref())
-                .expect("linked to a seed");
+            let inside = |s: &&&ObjectMetricSettings| {
+                let ([sx0, sy0, sx1, sy1], [rx0, ry0, rx1, ry1]) = (s.bbox, region.bbox);
+                sx0 >= rx0 && sy0 >= ry0 && sx1 <= rx1 && sy1 <= ry1
+            };
+            let seed = seeds.iter().find(inside).expect("a seed inside it");
             assert!(region.area >= seed.area, "holds its seed");
         }
     }

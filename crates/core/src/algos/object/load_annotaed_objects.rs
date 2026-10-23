@@ -64,12 +64,11 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
             let mut object = Object::from_object_settings(annotation.clone());
             // A fresh id: the stored one may collide with ids the pipeline
             // hands out. Links to other annotations (coloc partners, parents,
-            // children, tracks) refer to those stored ids, so they're dropped.
+            // tracks) refer to those stored ids, so they're dropped.
             object.id = ObjectId::next();
             object.segmentation_class = SegmentationClass::MANUAL_ANNOTATED;
             object.colocalized_with.clear();
-            object.parent_id = None;
-            object.children.clear();
+            object.retain_parents(|_, _| false);
             object.track = Default::default();
             if !self.keep_annotated_classes {
                 object.clear_object_classes();
@@ -185,8 +184,7 @@ mod tests {
         for class in classes {
             object.add_object_class(*class, Scope::Global).unwrap();
         }
-        object.parent_id = Some(ObjectId(id + 1));
-        object.children.push(ObjectId(id + 2));
+        object.set_parent(CELL, Some(ObjectId(id + 1)));
         object.colocalized_with.insert(CELL, vec![ObjectId(id + 3)]);
         object.to_object_settings()
     }
@@ -261,8 +259,7 @@ mod tests {
         let mut cache = cache_with(vec![annotation(STORED_ID, [0, 0, 2, 2], &[NUCLEUS])]);
         let object = &run(&load_all(), &mut cache)[0];
         assert!(object.colocalized_with.is_empty());
-        assert!(object.parent_id.is_none());
-        assert!(object.children.is_empty());
+        assert!(object.parents().is_empty());
     }
 
     #[test]

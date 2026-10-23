@@ -182,7 +182,6 @@ impl ImageAlgorithm for ObjectMath {
             let transformed = Object::new(ObjectInit {
                 id: ObjectId::next(),
                 segmentation_class,
-                parent_id: Some(input_id.clone()),
                 plane,
                 bbox: geometry.bbox,
                 area: geometry.area,

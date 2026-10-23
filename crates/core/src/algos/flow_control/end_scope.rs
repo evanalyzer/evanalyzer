@@ -80,7 +80,7 @@ impl ImageAlgorithm for EndScope {
 }
 
 /// Removes `scope`'s objects from `cache` and every reference the remaining
-/// objects hold to them - parent, children, colocalization partners, track
+/// objects hold to them - parents, colocalization partners, track
 /// members. Returns how many objects were removed.
 ///
 /// Two passes over the cache, no index: one removes, one cleans up. Most
@@ -116,7 +116,7 @@ fn remove_classes(cache: &mut ObjectCache, scope: Scope, classes: &[ObjectClass]
 
 /// Removes the objects `remove` picks from `cache` and every reference the
 /// remaining objects hold to them. Returns how many objects were removed.
-fn remove_where(cache: &mut ObjectCache, remove: impl Fn(&Object) -> bool) -> usize {
+pub(crate) fn remove_where(cache: &mut ObjectCache, remove: impl Fn(&Object) -> bool) -> usize {
     let to_remove = cache.values().filter(|object| remove(object)).count();
     if to_remove == 0 {
         return 0;
@@ -145,15 +145,8 @@ fn remove_where(cache: &mut ObjectCache, remove: impl Fn(&Object) -> bool) -> us
     let removed = SortedIds(&removed_ids);
 
     for object in cache.values_mut() {
-        if object
-            .parent_id
-            .as_ref()
-            .is_some_and(|parent| removed.contains(parent))
-        {
-            object.parent_id = None;
-        }
-        if !object.children.is_empty() {
-            object.children.retain(|child| !removed.contains(child));
+        if !object.parents().is_empty() {
+            object.retain_parents(|_, parent| !removed.contains(parent));
         }
         if !object.colocalized_with.is_empty() {
             // An entry emptied here pointed only at removed objects; one that
@@ -231,8 +224,8 @@ mod tests {
         let seed = object(1, ObjectClass::Local(1), MODULE);
         let mut cell = object(2, ObjectClass::Global(1), MODULE);
         let kept = object(3, ObjectClass::Global(2), Scope::Global);
-        cell.parent_id = Some(ObjectId(1));
-        cell.children = vec![ObjectId(1), ObjectId(3)];
+        cell.set_parent(ObjectClass::Local(1), Some(ObjectId(1)));
+        cell.set_parent(ObjectClass::Global(2), Some(ObjectId(3)));
         cell.colocalized_with
             .insert(ObjectClass::Local(1), vec![ObjectId(1)]);
         cell.colocalized_with
@@ -245,8 +238,8 @@ mod tests {
         remove_scope(&mut cache, MODULE);
 
         let cell = cache.get(&ObjectId(2)).unwrap();
-        assert_eq!(cell.parent_id, None);
-        assert_eq!(cell.children, [ObjectId(3)]);
+        let parents: Vec<_> = cell.parents().iter().collect();
+        assert_eq!(parents, [(&ObjectClass::Global(2), &ObjectId(3))]);
         assert!(!cell.colocalized_with.contains_key(&ObjectClass::Local(1)));
         assert_eq!(
             cell.colocalized_with[&ObjectClass::Global(2)],
@@ -289,7 +282,7 @@ mod tests {
                             MODULE,
                         );
                         if !in_module && i % 10 == 1 {
-                            o.parent_id = Some(ObjectId(i));
+                            o.set_parent(ObjectClass::Local(1), Some(ObjectId(i)));
                             o.colocalized_with
                                 .insert(ObjectClass::Local(1), vec![ObjectId(i)]);
                         }
@@ -415,10 +408,9 @@ mod tests {
         let inner = ObjectClass::Local(5);
         let mut both = object(3, ObjectClass::Local(1), MODULE);
         both.add_object_class(inner, MODULE).unwrap();
-        let mut seed = object(1, inner, MODULE);
-        seed.parent_id = Some(ObjectId(2));
+        let seed = object(1, inner, MODULE);
         let mut outer = object(2, ObjectClass::Local(1), MODULE);
-        outer.children = vec![ObjectId(1)];
+        outer.set_parent(inner, Some(ObjectId(1)));
         let mut cache = cache(vec![
             seed,
             outer,
@@ -433,7 +425,7 @@ mod tests {
             "only the nested use's class"
         );
         assert!(
-            cache.get(&ObjectId(2)).unwrap().children.is_empty(),
+            cache.get(&ObjectId(2)).unwrap().parents().is_empty(),
             "references to it go too"
         );
         let both = cache.get(&ObjectId(3)).unwrap();
@@ -505,8 +497,8 @@ mod tests {
         let mut objects: Vec<Object> = (10..20)
             .map(|id| object(id, ObjectClass::Global(1), Scope::Global))
             .collect();
-        objects[0].parent_id = Some(ObjectId(1));
-        objects[1].children = vec![ObjectId(1), ObjectId(11)];
+        objects[0].set_parent(ObjectClass::Local(1), Some(ObjectId(1)));
+        objects[1].set_parent(ObjectClass::Global(1), Some(ObjectId(11)));
         objects.push(object(1, ObjectClass::Local(1), MODULE));
         let mut cache = cache(objects);
         assert!(
@@ -516,7 +508,10 @@ mod tests {
 
         assert_eq!(remove_scope(&mut cache, MODULE), 1);
         assert_eq!(cache.len(), 10);
-        assert_eq!(cache.get(&ObjectId(10)).unwrap().parent_id, None);
-        assert_eq!(cache.get(&ObjectId(11)).unwrap().children, [ObjectId(11)]);
+        assert!(cache.get(&ObjectId(10)).unwrap().parents().is_empty());
+        assert_eq!(
+            cache.get(&ObjectId(11)).unwrap().parent(&ObjectClass::Global(1)),
+            Some(&ObjectId(11))
+        );
     }
 }

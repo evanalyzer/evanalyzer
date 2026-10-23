@@ -185,24 +185,25 @@ pub enum ObjectClassifyObjectsClassifyMatchHandlingSettings {
     ReclassifyIfNotMatch,
 }
 
-/// How many partners an object may coloc with at once.
+/// Which overlapping objects count as partners.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ObjectColocObjectsColocMultiplicitySettings {
-    /// Every object keeps only its single best-overlap match per other class -
-    /// e.g. a small object sitting on the border of two larger ones picks
-    /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
+    /// Every overlapping object meeting the minimum overlap is a partner -
+    /// a spot touching two others has two.
     #[default]
-    #[serde(alias = "one-to-one", alias = "oneToOne", alias = "one_to_one")]
-    OneToOne,
-    /// Every object may coloc with every overlapping partner meeting `min_coloc_area`.
     #[serde(alias = "many-to-many", alias = "manyToMany", alias = "many_to_many")]
     ManyToMany,
-    /// Only objects of these classes may coloc with more than one partner;
-    /// every other class in `classes_to_coloc` is capped to its single
-    /// best-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and
-    /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
-    /// each spot colocs with exactly one cell (the one it overlaps most).
+    /// Only the partner with the largest overlap, per class - e.g. a small
+    /// object on the border of two larger ones picks the larger overlap;
+    /// ties go to the lower `ObjectId`.
+    #[serde(alias = "one-to-one", alias = "oneToOne", alias = "one_to_one")]
+    OneToOne,
+    /// Only objects of these classes may have more than one partner; every
+    /// other class is capped to its best-overlapping one. E.g. with Cell and
+    /// Spot and `MultiFor([Cell])`, a cell can have any number of spots, but
+    /// each spot one cell (the one it overlaps most). Kept for older
+    /// pipelines - Relate Objects links spots to cells.
     #[serde(alias = "multi-for", alias = "multiFor", alias = "multi_for")]
     MultiFor(Vec<ObjectClass>),
 }
@@ -531,6 +532,30 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     /// by more than the specified threshold.
     #[serde(alias = "outliers")]
     Outliers(f32),
+}
+
+/// How a child is matched to a parent.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectRelateObjectsRelateRuleSettings {
+    /// The child belongs to the parent its centre of mass lies in - robust
+    /// for small children such as spots in a cell.
+    #[default]
+    #[serde(
+        alias = "centre-inside",
+        alias = "centreInside",
+        alias = "centre_inside"
+    )]
+    CentreInside,
+    /// The child belongs to the parent it shares the most pixels with -
+    /// for children whose centre can lie outside themselves (crescents, the
+    /// overlap regions of Colocalization).
+    #[serde(
+        alias = "largest-overlap",
+        alias = "largestOverlap",
+        alias = "largest_overlap"
+    )]
+    LargestOverlap,
 }
 
 /// Which side of the value meets a rule.
@@ -2361,55 +2386,58 @@ impl Default for ClassifyObjectsSettings {
 fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
     vec![]
 }
-/// Calculates spatial colocalization and intersections between specified object classes.
+/// Marks the objects that overlap others - "are they at the same place?".
 ///
-/// This command scans the object cache, groups objects by their designated classes,
-/// and performs spatial overlap analysis. It records colocalization relationships
-/// between intersecting entities and can optionally generate new child ROIs representing
-/// the precise intersection regions.
+/// E.g. mark the ch1 spots that overlap a ch2 spot as "ch1 with ch2": the
+/// class counts them per image, and later steps can use it (Relate Objects:
+/// the double-positive spots per cell). Every pair that overlaps is
+/// recorded as partners on both sides - which spots touch spot A. With
+/// several classes to overlap, an object is marked when it overlaps an
+/// object of each, one at a time; the area all of them share is the
+/// optional overlap region.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColocalizationSettings {
-    /// Theses are the classes the coloclization should be calculated for
-    pub classes_to_coloc: Vec<ObjectClass>,
+    /// The objects that are checked and marked (e.g. the ch1 spots).
+    pub objects: ObjectClass,
+    /// They must overlap an object of each of these classes (e.g. the ch2
+    /// spots).
+    pub overlapping: Vec<ObjectClass>,
+    /// They must not overlap an object of any of these classes (e.g. a
+    /// dead-cell marker): "overlaps A and B, but not C".
+    #[serde(default = "_serde_default_colocalization_exclude_classes")]
+    pub exclude_classes: Vec<ObjectClass>,
+    /// The overlap needed - also for an excluded class to count.
+    pub min_coloc_area: f32,
+    /// Unit of the minimum overlap: pixels, nm² or % of the smaller object.
+    pub size_unit: SizeUnitsRel,
+    /// The class the matching objects get (e.g. "ch1 with ch2"). `Unset`:
+    /// only the partners are recorded.
+    pub mark_as: ObjectClass,
+    /// The area all overlapping objects share, as a new object of this
+    /// class - for its own area and intensity. `Unset`: none.
+    pub class_for_overlapping_areas: ObjectClass,
+    /// Which overlapping objects count as partners.
+    pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
     /// Optional additional label filters.
     ///
     /// Only classes which matches all of these filters are used for coloc calculation
     pub filter_classes: Vec<ObjectClass>,
-    /// Class of the overlapping area if needed
-    ///
-    /// If defined the overlapping coloc area is added as new object and labeled with this class
-    pub class_for_overlapping_areas: ObjectClass,
-    /// How many partners an object may coloc with at once.
-    pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
-    /// Size unit for the minimum coloc area size
-    pub size_unit: SizeUnitsRel,
-    /// Minimum overlapping area size to count objects as coloc
-    pub min_coloc_area: f32,
-    /// Classes an object must NOT overlap to be considered colocalized.
-    ///
-    /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
-    /// Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
-    /// Without exclude_classes, any object satisfying that gets recorded as colocalized.
-    /// With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
-    /// So it's a "match A and B, but not C" filter
-    ///
-    /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
-    #[serde(default = "_serde_default_colocalization_exclude_classes")]
-    pub exclude_classes: Vec<ObjectClass>,
 }
 
 impl Default for ColocalizationSettings {
     fn default() -> Self {
         Self {
-            classes_to_coloc: vec![],
-            filter_classes: vec![],
-            class_for_overlapping_areas: ObjectClass::default(),
-            multiplicity: ObjectColocObjectsColocMultiplicitySettings::OneToOne,
-            size_unit: SizeUnitsRel::Pixels,
-            min_coloc_area: 0.0f32,
+            objects: ObjectClass::default(),
+            overlapping: vec![],
             exclude_classes: vec![],
+            min_coloc_area: 0.0f32,
+            size_unit: SizeUnitsRel::Pixels,
+            mark_as: ObjectClass::default(),
+            class_for_overlapping_areas: ObjectClass::default(),
+            multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
+            filter_classes: vec![],
         }
     }
 }
@@ -2559,7 +2587,7 @@ impl Default for ObjectMathSettings {
 /// to the seed it is reached from at the lowest cost, a step costing more
 /// the more the stain's brightness changes - so neighbouring cells meet
 /// where the stain is dim, not halfway between their nuclei. Each region
-/// keeps its seed's pixels and is linked to it (its parent).
+/// keeps its seed's pixels (Relate Objects links it to its seed).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -2592,6 +2620,40 @@ impl Default for PropagationSettings {
             regularization: 0.05f32,
             output_class: ObjectClass::default(),
             exclude_at_edges: bool::default(),
+        }
+    }
+}
+
+/// Links objects to the objects they belong to: each child (e.g. a spot)
+/// gets at most one parent of each parent class (e.g. its cell).
+///
+/// The results then give per parent the number of its children and the
+/// mean, median, ... of their measurements, and the parent's values next to
+/// each child. A child already linked to a parent of one of these classes
+/// is linked anew - or unlinked when no parent matches.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct RelateObjectsSettings {
+    /// The objects to link to a parent (e.g. spots).
+    pub child_classes: Vec<ObjectClass>,
+    /// The classes of the objects they belong to (e.g. Cell); a child gets
+    /// at most one parent of each.
+    pub parent_classes: Vec<ObjectClass>,
+    /// How a child is matched to a parent.
+    pub rule: ObjectRelateObjectsRelateRuleSettings,
+    /// Remove the children that don't get a parent of every parent class
+    /// (e.g. keep only the spots inside cells).
+    pub remove_without_parent: bool,
+}
+
+impl Default for RelateObjectsSettings {
+    fn default() -> Self {
+        Self {
+            child_classes: vec![],
+            parent_classes: vec![],
+            rule: ObjectRelateObjectsRelateRuleSettings::CentreInside,
+            remove_without_parent: bool::default(),
         }
     }
 }

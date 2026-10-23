@@ -533,24 +533,16 @@
       }
     },
     "ColocalizationSettings": {
-      "description": "Calculates spatial colocalization and intersections between specified object classes.\n\nThis command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
+      "description": "Marks the objects that overlap others - \"are they at the same place?\".\n\nE.g. mark the ch1 spots that overlap a ch2 spot as \"ch1 with ch2\": the\nclass counts them per image, and later steps can use it (Relate Objects:\nthe double-positive spots per cell). Every pair that overlaps is\nrecorded as partners on both sides - which spots touch spot A. With\nseveral classes to overlap, an object is marked when it overlaps an\nobject of each, one at a time; the area all of them share is the\noptional overlap region.",
       "type": "object",
       "properties": {
         "classForOverlappingAreas": {
-          "description": "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class",
+          "description": "The area all overlapping objects share, as a new object of this\nclass - for its own area and intensity. `Unset`: none.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
-        "classesToColoc": {
-          "description": "Theses are the classes the coloclization should be calculated for",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          }
-        },
         "excludeClasses": {
-          "description": "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"",
+          "description": "They must not overlap an object of any of these classes (e.g. a\ndead-cell marker): \"overlaps A and B, but not C\".",
           "type": "array",
           "default": [],
           "items": {
@@ -565,19 +557,37 @@
             "$ref": "#/$defs/ObjectClass"
           }
         },
+        "markAs": {
+          "description": "The class the matching objects get (e.g. \"ch1 with ch2\"). `Unset`:\nonly the partners are recorded.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
         "minColocArea": {
-          "description": "Minimum overlapping area size to count objects as coloc",
+          "description": "The overlap needed - also for an excluded class to count.",
           "type": "number",
           "format": "float",
           "default": 0.0
         },
         "multiplicity": {
-          "description": "How many partners an object may coloc with at once.",
+          "description": "Which overlapping objects count as partners.",
           "$ref": "#/$defs/ObjectColocObjectsColocMultiplicitySettings",
-          "default": "ONE_TO_ONE"
+          "default": "MANY_TO_MANY"
+        },
+        "objects": {
+          "description": "The objects that are checked and marked (e.g. the ch1 spots).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "overlapping": {
+          "description": "They must overlap an object of each of these classes (e.g. the ch2\nspots).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
         },
         "sizeUnit": {
-          "description": "Size unit for the minimum coloc area size",
+          "description": "Unit of the minimum overlap: pixels, nm² or % of the smaller object.",
           "$ref": "#/$defs/SizeUnitsRel",
           "default": "PIXELS"
         }
@@ -2184,20 +2194,20 @@
       ]
     },
     "ObjectColocObjectsColocMultiplicitySettings": {
-      "description": "How many partners an object may coloc with at once.",
+      "description": "Which overlapping objects count as partners.",
       "oneOf": [
         {
-          "description": "Every object keeps only its single best-overlap match per other class -\ne.g. a small object sitting on the border of two larger ones picks\nexactly one (the larger overlap; ties go to the lower `ObjectId`).",
-          "type": "string",
-          "const": "ONE_TO_ONE"
-        },
-        {
-          "description": "Every object may coloc with every overlapping partner meeting `min_coloc_area`.",
+          "description": "Every overlapping object meeting the minimum overlap is a partner -\na spot touching two others has two.",
           "type": "string",
           "const": "MANY_TO_MANY"
         },
         {
-          "description": "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).",
+          "description": "Only the partner with the largest overlap, per class - e.g. a small\nobject on the border of two larger ones picks the larger overlap;\nties go to the lower `ObjectId`.",
+          "type": "string",
+          "const": "ONE_TO_ONE"
+        },
+        {
+          "description": "Only objects of these classes may have more than one partner; every\nother class is capped to its best-overlapping one. E.g. with Cell and\nSpot and `MultiFor([Cell])`, a cell can have any number of spots, but\neach spot one cell (the one it overlaps most). Kept for older\npipelines - Relate Objects links spots to cells.",
           "type": "object",
           "properties": {
             "MULTI_FOR": {
@@ -2290,12 +2300,6 @@
           "type": "integer",
           "format": "int32"
         },
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectId"
-          }
-        },
         "colocalizedWith": {
           "type": "object",
           "additionalProperties": {
@@ -2334,15 +2338,13 @@
           },
           "uniqueItems": true
         },
-        "parentId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ObjectId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "parents": {
+          "description": "The objects this one belongs to, at most one per class: parent\nclass -> parent object (set by Relate Objects).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "default": {}
         },
         "perimeter": {
           "type": "number",
@@ -2397,7 +2399,6 @@
         "segmentationClass",
         "objectClass",
         "colocalizedWith",
-        "children",
         "track",
         "area",
         "bbox",
@@ -2436,6 +2437,21 @@
           "description": "Set difference: pixels in A that are NOT in B (A \\ B). The classic use case\nis deriving a cytoplasm-only region from a whole-cell mask and its nucleus.",
           "type": "string",
           "const": "SUBTRACT"
+        }
+      ]
+    },
+    "ObjectRelateObjectsRelateRuleSettings": {
+      "description": "How a child is matched to a parent.",
+      "oneOf": [
+        {
+          "description": "The child belongs to the parent its centre of mass lies in - robust\nfor small children such as spots in a cell.",
+          "type": "string",
+          "const": "CENTRE_INSIDE"
+        },
+        {
+          "description": "The child belongs to the parent it shares the most pixels with -\nfor children whose centre can lie outside themselves (crescents, the\noverlap regions of Colocalization).",
+          "type": "string",
+          "const": "LARGEST_OVERLAP"
         }
       ]
     },
@@ -3153,6 +3169,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "RELATE_OBJECTS"
+            }
+          },
+          "$ref": "#/$defs/RelateObjectsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "ROLLING_BALL"
             }
           },
@@ -3513,7 +3542,7 @@
       ]
     },
     "PropagationSettings": {
-      "description": "Grows a region around each seed object through a channel.\n\nE.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels and is linked to it (its parent).",
+      "description": "Grows a region around each seed object through a channel.\n\nE.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
       "type": "object",
       "properties": {
         "excludeAtEdges": {
@@ -3585,6 +3614,38 @@
         "radius",
         "filterType"
       ]
+    },
+    "RelateObjectsSettings": {
+      "description": "Links objects to the objects they belong to: each child (e.g. a spot)\ngets at most one parent of each parent class (e.g. its cell).\n\nThe results then give per parent the number of its children and the\nmean, median, ... of their measurements, and the parent's values next to\neach child. A child already linked to a parent of one of these classes\nis linked anew - or unlinked when no parent matches.",
+      "type": "object",
+      "properties": {
+        "childClasses": {
+          "description": "The objects to link to a parent (e.g. spots).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "parentClasses": {
+          "description": "The classes of the objects they belong to (e.g. Cell); a child gets\nat most one parent of each.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "removeWithoutParent": {
+          "description": "Remove the children that don't get a parent of every parent class\n(e.g. keep only the spots inside cells).",
+          "type": "boolean",
+          "default": false
+        },
+        "rule": {
+          "description": "How a child is matched to a parent.",
+          "$ref": "#/$defs/ObjectRelateObjectsRelateRuleSettings",
+          "default": "CENTRE_INSIDE"
+        }
+      }
     },
     "ResultsView": {
       "description": "One view of the results: what it is (`kind`), whether the image is\nshown beside it, and its settings - classes, columns, aggregations, the\nplate's value, the chart's axes, ... The settings are the Results\nview's own (the GUI reads and writes them); `null` until first shown.",

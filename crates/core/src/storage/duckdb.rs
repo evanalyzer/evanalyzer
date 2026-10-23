@@ -455,8 +455,7 @@ struct ObjectColumns {
     seg_class_id: Int32Builder,
     object_class_name: StringBuilder,
     object_class_id: ListBuilder<Int32Builder>,
-    parent_id: StringBuilder,
-    children: StringBuilder,
+    parent_ids: MapBuilder<Int32Builder, StringBuilder>,
     track_id: UInt64Builder,
     bbox_px: [UInt32Builder; 4],
     area_px: UInt64Builder,
@@ -480,8 +479,16 @@ const INTENSITY_COLUMNS: [&str; 8] = [
     "intensity_max_gray",
 ];
 
-/// `coloc_partner_ids` key for partners without an object class.
-const COLOC_UNSET_CLASS_KEY: i32 = -1;
+/// `coloc_partner_ids` / `parent_ids` key for a class without a number.
+const UNSET_CLASS_KEY: i32 = -1;
+
+/// A class as a `coloc_partner_ids` / `parent_ids` key.
+fn class_key(class: &ObjectClass) -> i32 {
+    match class {
+        ObjectClass::Global(n) => *n as i32,
+        ObjectClass::Unset | ObjectClass::Local(_) => UNSET_CLASS_KEY,
+    }
+}
 
 impl ObjectColumns {
     fn with_capacity(rows: usize) -> Self {
@@ -497,8 +504,7 @@ impl ObjectColumns {
             seg_class_id: Int32Builder::with_capacity(rows),
             object_class_name: strings(),
             object_class_id: ListBuilder::with_capacity(Int32Builder::with_capacity(rows), rows),
-            parent_id: strings(),
-            children: strings(),
+            parent_ids: MapBuilder::new(None, Int32Builder::new(), StringBuilder::new()),
             track_id: UInt64Builder::with_capacity(rows),
             bbox_px: std::array::from_fn(|_| UInt32Builder::with_capacity(rows)),
             area_px: UInt64Builder::with_capacity(rows),
@@ -553,16 +559,27 @@ impl ObjectColumns {
         }
     }
 
+    /// One row of `parent_ids`: parent class -> parent object id.
+    fn append_parents(
+        &mut self,
+        parents: &IndexMap<ObjectClass, ObjectId>,
+    ) -> Result<(), InternalErrors> {
+        for (class, id) in parents {
+            self.parent_ids.keys().append_value(class_key(class));
+            self.parent_ids.values().append_value(id.to_string());
+        }
+        self.parent_ids
+            .append(true)
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
     /// One row of `coloc_partner_ids`: partner class -> partner object ids.
     fn append_coloc(
         &mut self,
         colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>,
     ) -> Result<(), InternalErrors> {
         for (class, ids) in colocalized_with {
-            self.coloc_partner_ids.keys().append_value(match class {
-                ObjectClass::Global(n) => *n as i32,
-                ObjectClass::Unset | ObjectClass::Local(_) => COLOC_UNSET_CLASS_KEY,
-            });
+            self.coloc_partner_ids.keys().append_value(class_key(class));
             let partners = self.coloc_partner_ids.values();
             for id in ids {
                 partners.values().append_value(id.to_string());
@@ -658,8 +675,7 @@ impl ObjectColumns {
             ("seg_class_id", arr(&mut self.seg_class_id)),
             ("object_class_name", arr(&mut self.object_class_name)),
             ("object_class_id", arr(&mut self.object_class_id)),
-            ("parent_id", arr(&mut self.parent_id)),
-            ("children", arr(&mut self.children)),
+            ("parent_ids", arr(&mut self.parent_ids)),
             ("track_id", arr(&mut self.track_id)),
             ("centroid_x_px", c0),
             ("centroid_y_px", c1),
@@ -723,8 +739,9 @@ CREATE TABLE IF NOT EXISTS objects (
     seg_class_id         INTEGER,
     object_class_name    VARCHAR,
     object_class_id      INTEGER[],
-    parent_id            VARCHAR,
-    children             VARCHAR,
+    -- The objects this one belongs to (Relate Objects): parent class id ->
+    -- the parent object (key -1: a parent without a class).
+    parent_ids           MAP(INTEGER, UUID),
     track_id             UBIGINT,
     centroid_x_px        DOUBLE,
     centroid_y_px        DOUBLE,
@@ -937,8 +954,6 @@ impl DuckDbExporter {
                 .filter(|c| **c != ObjectClass::Unset)
                 .map(|c| self.class_label(c))
                 .collect();
-            let children_ids: Vec<String> =
-                object.children.iter().map(|id| id.to_string()).collect();
 
             let centroid_x_px = centroid.0 as f64;
             let centroid_y_px = centroid.1 as f64;
@@ -966,9 +981,7 @@ impl DuckDbExporter {
                 }
             }
             c.object_class_id.append(true);
-            c.parent_id
-                .append_option(object.parent_id.as_ref().map(|id| id.to_string()));
-            c.children.append_value(json_string_array(&children_ids));
+            c.append_parents(object.parents())?;
             c.track_id.append_value(object.track.id.0);
             c.f64(F64::CentroidXPx, centroid_x_px);
             c.f64(F64::CentroidYPx, centroid_y_px);
@@ -1859,6 +1872,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(without, ("[]".to_string(), "{}".to_string()));
+    }
+
+    #[test]
+    fn export_writes_the_parents_as_a_map_of_one_id_per_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        let mut spot = object_in_classes(1, &[5]);
+        spot.set_parent(ObjectClass::Global(3), Some(ObjectId(2)));
+        spot.set_parent(ObjectClass::Global(9), Some(ObjectId(3)));
+        cache.object_cache.insert(ObjectId(1), spot);
+        cache
+            .object_cache
+            .insert(ObjectId(2), object_in_classes(2, &[3]));
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let first = |sql: &str, order: &str| -> String {
+            conn.query_row(
+                &format!("SELECT CAST(({sql}) AS VARCHAR) FROM objects ORDER BY object_id {order} LIMIT 1"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(first("parent_ids[3]", "ASC"), ObjectId(2).to_string());
+        assert_eq!(first("parent_ids[9]", "ASC"), ObjectId(3).to_string());
+        assert_eq!(first("parent_ids", "DESC"), "{}", "the cell has no parent");
+        let spots_per_cell: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM objects WHERE parent_ids[3] = ?",
+                [ObjectId(2).to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(spots_per_cell, 1, "children are a query on the parent ids");
     }
 
     // ---- reading objects back for dataset steps ----
