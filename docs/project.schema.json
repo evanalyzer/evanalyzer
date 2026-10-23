@@ -41,6 +41,43 @@
     "plate": {
       "$ref": "#/$defs/PlateSettings"
     },
+    "resultsViews": {
+      "description": "How the results of the project's analyses are shown: its views\n(List, Plate, Charts, Tracks with their settings), the same for\nevery analysis.",
+      "$ref": "#/$defs/ResultsViews",
+      "default": {
+        "active": 1,
+        "views": [
+          {
+            "id": 1,
+            "kind": "list",
+            "name": "List",
+            "settings": null,
+            "split": false
+          },
+          {
+            "id": 2,
+            "kind": "plate",
+            "name": "Plate",
+            "settings": null,
+            "split": false
+          },
+          {
+            "id": 3,
+            "kind": "charts",
+            "name": "Charts",
+            "settings": null,
+            "split": false
+          },
+          {
+            "id": 4,
+            "kind": "tracks",
+            "name": "Tracks",
+            "settings": null,
+            "split": false
+          }
+        ]
+      }
+    },
     "schemaVersion": {
       "description": "On-disk format version of this project file. Absent on files written\nbefore versioning was introduced, which `serde(default)` reads as `0`\n- see `CURRENT_PROJECT_SCHEMA_VERSION` and `load_project_settings` (the\ncrate root's `versioning` module, not `include!()`-d here since this\nfile also feeds `build.rs`'s schema generator).",
       "type": "integer",
@@ -3547,6 +3584,69 @@
       "required": [
         "radius",
         "filterType"
+      ]
+    },
+    "ResultsView": {
+      "description": "One view of the results: what it is (`kind`), whether the image is\nshown beside it, and its settings - classes, columns, aggregations, the\nplate's value, the chart's axes, ... The settings are the Results\nview's own (the GUI reads and writes them); `null` until first shown.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable while the view exists (also when renamed or moved).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/ResultsViewKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "settings": {
+          "default": null
+        },
+        "split": {
+          "description": "\"Split with image\".",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ]
+    },
+    "ResultsViewKind": {
+      "description": "What a results view shows.",
+      "type": "string",
+      "enum": [
+        "list",
+        "plate",
+        "charts",
+        "tracks"
+      ]
+    },
+    "ResultsViews": {
+      "description": "See `ProjectSettings::results_views`.",
+      "type": "object",
+      "properties": {
+        "active": {
+          "description": "The view shown (its `id`).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResultsView"
+          }
+        }
+      },
+      "required": [
+        "views",
+        "active"
       ]
     },
     "RollingBallSettings": {

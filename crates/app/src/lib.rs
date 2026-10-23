@@ -117,6 +117,7 @@ pub mod results {
     pub use crate::api::WellsBatchFilter;
     pub use crate::api::WellsBatchFilterMulti;
     pub use crate::api::color_scale_gradient;
+    pub use crate::api::view_settings;
     pub use crate::api::{
         ImageObjectsFilter, ImageTracks, ImageTracksFilter, ResultObject, TrackPath, TrackPoint,
     };

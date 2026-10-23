@@ -5,10 +5,16 @@ use crate::commands::common::{
 };
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::global::SpeedUnit;
+use evanalyzer_app::project::load_project;
 use evanalyzer_app::results::Column;
 use evanalyzer_app::results::ExportFormat;
 use evanalyzer_app::results::ResultExport;
+use evanalyzer_app::results::view_settings::{
+    DEFAULT_LIST_COLUMNS, ListView, ViewSettings, resolve_columns,
+};
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::settings::project_settings::ResultsViewKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -112,14 +118,60 @@ fn export_table(
             "--colocalized isn't supported by the current results backend".to_string(),
         ));
     }
-    let grouping = resolve_grouping(&args.group)?;
-    let image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
-    let object_classes = resolve_object_classes(db, &args.filter.classes)?;
-    let columns: Vec<Column> = db
+    let mut grouping = resolve_grouping(&args.group)?;
+    let mut image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
+    let mut object_classes = resolve_object_classes(db, &args.filter.classes)?;
+    let mut columns: Vec<Column> = db
         .get_available_columns()?
         .into_iter()
         .map(|entry| entry.key)
         .collect();
+    // --view: as that List view of the project shows these results; the
+    // explicit flags win.
+    if let (Some(project), Some(name)) = (&args.project, &args.view) {
+        let list = list_view_of(backend, project, name)?;
+        let classes = db.get_object_classes()?;
+        let available = db.get_available_columns()?;
+        let keys = list.columns.clone().unwrap_or_else(|| {
+            DEFAULT_LIST_COLUMNS
+                .iter()
+                .map(|column| column.as_key(&classes))
+                .collect()
+        });
+        let (found, missing) = resolve_columns(&keys, &classes, &available);
+        if !missing.is_empty() {
+            eprintln!(
+                "Not in these results, left out of the view: {}",
+                missing.join(", ")
+            );
+        }
+        columns = found;
+        if args.filter.classes.is_empty()
+            && let Some(ids) = &list.classes
+        {
+            object_classes = ids
+                .iter()
+                .map(|id| ObjectClass::Global(*id))
+                .filter(|class| classes.iter().any(|known| known.global() == *class))
+                .collect();
+        }
+        if args.filter.images.is_empty() && list.images == "disabled" {
+            image_rel_paths = db
+                .get_images()?
+                .into_iter()
+                .filter(|image| image.disabled)
+                .map(|image| image.rel_path.to_string_lossy().into_owned())
+                .collect();
+            if image_rel_paths.is_empty() {
+                return Err(InternalErrors::InvalidArgument(format!(
+                    "view \"{name}\" shows only the left-out images - these results have none"
+                )));
+            }
+        }
+        if args.group.group_by.is_none() && list.rows_per_image {
+            grouping = ResolvedGrouping::PerImage(list.aggregations.clone());
+        }
+    }
 
     // `ResultExport` writes `list.{ext}`/`grouped_by_image.{ext}`/
     // `time_course*.{ext}` into a directory it owns - see
@@ -211,6 +263,34 @@ fn export_table(
     move_into_place(backend, &produced, &args.out, &scratch_dir, outcome)?;
     println!("Exported to {}", args.out.display());
     Ok(())
+}
+
+/// The List settings of view `name` (case aside) of the project at
+/// `project` - an error for no such view, or one that isn't a List.
+fn list_view_of(
+    backend: &dyn Backend,
+    project: &Path,
+    name: &str,
+) -> Result<ListView, InternalErrors> {
+    let project = load_project(backend.files(), &project.to_path_buf())?;
+    let views = &project.results_views.views;
+    let Some(view) = views
+        .iter()
+        .find(|view| view.name.eq_ignore_ascii_case(name))
+    else {
+        let names: Vec<&str> = views.iter().map(|view| view.name.as_str()).collect();
+        return Err(InternalErrors::InvalidArgument(format!(
+            "no view \"{name}\" in the project - its views: {}",
+            names.join(", ")
+        )));
+    };
+    if view.kind != ResultsViewKind::List {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "view \"{}\" is a {:?} view - --view exports List views",
+            view.name, view.kind
+        )));
+    }
+    Ok(ViewSettings::read(&view.settings).list)
 }
 
 /// The time course's CSV files to their places: `time_course.csv` to `out`,
@@ -310,6 +390,8 @@ mod tests {
                 group: GroupArgs::default(),
                 tracks: Default::default(),
                 measurements: false,
+                project: None,
+                view: None,
             },
             ExportFormat::CSV,
         )
@@ -323,6 +405,71 @@ mod tests {
         assert_eq!(body.len(), 2, "expected 2 data rows, got: {body:?}");
         assert!(content.contains("ClassA"));
         assert!(content.contains("ClassB"));
+    }
+
+    /// A project with a List view "QC" (two columns, a row per image) and
+    /// a Plate view.
+    fn project_with_views() -> crate::commands::test_support::TempProjectFile {
+        use evanalyzer_cfg::settings::project_settings::{ProjectSettings, ResultsView};
+        let mut settings = ProjectSettings::default();
+        settings.results_views.views.push(ResultsView {
+            id: 9,
+            name: "QC".into(),
+            kind: ResultsViewKind::List,
+            split: false,
+            settings: serde_json::json!({"list": {
+                "columns": ["object_class_name", "area_px", "measurement:gone_01/noise"],
+                "rowsPerImage": true,
+                "aggregations": ["Max"]
+            }}),
+        });
+        crate::commands::test_support::TempProjectFile::new(&settings)
+    }
+
+    fn view_export(view: &str, project: &Path, out: &Path) -> Result<(), InternalErrors> {
+        let db = TempResultsDb::seeded();
+        export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out: out.to_path_buf(),
+                filter: FilterArgs::default(),
+                group: GroupArgs::default(),
+                tracks: Default::default(),
+                measurements: false,
+                project: Some(project.to_path_buf()),
+                view: Some(view.into()),
+            },
+            ExportFormat::CSV,
+        )
+    }
+
+    /// `--view`: as the List view shows it - its columns (one these results
+    /// lack left out), a row per image with its aggregation.
+    #[test]
+    fn export_as_a_list_view_of_the_project() {
+        let project = project_with_views();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("qc.csv");
+        view_export("qc", &project.path, &out).expect("export as the view");
+        let content = std::fs::read_to_string(&out).expect("read csv back");
+        let header = content.lines().next().unwrap();
+        assert!(header.contains("Area [px] (MAX)"), "{header}");
+        assert!(
+            !header.contains("Circularity"),
+            "only the view's columns: {header}"
+        );
+
+        let err = view_export("Nope", &project.path, &out)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no view \"Nope\"") && err.contains("QC"),
+            "{err}"
+        );
+        let err = view_export("Plate", &project.path, &out)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exports List views"), "{err}");
     }
 
     /// `--tracks`: a row per track (here each object its own, of one time
@@ -349,6 +496,8 @@ mod tests {
                         ..Default::default()
                     },
                     measurements: false,
+                    project: None,
+                    view: None,
                 },
                 ExportFormat::CSV,
             )
@@ -381,6 +530,8 @@ mod tests {
                 group: GroupArgs::default(),
                 tracks: Default::default(),
                 measurements: false,
+                project: None,
+                view: None,
             },
             ExportFormat::XLSX,
         )
@@ -413,6 +564,8 @@ mod tests {
                 },
                 tracks: Default::default(),
                 measurements: false,
+                project: None,
+                view: None,
             },
             ExportFormat::CSV,
         )
@@ -442,6 +595,8 @@ mod tests {
                 },
                 tracks: Default::default(),
                 measurements: false,
+                project: None,
+                view: None,
             },
             ExportFormat::CSV,
         );
@@ -459,6 +614,8 @@ mod tests {
                 group,
                 tracks: Default::default(),
                 measurements: false,
+                project: None,
+                view: None,
             },
             ExportFormat::CSV,
         )
@@ -536,6 +693,8 @@ mod tests {
                 group: GroupArgs::default(),
                 tracks: Default::default(),
                 measurements: false,
+                project: None,
+                view: None,
             },
             ExportFormat::CSV,
         )

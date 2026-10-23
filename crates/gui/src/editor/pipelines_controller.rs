@@ -2717,6 +2717,7 @@ impl PipelinesController {
             modules: project.modules.clone(),
             // The preview needs none of the editor's state.
             editor: Default::default(),
+            results_views: Default::default(),
         }
     }
 

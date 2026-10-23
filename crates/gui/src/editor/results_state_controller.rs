@@ -4,6 +4,7 @@ use crate::editor::viewport_controller::ViewportController;
 mod split;
 mod tracks;
 mod tracks_all;
+mod views;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine,
     ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2,
@@ -111,14 +112,7 @@ impl DbWorker {
 const CHART_HISTOGRAM_BINS: usize = 24;
 const CHART_SCATTER_MAX_POINTS: usize = 2000;
 
-const DEFAULT_LIST_COLUMNS: [Column; 6] = [
-    Column::ImageName,
-    Column::ObjectId,
-    Column::ObjectClass,
-    Column::AreaSizePx,
-    Column::AreaSizeNm,
-    Column::Circularity,
-];
+use evanalyzer_app::results::view_settings::DEFAULT_LIST_COLUMNS;
 
 #[derive(Default)]
 struct PlaneFilter {
@@ -462,6 +456,10 @@ pub struct ResultsStateController {
     /// The list's ticked rows (this page), and the last one ticked - a
     /// Shift-click ticks every row from it.
     list_checked: Mutex<(BTreeSet<usize>, Option<usize>)>,
+    /// What the view shown names but the open analysis lacks (`views`);
+    /// `None` until a view is applied to the open analysis - nothing is
+    /// written back before.
+    view_unavailable: Mutex<Option<views::ViewUnavailable>>,
     /// The scatter's points (0..1, as drawn) and their objects' image and
     /// box - for a click on a point.
     scatter_points: Mutex<Vec<(f32, f32, String, [u32; 4])>>,
@@ -536,6 +534,7 @@ impl ResultsStateController {
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
             list_checked: Mutex::new((BTreeSet::new(), None)),
+            view_unavailable: Mutex::new(None),
             scatter_points: Mutex::new(Vec::new()),
             image_list_controller,
             export_populated: Mutex::new(false),
@@ -556,6 +555,7 @@ impl ResultsStateController {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             self.attach_split_callbacks(&ui);
+            self.attach_views_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
 
@@ -632,6 +632,9 @@ impl ResultsStateController {
                 // plate/well level, so clicking it switches tabs instead
                 // of just truncating within Matrix.
                 if index == 0 {
+                    manager.activate_first_view_of(
+                        evanalyzer_cfg::settings::project_settings::ResultsViewKind::List,
+                    );
                     state.set_rail_mode(ResultsRailMode::List);
                     manager.show_view(ResultsRailMode::List);
                     state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(vec![
@@ -2508,6 +2511,9 @@ impl ResultsStateController {
 
     fn close_database_now(&self) {
         *self.result_generator.lock().expect("Poisoned") = None;
+        *self.view_unavailable.lock().expect("Poisoned") = None;
+        // Another project (or none): its views.
+        self.push_views_in_slint();
         *self.split.lock().expect("Poisoned") = split::SplitState::default();
         *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
         *self.tracks_all.lock().expect("Poisoned") = tracks_all::TracksAllState::default();
@@ -2566,6 +2572,8 @@ impl ResultsStateController {
         let db = self._app_state.backend().open_results(&path);
         match db {
             Ok(results) => {
+                // Nothing written into the view before it's applied.
+                *self.view_unavailable.lock().expect("Poisoned") = None;
                 *self.export_populated.lock().expect("Poisened") = false;
                 // Another analysis: nothing of the last one's split.
                 *self.split.lock().expect("Poisoned") = split::SplitState::default();
@@ -2792,6 +2800,9 @@ impl ResultsStateController {
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
                 self.push_plate_settings_in_slint();
+                // The project's view shown: its settings, kind and split.
+                self.apply_active_view();
+                self.show_active_view_mode();
                 // Only the tab on screen queries the database; the others
                 // catch up when they're shown.
                 self.refresh_list();
@@ -2834,6 +2845,7 @@ impl ResultsStateController {
     /// on changes (chart kind, column(s), class filter, z/t plane, or a
     /// fresh database).
     fn refresh_charts(&self) {
+        self.remember_view();
         if !self.is_view_shown(ResultsRailMode::Charts, &self.charts_stale) {
             return;
         }
@@ -3168,6 +3180,10 @@ impl ResultsStateController {
     /// (a class, an image, a well, a plate row or column).
     pub fn show_box_in_list(&self, label: &str) {
         let group = self.chart_filter.lock().expect("Poisened").group_by;
+        // Into the project's List view, the box's objects on its settings.
+        self.activate_first_view_of(
+            evanalyzer_cfg::settings::project_settings::ResultsViewKind::List,
+        );
         let images = self.images.lock().expect("Poisened").clone();
         let total_images = images.len();
         let mut picked_images: Vec<PathBuf> = Vec::new();
@@ -3470,6 +3486,8 @@ impl ResultsStateController {
     }
 
     pub fn update_list_view(&self) {
+        // The view shown keeps what changed.
+        self.remember_view();
         if !self.is_view_shown(ResultsRailMode::List, &self.list_stale) {
             return;
         }
@@ -3699,6 +3717,7 @@ impl ResultsStateController {
     }
 
     pub fn update_matrix_view(&self) {
+        self.remember_view();
         // Hidden: refreshed anyway whenever the Matrix tab is shown.
         if *self.rail_mode.lock().expect("Poisoned") != ResultsRailMode::Matrix {
             return;
@@ -3781,6 +3800,7 @@ impl ResultsStateController {
     // not a separate one), so a change there must refresh whichever grid is
     // actually on screen rather than always the plate's.
     fn refresh_active_matrix_view(&self) {
+        self.remember_view();
         let Some(ui_ready) = self.ui.upgrade() else {
             warn!("Failed to upgrade UI handle in refresh_active_matrix_view");
             return;
@@ -7664,6 +7684,183 @@ pub(crate) mod tests {
         }
     }
 
+    fn active_view(o: &Opened) -> evanalyzer_cfg::settings::project_settings::ResultsView {
+        let project = o.controller._app_state.get_project();
+        let views = &project.results_views;
+        views
+            .views
+            .iter()
+            .find(|view| view.id == views.active)
+            .unwrap()
+            .clone()
+    }
+
+    fn view_id(o: &Opened, name: &str) -> i32 {
+        o.controller
+            ._app_state
+            .get_project()
+            .results_views
+            .views
+            .iter()
+            .find(|view| view.name == name)
+            .unwrap_or_else(|| panic!("view {name}"))
+            .id as i32
+    }
+
+    /// A change in the view shown is written into it (the project then has
+    /// unsaved changes); another view has its own settings; switching
+    /// back brings the first one's back.
+    #[test]
+    fn each_view_keeps_its_own_settings() {
+        let o = opened();
+        let s = o.state();
+        assert_eq!(s.get_views().row_count(), 4, "List, Plate, Charts, Tracks");
+        assert_eq!(active_view(&o).name, "List");
+        o.controller._app_state.clear_dirty();
+
+        s.invoke_list_transpond_changed(true);
+        drain_ui_queue();
+        assert_eq!(active_view(&o).settings["list"]["transposed"], true);
+        assert!(o.controller._app_state.is_dirty(), "the project changed");
+
+        s.invoke_view_new("list".into());
+        drain_ui_queue();
+        assert_eq!(active_view(&o).name, "List 2");
+        assert!(!s.get_list_transpond(), "a new view starts fresh");
+        assert!(!o.controller.list_filter.lock().unwrap().transpond);
+
+        s.invoke_view_selected(view_id(&o, "List"));
+        drain_ui_queue();
+        assert!(s.get_list_transpond(), "the first view's setting is back");
+        assert!(o.controller.list_filter.lock().unwrap().transpond);
+    }
+
+    /// A view of another kind shows that kind; "Show as" changes it.
+    #[test]
+    fn a_view_shows_its_kind_and_show_as_changes_it() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_view_selected(view_id(&o, "Plate"));
+        drain_ui_queue();
+        assert_eq!(s.get_rail_mode(), ResultsRailMode::Matrix);
+        assert_eq!(
+            *o.controller.rail_mode.lock().unwrap(),
+            ResultsRailMode::Matrix
+        );
+        s.invoke_view_show_as(view_id(&o, "Plate"), "list".into());
+        drain_ui_queue();
+        assert_eq!(s.get_rail_mode(), ResultsRailMode::List);
+        assert_eq!(
+            active_view(&o).kind,
+            evanalyzer_cfg::settings::project_settings::ResultsViewKind::List
+        );
+    }
+
+    /// What a view names but these results lack is said - and stays in
+    /// the view when it is written back.
+    #[test]
+    fn a_column_these_results_lack_is_named_and_kept() {
+        let o = opened();
+        let s = o.state();
+        {
+            let mut project = o.controller._app_state.get_project_write();
+            let views = &mut project.results_views;
+            let active = views.active;
+            let view = views.views.iter_mut().find(|v| v.id == active).unwrap();
+            view.settings = serde_json::json!({
+                "list": {"columns": ["object_id", "measurement:quality_09/noise"]}
+            });
+        }
+        o.controller.close_database();
+        drain_ui_queue();
+        let path = o._dir.path().join("results.evadb");
+        o.controller.open_database(path);
+        drain_ui_queue();
+        assert!(
+            s.get_view_missing()
+                .contains("measurement:quality_09/noise"),
+            "{}",
+            s.get_view_missing()
+        );
+        s.invoke_list_transpond_changed(true);
+        drain_ui_queue();
+        let columns = active_view(&o).settings["list"]["columns"].clone();
+        assert_eq!(
+            columns,
+            serde_json::json!(["object_id", "measurement:quality_09/noise"]),
+            "kept for other results"
+        );
+    }
+
+    /// Move left / right reorders the tabs; the ends stay put.
+    #[test]
+    fn views_move_left_and_right() {
+        let o = opened();
+        let s = o.state();
+        let names = |o: &Opened| -> Vec<String> {
+            o.controller
+                ._app_state
+                .get_project()
+                .results_views
+                .views
+                .iter()
+                .map(|view| view.name.clone())
+                .collect()
+        };
+        s.invoke_view_move(view_id(&o, "Charts"), -1);
+        assert_eq!(names(&o), ["List", "Charts", "Plate", "Tracks"]);
+        s.invoke_view_move(view_id(&o, "List"), -1);
+        s.invoke_view_move(view_id(&o, "Tracks"), 1);
+        assert_eq!(
+            names(&o),
+            ["List", "Charts", "Plate", "Tracks"],
+            "ends stay"
+        );
+        s.invoke_view_move(view_id(&o, "List"), 1);
+        assert_eq!(names(&o), ["Charts", "List", "Plate", "Tracks"]);
+    }
+
+    /// Rename, duplicate, delete (never the last), back to how it was
+    /// saved.
+    #[test]
+    fn views_are_renamed_duplicated_deleted_and_reverted() {
+        let o = opened();
+        let s = o.state();
+        let list = view_id(&o, "List");
+        o.controller._app_state.clear_dirty();
+        s.invoke_view_rename(list, "QC".into());
+        drain_ui_queue();
+        assert_eq!(active_view(&o).name, "QC");
+        s.invoke_view_duplicate(list);
+        drain_ui_queue();
+        assert_eq!(active_view(&o).name, "QC copy");
+        s.invoke_view_delete(view_id(&o, "QC copy"));
+        drain_ui_queue();
+        // The last tab: its neighbour on the left.
+        assert_eq!(active_view(&o).name, "Tracks");
+        s.invoke_view_selected(list);
+        drain_ui_queue();
+
+        s.invoke_list_transpond_changed(true);
+        drain_ui_queue();
+        s.invoke_view_revert(list);
+        drain_ui_queue();
+        assert_eq!(active_view(&o).name, "List", "as saved");
+        assert!(!s.get_list_transpond());
+
+        for id in [
+            view_id(&o, "Plate"),
+            view_id(&o, "Charts"),
+            view_id(&o, "Tracks"),
+        ] {
+            s.invoke_view_delete(id);
+        }
+        drain_ui_queue();
+        s.invoke_view_delete(list);
+        drain_ui_queue();
+        assert_eq!(s.get_views().row_count(), 1, "the last view stays");
+    }
+
     /// The list's images and whether each is left out (from the list's
     /// rows) - a row per image.
     fn listed_images(o: &Opened) -> Vec<(String, bool)> {
@@ -9100,8 +9297,19 @@ pub(crate) mod tests {
         state.invoke_split_changed(true);
         state.invoke_split_width_changed(512.0);
         state.invoke_split_follow_changed(false);
+        // Split or not: the view shown keeps it, in the project.
+        let split_in_view = {
+            let project = controller._app_state.get_project();
+            let views = &project.results_views;
+            views
+                .views
+                .iter()
+                .find(|v| v.id == views.active)
+                .unwrap()
+                .split
+        };
+        assert!(split_in_view);
         let saved = controller._app_state.load_app_settings().results_split;
-        assert!(saved.on);
         assert_eq!(saved.width_px, 512.0);
         assert!(!saved.follow);
         assert!(!saved.image_panel, "closed by default");

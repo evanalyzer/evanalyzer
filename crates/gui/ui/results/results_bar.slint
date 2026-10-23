@@ -1,10 +1,11 @@
 // results/results_bar.slint — Results in the top bar (boards H, L, M): the
-// view (List, Plate, Charts), the analysis shown (a menu of all), where in
-// the plate one is; on the right Z/T and Export.
+// project's views (tabs - each a List, Plate, Charts or Tracks), the
+// analysis shown (a menu of all), where in the plate one is; on the right
+// Z/T and Export.
 
-import { ResultsRailMode, ResultsState } from "../api/results.slint";
+import { ResultsRailMode, ResultsState, ResultsViewTab } from "../api/results.slint";
 import { ResultsListState } from "../api/results_list.slint";
-import { Ink, InkIcons, InkSegmented, InkButton, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { Ink, InkIcons, InkSegmented, InkButton, InkIconButton, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkTextField } from "../ink/ink.slint";
 import { GlobalPlaneStepper } from "results_common.slint";
 
 // The analysis shown: "Analysis 16 Oct ▾" - a click lists them all.
@@ -46,51 +47,118 @@ component AnalysisChip inherits Rectangle {
     }
 }
 
-// Left of the bar: view, analysis, breadcrumb.
+// One view: its name and kind; a click shows it, a double-click renames
+// it (in place), a right-click opens its menu.
+component ViewTab inherits Rectangle {
+    in property <ResultsViewTab> tab;
+    in property <bool> active;
+    // Its name is being edited, in the tab.
+    in property <bool> renaming;
+    callback clicked;
+    callback double-clicked;
+    // Where the menu opens (in the tab).
+    callback menu(length, length);
+    callback renamed(string);
+    callback rename-cancelled;
+
+    width: root.renaming ? max(180px, row.preferred-width) : row.preferred-width;
+    height: 26px;
+    border-radius: Ink.radius-md;
+    background: root.active ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    opacity: root.tab.available ? 1.0 : 0.5;
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.tab.name + " (" + root.tab.kind + ")";
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 6px;
+        Text {
+            text: root.tab.name;
+            font-size: Ink.fs-body;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Ink.text : Ink.text-dim;
+            vertical-alignment: center;
+        }
+        if root.tab.show-kind: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 16px;
+                width: kind-text.preferred-width + 10px;
+                border-radius: 4px;
+                background: Ink.field;
+                kind-text := Text {
+                    text: root.tab.kind;
+                    font-size: 10px;
+                    font-weight: 600;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: !root.renaming;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+        double-clicked => {
+            root.double-clicked();
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                root.menu(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+
+    // Enter takes the name, Esc keeps the old one.
+    // Over the name while it's edited.
+    if root.renaming: FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.rename-cancelled();
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            background: Ink.panel;
+            border-radius: Ink.radius-md;
+        }
+        InkTextField {
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            text: root.tab.name;
+            autofocus: true;
+            accepted(name) => {
+                root.renamed(name);
+            }
+        }
+    }
+}
+
+// Left of the bar: analysis, views, breadcrumb.
 export component ResultsBarNav inherits HorizontalLayout {
     spacing: 10px;
     // Left, as wide as it is: the crumbs don't stretch it.
     alignment: start;
     horizontal-stretch: 0;
 
-    VerticalLayout {
-        alignment: center;
-        InkSegmented {
-            width: ResultsState.has-tracks ? 250px : 190px;
-            label: "Results view";
-            // Split works with List and Plate.
-            disabled-index: ResultsState.split ? 2 : -1;
-            disabled-why: "Split view works with List and Plate";
-            // Tracks: only with tracked objects.
-            model: ResultsState.has-tracks ? ["List", "Plate", "Charts", "Tracks"] : ["List", "Plate", "Charts"];
-            selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : ResultsState.rail-mode == ResultsRailMode.tracks ? 3 : 0;
-            picked(i) => {
-                ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : i == 3 ? ResultsRailMode.tracks : ResultsRailMode.list;
-                ResultsState.rail-mode-selected(ResultsState.rail-mode);
-            }
-        }
-    }
+    // The view the menus act on (its id and place).
+    property <int> menu-id: -1;
+    property <int> menu-index: -1;
+    property <length> menu-x;
+    property <ResultsViewTab> menu-tab;
+    property <length> all-x;
 
-    // Full | Split with image (board Z).
-    VerticalLayout {
-        alignment: center;
-        InkSegmented {
-            width: 200px;
-            label: "Layout";
-            model: ["Full", "Split with image"];
-            selected: ResultsState.split ? 1 : 0;
-            picked(i) => {
-                ResultsState.split = i == 1;
-                ResultsState.split-changed(i == 1);
-                // Split works with List and Plate.
-                if i == 1 && ResultsState.rail-mode == ResultsRailMode.charts {
-                    ResultsState.rail-mode = ResultsRailMode.list;
-                    ResultsState.rail-mode-selected(ResultsState.rail-mode);
-                }
-            }
-        }
-    }
-
+    // The analysis shown first: then how to look at it (the views).
     chip-box := VerticalLayout {
         alignment: center;
         chip := AnalysisChip {
@@ -99,6 +167,100 @@ export component ResultsBarNav inherits HorizontalLayout {
             }
         }
     }
+
+    // The project's views: one is shown; + makes another.
+    // More views than fit: the row scrolls, and "All views" lists them.
+    property <length> tabs-max: max(200px, Ink.window-width - 860px);
+    property <bool> tabs-overflow: tabs-row.preferred-width > root.tabs-max;
+
+    tabs-box := HorizontalLayout {
+        spacing: 2px;
+        alignment: start;
+        tabs-flick := Flickable {
+            width: min(tabs-row.preferred-width, root.tabs-max);
+            content-width: tabs-row.preferred-width;
+            tabs-row := HorizontalLayout {
+                height: tabs-flick.height;
+                spacing: 2px;
+                alignment: start;
+                for tab[i] in ResultsState.views: VerticalLayout {
+                    alignment: center;
+                    // The view shown is scrolled into sight - when it's
+                    // chosen, and when the tabs are made (opening results).
+                    property <bool> shown: tab.id == ResultsState.active-view;
+                    function into-sight() {
+                        if self.x + tabs-flick.content-x < 0 {
+                            tabs-flick.content-x = -self.x;
+                        } else if self.x + self.width + tabs-flick.content-x > tabs-flick.width {
+                            tabs-flick.content-x = tabs-flick.width - self.x - self.width;
+                        }
+                    }
+                    changed shown => {
+                        if self.shown {
+                            self.into-sight();
+                        }
+                    }
+                    init => {
+                        if self.shown {
+                            self.into-sight();
+                        }
+                    }
+                    ViewTab {
+                        tab: tab;
+                        active: tab.id == ResultsState.active-view;
+                        renaming: tab.id == ResultsState.renaming-view;
+                        clicked => {
+                            ResultsState.renaming-view = -1;
+                            if tab.id != ResultsState.active-view {
+                                ResultsState.view-selected(tab.id);
+                            }
+                        }
+                        double-clicked => {
+                            ResultsState.renaming-view = tab.id;
+                        }
+                        renamed(name) => {
+                            ResultsState.renaming-view = -1;
+                            ResultsState.view-rename(tab.id, name);
+                        }
+                        rename-cancelled => {
+                            ResultsState.renaming-view = -1;
+                        }
+                        menu(x, y) => {
+                            root.menu-id = tab.id;
+                            root.menu-index = i;
+                            root.menu-tab = tab;
+                            root.menu-x = self.absolute-position.x - root.absolute-position.x + x;
+                            view-menu.show();
+                        }
+                    }
+                }
+            }
+        }
+        if root.tabs-overflow: VerticalLayout {
+            alignment: center;
+            all-button := InkIconButton {
+                icon: InkIcons.caret-down;
+                label: "All views";
+                size: 26px;
+                clicked => {
+                    root.all-x = self.absolute-position.x - root.absolute-position.x;
+                    all-menu.show();
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            new-button := InkIconButton {
+                icon: InkIcons.add;
+                label: "New view";
+                size: 26px;
+                clicked => {
+                    new-menu.show();
+                }
+            }
+        }
+    }
+
 
     // Inside a well (board H): Plate › Well C3 › D3_03.vsi - a click goes
     // back. Not at the plate itself (the tab says that); "All results" is
@@ -129,6 +291,159 @@ export component ResultsBarNav inherits HorizontalLayout {
                     color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
                     vertical-alignment: center;
                     overflow: elide;
+                }
+            }
+        }
+    }
+
+    // Every view, the one shown ticked - for when they don't all fit.
+    all-menu := PopupWindow {
+        x: root.all-x;
+        y: Ink.bar-h - 6px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.bar-h - 6px;
+            menu-width: 260px;
+            InkMenuCaption {
+                text: "VIEWS · \{ResultsState.views.length}";
+            }
+            for tab in ResultsState.views: InkMenuItem {
+                text: tab.name;
+                shortcut: tab.kind;
+                checked: tab.id == ResultsState.active-view;
+                enabled: tab.available;
+                clicked => {
+                    if tab.id != ResultsState.active-view {
+                        ResultsState.view-selected(tab.id);
+                    }
+                }
+            }
+        }
+    }
+
+    // + : a new view of a kind, or a copy of the one shown.
+    new-menu := PopupWindow {
+        x: new-button.absolute-position.x - root.absolute-position.x;
+        y: Ink.bar-h - 6px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.bar-h - 6px;
+            menu-width: 260px;
+            InkMenuCaption {
+                text: "NEW VIEW";
+            }
+            InkMenuItem {
+                text: "List";
+                clicked => {
+                    ResultsState.view-new("list");
+                }
+            }
+            InkMenuItem {
+                text: "Plate";
+                clicked => {
+                    ResultsState.view-new("plate");
+                }
+            }
+            InkMenuItem {
+                text: "Charts";
+                clicked => {
+                    ResultsState.view-new("charts");
+                }
+            }
+            InkMenuItem {
+                text: "Tracks";
+                enabled: ResultsState.has-tracks;
+                clicked => {
+                    ResultsState.view-new("tracks");
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                text: "A copy of the view shown";
+                clicked => {
+                    ResultsState.view-new("copy");
+                }
+            }
+        }
+    }
+
+    // A view's menu (right-click on its tab).
+    view-menu := PopupWindow {
+        x: root.menu-x;
+        y: Ink.bar-h - 6px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.bar-h - 6px;
+            menu-width: 260px;
+            InkMenuCaption {
+                text: "SHOW AS";
+            }
+            InkMenuItem {
+                text: "List";
+                checked: root.menu-tab.kind == "LIST";
+                clicked => {
+                    ResultsState.view-show-as(root.menu-id, "list");
+                }
+            }
+            InkMenuItem {
+                text: "Plate";
+                checked: root.menu-tab.kind == "PLATE";
+                clicked => {
+                    ResultsState.view-show-as(root.menu-id, "plate");
+                }
+            }
+            InkMenuItem {
+                text: "Charts";
+                checked: root.menu-tab.kind == "CHART";
+                clicked => {
+                    ResultsState.view-show-as(root.menu-id, "charts");
+                }
+            }
+            InkMenuItem {
+                text: "Tracks";
+                checked: root.menu-tab.kind == "TRACKS";
+                enabled: ResultsState.has-tracks;
+                clicked => {
+                    ResultsState.view-show-as(root.menu-id, "tracks");
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                text: "Rename…";
+                clicked => {
+                    ResultsState.renaming-view = root.menu-id;
+                }
+            }
+            InkMenuItem {
+                text: "Move left";
+                enabled: root.menu-index > 0;
+                clicked => {
+                    ResultsState.view-move(root.menu-id, -1);
+                }
+            }
+            InkMenuItem {
+                text: "Move right";
+                enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views.length - 1;
+                clicked => {
+                    ResultsState.view-move(root.menu-id, 1);
+                }
+            }
+            InkMenuItem {
+                text: "Duplicate";
+                clicked => {
+                    ResultsState.view-duplicate(root.menu-id);
+                }
+            }
+            InkMenuItem {
+                text: "Back to how it was saved";
+                enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views-revertable.length && ResultsState.views-revertable[root.menu-index];
+                clicked => {
+                    ResultsState.view-revert(root.menu-id);
+                }
+            }
+            InkMenuItem {
+                text: "Delete";
+                danger: true;
+                enabled: ResultsState.views.length > 1;
+                clicked => {
+                    ResultsState.view-delete(root.menu-id);
                 }
             }
         }
@@ -176,7 +491,7 @@ export component ResultsBarNav inherits HorizontalLayout {
     }
 }
 
-// Right of the bar: Z/T, Export.
+// Right of the bar: Z/T, Full | Split, Export.
 export component ResultsBarActions inherits HorizontalLayout {
     spacing: 8px;
     // Its own width at the right: the bar's spacer takes the rest.
@@ -186,6 +501,25 @@ export component ResultsBarActions inherits HorizontalLayout {
         horizontal-stretch: 0;
         GlobalPlaneStepper { }
     }
+    // Full | Split with image (board Z): how the view is laid out, beside
+    // Z/T and Export.
+    VerticalLayout {
+        alignment: center;
+        InkSegmented {
+            width: 200px;
+            label: "Layout";
+            model: ["Full", "Split with image"];
+            selected: ResultsState.split ? 1 : 0;
+            // A chart has no image to show beside it.
+            disabled-index: ResultsState.rail-mode == ResultsRailMode.charts ? 1 : -1;
+            disabled-why: "Split view works with List, Plate and Tracks";
+            picked(i) => {
+                ResultsState.split = i == 1;
+                ResultsState.split-changed(i == 1);
+            }
+        }
+    }
+
     VerticalLayout {
         alignment: center;
         horizontal-stretch: 0;

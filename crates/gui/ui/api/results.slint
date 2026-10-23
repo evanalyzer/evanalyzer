@@ -12,6 +12,18 @@ export enum MatrixLevel { plate, well, object }
 
 export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time }
 
+// One of the project's results views (the bar's tabs).
+export struct ResultsViewTab {
+    id: int,
+    name: string,
+    // "LIST", "PLATE", "CHART", "TRACKS".
+    kind: string,
+    // A Tracks view without tracked objects can't show anything.
+    available: bool,
+    // The kind badge - not when the name says it already ("List").
+    show-kind: bool,
+}
+
 export struct BreadcrumbItem {
     label: string,
 }
@@ -325,6 +337,28 @@ export global ResultsState {
     in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
     in-out property <[BreadcrumbItem]> breadcrumb: [{ label: "All results" }];
     callback rail-mode-selected(ResultsRailMode);
+
+    // The project's results views - each a List, Plate, Charts or Tracks
+    // with its own settings, saved as they change (`views.rs`).
+    in property <[ResultsViewTab]> views: [];
+    in property <int> active-view: 0;
+    // Per view: it differs from the project as saved ("Back to how it was
+    // saved").
+    in property <[bool]> views-revertable: [];
+    // What the view names but these results lack ("" nothing).
+    in property <string> view-missing: "";
+    callback view-selected(int);
+    // "list", "plate", "charts", "tracks" or "copy" (of the one shown).
+    callback view-new(string);
+    callback view-duplicate(int);
+    callback view-show-as(int, string);
+    callback view-rename(int, string);
+    callback view-revert(int);
+    callback view-delete(int);
+    // Moves a view one place left (-1) or right (1).
+    callback view-move(int, int);
+    // The view whose name is edited in its tab (-1 none).
+    in-out property <int> renaming-view: -1;
     // Index of the clicked breadcrumb segment (always < length - 1).
     callback breadcrumb-nav(int);
 

@@ -45,6 +45,17 @@ export component ResultsView inherits Rectangle {
             }
         }
 
+        // The view names something these results lack: left out here,
+        // kept in the view for other results.
+        if ResultsState.view-missing != "": VerticalLayout {
+            padding: 12px;
+            padding-bottom: 0px;
+            InkBanner {
+                tone: InkTone.warn;
+                text: ResultsState.view-missing;
+            }
+        }
+
         if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
             vertical-stretch: 1;
         }

@@ -55,6 +55,9 @@ pub struct UiState {
     /// (e.g. "open a project" before doing any I/O) check for unsaved
     /// changes without a round trip through the event loop.
     dirty: AtomicBool,
+    /// The results views as the project was last saved (or opened) - for
+    /// "Back to how it was saved".
+    saved_results_views: Mutex<evanalyzer_cfg::settings::project_settings::ResultsViews>,
     /// Snapshots of `ProjectWithRuntime::settings` taken right before a
     /// mutation, oldest first. `ProjectSettings` holds only metadata/geometry
     /// (paths, IDs, object polygons, pipeline params - no pixel buffers), so
@@ -111,6 +114,7 @@ impl UiState {
             app,
             ui_handle: handle,
             dirty: AtomicBool::new(false),
+            saved_results_views: Mutex::new(Default::default()),
             undo_stack: Mutex::new(VecDeque::new()),
             redo_stack: Mutex::new(VecDeque::new()),
             last_checkpoint_at: Mutex::new(Instant::now()),
@@ -523,6 +527,9 @@ impl UiState {
     /// Clears the unsaved-changes indicator.
     pub fn clear_dirty(&self) {
         self.dirty.store(false, Ordering::Relaxed);
+        // Saved (or opened) as it is: the views to go back to.
+        *self.saved_results_views.lock().expect("Poisoned") =
+            self.get_project().results_views.clone();
         let ui = self.ui_handle.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
@@ -531,6 +538,20 @@ impl UiState {
         })
         .ok();
         self.set_window_title(false);
+    }
+
+    /// Results view `id` as the project was last saved (`None`: made since).
+    pub fn saved_results_view(
+        &self,
+        id: u32,
+    ) -> Option<evanalyzer_cfg::settings::project_settings::ResultsView> {
+        self.saved_results_views
+            .lock()
+            .expect("Poisoned")
+            .views
+            .iter()
+            .find(|view| view.id == id)
+            .cloned()
     }
 
     /// Whether the project has unsaved changes. Safe to call from any
