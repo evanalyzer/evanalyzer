@@ -7,7 +7,8 @@ use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use crate::workspace::extensions::object_ext::ObjectExt;
 use crate::workspace::extensions::utils::{
-    ASSIGNED_WAVELENGTHS, channel_colors, channel_display_name, get_relative_key, is_in_root,
+    ASSIGNED_WAVELENGTHS, channel_colors, class_name_of_channel,
+    get_relative_key, is_in_root,
     rgb_to_u32, wavelength_colors,
 };
 use crate::workspace::{FocusChannels, PipelineFocus};
@@ -1063,7 +1064,7 @@ impl ProjectExt for ProjectWithRuntime {
                         .map(|(channel_id, ch)| Class {
                             id: 0, // `add_class` gives it the next free one
                             color: rgb_to_u32(colors[channel_id]),
-                            name: channel_display_name(&ch.name, *channel_id),
+                            name: class_name_of_channel(&ch.name, *channel_id),
                             notes: "".into(),
                         })
                         .collect()
@@ -2429,7 +2430,7 @@ mod tests {
             .filter(|c| c.name != "Background")
             .collect();
         let names: Vec<&str> = classes.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["Channel 1", "Channel 2", "Channel 3"]);
+        assert_eq!(names, ["Class 0", "Class 1", "Class 2"]);
         assert_eq!(
             classes.iter().map(|c| c.color).collect::<Vec<_>>(),
             [0xFF0000, 0x00FF00, 0x0000FF]

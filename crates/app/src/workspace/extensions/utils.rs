@@ -303,11 +303,22 @@ pub fn wavelength_colors(channels: &[(i32, f32)]) -> std::collections::BTreeMap<
         .collect()
 }
 
-/// A channel's name for display: its own, or "Channel N" (1-based) when the
-/// image has none.
+/// A channel's name for display: its own, or "Channel N" (N its index,
+/// from 0 like the channels) when the image has none.
 pub fn channel_display_name(name: &str, channel: i32) -> String {
     if name.trim().is_empty() {
-        format!("Channel {}", channel + 1)
+        format!("Channel {channel}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// The name of a class made from an image channel ("Add classes from
+/// image"): the channel's own name, or "Class N" (N the channel's index,
+/// from 0) when the image has none.
+pub fn class_name_of_channel(name: &str, channel: i32) -> String {
+    if name.trim().is_empty() {
+        format!("Class {channel}")
     } else {
         name.to_string()
     }
@@ -499,8 +510,11 @@ mod tests {
 
     #[test]
     fn unnamed_channels_are_numbered_from_one() {
-        assert_eq!(channel_display_name("", 0), "Channel 1");
-        assert_eq!(channel_display_name("  ", 2), "Channel 3");
+        assert_eq!(channel_display_name("", 0), "Channel 0");
+        assert_eq!(channel_display_name("  ", 2), "Channel 2");
+        assert_eq!(class_name_of_channel("", 0), "Class 0");
+        assert_eq!(class_name_of_channel("  ", 2), "Class 2");
+        assert_eq!(class_name_of_channel("DAPI", 0), "DAPI");
         assert_eq!(channel_display_name("DAPI", 0), "DAPI");
     }
 
