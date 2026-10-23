@@ -586,7 +586,13 @@ impl ViewportImageController {
                         //let _normalized_val = raw_val * 100.0;
                         let scaled_val =
                             crate::editor::view_channel::raw_value(raw_val, ctx.bit_depth);
-                        pixel_values.push(format!("{}: {:.0}", channel.name, scaled_val));
+                        // An image without channel names: the names the
+                        // channels panel shows ("Channel 0").
+                        let name = evanalyzer_app::utils::channel_display_name(
+                            &channel.name,
+                            channel.c_stack,
+                        );
+                        pixel_values.push(format!("{name}: {:.0}", scaled_val));
                     }
                 }
             }
