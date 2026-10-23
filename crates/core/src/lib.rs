@@ -13,6 +13,7 @@ mod storage;
 mod utils;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
+pub use crate::job::job_generator::random_job_name;
 pub use crate::storage::duckdb::shared_connection as open_results_database;
 pub use crate::utils::resources::SystemDiagnostics;
 pub use crate::utils::resources::cpu_ram_diagnostics;

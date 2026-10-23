@@ -2734,6 +2734,9 @@ impl ResultsStateController {
                             classes.iter().map(|class| class.global()).collect();
                         *self.classes.lock().expect("Poisened") = classes.clone();
                         self.set_object_classes_in_slint(&classes);
+                        // Another analysis: every class drawn again.
+                        self.split.lock().expect("Poisoned").hidden_classes.clear();
+                        self.split_push_class_items();
                     }
                     Err(err) => {
                         error!("{}", err);
@@ -2990,7 +2993,7 @@ impl ResultsStateController {
                 related: RelatedTo::ChildrenOf(c.parent_class, id),
             },
             Some(Column::ColocCount(class)) => Drill {
-                label: format!("{} touching {}", name(class), short_object_id(&id)),
+                label: format!("{} coloc with {}", name(class), short_object_id(&id)),
                 class,
                 related: RelatedTo::PartnersOf(class, id),
             },
@@ -5506,7 +5509,7 @@ fn image_state_items() -> Vec<MultiSelectItem> {
 }
 
 /// "A row per": Objects, Images and - when the results have
-/// Colocalization partners (`pairs`) - Overlapping pairs; `selected` is the
+/// Colocalization partners (`pairs`) - Coloc pairs; `selected` is the
 /// chosen one's key.
 fn group_by_items(selected: &str, pairs: bool) -> Vec<MultiSelectItem> {
     let item = |key: &str, value: &str| MultiSelectItem {
@@ -5518,7 +5521,7 @@ fn group_by_items(selected: &str, pairs: bool) -> Vec<MultiSelectItem> {
     };
     let mut items = vec![item("objects", "Objects"), item("images", "Images")];
     if pairs {
-        items.push(item("pairs", "Overlapping pairs"));
+        items.push(item("pairs", "Coloc pairs"));
     }
     items
 }
@@ -6878,7 +6881,7 @@ pub(crate) mod tests {
 
     /// Relate Objects' links show up as the Children and Linked objects
     /// groups; ticking them adds the related columns to the list, and
-    /// "Overlapping pairs" is a row type.
+    /// "Coloc pairs" is a row type.
     #[test]
     fn the_children_and_linked_objects_groups_add_their_columns() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -6904,7 +6907,7 @@ pub(crate) mod tests {
         assert_eq!(values(state.get_list_children_items()), ["ClassB in ClassA"]);
         assert_eq!(values(state.get_list_parent_items()), ["Parent · ClassA"]);
         assert!(
-            values(state.get_list_group_by_items()).contains(&"Overlapping pairs".to_string()),
+            values(state.get_list_group_by_items()).contains(&"Coloc pairs".to_string()),
             "the results have colocalization partners"
         );
 
@@ -6947,7 +6950,7 @@ pub(crate) mod tests {
         assert!(state.get_list_rows().row_count() > 1, "back to every object");
 
         // The first object touches the ClassB object (seeded partners): its
-        // "Partners ClassB · Count" opens it.
+        // "Coloc with ClassB" opens it.
         state.invoke_list_columns_item_selected("n_colocalized_class_ClassB".into(), true);
         drain_ui_queue();
         let headers: Vec<String> = state
@@ -6957,7 +6960,7 @@ pub(crate) mod tests {
             .collect();
         let partners = headers
             .iter()
-            .position(|h| h == "Partners ClassB · Count")
+            .position(|h| h == "Coloc with ClassB")
             .expect("the partners' count column");
         assert!(state.get_list_column_drill().row_data(partners).unwrap());
         state.invoke_list_drill(0, partners as i32);
@@ -6965,7 +6968,7 @@ pub(crate) mod tests {
         assert_eq!(state.get_list_rows().row_count(), 1, "its one partner");
         assert_eq!(
             state.get_list_drill_label().as_str(),
-            "ClassB touching 000000000000"
+            "ClassB coloc with 000000000000"
         );
         state.invoke_list_drill_up();
         drain_ui_queue();
@@ -6974,6 +6977,34 @@ pub(crate) mod tests {
         assert!(controller.list_filter.lock().unwrap().with_coloc_details);
         state.invoke_list_group_by_selected("objects".into());
         assert!(!controller.list_filter.lock().unwrap().with_coloc_details);
+    }
+
+    /// The split image's OBJECTS list: every class, ticked; an unticked
+    /// one is hidden, "all" shows them again.
+    #[test]
+    fn the_split_drawer_picks_the_classes_drawn() {
+        let (ui, controller) = controller_with_open_database();
+        drain_ui_queue();
+        let state = ui.global::<ResultsState>();
+        let ticked = || -> Vec<(String, bool)> {
+            state
+                .get_split_class_items()
+                .iter()
+                .map(|item| (item.value.to_string(), item.selected))
+                .collect()
+        };
+        assert_eq!(ticked(), [("ClassA".into(), true), ("ClassB".into(), true)]);
+
+        state.invoke_split_class_selected("1".into(), false);
+        drain_ui_queue();
+        assert_eq!(ticked(), [("ClassA".into(), false), ("ClassB".into(), true)]);
+        assert_eq!(state.get_split_class_summary().as_str(), "1 of 2");
+        assert!(controller.split.lock().unwrap().hidden_classes.contains(&1));
+
+        state.invoke_split_class_select_all(true);
+        drain_ui_queue();
+        assert!(controller.split.lock().unwrap().hidden_classes.is_empty());
+        assert_eq!(state.get_split_class_summary().as_str(), "2 of 2");
     }
 
     #[test]

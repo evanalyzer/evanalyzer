@@ -885,7 +885,7 @@ impl ResultsStateController {
             state.set_list_aggregate(aggregate_summary);
             let rows = match (group_by, coloc) {
                 (ListGroupBy::Images, _) => ("images", "Images"),
-                (ListGroupBy::Objects, true) => ("pairs", "Overlapping pairs"),
+                (ListGroupBy::Objects, true) => ("pairs", "Coloc pairs"),
                 (ListGroupBy::Objects, false) => ("objects", "Objects"),
             };
             state.set_list_group_by_items(model(group_by_items(rows.0, has_partners)));

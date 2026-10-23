@@ -3,6 +3,9 @@
 
 export global RunAnalysisState {
     in-out property <string> job_name: "";
+    // The name the run gets when the field stays empty - drawn when the
+    // dialog opens.
+    in property <string> job_name_placeholder: "";
     /// Run only the dataset steps, on a copy of an earlier analysis.
     in-out property <bool> dataset_only: false;
     /// Whether the project has enabled dataset steps to run.

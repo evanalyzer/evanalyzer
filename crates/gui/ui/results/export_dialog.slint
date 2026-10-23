@@ -351,7 +351,7 @@ export component ExportDialog inherits InkDialog {
                     }
                 }
                 CheckBox {
-                    text: "A row per overlapping pair";
+                    text: "A row per coloc pair";
                     checked <=> ExportDialogState.with-list-coloc-details;
                     enabled: ExportDialogState.with-list-view;
                 }

@@ -121,7 +121,7 @@ fn export_table(
         .into_iter()
         .map(|entry| entry.key)
         .collect();
-    // A row per pair of overlapping objects (a view's "Overlapping pairs").
+    // A row per pair of overlapping objects (a view's "Coloc pairs").
     let mut overlapping_pairs = false;
     // --view: as that List view of the project shows these results; the
     // explicit flags win.

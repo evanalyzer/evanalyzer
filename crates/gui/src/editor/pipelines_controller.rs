@@ -3102,6 +3102,7 @@ impl PipelinesController {
 
         let state = ui.global::<RunAnalysisState>();
         state.set_job_name("".into());
+        state.set_job_name_placeholder(evanalyzer_app::analysis::random_job_name().into());
         state.set_dataset_only(false);
         state.set_has_dataset_steps(has_dataset_steps);
         state.set_base_names(ModelRc::new(VecModel::from(names)));
@@ -3119,6 +3120,11 @@ impl PipelinesController {
         };
         let state = ui.global::<RunAnalysisState>();
         let job_name = state.get_job_name().to_string();
+        // Left blank: the name the dialog showed.
+        let job_name = match job_name.trim().is_empty() {
+            true => state.get_job_name_placeholder().to_string(),
+            false => job_name,
+        };
         let base_results = state
             .get_dataset_only()
             .then(|| {
@@ -11354,11 +11360,16 @@ mod tests {
         assert_eq!(task.job_name.as_deref(), Some("  run 1  "));
         assert_eq!(task.project_path, PathBuf::from("/data/exp"));
 
-        // A blank job name means none.
+        // A blank job name: the random one the dialog showed.
+        let shown = ui
+            .global::<RunAnalysisState>()
+            .get_job_name_placeholder()
+            .to_string();
+        assert!(!shown.is_empty(), "a name is drawn when the dialog opens");
         ui.global::<RunAnalysisState>().set_job_name("   ".into());
         ui.global::<RunAnalysisState>().invoke_confirm();
         let task = controller.task_request.0.lock().unwrap().take().unwrap();
-        assert_eq!(task.job_name, None);
+        assert_eq!(task.job_name.as_deref(), Some(shown.as_str()));
     }
 
     #[test]

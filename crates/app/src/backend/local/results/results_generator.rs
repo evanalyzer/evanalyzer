@@ -7001,11 +7001,11 @@ mod tests {
         let classes: Vec<Class> = vec![];
         assert_eq!(
             Column::ColocCount(ObjectClass::Global(7)).display_label(&classes),
-            "Partners class 7 · Count"
+            "Coloc with class 7"
         );
         assert_eq!(
             Column::ColocCount(ObjectClass::Unset).display_label(&classes),
-            "Partners unset · Count"
+            "Coloc with unset"
         );
     }
 

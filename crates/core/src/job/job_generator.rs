@@ -186,6 +186,12 @@ pub fn generate_dataset_job_from_project_settings(
     job
 }
 
+/// A random job name ("brave_otter") - what a run without a name gets; the
+/// run dialog shows it before, so the results' name is known.
+pub fn random_job_name() -> String {
+    petname::petname(2, "_").expect("Problem in random job name generator")
+}
+
 /// Creates `<project_path>/results/<date>__<job_name>` for a new run; a
 /// blank `job_name` gets a random one. Returns the folder and the name.
 fn create_results_dir(
@@ -197,7 +203,7 @@ fn create_results_dir(
         .as_deref()
         .map(sanitize_job_name)
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| petname::petname(2, "_").expect("Problem in random job name generator"));
+        .unwrap_or_else(random_job_name);
     let output_path = project_path
         .join("results")
         .join(format!("{file_date}__{job_name}"));

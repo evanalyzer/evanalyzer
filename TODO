@@ -371,3 +371,4 @@ Results (aggregates computed by the queries, nothing stored):
 - [x] `get_centroid()` is the centre of mass (was the bbox centre, now `get_bbox_center()`); both stored (`centroid_*`, `bbox_center_*`) - 2026-10-23, BENCHMARK.md.
 - [ ] Linked objects: the parent's columns are the ticked ones (one picker less than board U1's "Its columns"); a picker of its own if users need other columns.
 - [x] Editor viewer: the selected object was drawn magenta-ish, not yellow - `Color::from_argb_u8(0xfc, 0xe9, 0x03, alpha)` had the alpha last (Slint: alpha first) - 2026-10-23.
+- [x] Results split view: the image drawer's OBJECTS list picks which classes are drawn on the split image (session only, not saved in the view); "Overlapping pairs" → "Coloc pairs", "Partners X · Count" → "Coloc with X" - 2026-10-23.

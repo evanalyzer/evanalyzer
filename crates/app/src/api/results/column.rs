@@ -257,12 +257,10 @@ impl Column {
             Column::ColocCount(class_id) => classes
                 .iter()
                 .find(|class| class.global() == *class_id)
-                .map(|class| format!("Partners {} · Count", class.name))
+                .map(|class| format!("Coloc with {}", class.name))
                 .unwrap_or_else(|| match class_id {
-                    ObjectClass::Global(n) => format!("Partners class {n} · Count"),
-                    ObjectClass::Unset | ObjectClass::Local(_) => {
-                        "Partners unset · Count".to_string()
-                    }
+                    ObjectClass::Global(n) => format!("Coloc with class {n}"),
+                    ObjectClass::Unset | ObjectClass::Local(_) => "Coloc with unset".to_string(),
                 }),
             Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
