@@ -144,7 +144,8 @@ component ViewTab inherits Rectangle {
     }
 }
 
-// Left of the bar: analysis, views, breadcrumb.
+// Left of the bar: analysis, views (the plate's way into a well is in the
+// plate's own head - results_matrix.slint).
 export component ResultsBarNav inherits HorizontalLayout {
     spacing: 10px;
     // Left, as wide as it is: the crumbs don't stretch it.
@@ -261,40 +262,6 @@ export component ResultsBarNav inherits HorizontalLayout {
         }
     }
 
-
-    // Inside a well (board H): Plate › Well C3 › D3_03.vsi - a click goes
-    // back. Not at the plate itself (the tab says that); "All results" is
-    // the List tab.
-    if ResultsState.breadcrumb.length > 2: HorizontalLayout {
-        spacing: 6px;
-        for item[i] in ResultsState.breadcrumb: HorizontalLayout {
-            spacing: 6px;
-            if i > 1: Text {
-                text: "›";
-                color: Ink.text-faint;
-                font-size: Ink.fs-body;
-                vertical-alignment: center;
-            }
-            if i > 0: crumb-ta := TouchArea {
-                // Long image names don't push the bar.
-                width: min(crumb-text.preferred-width, 180px);
-                enabled: i < ResultsState.breadcrumb.length - 1;
-                mouse-cursor: crumb-ta.enabled ? pointer : default;
-                clicked => {
-                    ResultsState.breadcrumb-nav(i);
-                }
-                crumb-text := Text {
-                    width: 100%;
-                    text: item.label;
-                    font-size: Ink.fs-body;
-                    font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
-                    color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
-        }
-    }
 
     // Every view, the one shown ticked - for when they don't all fit.
     all-menu := PopupWindow {

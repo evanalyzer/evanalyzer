@@ -60,4 +60,14 @@ export global ImagesListState {
     // The images of the selected well.
     in property <[ImageItemData]> well-images: [];
     callback well-selected(int);
+
+    // -- The quick picker of the editor's image chip --
+    // The images matching the picker's search, at most `QUICK_PICK_LIMIT`.
+    in property <[ImageItemData]> quick-images: [];
+    // How many images match, also those not in `quick-images`.
+    in property <int> quick-matches: 0;
+    // Index into `quick-images` of the open image; -1 not among them.
+    in property <int> quick-current: -1;
+    // New search text (also "" when the picker opens).
+    callback quick-search(string);
 }

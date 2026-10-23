@@ -2,7 +2,7 @@
 // (single image + detected-object markers), all three drill levels driven
 // by ResultsState.matrix-level so the breadcrumb + this one view swap in
 // place rather than opening new windows.
-import { InkBanner, InkButton, InkButtonKind, InkCaption, InkHint, InkIcons, InkListRow, InkTone } from "../ink/ink.slint";
+import { InkBanner, InkButton, InkButtonKind, InkCaption, InkHint, InkIconButton, InkIcons, InkListRow, InkTone } from "../ink/ink.slint";
 import { ListView } from "std-widgets.slint";
 import { LineEdit } from "../ink/std_compat.slint";
 import { MatrixCell, MatrixLevel, ObjectMarker, ResultsState } from "../api/results.slint";
@@ -715,6 +715,58 @@ export component ResultsMatrixView inherits Rectangle {
                     padding-top: 10px;
                     padding-bottom: 6px;
                     spacing: 12px;
+                    // Inside a well or an image: where (Plate › Well C3 ›
+                    // D3_03.vsi) - a click on a part goes back there, ‹ one
+                    // level up. Here with the plate, not in the bar: the
+                    // bar is the views'.
+                    if ResultsState.breadcrumb.length > 2: HorizontalLayout {
+                        spacing: 6px;
+                        horizontal-stretch: 0;
+                        VerticalLayout {
+                            alignment: center;
+                            InkIconButton {
+                                icon: InkIcons.caret-left;
+                                label: "Back";
+                                size: 24px;
+                                clicked => {
+                                    ResultsState.breadcrumb-nav(ResultsState.breadcrumb.length - 2);
+                                }
+                            }
+                        }
+                        for item[i] in ResultsState.breadcrumb: HorizontalLayout {
+                            spacing: 6px;
+                            if i > 1: Text {
+                                text: "›";
+                                color: Ink.text-faint;
+                                font-size: Ink.fs-body;
+                                vertical-alignment: center;
+                            }
+                            if i > 0: crumb-ta := TouchArea {
+                                // Long image names don't push the head.
+                                width: min(crumb-text.preferred-width, 220px);
+                                enabled: i < ResultsState.breadcrumb.length - 1;
+                                mouse-cursor: crumb-ta.enabled ? pointer : default;
+                                clicked => {
+                                    ResultsState.breadcrumb-nav(i);
+                                }
+                                crumb-text := Text {
+                                    width: 100%;
+                                    text: item.label;
+                                    font-size: Ink.fs-body;
+                                    font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
+                                    color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                        Text {
+                            text: "·";
+                            color: Ink.text-faint;
+                            font-size: Ink.fs-body;
+                            vertical-alignment: center;
+                        }
+                    }
                     // Split with the image: the value's fields here.
                     if ResultsState.split: HorizontalLayout {
                         spacing: 6px;
