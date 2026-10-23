@@ -201,6 +201,10 @@ export component GlobalShortcuts inherits FocusScope {
         // Re-run the pipeline preview once (the toolbar's "eye" button /
         // PipelinesPanel's "Preview" tap - a single dry-run, distinct from
         // toggling Auto Preview on/off).
+        if (e.text == Key.F5 && e.modifiers.shift) {
+            PipelinesPanelState.preview-whole-image();
+            return accept;
+        }
         if (e.text == Key.F5) {
             PipelinesPanelState.dry-run();
             return accept;

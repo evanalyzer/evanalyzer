@@ -50,11 +50,15 @@ export component PreviewRendering inherits Rectangle {
                 }
 
                 Text {
-                    text: !PreviewRunState.done ? "Generating preview…"
+                    text: !PreviewRunState.done
+                        ? (PreviewRunState.whole-image ? "Previewing the whole image…" : "Generating preview…")
                         : root.failed ? "Preview failed: " + PreviewRunState.status-message
+                        : PreviewRunState.whole-image && PreviewRunState.outdated ? "Whole image: outdated - settings changed"
+                        : PreviewRunState.whole-image ? "Whole image: " + PreviewRunState.objects + (PreviewRunState.objects == 1 ? " object" : " objects")
                         : "Preview ready";
                     font-size: Ink.fs-body;
-                    color: root.failed ? Ink.err : #FFFFFF;
+                    color: root.failed ? Ink.err
+                        : PreviewRunState.done && PreviewRunState.outdated ? Ink.warn : #FFFFFF;
                     vertical-alignment: center;
                     overflow: elide;
                 }

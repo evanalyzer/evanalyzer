@@ -456,6 +456,8 @@ export global PipelinesPanelState {
 
         callback run-all();
         callback dry-run();
+        // The preview of the whole image, not just what is in view.
+        callback preview-whole-image();
         callback auto-preview(bool);
         // Saves the pipeline's (id) steps to the library as one module.
         callback save-as-module(int);

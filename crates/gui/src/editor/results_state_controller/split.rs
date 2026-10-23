@@ -679,34 +679,39 @@ impl ResultsStateController {
         let family = selected
             .and_then(|i| objects.get(i))
             .and_then(|selected| family_of(selected, &objects));
-        let overlay = ResultsOverlay {
-            objects: objects
-                .iter()
-                // The classes unticked in the drawer aren't drawn.
-                .filter(|object| !hidden.contains(&object.class_id))
-                .map(|object| {
-                    let own = || match (&gradient, object.value) {
-                        (Some(stops), Some(v)) if !stops.is_empty() => {
-                            let t = if hi > lo { (v - lo) / (hi - lo) } else { 1.0 };
-                            gradient_at(stops, t)
-                        }
-                        (Some(_), None) => 0x8A8A93,
-                        _ => class_colors
-                            .get(&object.class_id)
-                            .copied()
-                            .unwrap_or(0xFFFFFF),
-                    };
-                    // The selected object's family, when it has one.
-                    let rgb = family
-                        .as_ref()
-                        .and_then(|f| f.color_of(object))
-                        .unwrap_or_else(own);
+        let (objects, masks) = objects
+            .iter()
+            // The classes unticked in the drawer aren't drawn.
+            .filter(|object| !hidden.contains(&object.class_id))
+            .map(|object| {
+                let own = || match (&gradient, object.value) {
+                    (Some(stops), Some(v)) if !stops.is_empty() => {
+                        let t = if hi > lo { (v - lo) / (hi - lo) } else { 1.0 };
+                        gradient_at(stops, t)
+                    }
+                    (Some(_), None) => 0x8A8A93,
+                    _ => class_colors
+                        .get(&object.class_id)
+                        .copied()
+                        .unwrap_or(0xFFFFFF),
+                };
+                // The selected object's family, when it has one.
+                let rgb = family
+                    .as_ref()
+                    .and_then(|f| f.color_of(object))
+                    .unwrap_or_else(own);
+                (
                     (
                         object.bbox_px,
                         [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8],
-                    )
-                })
-                .collect(),
+                    ),
+                    object.decoded_mask().map(Arc::new),
+                )
+            })
+            .unzip();
+        let overlay = ResultsOverlay {
+            objects,
+            masks,
             trails,
         };
         self.viewport().set_results_overlay(Some(overlay));
@@ -1253,8 +1258,14 @@ fn children_text(
     classes: &HashMap<i32, (String, u32)>,
 ) -> String {
     let mut counts: Vec<(i32, usize)> = Vec::new();
-    for child in objects.iter().filter(|o| o.parent_ids.contains(&object.object_id)) {
-        match counts.iter_mut().find(|(class, _)| *class == child.class_id) {
+    for child in objects
+        .iter()
+        .filter(|o| o.parent_ids.contains(&object.object_id))
+    {
+        match counts
+            .iter_mut()
+            .find(|(class, _)| *class == child.class_id)
+        {
             Some((_, count)) => *count += 1,
             None => counts.push((child.class_id, 1)),
         }
@@ -1345,6 +1356,7 @@ mod family_tests {
             means: vec![],
             value: None,
             track_id: None,
+            mask: Vec::new(),
             parent_ids: parents.iter().map(|p| p.to_string()).collect(),
         }
     }
@@ -1359,12 +1371,19 @@ mod family_tests {
         ];
         let family = family_of(&objects[0], &objects).expect("the cell has a child");
         let colors: Vec<Option<u32>> = objects.iter().map(|o| family.color_of(o)).collect();
-        assert_eq!(colors, [None, Some(CHILD_RGB), Some(DIMMED_RGB), Some(DIMMED_RGB)]);
+        assert_eq!(
+            colors,
+            [None, Some(CHILD_RGB), Some(DIMMED_RGB), Some(DIMMED_RGB)]
+        );
     }
 
     #[test]
     fn the_card_counts_the_children_per_class_and_names_the_parent() {
-        let mut objects = vec![object("cell", &[]), object("spot1", &["cell"]), object("spot2", &["cell"])];
+        let mut objects = vec![
+            object("cell", &[]),
+            object("spot1", &["cell"]),
+            object("spot2", &["cell"]),
+        ];
         objects[0].class_id = 1;
         objects[1].class_id = 2;
         objects[2].class_id = 2;
@@ -1377,7 +1396,11 @@ mod family_tests {
 
     #[test]
     fn a_selected_spot_shows_its_cell_and_without_relations_nothing_changes() {
-        let objects = [object("cell", &[]), object("spot", &["cell"]), object("alone", &[])];
+        let objects = [
+            object("cell", &[]),
+            object("spot", &["cell"]),
+            object("alone", &[]),
+        ];
         let family = family_of(&objects[1], &objects).unwrap();
         assert_eq!(family.color_of(&objects[0]), Some(PARENT_RGB));
         assert!(family_of(&objects[2], &objects).is_none());

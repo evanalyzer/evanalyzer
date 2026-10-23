@@ -80,6 +80,8 @@ fn main() {
     std::fs::create_dir_all(&images_dir).unwrap();
 
     let mut project = ProjectSettings::default();
+    // `BENCH_MASKS=0`: the results don't store the objects' masks.
+    project.results_storage.store_object_masks = std::env::var("BENCH_MASKS").as_deref() != Ok("0");
     project.images.root = Some(images_dir.clone());
     for i in 0..images {
         let name = PathBuf::from(format!("img_{i:03}.tif"));

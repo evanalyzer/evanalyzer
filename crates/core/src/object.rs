@@ -1510,8 +1510,7 @@ mod tests {
             let (w, h) = (1 + next() % 90, 1 + next() % 40);
             let (x0, y0) = (next() % 1000, next() % 1000);
             let density = 1 + next() % 4;
-            let mask: BitVec<u64, Lsb0> =
-                (0..w * h).map(|_| next() % density == 0).collect();
+            let mask: BitVec<u64, Lsb0> = (0..w * h).map(|_| next() % density == 0).collect();
             let object = Object::new(ObjectInit {
                 bbox: [x0, y0, x0 + w - 1, y0 + h - 1],
                 area: mask.count_ones(),

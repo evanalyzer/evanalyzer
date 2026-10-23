@@ -307,7 +307,12 @@ impl ResultsStateController {
                 .map(|(p, c)| (ObjectClass::Global(*p), ObjectClass::Global(*c)))
                 .collect();
             list.child_aggregations = view.child_aggregations.clone();
-            list.parents = view.parents.iter().copied().map(ObjectClass::Global).collect();
+            list.parents = view
+                .parents
+                .iter()
+                .copied()
+                .map(ObjectClass::Global)
+                .collect();
         }
 
         {

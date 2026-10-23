@@ -6,12 +6,12 @@ use crate::commands::common::{
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::global::SpeedUnit;
 use evanalyzer_app::project::load_project;
-use evanalyzer_app::results::{ChildValue, Column};
 use evanalyzer_app::results::ExportFormat;
 use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::view_settings::{
     DEFAULT_LIST_COLUMNS, ListView, ViewSettings, resolve_columns, with_related_columns,
 };
+use evanalyzer_app::results::{ChildValue, Column};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::project_settings::ResultsViewKind;

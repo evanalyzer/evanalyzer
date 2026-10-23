@@ -5,6 +5,7 @@ use crate::{
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
 pub mod duckdb;
 pub mod file;
+pub mod mask_codec;
 pub mod memory;
 pub mod stored_object;
 

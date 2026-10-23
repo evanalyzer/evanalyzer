@@ -1196,10 +1196,13 @@ impl ViewportController {
             let all = || objects.iter().chain(auto_objects.iter());
             let selected = all().find(|o| o.id == *id)?;
             let children: Vec<&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings> =
-                all().filter(|o| o.parents.values().any(|p| p == id)).collect();
-            let parents: Vec<&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings> = all()
-                .filter(|o| selected.parents.values().any(|p| *p == o.id))
-                .collect();
+                all()
+                    .filter(|o| o.parents.values().any(|p| p == id))
+                    .collect();
+            let parents: Vec<&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings> =
+                all()
+                    .filter(|o| selected.parents.values().any(|p| *p == o.id))
+                    .collect();
             if children.is_empty() && parents.is_empty() {
                 return None;
             }

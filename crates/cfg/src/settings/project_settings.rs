@@ -81,6 +81,23 @@ impl Default for TileMergeSettings {
     }
 }
 
+/// What the results store of each object.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResultsStorageSettings {
+    /// Each object's mask (its outline in the results' split view, for
+    /// export) - off: smaller results, the objects drawn as ellipses.
+    pub store_object_masks: bool,
+}
+
+impl Default for ResultsStorageSettings {
+    fn default() -> Self {
+        Self {
+            store_object_masks: true,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSettings {
@@ -105,6 +122,10 @@ pub struct ProjectSettings {
     /// Setting to reassemble objects split across an internal tile boundary
     #[serde(default)]
     pub tile_merge: TileMergeSettings,
+
+    /// What the results store of each object.
+    #[serde(default)]
+    pub results_storage: ResultsStorageSettings,
 
     /// The collection of images and their associated processing states.
     pub images: ImageSettings,

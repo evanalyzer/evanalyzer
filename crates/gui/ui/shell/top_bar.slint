@@ -635,6 +635,15 @@ export component TopBar inherits Rectangle {
                 }
                 if root.editing: InkIconButton {
                     size: 30px;
+                    icon: InkIcons.expand;
+                    label: "Preview the whole image";
+                    keys: ["Shift", "F5"];
+                    clicked => {
+                        PipelinesPanelState.preview-whole-image();
+                    }
+                }
+                if root.editing: InkIconButton {
+                    size: 30px;
                     icon: InkIcons.annotate;
                     label: "Annotate";
                     keys: ["A"];

@@ -62,7 +62,8 @@ pub fn with_related_columns(
     let values: Vec<&Column> = base
         .iter()
         .filter(|c| {
-            c.is_aggregable() && !matches!(c, Column::Count | Column::Children(_) | Column::Parent(_))
+            c.is_aggregable()
+                && !matches!(c, Column::Count | Column::Children(_) | Column::Parent(_))
         })
         .collect();
     let mut columns = base.to_vec();
@@ -233,10 +234,25 @@ mod related_tests {
     fn related_columns_follow_the_ticked_ones() {
         let (cell, spot) = (ObjectClass::Global(1), ObjectClass::Global(2));
         let base = [Column::ObjectId, Column::Count, Column::AreaSizePx];
-        let columns =
-            with_related_columns(&base, &[(cell, spot)], &[Aggregation::Avg, Aggregation::Sum], &[cell]);
-        let child = |value| Column::Children(ChildColumn { parent_class: cell, child_class: spot, value });
-        let parent = |value| Column::Parent(ParentColumn { parent_class: cell, value });
+        let columns = with_related_columns(
+            &base,
+            &[(cell, spot)],
+            &[Aggregation::Avg, Aggregation::Sum],
+            &[cell],
+        );
+        let child = |value| {
+            Column::Children(ChildColumn {
+                parent_class: cell,
+                child_class: spot,
+                value,
+            })
+        };
+        let parent = |value| {
+            Column::Parent(ParentColumn {
+                parent_class: cell,
+                value,
+            })
+        };
         let area = || Box::new(Column::AreaSizePx);
         assert_eq!(
             columns,
@@ -252,6 +268,9 @@ mod related_tests {
             ],
             "only aggregable value columns are related, not the id or the count"
         );
-        assert_eq!(with_related_columns(&base, &[], &[Aggregation::Avg], &[]), base);
+        assert_eq!(
+            with_related_columns(&base, &[], &[Aggregation::Avg], &[]),
+            base
+        );
     }
 }

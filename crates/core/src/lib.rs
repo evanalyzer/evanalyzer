@@ -15,6 +15,7 @@ mod utils;
 // System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::job::job_generator::random_job_name;
 pub use crate::storage::duckdb::shared_connection as open_results_database;
+pub use crate::storage::mask_codec::{decode_mask, encode_mask};
 pub use crate::utils::resources::SystemDiagnostics;
 pub use crate::utils::resources::cpu_ram_diagnostics;
 pub use crate::utils::resources::recommended_parallelism;

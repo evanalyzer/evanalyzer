@@ -7,9 +7,7 @@ pub mod view_settings;
 
 pub(crate) use colors::value_to_color;
 pub use colors::{COLOR_SCALE_GRADIENT_STOPS, color_scale_gradient};
-pub use column::{
-    ChildColumn, ChildValue, Column, MeasurementColumn, ParentColumn, ParentValue,
-};
+pub use column::{ChildColumn, ChildValue, Column, MeasurementColumn, ParentColumn, ParentValue};
 use evanalyzer_cfg::core_types::ObjectClass;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -153,6 +151,22 @@ pub struct ResultObject {
     pub track_id: Option<u64>,
     /// The objects it belongs to (Relate Objects), any class.
     pub parent_ids: Vec<String>,
+    /// Its mask as stored (run lengths, see [`ResultObject::decoded_mask`]) -
+    /// empty when the results keep none.
+    pub mask: Vec<u8>,
+}
+
+impl ResultObject {
+    /// Its mask, a bit per pixel of its box row by row - `None` when the
+    /// results keep none (or it doesn't fit the box).
+    pub fn decoded_mask(&self) -> Option<bitvec::vec::BitVec<u64, bitvec::order::Lsb0>> {
+        if self.mask.is_empty() {
+            return None;
+        }
+        let [x0, y0, x1, y1] = self.bbox_px;
+        let len = (x1.checked_sub(x0)? as usize + 1) * (y1.checked_sub(y0)? as usize + 1);
+        evanalyzer_core::decode_mask(&self.mask, len)
+    }
 }
 
 /// One image's tracks across its time points (Results › Tracks): their

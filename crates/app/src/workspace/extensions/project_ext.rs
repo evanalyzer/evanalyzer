@@ -7,8 +7,7 @@ use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use crate::workspace::extensions::object_ext::ObjectExt;
 use crate::workspace::extensions::utils::{
-    ASSIGNED_WAVELENGTHS, channel_colors, class_name_of_channel,
-    get_relative_key, is_in_root,
+    ASSIGNED_WAVELENGTHS, channel_colors, class_name_of_channel, get_relative_key, is_in_root,
     rgb_to_u32, wavelength_colors,
 };
 use crate::workspace::{FocusChannels, PipelineFocus};

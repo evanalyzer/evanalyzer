@@ -2707,11 +2707,21 @@ impl ResultsGenerator {
     /// Whether these results store parents (`parent_ids`) - not those from
     /// before Relate Objects.
     pub fn has_parent_ids(&self) -> Result<bool, InternalErrors> {
+        self.has_object_column("parent_ids")
+    }
+
+    /// The results keep the objects' masks (results from before they did,
+    /// or written with them switched off, have no or empty `mask`s).
+    pub fn has_masks(&self) -> Result<bool, InternalErrors> {
+        self.has_object_column("mask")
+    }
+
+    fn has_object_column(&self, column: &str) -> Result<bool, InternalErrors> {
         self.database
             .query_row(
                 "SELECT count(*) > 0 FROM information_schema.columns \
-                 WHERE table_name = 'objects' AND column_name = 'parent_ids'",
-                [],
+                 WHERE table_name = 'objects' AND column_name = ?",
+                [column],
                 |row| row.get(0),
             )
             .map_err(|e| InternalErrors::Io(e.to_string()))
@@ -3662,9 +3672,10 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
 fn children_value_expr(c: &ChildColumn) -> Result<String, InternalErrors> {
     let (value, aggregate) = match &c.value {
         ChildValue::Count => ("1".to_string(), "count"),
-        ChildValue::Of(aggregation, column) => {
-            (column_aggregate_expr(column)?, aggregation_sql_fn(aggregation))
-        }
+        ChildValue::Of(aggregation, column) => (
+            column_aggregate_expr(column)?,
+            aggregation_sql_fn(aggregation),
+        ),
     };
     let child_filter = match c.child_class {
         ObjectClass::Global(n) => format!(" AND list_contains(object_class_id, {n})"),
@@ -4686,7 +4697,11 @@ mod tests {
         })
     }
 
-    fn list_of(generator: &ResultsGenerator, class: ObjectClass, columns: Vec<Column>) -> DatabaseResult {
+    fn list_of(
+        generator: &ResultsGenerator,
+        class: ObjectClass,
+        columns: Vec<Column>,
+    ) -> DatabaseResult {
         generator
             .get_object_list(&ListFilter {
                 plane: plane(),
@@ -4729,7 +4744,10 @@ mod tests {
     #[test]
     fn a_cell_row_shows_its_spots_count_and_mean() {
         let generator = cells_with_spots();
-        let mean_area = children(ChildValue::Of(Aggregation::Avg, Box::new(Column::AreaSizePx)));
+        let mean_area = children(ChildValue::Of(
+            Aggregation::Avg,
+            Box::new(Column::AreaSizePx),
+        ));
         let result = list_of(
             &generator,
             CELL,
@@ -4814,7 +4832,10 @@ mod tests {
     fn relation_columns_round_trip_through_their_keys() {
         for column in [
             children(ChildValue::Count),
-            children(ChildValue::Of(Aggregation::Median, Box::new(Column::IntensityAvg(2)))),
+            children(ChildValue::Of(
+                Aggregation::Median,
+                Box::new(Column::IntensityAvg(2)),
+            )),
             parent(ParentValue::Id),
             parent(ParentValue::Of(Box::new(Column::Circularity))),
         ] {

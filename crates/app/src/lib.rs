@@ -88,7 +88,6 @@ pub mod results {
     pub use crate::api::CellValue;
     pub use crate::api::ColorScale;
     pub use crate::api::ColorSchema;
-    pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
     pub use crate::api::Column;
     pub use crate::api::ColumnEntry;
     pub use crate::api::DatabaseResult;
@@ -119,6 +118,7 @@ pub mod results {
     pub use crate::api::WellsBatchFilterMulti;
     pub use crate::api::color_scale_gradient;
     pub use crate::api::view_settings;
+    pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
     pub use crate::api::{
         ImageObjectsFilter, ImageTracks, ImageTracksFilter, ResultObject, TrackPath, TrackPoint,
     };
@@ -221,19 +221,20 @@ pub mod backends {
 }
 
 pub mod analysis {
-    pub use evanalyzer_core::random_job_name;
     pub use crate::api::AnalysisRequest;
     pub use crate::api::CancelHandle;
     pub use crate::api::JobInfo;
     pub use crate::api::JobState;
     pub use crate::api::ProgressEvent;
     pub use crate::api::RunningJob;
+    pub use evanalyzer_core::random_job_name;
 }
 
 pub mod preview {
     pub use crate::api::PreviewRequest;
     pub use crate::api::PreviewViewport;
     pub use crate::api::StartPreviewError;
+    pub use crate::api::WHOLE_IMAGE_PREVIEW_MAX_TILES;
 }
 
 pub mod images {

@@ -129,6 +129,7 @@ impl ProjectSettingsController {
                 tile_merge.max_fragments_per_group =
                     project_settings.tile_merge_max_fragments_per_group.max(1) as u32;
             }
+            project.results_storage.store_object_masks = project_settings.store_object_masks;
         }
 
         self.app_state.mark_dirty();
@@ -188,6 +189,8 @@ impl ProjectSettingsController {
             )
         };
 
+        let store_object_masks = project.results_storage.store_object_masks;
+
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             // Each window has its own independent `ProjectSettingsState`
             // instance (see the struct-level doc comment), so each needs its
@@ -212,6 +215,7 @@ impl ProjectSettingsController {
                 )),
                 tile_merge_connectivity,
                 tile_merge_max_fragments_per_group: tile_merge_cap,
+                store_object_masks,
             };
             let labels = || {
                 slint::ModelRc::from(std::rc::Rc::new(slint::VecModel::from(
@@ -461,6 +465,7 @@ mod tests {
             )),
             tile_merge_connectivity: 1,
             tile_merge_max_fragments_per_group: 10000,
+            store_object_masks: false,
         }
     }
 
@@ -493,6 +498,7 @@ mod tests {
         );
         assert_eq!(project.plate.plate_size, PlateSize::Plate8x12);
         assert_eq!(project.plate.grouping_mode, GroupingMode::Custom);
+        assert!(!project.results_storage.store_object_masks, "switched off");
     }
 
     #[test]

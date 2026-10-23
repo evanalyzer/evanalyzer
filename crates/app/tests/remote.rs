@@ -277,6 +277,7 @@ fn remote_preview_returns_its_final_objects_from_wait() {
             breakpoint: None,
             max_visible_tiles: None,
             breakpoint_tiles: 1,
+            whole_image: false,
         })
         .unwrap();
     drain(&job);
@@ -322,6 +323,7 @@ fn remote_preview_returns_its_measurements_too() {
             breakpoint: None,
             max_visible_tiles: None,
             breakpoint_tiles: 1,
+            whole_image: false,
         })
         .unwrap();
     drain(&job);

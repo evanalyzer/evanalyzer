@@ -11,7 +11,6 @@ use crate::{
     ResultsRailMode, ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
-use evanalyzer_app::results::{ChildColumn, ChildValue};
 use evanalyzer_app::results::ColorScale;
 use evanalyzer_app::results::ColorSchema;
 use evanalyzer_app::results::Column;
@@ -30,6 +29,7 @@ use evanalyzer_app::results::WellSize;
 use evanalyzer_app::results::{Aggregation, HistogramResult};
 use evanalyzer_app::results::{BoxplotBox, Cell};
 use evanalyzer_app::results::{BoxplotFilter, BoxplotGroup, ScatterResult};
+use evanalyzer_app::results::{ChildColumn, ChildValue};
 use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_app::results::{
     TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
@@ -930,9 +930,10 @@ impl ResultsStateController {
                     manager.refresh_list();
                 });
             let manager = self.clone();
-            ui.global::<ResultsState>().on_list_drill(move |row, column| {
-                manager.drill_into(row, column);
-            });
+            ui.global::<ResultsState>()
+                .on_list_drill(move |row, column| {
+                    manager.drill_into(row, column);
+                });
             let manager = self.clone();
             ui.global::<ResultsState>().on_list_drill_up(move || {
                 manager.list_filter.lock().expect("Poisened").drill = None;
@@ -953,7 +954,11 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_list_parent_select_all(move |all| {
                     let mut parents: Vec<ObjectClass> = match all {
-                        true => manager.available_links().into_iter().map(|(p, _)| p).collect(),
+                        true => manager
+                            .available_links()
+                            .into_iter()
+                            .map(|(p, _)| p)
+                            .collect(),
                         false => Vec::new(),
                     };
                     parents.dedup();
@@ -4879,8 +4884,7 @@ impl ResultsStateController {
                 group: group.into(),
             });
         }
-        let column_items_vec =
-            column_items(&dialog_columns, &classes, |key| columns.contains(key));
+        let column_items_vec = column_items(&dialog_columns, &classes, |key| columns.contains(key));
         let column_groups_vec = column_groups(&dialog_columns);
         let column_summary = list_summary(columns.len(), dialog_columns.len(), "Columns");
 
@@ -5528,7 +5532,11 @@ fn group_by_items(selected: &str, pairs: bool) -> Vec<MultiSelectItem> {
 
 /// A Children group item's key ("<parent id>:<child id>") for a link.
 fn link_key((parent, child): (ObjectClass, ObjectClass)) -> String {
-    let id = |class: ObjectClass| class.to_u32().map_or("unset".to_string(), |n| n.to_string());
+    let id = |class: ObjectClass| {
+        class
+            .to_u32()
+            .map_or("unset".to_string(), |n| n.to_string())
+    };
     format!("{}:{}", id(parent), id(child))
 }
 
@@ -6904,7 +6912,10 @@ pub(crate) mod tests {
         let values = |items: slint::ModelRc<MultiSelectItem>| -> Vec<String> {
             items.iter().map(|item| item.value.to_string()).collect()
         };
-        assert_eq!(values(state.get_list_children_items()), ["ClassB in ClassA"]);
+        assert_eq!(
+            values(state.get_list_children_items()),
+            ["ClassB in ClassA"]
+        );
         assert_eq!(values(state.get_list_parent_items()), ["Parent · ClassA"]);
         assert!(
             values(state.get_list_group_by_items()).contains(&"Coloc pairs".to_string()),
@@ -6917,7 +6928,10 @@ pub(crate) mod tests {
         state.invoke_list_parent_selected("1".into(), true);
         drain_ui_queue();
         let filter = controller.list_filter.lock().unwrap();
-        assert_eq!(filter.children, [(ObjectClass::Global(1), ObjectClass::Global(2))]);
+        assert_eq!(
+            filter.children,
+            [(ObjectClass::Global(1), ObjectClass::Global(2))]
+        );
         assert_eq!(filter.parents, [ObjectClass::Global(1)]);
         drop(filter);
         let headers: Vec<String> = state
@@ -6932,7 +6946,10 @@ pub(crate) mod tests {
             "Parent ClassA",
             "Parent ClassA · Area [px]",
         ] {
-            assert!(headers.iter().any(|h| h == wanted), "{wanted} in {headers:?}");
+            assert!(
+                headers.iter().any(|h| h == wanted),
+                "{wanted} in {headers:?}"
+            );
         }
 
         // A click on the first object's "ClassB · Count": down to its child.
@@ -6943,11 +6960,17 @@ pub(crate) mod tests {
         state.invoke_list_drill(0, count_column as i32);
         drain_ui_queue();
         assert_eq!(state.get_list_rows().row_count(), 1, "its one ClassB child");
-        assert_eq!(state.get_list_drill_label().as_str(), "ClassB of ClassA 000000000000");
+        assert_eq!(
+            state.get_list_drill_label().as_str(),
+            "ClassB of ClassA 000000000000"
+        );
         state.invoke_list_drill_up();
         drain_ui_queue();
         assert_eq!(state.get_list_drill_label().as_str(), "");
-        assert!(state.get_list_rows().row_count() > 1, "back to every object");
+        assert!(
+            state.get_list_rows().row_count() > 1,
+            "back to every object"
+        );
 
         // The first object touches the ClassB object (seeded partners): its
         // "Coloc with ClassB" opens it.
@@ -6997,7 +7020,10 @@ pub(crate) mod tests {
 
         state.invoke_split_class_selected("1".into(), false);
         drain_ui_queue();
-        assert_eq!(ticked(), [("ClassA".into(), false), ("ClassB".into(), true)]);
+        assert_eq!(
+            ticked(),
+            [("ClassA".into(), false), ("ClassB".into(), true)]
+        );
         assert_eq!(state.get_split_class_summary().as_str(), "1 of 2");
         assert!(controller.split.lock().unwrap().hidden_classes.contains(&1));
 
@@ -7449,6 +7475,10 @@ pub(crate) mod tests {
         );
         let overlay = crate::editor::results_overlay::ResultsOverlay {
             objects: objects.iter().map(|o| (o.bbox_px, [255, 0, 255])).collect(),
+            masks: objects
+                .iter()
+                .map(|o| o.decoded_mask().map(Arc::new))
+                .collect(),
             trails: None,
         };
         let (w, h) = (1920 + 512, 1080 + 512);

@@ -452,6 +452,37 @@ no measurable cost (a build without any centroid: mean 5.60 s). The writer's
 ~5 % are the four `bbox_center_*` columns and the `parent_ids` map; the file
 is 1,317 MB instead of 1,309 MB.
 
+## Object masks in the results (2026-10-23)
+
+Each object's mask as run lengths (`objects.mask BLOB`, LEB128 varints of
+alternating unset/set runs, row by row in its box -
+`storage/mask_codec.rs`), switch `resultsStorage.storeObjectMasks`
+(Settings › Objects). Three builds alternated, 10 s pauses, 22 cores:
+**base** = the last build without the column, **off** / **on** = this one
+with the switch off / on.
+
+| Benchmark | base | off | on |
+|---|---|---|---|
+| `bench_pipeline` 200 × 2048², 8 threads, 208,002 objects (2 runs each) | 5.63 / 5.31 s, 982-1040 MB | 5.20 / 5.33 s, 993-1009 MB | 5.34 / 5.43 s, 1028-1053 MB |
+| Results file of that run | 54.0 MB | 54.0 MB | 112-114 MB (+~290 bytes per object) |
+| `bench_export --object-size 24`, 3.8M objects, 4 masks repeated (1 run each) | 47.1 s, 2509 MB, 1473 MB | 46.3 s, 2505 MB, 1474 MB | 47.3 s, 2511 MB, 1476 MB |
+| `bench_export --object-size 24`, 3.8M objects, every mask its own (2 runs each) | - | 51.4 / 50.4 s, 2509-2561 MB, 1489 MB | 53.2 / 53.3 s, 2527-2557 MB, 1576-1580 MB |
+
+- **Switched off, the same as before**: the column holds NULLs - same
+  speed, RAM and file size as the build without it (both benchmarks).
+- **On**: no measurable cost in a pipeline run (the image work dominates);
+  writing alone ~5 % slower (+2.4 s for 3.8M objects); RAM unchanged. The
+  file grows by the masks: ~290 bytes per object for the pipeline's
+  segmented spots (the file doubles - those results are small otherwise),
+  ~24 bytes for the 24 px objects of `bench_export` (+6 %). Big objects
+  cost more: about two varints per row of the object.
+- The first `bench_export` generator made only 4 different masks - DuckDB
+  stores repeated BLOBs once, so that row understates the size. Its
+  objects now each get their own outline (`bench_export`'s area/centroid
+  columns compress a little worse with it: 1489 instead of 1473 MB, and
+  writing is slower - base isn't comparable on that row).
+- Split view: the masks are decoded per shown image (one image's objects).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -472,10 +503,10 @@ graphics driver).
 | Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
-| Running a pipeline: 200 images 2048², 8 threads | ~1 GB | 2026-10-21 | not written up yet (`bench_pipeline`) |
+| Running a pipeline: 200 images 2048², 8 threads | ~1 GB (1.05 GB with masks) | 2026-10-23 | Object masks in the results |
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
-| Writing results: 1776 images × 2150 objects | ~2.4 GB | 2026-10-21 | not written up yet (`bench_export`) |
+| Writing results: 1776 images × 2150 objects | ~2.4 GB (2.56 GB with masks) | 2026-10-23 | Object masks in the results |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,

@@ -1380,13 +1380,26 @@ mod tests {
         let coloc = Colocalization {
             mark_objects_of,
             mark_as,
-            ..coloc_with(SizeUnitsRel::Pixels, 0.0, ColocMultiplicity::ManyToMany, vec![])
+            ..coloc_with(
+                SizeUnitsRel::Pixels,
+                0.0,
+                ColocMultiplicity::ManyToMany,
+                vec![],
+            )
         };
         run(&coloc, &mut cache);
         let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
-        assert_eq!(a.colocalized_with[&CLASS_B], [ObjectId(ID_B)], "partners recorded");
-        assert_eq!(b.colocalized_with[&CLASS_A], [ObjectId(ID_A)], "on both sides");
+        assert_eq!(
+            a.colocalized_with[&CLASS_B],
+            [ObjectId(ID_B)],
+            "partners recorded"
+        );
+        assert_eq!(
+            b.colocalized_with[&CLASS_A],
+            [ObjectId(ID_A)],
+            "on both sides"
+        );
         (
             a.object_classes().contains(&CLASS_MARK),
             b.object_classes().contains(&CLASS_MARK),
@@ -1395,26 +1408,45 @@ mod tests {
 
     #[test]
     fn marking_is_optional_and_partners_are_recorded_without_it() {
-        assert_eq!(marked(ObjectClass::Unset, ObjectClass::Unset), (false, false));
-        assert_eq!(marked(CLASS_A, ObjectClass::Unset), (false, false), "no class to give");
+        assert_eq!(
+            marked(ObjectClass::Unset, ObjectClass::Unset),
+            (false, false)
+        );
+        assert_eq!(
+            marked(CLASS_A, ObjectClass::Unset),
+            (false, false),
+            "no class to give"
+        );
     }
 
     #[test]
     fn the_colocalizing_objects_of_one_class_or_of_all_get_the_mark() {
         assert_eq!(marked(CLASS_A, CLASS_MARK), (true, false), "only A's");
-        assert_eq!(marked(ObjectClass::Unset, CLASS_MARK), (true, true), "every class's");
+        assert_eq!(
+            marked(ObjectClass::Unset, CLASS_MARK),
+            (true, true),
+            "every class's"
+        );
     }
 
     #[test]
     fn an_object_without_a_partner_is_not_marked() {
         let mut cache = GlobalPipelineCache::default();
-        for (id, bbox, class) in [(ID_A, [0, 0, 3, 3], CLASS_A), (ID_B, [10, 10, 13, 13], CLASS_B)] {
+        for (id, bbox, class) in [
+            (ID_A, [0, 0, 3, 3], CLASS_A),
+            (ID_B, [10, 10, 13, 13], CLASS_B),
+        ] {
             let object = make_filled_object(id, bbox, ImagePlane::default(), class);
             cache.object_cache.insert(object.id.clone(), object);
         }
         let coloc = Colocalization {
             mark_as: CLASS_MARK,
-            ..coloc_with(SizeUnitsRel::Pixels, 0.0, ColocMultiplicity::ManyToMany, vec![])
+            ..coloc_with(
+                SizeUnitsRel::Pixels,
+                0.0,
+                ColocMultiplicity::ManyToMany,
+                vec![],
+            )
         };
         run(&coloc, &mut cache);
         for id in [ID_A, ID_B] {
@@ -1437,7 +1469,12 @@ mod tests {
             all_combinations: true,
             mark_as: CLASS_MARK,
             class_for_overlapping_areas: CLASS_OVERLAP,
-            ..coloc_with(SizeUnitsRel::Pixels, 0.0, ColocMultiplicity::ManyToMany, vec![])
+            ..coloc_with(
+                SizeUnitsRel::Pixels,
+                0.0,
+                ColocMultiplicity::ManyToMany,
+                vec![],
+            )
         };
         run(&coloc, &mut cache);
         cache
@@ -1512,7 +1549,10 @@ mod tests {
         );
         assert_eq!(partners_of(&cache, ID_B), [(CLASS_A, vec![ID_A])]);
         assert_eq!(partners_of(&cache, ID_C), [(CLASS_A, vec![ID_A])]);
-        assert_eq!([ID_A, ID_B, ID_C].map(|id| is_marked(&cache, id)), [true, false, false]);
+        assert_eq!(
+            [ID_A, ID_B, ID_C].map(|id| is_marked(&cache, id)),
+            [true, false, false]
+        );
     }
 
     /// With the option, each object's partners are exactly the objects of
