@@ -32,14 +32,14 @@ export component RunAnalysisDialog inherits InkDialog {
             name-edit := LineEdit {
                 height: 30px;
                 text <=> RunAnalysisState.job_name;
-                placeholder-text: "e.g. sigmund_freud";
+                placeholder-text: RunAnalysisState.job_name_placeholder;
                 accepted => {
                     RunAnalysisState.confirm();
                 }
             }
 
             Text {
-                text: "Leave blank to auto-generate a name.";
+                text: "Leave blank to use \"" + RunAnalysisState.job_name_placeholder + "\".";
                 wrap: word-wrap;
                 color: Ink.text-dim;
                 font-size: Ink.fs-secondary;

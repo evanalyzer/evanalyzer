@@ -221,6 +221,7 @@ pub mod backends {
 }
 
 pub mod analysis {
+    pub use evanalyzer_core::random_job_name;
     pub use crate::api::AnalysisRequest;
     pub use crate::api::CancelHandle;
     pub use crate::api::JobInfo;

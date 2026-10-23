@@ -48,11 +48,52 @@ pub(super) struct SplitState {
     by_value: bool,
     /// Thumbnails made so far, by `rel_path`.
     thumbs: HashMap<String, SharedPixelBuffer<Rgb8Pixel>>,
+    /// Classes (`ResultObject::class_id`) not drawn on the image - the
+    /// drawer's OBJECTS list.
+    pub(super) hidden_classes: HashSet<i32>,
 }
 
 impl ResultsStateController {
     pub(super) fn attach_split_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
+
+        // The drawer's OBJECTS list: which classes are drawn.
+        let weak = Arc::downgrade(self);
+        state.on_split_class_selected(move |key, selected| {
+            let Some(manager) = weak.upgrade() else {
+                return;
+            };
+            let Ok(class) = key.as_str().parse::<i32>() else {
+                return;
+            };
+            {
+                let mut split = manager.split.lock().expect("Poisoned");
+                match selected {
+                    true => split.hidden_classes.remove(&class),
+                    false => split.hidden_classes.insert(class),
+                };
+            }
+            manager.split_push_class_items();
+            manager.split_push_overlay();
+        });
+        let weak = Arc::downgrade(self);
+        state.on_split_class_select_all(move |all| {
+            let Some(manager) = weak.upgrade() else {
+                return;
+            };
+            let classes: HashSet<i32> = manager
+                .classes
+                .lock()
+                .expect("Poisoned")
+                .iter()
+                .map(|class| class.id as i32)
+                .chain(std::iter::once(-1))
+                .collect();
+            manager.split.lock().expect("Poisoned").hidden_classes =
+                if all { HashSet::new() } else { classes };
+            manager.split_push_class_items();
+            manager.split_push_overlay();
+        });
 
         // The split's image open now: its objects and the selected one on it.
         let weak = Arc::downgrade(self);
@@ -553,11 +594,46 @@ impl ResultsStateController {
 
     /// The image's objects on it, in their class's color (or, Plate
     /// "Color by value", the heatmap's).
+    /// The drawer's OBJECTS list: every class of the analysis, ticked
+    /// unless hidden.
+    pub(super) fn split_push_class_items(&self) {
+        let hidden = self.split.lock().expect("Poisoned").hidden_classes.clone();
+        let items: Vec<MultiSelectItem> = self
+            .classes
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .map(|class| MultiSelectItem {
+                key: class.id.to_string().into(),
+                value: class.name.clone().into(),
+                color: bg_color_to_slint(class.color),
+                group: "".into(),
+                selected: !hidden.contains(&(class.id as i32)),
+            })
+            .collect();
+        let shown = items.iter().filter(|item| item.selected).count();
+        let summary = format!("{shown} of {}", items.len());
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ResultsState>();
+                state.set_split_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_split_class_summary(summary.into());
+            }
+        })
+        .ok();
+    }
+
     pub(super) fn split_push_overlay(&self) {
         let by_value = self.split.lock().expect("Poisoned").by_value && self.in_plate();
-        let (objects, image, selected) = {
+        let (objects, image, selected, hidden) = {
             let split = self.split.lock().expect("Poisoned");
-            (split.objects.clone(), split.image.clone(), split.selected)
+            (
+                split.objects.clone(),
+                split.image.clone(),
+                split.selected,
+                split.hidden_classes.clone(),
+            )
         };
         // Its image isn't the one in the viewer (yet): opening it takes
         // longer than reading its objects. They are kept and drawn once it
@@ -606,6 +682,8 @@ impl ResultsStateController {
         let overlay = ResultsOverlay {
             objects: objects
                 .iter()
+                // The classes unticked in the drawer aren't drawn.
+                .filter(|object| !hidden.contains(&object.class_id))
                 .map(|object| {
                     let own = || match (&gradient, object.value) {
                         (Some(stops), Some(v)) if !stops.is_empty() => {

@@ -9,7 +9,7 @@ import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ResultsState } from "../api/results.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
-import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem, InkCheckList } from "../ink/ink.slint";
 
 // One channel: its color (a click switches it on/off), name, index. The
 // selected one is the histogram's.
@@ -381,6 +381,22 @@ export component ImageControlPanel inherits Rectangle {
                         ChannelState.grayscale = on;
                         ChannelState.grayscale_toggled(on);
                     }
+                }
+            }
+
+            // Results, split: which classes' objects are drawn on the image.
+            if root.in-split && ResultsState.split-class-items.length > 0: InkCheckList {
+                title: "OBJECTS · " + ResultsState.split-class-summary;
+                items <=> ResultsState.split-class-items;
+                list-height: 108px;
+                item-selected(key, value, selected) => {
+                    ResultsState.split-class-selected(key, selected);
+                }
+                select-all => {
+                    ResultsState.split-class-select-all(true);
+                }
+                select-none => {
+                    ResultsState.split-class-select-all(false);
                 }
             }
 

@@ -462,6 +462,13 @@ export global ResultsState {
     in property <string> list-drill-label: "";
     callback list-drill-up();
 
+    // The split image's objects: which classes are drawn (the drawer's
+    // OBJECTS list) - ticked ones.
+    in-out property <[MultiSelectItem]> split-class-items: [];
+    in property <string> split-class-summary: "";
+    callback split-class-selected(string, bool);
+    callback split-class-select-all(bool);
+
 
     // Rows (one row per object / per (image, class)) or the classes side by
     // side: per image one column block per class (`transpond_table` on
