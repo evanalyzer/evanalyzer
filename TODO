@@ -347,12 +347,14 @@ Relate objects (new command, category Object, `WholeImage`, after TileMerge; its
 Results (aggregates computed by the queries, nothing stored):
 - [ ] List "Children" group (board 1): child classes (with the Relate step that linked them) × the Aggregate picker (Count, Mean, Median, Sum, Min, Max) × the ticked columns; columns grouped under the class; saved in the view (`ViewSettings`). Same values in Plate, Charts, Export, CLI.
 - [ ] Drill-down (board 3): a click on a child count opens those children, breadcrumb back.
-- [ ] List "Parent" group (board 3): the parent's id (click → its row) and chosen parent columns on child rows.
+- [ ] List "Linked objects" group (boards 3, U1, U7, U12): the linked object's id (click → its row) and chosen columns of it, next to each row - one group for Relate's parent ("Parent · Cell (Relate)") and Coloc 1:1 partners ("Partner · Spot ch2 (Coloc)"). Filter All / With a link / Without (U6).
 - [ ] Split view (board 4): selected object yellow, its children outlined, the rest dimmed; card with children per class and the parent.
 - [ ] Editor object details: "Parent: Cell", "Children: Spot 7" next to "Coloc with".
 
 Coloc (back to "at the same place"):
-- [ ] Results: remove the "Coloc details" switch (list + export dialog + `ListFilter::with_coloc_details`, `ViewSettings::coloc_details`, `build_coloc_detail_rows`). Replaced by: Relate's Children/Parent groups; for 1:1 coloc, partner columns ("Partner ‹class› · ‹column›"); for "Allow multi", a click on the overlap count opens the partners (like the drill-down).
+- [ ] Results: the "Coloc details" switch (list + export dialog) becomes a row type: "A row per · Objects | Images | Overlapping pairs" (board U12) - one row per pair, both objects' columns side by side, offered when the results have coloc partners; the Objects export follows it (replaces the "List (Coloc Details)" sheet / `list_coloc_details.csv`). 1:1 partners also as "Linked objects" columns; a click on an overlap count opens that object's partners. No use case lost (decided 2026-10-23).
+- [ ] Export: the new values are ordinary `Column` variants (child aggregates, linked-object columns, "Overlapping X", "% overlapping X") with `key()`/`from_key()`, so every export kind, the CLI `--columns`/`--view` and Plate/Charts get them; the export dialog's column picker gets the Children and Linked objects groups.
+- [ ] CLI: `export --colocalized` and `--split-colocalized` always fail today ("isn't supported by the current results backend") - remove them or rebuild them on "Overlaps X".
 - [ ] Column "Coloc with ‹class›" → "Overlaps ‹class›" (per object). Per image / well / plate: "Objects overlapping ‹class›" (objects with ≥1 partner) and "% overlapping ‹class›" instead of summing partner counts (which counts pairs).
 - [ ] Multiplicity "Multi coloc only for selected" (`MultiFor`): stays in Advanced for now, to be removed later (Relate covers it).
 - [ ] Tell the alpha testers: "spots per cell" with Coloc 1:1 (the default) counted at most 1 spot per cell - redo it with Relate.
