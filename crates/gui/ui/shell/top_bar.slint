@@ -2,14 +2,14 @@
 // actions, the image shown, the project's name, preview and Run.
 
 import { ViewportObjectState } from "../api/viewport.slint";
-import { Ink, InkScheme, InkIcons, InkSegmented, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { Ink, InkScheme, InkIcons, InkSegmented, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkSearchField } from "../ink/ink.slint";
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ToolbarState } from "../api/toolbar.slint";
 import { GlobalAppState, DialogType, ConnectionState, ChannelState } from "../api/state.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
-import { ImagesListState } from "../api/images_list.slint";
+import { ImagesListState, ImageItemData } from "../api/images_list.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
 import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 import { StartState } from "../api/start.slint";
@@ -83,6 +83,187 @@ component EvaButton inherits Rectangle {
 // The image shown: its name; a click goes to the images.
 // The image shown: its name (a click goes to the images) and, with several
 // series, which one - always in view, a click lists them with their sizes.
+// One image of the quick picker: its name, its folder and size dimmed.
+component QuickImageRow inherits Rectangle {
+    in property <ImageItemData> item;
+    in property <bool> current;
+    in property <bool> active;
+    callback clicked;
+
+    height: 30px;
+    border-radius: Ink.radius-sm;
+    background: root.active || ta.has-hover ? Ink.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.item.path;
+    accessible-checked: root.current;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
+        spacing: 8px;
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: root.current ? InkIcons.check : InkIcons.images;
+            width: 13px;
+            colorize: root.current ? Ink.text : Ink.text-mute;
+        }
+        Text {
+            text: root.item.path;
+            font-size: Ink.fs-body;
+            font-family: Ink.font-mono;
+            font-weight: root.current ? 600 : 400;
+            color: Ink.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.item.image-dimension;
+            font-size: Ink.fs-caption;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            horizontal-stretch: 0;
+        }
+    }
+}
+
+// The image chip's dropdown: type to narrow the project's images down
+// (Rust filters, see `ImagesListState.quick-search`), arrows to move,
+// Enter to open, Escape to close.
+component QuickImagePicker inherits Rectangle {
+    property <length> row-h: 30px;
+    property <length> list-h: min(10 * root.row-h, max(1, ImagesListState.quick-images.length) * root.row-h);
+    // The highlighted row (the one Enter opens).
+    property <int> cursor: max(0, ImagesListState.quick-current);
+    callback closed;
+
+    function pick(i: int) {
+        if i >= 0 && i < ImagesListState.quick-images.length {
+            ImagesListState.image_selected(ImagesListState.quick-images[i].path);
+        }
+        root.closed();
+    }
+
+    function move(by: int) {
+        root.cursor = clamp(root.cursor + by, 0, max(0, ImagesListState.quick-images.length - 1));
+        // Keep the highlighted row in sight.
+        if root.cursor * root.row-h < -list.content-y {
+            list.content-y = -root.cursor * root.row-h;
+        }
+        if (root.cursor + 1) * root.row-h > -list.content-y + list.height {
+            list.content-y = -((root.cursor + 1) * root.row-h - list.height);
+        }
+    }
+
+    width: 460px;
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 20px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: Ink.shadow;
+    clip: true;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        keys := FocusScope {
+            height: search.height;
+            capture-key-pressed(event) => {
+                if event.text == Key.UpArrow {
+                    root.move(-1);
+                    return accept;
+                }
+                if event.text == Key.DownArrow {
+                    root.move(1);
+                    return accept;
+                }
+                if event.text == Key.PageUp {
+                    root.move(-10);
+                    return accept;
+                }
+                if event.text == Key.PageDown {
+                    root.move(10);
+                    return accept;
+                }
+                if event.text == Key.Return {
+                    root.pick(root.cursor);
+                    return accept;
+                }
+                if event.text == Key.Escape {
+                    root.closed();
+                    return accept;
+                }
+                reject
+            }
+            search := InkSearchField {
+                placeholder: "Go to image";
+                init => {
+                    self.text = "";
+                    self.focus-input();
+                }
+                edited(text) => {
+                    ImagesListState.quick-search(text);
+                    root.cursor = 0;
+                    list.content-y = 0;
+                }
+            }
+        }
+        if ImagesListState.quick-images.length == 0: Text {
+            height: root.row-h;
+            text: "No image matches";
+            font-size: Ink.fs-body;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        list := Flickable {
+            height: root.list-h;
+            content-height: ImagesListState.quick-images.length * root.row-h;
+            for item[i] in ImagesListState.quick-images: QuickImageRow {
+                y: i * root.row-h;
+                width: parent.width;
+                height: root.row-h;
+                item: item;
+                current: i == ImagesListState.quick-current;
+                active: i == root.cursor;
+                clicked => {
+                    root.pick(i);
+                }
+            }
+        }
+        if ImagesListState.quick-matches > ImagesListState.quick-images.length: Text {
+            text: "\{ImagesListState.quick-images.length} of \{ImagesListState.quick-matches} - type to narrow down";
+            font-size: Ink.fs-caption;
+            color: Ink.text-mute;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            height: 1px;
+            background: Ink.border;
+        }
+        InkMenuItem {
+            icon: InkIcons.images;
+            text: "Show all images";
+            clicked => {
+                LayoutState.mode = WorkspaceMode.images;
+                root.closed();
+            }
+        }
+    }
+}
+
 component ImageChip inherits Rectangle {
     property <bool> has-series: ImageMetaData.nr_series > 1;
 
@@ -91,7 +272,12 @@ component ImageChip inherits Rectangle {
     accessible-role: button;
     accessible-label: "Image: " + ImageMetaData.image_name;
     accessible-action-default => {
-        LayoutState.mode = WorkspaceMode.images;
+        root.open-picker();
+    }
+
+    function open-picker() {
+        ImagesListState.quick-search("");
+        picker.show();
     }
 
     face := Rectangle {
@@ -127,7 +313,7 @@ component ImageChip inherits Rectangle {
                 name-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        LayoutState.mode = WorkspaceMode.images;
+                        root.open-picker();
                     }
                 }
             }
@@ -163,6 +349,18 @@ component ImageChip inherits Rectangle {
                         series-menu.show();
                     }
                 }
+            }
+        }
+    }
+
+    picker := PopupWindow {
+        x: 0px;
+        width: 460px;
+        y: root.height + 4px;
+        close-policy: close-on-click-outside;
+        QuickImagePicker {
+            closed => {
+                picker.close();
             }
         }
     }

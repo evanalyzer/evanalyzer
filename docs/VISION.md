@@ -259,6 +259,15 @@ Status 2026-10-12: no pipeline step fills these fields yet.
 - The executor analyses **one plane (t, z) at a time** and discards its objects afterwards.
 - The results database stores centroid, bounding box, area, shape and intensities, but **no masks**.
 
+### 7.0 Decided: relations data model (2026-10-23)
+
+- **Explicit only.** Only the "Relate objects" step writes parent links. Voronoi, Propagation, ObjectMath, coloc intersections and TransformObjects stop writing `parent_id`: one responsibility per command, and a new command never has to know about links. "Largest overlap" finds the source exactly for Propagation, ObjectMath and intersections, and nearly always for Voronoi. A ready-made module (Voronoi/Propagation → Relate → ObjectMath) covers the CellProfiler pattern.
+- **At most one parent per class.** `Object.parent_id` and `children` become `parents: IndexMap<ObjectClass, ObjectId>`; in DuckDB, `objects.parent_id`/`children` become `parent_ids MAP(INTEGER, UUID)`. The key is the parent class set in Relate. Children are derived with `GROUP BY parent_ids[class]` (no `children` column, no join).
+- **Relate owns its key:** for every object of its child class it sets `parent_ids[parent class]` or clears it.
+- **Separate from Coloc.** Different algorithm (directed, one per class, centroid rule); both only use `BboxGrid` and `Object::overlaps`.
+- **Aggregates** (child count, mean/median/sum of a child measurement) are computed by the results and export queries, not stored.
+- **Distances** (to parent centroid/edge, nearest neighbour, neighbour count, to a border) are per-object rows in the existing `measurements` table, possibly with an optional `related_object_id`. No pairwise distance matrix.
+
 ### 7.1 How to build them
 
 **Hierarchy: rule-based containment (industry standard)**
@@ -289,7 +298,7 @@ Best practice:
 | | Where | Why |
 |---|---|---|
 | **Hierarchy links** | **Pipeline step** "Relate objects" (`WholeImage` scope, after `TileMerge`) | Needs the masks, which only the pipeline has |
-| **Hierarchy aggregates** (child count, mean child intensity, children per mm²) | **In the results view**, computed from `parent_id` | Only a way of looking at the data; change it without re-running. DuckDB does it in milliseconds. Aggregates that should be stored or exported as new data become a dataset step. |
+| **Hierarchy aggregates** (child count, mean child intensity, children per mm²) | **In the results view**, computed from `parent_ids` | Only a way of looking at the data; change it without re-running. DuckDB does it in milliseconds. Aggregates that should be stored or exported as new data become a dataset step. |
 | **Tracking** | **Dataset step** "Link tracks" (see section 6), on the objects in the results database | Linking needs all frames, but the pipeline sees only one. Centroid, area and intensities are already stored. Re-linking with other parameters takes seconds instead of re-segmenting the movie. TrackMate also keeps detection and linking separate for this reason. |
 
 Limits of this split:

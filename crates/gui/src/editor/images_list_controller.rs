@@ -487,6 +487,13 @@ impl ImagesListController {
                     }
                 });
 
+            // The image chip's quick picker searched
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_quick_search(move |query| {
+                    manager.sync_quick_pick_to_slint(&query);
+                });
+
             // Image selected
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
@@ -625,6 +632,34 @@ impl ImagesListController {
             .ok();
     }
 
+    /// The image chip's quick picker: the images matching `query`.
+    pub fn sync_quick_pick_to_slint(&self, query: &str) {
+        let image_states = self.app_state.image_states();
+        let project = self.app_state.get_project();
+        let image_root = project.images.root.clone().unwrap_or_default();
+        let current = project
+            .get_current_image_path_cloned()
+            .and_then(|path| path.strip_prefix(&image_root).ok().map(PathBuf::from));
+        let (items, matches, current_index) = quick_pick_items(
+            &project.images.list,
+            query,
+            current.as_deref(),
+            &image_states,
+            &image_root,
+        );
+        drop(project);
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ImagesListState>();
+                state.set_quick_images(slint::ModelRc::new(slint::VecModel::from(items)));
+                state.set_quick_matches(matches as i32);
+                state.set_quick_current(current_index.map_or(-1, |i| i as i32));
+            }
+        })
+        .ok();
+    }
+
     /// Only the plate: its wells' states changed (an image was previewed,
     /// an analysis opened) - cheaper than the whole list.
     pub fn sync_plate_to_slint(&self) {
@@ -760,23 +795,65 @@ fn build_image_list_items(
                 .to_lowercase()
                 .contains(filter_text_lowercase)
         })
-        .map(|entry| ImageItemData {
-            name: entry
-                .rel_path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-                .into(),
-            path: entry.rel_path.to_string_lossy().to_string().into(),
-            image_dimension: dimension_text(entry).into(),
-            image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
-            has_annotations: entry
-                .series
-                .values()
-                .any(|series| !series.objects.is_empty()),
-            state: image_state(&entry.rel_path, states, image_root),
-        })
+        .map(|entry| image_list_item(entry, states, image_root))
         .collect()
+}
+
+fn image_list_item(
+    entry: &evanalyzer_cfg::settings::images_settings::ImageEntry,
+    states: &ImageStates,
+    image_root: &std::path::Path,
+) -> ImageItemData {
+    ImageItemData {
+        name: entry
+            .rel_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into(),
+        path: entry.rel_path.to_string_lossy().to_string().into(),
+        image_dimension: dimension_text(entry).into(),
+        image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
+        has_annotations: entry
+            .series
+            .values()
+            .any(|series| !series.objects.is_empty()),
+        state: image_state(&entry.rel_path, states, image_root),
+    }
+}
+
+/// At most this many images in the image chip's quick picker - typing
+/// narrows the rest down.
+const QUICK_PICK_LIMIT: usize = 50;
+
+/// The quick picker's images: those whose path holds every word of
+/// `query` (any case, any order), at most [`QUICK_PICK_LIMIT`]. Also how
+/// many match in all and where the open image `current` (relative) is.
+fn quick_pick_items(
+    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    query: &str,
+    current: Option<&std::path::Path>,
+    states: &ImageStates,
+    image_root: &std::path::Path,
+) -> (Vec<ImageItemData>, usize, Option<usize>) {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut items = Vec::new();
+    let mut matches = 0;
+    let mut current_index = None;
+    for entry in images.values() {
+        let path = entry.rel_path.to_string_lossy().to_lowercase();
+        if !words.iter().all(|word| path.contains(word.as_str())) {
+            continue;
+        }
+        matches += 1;
+        if items.len() < QUICK_PICK_LIMIT {
+            if current == Some(entry.rel_path.as_path()) {
+                current_index = Some(items.len());
+            }
+            items.push(image_list_item(entry, states, image_root));
+        }
+    }
+    (items, matches, current_index)
 }
 
 /// "2048 × 2048 · 3 ch" of the image's selected series ("" before it was
@@ -1317,5 +1394,86 @@ mod tests {
 
         assert_eq!(has_annotations_by_path.get("with_objects.tif"), Some(&true));
         assert_eq!(has_annotations_by_path.get("empty.tif"), Some(&false));
+    }
+
+    fn image_entries(paths: &[&str]) -> indexmap::IndexMap<PathBuf, ImageEntry> {
+        paths
+            .iter()
+            .map(|path| {
+                (
+                    PathBuf::from(path),
+                    ImageEntry {
+                        rel_path: PathBuf::from(path),
+                        file_size: 0,
+                        selected_series: 0,
+                        series: BTreeMap::new(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn quick_pick_keeps_the_images_holding_every_word_in_any_case_and_order() {
+        let images = image_entries(&[
+            "plate1/A01_01.vsi",
+            "plate1/B02_01.vsi",
+            "plate2/A01_02.vsi",
+        ]);
+
+        let (items, matches, _) = quick_pick_items(
+            &images,
+            "a01 PLATE1",
+            None,
+            &Default::default(),
+            std::path::Path::new(""),
+        );
+
+        let paths: Vec<String> = items.iter().map(|item| item.path.to_string()).collect();
+        assert_eq!(paths, vec!["plate1/A01_01.vsi"]);
+        assert_eq!(matches, 1);
+    }
+
+    #[test]
+    fn quick_pick_without_a_query_lists_the_images_up_to_the_limit_and_counts_all() {
+        let names: Vec<String> = (0..QUICK_PICK_LIMIT + 7)
+            .map(|i| format!("img_{i:03}.tif"))
+            .collect();
+        let images = image_entries(&names.iter().map(String::as_str).collect::<Vec<_>>());
+
+        let (items, matches, _) = quick_pick_items(
+            &images,
+            "  ",
+            None,
+            &Default::default(),
+            std::path::Path::new(""),
+        );
+
+        assert_eq!(items.len(), QUICK_PICK_LIMIT);
+        assert_eq!(matches, QUICK_PICK_LIMIT + 7);
+        assert_eq!(items[0].path.as_str(), "img_000.tif");
+    }
+
+    #[test]
+    fn quick_pick_marks_the_open_image_only_when_it_is_listed() {
+        let images = image_entries(&["a.tif", "b.tif", "c.tif"]);
+
+        let (_, _, current) = quick_pick_items(
+            &images,
+            "",
+            Some(std::path::Path::new("b.tif")),
+            &Default::default(),
+            std::path::Path::new(""),
+        );
+        assert_eq!(current, Some(1));
+
+        let (_, _, current) = quick_pick_items(
+            &images,
+            "c",
+            Some(std::path::Path::new("b.tif")),
+            &Default::default(),
+            std::path::Path::new(""),
+        );
+        assert_eq!(current, None);
     }
 }
