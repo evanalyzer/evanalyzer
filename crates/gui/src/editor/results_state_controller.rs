@@ -11,7 +11,7 @@ use crate::{
     ResultsRailMode, ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
-use evanalyzer_app::results::ChildValue;
+use evanalyzer_app::results::{ChildColumn, ChildValue};
 use evanalyzer_app::results::ColorScale;
 use evanalyzer_app::results::ColorSchema;
 use evanalyzer_app::results::Column;
@@ -157,6 +157,20 @@ struct ListFilter {
     pub child_aggregations: Vec<Aggregation>,
     /// The Linked objects group: the parent classes shown.
     pub parents: Vec<ObjectClass>,
+    /// Down to one object's children (a click on a children's count) -
+    /// navigation, not part of the view.
+    pub drill: Option<Drill>,
+}
+
+/// The List shows the children or the partners of one object (design
+/// canvas "Object relations in the results", boards 3 and U7).
+#[derive(Clone, Debug, PartialEq)]
+struct Drill {
+    related: evanalyzer_app::results::RelatedTo,
+    /// The class of the objects listed.
+    class: ObjectClass,
+    /// "Spot of Cell 0f3a…" - the bar above the list.
+    label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -460,6 +474,10 @@ pub struct ResultsStateController {
     // navigate to a clicked object's own image without re-querying the
     // database.
     list_row_locations: Mutex<Vec<(String, Option<[u32; 4]>)>>,
+    /// The list's rows' names (an object's id per row in Objects mode).
+    list_row_ids: Mutex<Vec<String>>,
+    /// The list's columns as shown (sorted, the related ones included).
+    list_columns_shown: Mutex<Vec<Column>>,
     /// The list's ticked rows (this page), and the last one ticked - a
     /// Shift-click ticks every row from it.
     list_checked: Mutex<(BTreeSet<usize>, Option<usize>)>,
@@ -540,6 +558,8 @@ impl ResultsStateController {
             current_well: Mutex::new(None),
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
+            list_row_ids: Mutex::new(Vec::new()),
+            list_columns_shown: Mutex::new(Vec::new()),
             list_checked: Mutex::new((BTreeSet::new(), None)),
             view_unavailable: Mutex::new(None),
             scatter_points: Mutex::new(Vec::new()),
@@ -909,6 +929,15 @@ impl ResultsStateController {
                     manager.push_view_controls_in_slint();
                     manager.refresh_list();
                 });
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_list_drill(move |row, column| {
+                manager.drill_into(row, column);
+            });
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_list_drill_up(move || {
+                manager.list_filter.lock().expect("Poisened").drill = None;
+                manager.refresh_list();
+            });
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_children_select_all(move |all| {
@@ -2767,6 +2796,7 @@ impl ResultsStateController {
                     children: Vec::new(),
                     child_aggregations: vec![Aggregation::Avg],
                     parents: Vec::new(),
+                    drill: None,
                 };
 
                 // Charts default to the first aggregable column for both
@@ -2921,6 +2951,55 @@ impl ResultsStateController {
     // Called whenever a filter (plane, image, class or column selection)
     // changes: the previous page number no longer means anything for the new
     // filter, so jump back to page 1.
+    /// Down to the children or partners a click on a children's or
+    /// partners' count (`row`, `column` of the list) counts.
+    fn drill_into(&self, row: i32, column: i32) {
+        let id = self
+            .list_row_ids
+            .lock()
+            .expect("Poisoned")
+            .get(row as usize)
+            .cloned();
+        let shown = self
+            .list_columns_shown
+            .lock()
+            .expect("Poisoned")
+            .get(column as usize)
+            .cloned();
+        let Some(id) = id else {
+            return;
+        };
+        let classes = self.classes.lock().expect("Poisoned").clone();
+        let name = |class: ObjectClass| {
+            classes
+                .iter()
+                .find(|known| known.global() == class)
+                .map(|known| known.name.clone())
+                .unwrap_or_else(|| "objects".into())
+        };
+        use evanalyzer_app::results::RelatedTo;
+        let drill = match shown {
+            Some(Column::Children(c)) => Drill {
+                label: format!(
+                    "{} of {} {}",
+                    name(c.child_class),
+                    name(c.parent_class),
+                    short_object_id(&id)
+                ),
+                class: c.child_class,
+                related: RelatedTo::ChildrenOf(c.parent_class, id),
+            },
+            Some(Column::ColocCount(class)) => Drill {
+                label: format!("{} touching {}", name(class), short_object_id(&id)),
+                class,
+                related: RelatedTo::PartnersOf(class, id),
+            },
+            _ => return,
+        };
+        self.list_filter.lock().expect("Poisened").drill = Some(drill);
+        self.refresh_list();
+    }
+
     /// The (parent class, child class) links of the open results.
     fn available_links(&self) -> Vec<(ObjectClass, ObjectClass)> {
         self.available_columns
@@ -3612,10 +3691,11 @@ impl ResultsStateController {
             list_filter.image_state,
             &self.images.lock().expect("Poisoned"),
         );
-        let object_classes = if list_filter.object_classes.is_empty() {
-            None
-        } else {
-            Some(list_filter.object_classes.clone())
+        let drill = list_filter.drill.clone();
+        let object_classes = match &drill {
+            Some(drill) => Some(vec![drill.class]),
+            None if list_filter.object_classes.is_empty() => None,
+            None => Some(list_filter.object_classes.clone()),
         };
         let columns = evanalyzer_app::results::view_settings::with_related_columns(
             &list_filter.columns,
@@ -3623,9 +3703,34 @@ impl ResultsStateController {
             &list_filter.child_aggregations,
             &list_filter.parents,
         );
-        let with_coloc_details = list_filter.with_coloc_details;
-        let transpond_table = list_filter.transpond;
-        let group_by = list_filter.group_by;
+        // Down to an object's children: one row per child, as they are.
+        let with_coloc_details = list_filter.with_coloc_details && drill.is_none();
+        let transpond_table = list_filter.transpond && drill.is_none();
+        let group_by = match drill {
+            Some(_) => ListGroupBy::Objects,
+            None => list_filter.group_by,
+        };
+        // A children's count can be clicked (to them) where a row is one
+        // object and the columns are as sorted.
+        let mut ordered_columns = columns.clone();
+        ordered_columns.sort();
+        let drillable: Vec<bool> = ordered_columns
+            .iter()
+            .map(|c| {
+                group_by == ListGroupBy::Objects
+                    && !with_coloc_details
+                    && !transpond_table
+                    && matches!(
+                        c,
+                        Column::Children(ChildColumn {
+                            value: ChildValue::Count,
+                            ..
+                        }) | Column::ColocCount(ObjectClass::Global(_))
+                    )
+            })
+            .collect();
+        *self.list_columns_shown.lock().expect("Poisoned") = ordered_columns;
+        let drill_label = drill.as_ref().map(|d| d.label.clone()).unwrap_or_default();
         let aggregations = list_filter.aggregations.clone();
         drop(list_filter);
 
@@ -3645,6 +3750,7 @@ impl ResultsStateController {
                 object_classes,
                 columns,
                 with_coloc_details,
+                related_to: drill.map(|d| d.related),
                 page: evanalyzer_app::results::Pagination {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
@@ -3691,6 +3797,15 @@ impl ResultsStateController {
         }
 
         self.set_objects_list_in_slint(&result);
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ResultsState>();
+                state.set_list_column_drill(ModelRc::from(Rc::new(VecModel::from(drillable))));
+                state.set_list_drill_label(drill_label.into());
+            }
+        })
+        .ok();
     }
 
     // Rust never hands this more than one page of rows (see the LIST_PAGE_SIZE
@@ -3784,6 +3899,7 @@ impl ResultsStateController {
             *width += 14.0;
         }
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
+        *self.list_row_ids.lock().expect("Poisoned") = result.row_names.clone();
         // A new page: nothing ticked.
         *self.list_checked.lock().expect("Poisoned") = (BTreeSet::new(), None);
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -6816,6 +6932,44 @@ pub(crate) mod tests {
             assert!(headers.iter().any(|h| h == wanted), "{wanted} in {headers:?}");
         }
 
+        // A click on the first object's "ClassB · Count": down to its child.
+        let count_column = headers.iter().position(|h| h == "ClassB · Count").unwrap();
+        let drill: Vec<bool> = state.get_list_column_drill().iter().collect();
+        assert!(drill[count_column], "the count opens the children");
+        assert_eq!(drill.iter().filter(|d| **d).count(), 1, "only the count");
+        state.invoke_list_drill(0, count_column as i32);
+        drain_ui_queue();
+        assert_eq!(state.get_list_rows().row_count(), 1, "its one ClassB child");
+        assert_eq!(state.get_list_drill_label().as_str(), "ClassB of ClassA 000000000000");
+        state.invoke_list_drill_up();
+        drain_ui_queue();
+        assert_eq!(state.get_list_drill_label().as_str(), "");
+        assert!(state.get_list_rows().row_count() > 1, "back to every object");
+
+        // The first object touches the ClassB object (seeded partners): its
+        // "Partners ClassB · Count" opens it.
+        state.invoke_list_columns_item_selected("n_colocalized_class_ClassB".into(), true);
+        drain_ui_queue();
+        let headers: Vec<String> = state
+            .get_list_column_headers()
+            .iter()
+            .map(|h| h.to_string())
+            .collect();
+        let partners = headers
+            .iter()
+            .position(|h| h == "Partners ClassB · Count")
+            .expect("the partners' count column");
+        assert!(state.get_list_column_drill().row_data(partners).unwrap());
+        state.invoke_list_drill(0, partners as i32);
+        drain_ui_queue();
+        assert_eq!(state.get_list_rows().row_count(), 1, "its one partner");
+        assert_eq!(
+            state.get_list_drill_label().as_str(),
+            "ClassB touching 000000000000"
+        );
+        state.invoke_list_drill_up();
+        drain_ui_queue();
+
         state.invoke_list_group_by_selected("pairs".into());
         assert!(controller.list_filter.lock().unwrap().with_coloc_details);
         state.invoke_list_group_by_selected("objects".into());
@@ -8353,6 +8507,7 @@ pub(crate) mod tests {
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,
+                    related_to: None,
                     page: evanalyzer_app::results::Pagination {
                         limit: 10_000,
                         after: None,

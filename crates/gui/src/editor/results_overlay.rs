@@ -192,6 +192,30 @@ fn draw_trails(
     }
 }
 
+/// Lines between image points (`links`, each from one point to another)
+/// into `buffer` (`buf_w` × `buf_h`), image pixel `p` at `p * zoom + off` -
+/// the editor's links between the selected object and its relatives.
+pub fn draw_links(
+    buffer: &mut [slint::Rgba8Pixel],
+    links: &[((f32, f32), (f32, f32))],
+    rgb: [u8; 3],
+    buf_w: u32,
+    buf_h: u32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) {
+    let screen = |p: (f32, f32)| (p.0 * zoom + off_x, p.1 * zoom + off_y);
+    let mut canvas = Canvas {
+        buffer,
+        w: buf_w as i64,
+        h: buf_h as i64,
+    };
+    for (a, b) in links {
+        canvas.line(screen(*a), screen(*b), rgb, TRAIL_ALPHA, true);
+    }
+}
+
 /// A buffer to draw anti-aliased lines into.
 struct Canvas<'a> {
     buffer: &'a mut [slint::Rgba8Pixel],
@@ -534,6 +558,15 @@ mod tests {
         assert!(alpha_at(&buf, 75, 10) > 0, "its path ahead, faint");
         assert!(alpha_at(&buf, 75, 10) < alpha_at(&buf, 45, 10));
         assert_eq!(alpha_at(&buf, 45, 30), 0, "the other track hidden");
+    }
+
+    #[test]
+    fn a_link_is_drawn_between_its_two_points() {
+        // 100 wide, as `alpha_at` reads.
+        let mut buf = buffer(100, 20);
+        draw_links(&mut buf, &[((5.0, 10.0), (35.0, 10.0))], [255, 0, 0], 100, 20, 1.0, 0.0, 0.0);
+        assert!(alpha_at(&buf, 20, 10) > 0, "on the line");
+        assert_eq!(alpha_at(&buf, 20, 2), 0, "not beside it");
     }
 
     #[test]

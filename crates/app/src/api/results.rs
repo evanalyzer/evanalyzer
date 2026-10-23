@@ -151,6 +151,8 @@ pub struct ResultObject {
     pub value: Option<f64>,
     /// Its track - `None` when not tracked.
     pub track_id: Option<u64>,
+    /// The objects it belongs to (Relate Objects), any class.
+    pub parent_ids: Vec<String>,
 }
 
 /// One image's tracks across its time points (Results › Tracks): their
@@ -308,9 +310,21 @@ pub struct ListFilter {
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
+    /// Only the objects related to one object - a click on a children's or
+    /// a partners' count.
+    pub related_to: Option<RelatedTo>,
     pub page: Pagination,
     /// If true each object class is shown in a separate table instead of in rows
     pub transpond_table: bool,
+}
+
+/// The objects of a list related to one object (by its id).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum RelatedTo {
+    /// Its children linked through the class (Relate Objects).
+    ChildrenOf(ObjectClass, String),
+    /// Its partners of the class (Colocalization).
+    PartnersOf(ObjectClass, String),
 }
 
 #[derive(Clone, Serialize, Deserialize)]

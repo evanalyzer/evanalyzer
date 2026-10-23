@@ -664,6 +664,7 @@ fn remote_results_queries_match_local_ones() {
         object_classes: None,
         columns: vec![evanalyzer_app::results::Column::AreaSizePx],
         with_coloc_details: false,
+        related_to: None,
         page: evanalyzer_app::results::Pagination {
             limit: 100,
             after: None,

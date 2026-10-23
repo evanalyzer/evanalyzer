@@ -658,6 +658,7 @@ impl ResultsStateController {
             children: Vec::new(),
             child_aggregations: vec![Aggregation::Avg],
             parents: Vec::new(),
+            drill: None,
         };
         let chart_column = first(is_chartable_column);
         *self.chart_filter.lock().expect("Poisoned") = ChartFilter {
@@ -767,8 +768,8 @@ impl ResultsStateController {
                 _ => None,
             })
             .collect();
-        let children_summary = list_summary(children.len(), children_items.len(), "Children");
-        let parent_summary = list_summary(parents.len(), parent_items.len(), "Linked objects");
+        let children_summary = format!("{} of {}", children.len(), children_items.len());
+        let parent_summary = format!("{} of {}", parents.len(), parent_items.len());
         let child_aggregation_items = aggregation_items(&child_aggregations);
         let child_aggregate_summary =
             list_summary(child_aggregations.len(), AGGREGATIONS.len(), "Aggregations");

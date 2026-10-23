@@ -332,6 +332,20 @@ impl ResultsGenerator {
         if let Some(ids) = &class_ids {
             conditions.push(class_filter_sql("object_class_id", ids));
         }
+        match &filter.related_to {
+            Some(RelatedTo::ChildrenOf(parent_class, parent_id)) => conditions.push(format!(
+                "parent_ids[{}] = '{}'::UUID",
+                coloc_class_key(*parent_class),
+                parent_id.replace('\'', "''")
+            )),
+            Some(RelatedTo::PartnersOf(class, id)) => conditions.push(format!(
+                "object_id IN (SELECT UNNEST(coloc_partner_ids[{}]) FROM objects \
+                 WHERE object_id = '{}'::UUID)",
+                coloc_class_key(*class),
+                id.replace('\'', "''")
+            )),
+            None => {}
+        }
         // Keyset pagination (see the doc comment on `Pagination::after`):
         // narrowing to `object_id > cursor` here, in the same WHERE clause
         // DuckDB already zone-map-prunes on, is what lets it skip whole row
@@ -2690,20 +2704,24 @@ impl ResultsGenerator {
         Ok(ret)
     }
 
-    /// The (parent class, child class) pairs Relate Objects linked in these
-    /// results, sorted - none in results without `parent_ids`.
-    pub fn get_relations(&self) -> Result<Vec<(ObjectClass, ObjectClass)>, InternalErrors> {
-        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let has_column: bool = self
-            .database
+    /// Whether these results store parents (`parent_ids`) - not those from
+    /// before Relate Objects.
+    pub fn has_parent_ids(&self) -> Result<bool, InternalErrors> {
+        self.database
             .query_row(
                 "SELECT count(*) > 0 FROM information_schema.columns \
                  WHERE table_name = 'objects' AND column_name = 'parent_ids'",
                 [],
                 |row| row.get(0),
             )
-            .map_err(err)?;
-        if !has_column {
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    /// The (parent class, child class) pairs Relate Objects linked in these
+    /// results, sorted - none in results without `parent_ids`.
+    pub fn get_relations(&self) -> Result<Vec<(ObjectClass, ObjectClass)>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if !self.has_parent_ids()? {
             return Ok(Vec::new());
         }
         let mut stmt = self
@@ -4339,6 +4357,7 @@ mod tests {
                         object_classes: None,
                         columns: columns.clone(),
                         with_coloc_details: false,
+                        related_to: None,
                         page: Pagination { limit: PAGE, after },
                         transpond_table,
                     })
@@ -4675,6 +4694,7 @@ mod tests {
                 object_classes: Some(vec![class]),
                 columns,
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4818,6 +4838,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::ObjectClass, Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4846,6 +4867,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::TrackId, Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4894,6 +4916,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4933,6 +4956,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::ImageName],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4953,6 +4977,7 @@ mod tests {
                 object_classes: Some(vec![ObjectClass::Global(2)]),
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4970,6 +4995,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -4994,6 +5020,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -5023,6 +5050,7 @@ mod tests {
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,
+                    related_to: None,
                     page: no_page(),
                     transpond_table: false,
                 })
@@ -5065,6 +5093,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: Pagination {
                     limit: 2,
                     after: None,
@@ -5082,6 +5111,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: Pagination {
                     limit: 2,
                     after: cursor.clone(),
@@ -5113,6 +5143,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::IntensityAvg(0)],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -5416,6 +5447,7 @@ mod tests {
                 object_classes,
                 columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page,
                 transpond_table: true,
             })
@@ -6086,6 +6118,7 @@ mod tests {
                     Column::AreaSizePx,
                 ],
                 with_coloc_details: true,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -6986,6 +7019,7 @@ mod tests {
                 object_classes: Some(vec![]),
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -7007,6 +7041,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -7135,6 +7170,7 @@ mod tests {
                     Column::AreaSizePx,
                 ],
                 with_coloc_details: true,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -7171,6 +7207,7 @@ mod tests {
                     Column::ColocCount(ObjectClass::Global(3)),
                 ],
                 with_coloc_details: true,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -8020,6 +8057,7 @@ mod tests {
                     Column::IntensityAvg(0),
                 ],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })
@@ -8145,6 +8183,7 @@ mod tests {
                 object_classes: None,
                 columns: vec![Column::AreaSizePx, p, q],
                 with_coloc_details: false,
+                related_to: None,
                 page: no_page(),
                 transpond_table: false,
             })

@@ -1,5 +1,5 @@
 use crate::ViewportState as ViewportSlintState;
-use crate::editor::results_overlay::{ResultsOverlay, draw_results_overlay};
+use crate::editor::results_overlay::{ResultsOverlay, draw_links, draw_results_overlay};
 use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
@@ -1189,6 +1189,36 @@ impl ViewportController {
         // (first class in the list on top) > unclassified. Resolved once here.
         let z = ZOrder::new(&*project);
 
+        // The selected object's family (Relate Objects' links, design canvas
+        // "Object relations in the results", board 4): its children light
+        // blue, its parents yellow, linked to it by lines; the rest dimmed.
+        let family = selected_object_id.as_ref().and_then(|id| {
+            let all = || objects.iter().chain(auto_objects.iter());
+            let selected = all().find(|o| o.id == *id)?;
+            let children: Vec<&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings> =
+                all().filter(|o| o.parents.values().any(|p| p == id)).collect();
+            let parents: Vec<&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings> = all()
+                .filter(|o| selected.parents.values().any(|p| *p == o.id))
+                .collect();
+            if children.is_empty() && parents.is_empty() {
+                return None;
+            }
+            let centre = |o: &evanalyzer_cfg::settings::object_settings::ObjectMetricSettings| {
+                (
+                    (o.bbox[0] + o.bbox[2]) as f32 / 2.0 + 0.5,
+                    (o.bbox[1] + o.bbox[3]) as f32 / 2.0 + 0.5,
+                )
+            };
+            let links = children
+                .iter()
+                .chain(parents.iter())
+                .map(|o| (centre(o), centre(selected)))
+                .collect::<Vec<_>>();
+            let children: Vec<_> = children.iter().map(|o| o.id.clone()).collect();
+            let parents: Vec<_> = parents.iter().map(|o| o.id.clone()).collect();
+            Some((children, parents, links))
+        });
+
         // Resolve project-level filtering/coloring/ordering up front, so the
         // compositing pass (`composite_object_instances`) is pure pixel math
         // with no project access.
@@ -1202,8 +1232,19 @@ impl ViewportController {
 
             let is_selected = selected_object_id.as_ref() == Some(&object.id);
 
+            let relative = family.as_ref().map(|(children, parents, _)| {
+                if children.contains(&object.id) {
+                    Color::from_argb_u8(object_transparency, 0x7c, 0xc4, 0xfa)
+                } else if parents.contains(&object.id) {
+                    Color::from_argb_u8(object_transparency, 0xfa, 0xcc, 0x15)
+                } else {
+                    Color::from_argb_u8(object_transparency / 3, 0x4a, 0x4d, 0x57)
+                }
+            });
             let color = if is_selected {
-                Color::from_argb_u8(0xfc, 0xe9, 0x03, object_transparency)
+                Color::from_argb_u8(object_transparency, 0xfc, 0xe9, 0x03)
+            } else if let Some(color) = relative {
+                color
             } else {
                 get_colors_from_class(&project, object_transparency, &object.object_class)
             };
@@ -1240,6 +1281,18 @@ impl ViewportController {
             off_y + margin,
             zoom < 1.0,
         );
+        if let Some((_, _, links)) = &family {
+            draw_links(
+                buffer.make_mut_slice(),
+                links,
+                [0xf4, 0xf4, 0xf5],
+                buf_w,
+                buf_h,
+                zoom,
+                off_x + margin,
+                off_y + margin,
+            );
+        }
         self.post_object_image(buffer, rect);
     }
 

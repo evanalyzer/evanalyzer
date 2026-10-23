@@ -760,6 +760,13 @@
           "with_coloc_details": "BOOL"
         },
         {
+          "related_to": {
+            "OPTION": {
+              "TYPENAME": "RelatedTo"
+            }
+          }
+        },
+        {
           "page": {
             "TYPENAME": "Pagination"
           }
@@ -939,6 +946,30 @@
         },
         "13": {
           "PLATE48X72": "UNIT"
+        }
+      }
+    },
+    "RelatedTo": {
+      "ENUM": {
+        "0": {
+          "ChildrenOf": {
+            "TUPLE": [
+              {
+                "TYPENAME": "ObjectClass"
+              },
+              "STR"
+            ]
+          }
+        },
+        "1": {
+          "PartnersOf": {
+            "TUPLE": [
+              {
+                "TYPENAME": "ObjectClass"
+              },
+              "STR"
+            ]
+          }
         }
       }
     },
@@ -1140,6 +1171,11 @@
         {
           "track_id": {
             "OPTION": "U64"
+          }
+        },
+        {
+          "parent_ids": {
+            "SEQ": "STR"
           }
         }
       ]

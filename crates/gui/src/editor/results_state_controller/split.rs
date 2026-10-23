@@ -555,9 +555,9 @@ impl ResultsStateController {
     /// "Color by value", the heatmap's).
     pub(super) fn split_push_overlay(&self) {
         let by_value = self.split.lock().expect("Poisoned").by_value && self.in_plate();
-        let (objects, image) = {
+        let (objects, image, selected) = {
             let split = self.split.lock().expect("Poisoned");
-            (split.objects.clone(), split.image.clone())
+            (split.objects.clone(), split.image.clone(), split.selected)
         };
         // Its image isn't the one in the viewer (yet): opening it takes
         // longer than reading its objects. They are kept and drawn once it
@@ -600,11 +600,14 @@ impl ResultsStateController {
             .iter()
             .filter_map(|o| o.value)
             .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let family = selected
+            .and_then(|i| objects.get(i))
+            .and_then(|selected| family_of(selected, &objects));
         let overlay = ResultsOverlay {
             objects: objects
                 .iter()
                 .map(|object| {
-                    let rgb = match (&gradient, object.value) {
+                    let own = || match (&gradient, object.value) {
                         (Some(stops), Some(v)) if !stops.is_empty() => {
                             let t = if hi > lo { (v - lo) / (hi - lo) } else { 1.0 };
                             gradient_at(stops, t)
@@ -615,6 +618,11 @@ impl ResultsStateController {
                             .copied()
                             .unwrap_or(0xFFFFFF),
                     };
+                    // The selected object's family, when it has one.
+                    let rgb = family
+                        .as_ref()
+                        .and_then(|f| f.color_of(object))
+                        .unwrap_or_else(own);
                     (
                         object.bbox_px,
                         [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8],
@@ -839,6 +847,7 @@ impl ResultsStateController {
             .map(|(name, _)| name.clone())
             .unwrap_or_default();
 
+        let image_objects = self.split.lock().expect("Poisoned").objects.clone();
         let sel = match &object {
             None => SplitObject::default(),
             Some(o) => {
@@ -863,6 +872,8 @@ impl ResultsStateController {
                         .unwrap_or_else(|| "–".to_string())
                         .into(),
                     position: format!("{:.0}, {:.0}", o.centroid_px[0], o.centroid_px[1]).into(),
+                    children: children_text(o, &image_objects, &classes).into(),
+                    parents: parents_text(o, &image_objects, &classes).into(),
                 }
             }
         };
@@ -1153,5 +1164,144 @@ mod tests {
         assert_eq!(gradient_at(&stops, 1.0), 0xFFFFFF);
         assert_eq!(gradient_at(&stops, 0.25), 0x800000);
         assert_eq!(gradient_at(&stops, 7.0), 0xFFFFFF, "clamped");
+    }
+}
+
+/// The card's "Children": how many objects of `objects` belong to `object`,
+/// per class ("Spot · 7, Nucleus · 1"); "" none.
+fn children_text(
+    object: &ResultObject,
+    objects: &[ResultObject],
+    classes: &HashMap<i32, (String, u32)>,
+) -> String {
+    let mut counts: Vec<(i32, usize)> = Vec::new();
+    for child in objects.iter().filter(|o| o.parent_ids.contains(&object.object_id)) {
+        match counts.iter_mut().find(|(class, _)| *class == child.class_id) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((child.class_id, 1)),
+        }
+    }
+    counts
+        .iter()
+        .map(|(class, count)| format!("{} · {count}", class_name_of(*class, classes)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The card's "Parent": the classes of the objects `object` belongs to
+/// ("Cell"); "" none.
+fn parents_text(
+    object: &ResultObject,
+    objects: &[ResultObject],
+    classes: &HashMap<i32, (String, u32)>,
+) -> String {
+    objects
+        .iter()
+        .filter(|o| object.parent_ids.contains(&o.object_id))
+        .map(|parent| class_name_of(parent.class_id, classes))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn class_name_of(class: i32, classes: &HashMap<i32, (String, u32)>) -> String {
+    classes
+        .get(&class)
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| "Unclassified".to_string())
+}
+
+/// The selected object's family on the split image (design canvas "Object
+/// relations in the results", board 4): its children outlined in one
+/// color, its parents in yellow, every other object dimmed.
+struct Family {
+    selected: String,
+    parents: Vec<String>,
+}
+
+/// Its children's color.
+const CHILD_RGB: u32 = 0x7CC4FA;
+/// Its parents' color - the viewer's selection yellow.
+const PARENT_RGB: u32 = 0xFACC15;
+/// Everything else while a family is shown.
+const DIMMED_RGB: u32 = 0x4A4D57;
+
+/// The family of `selected` among `objects` - `None` without any relation
+/// (then every object keeps its color).
+fn family_of(selected: &ResultObject, objects: &[ResultObject]) -> Option<Family> {
+    let has_children = objects
+        .iter()
+        .any(|o| o.parent_ids.contains(&selected.object_id));
+    (has_children || !selected.parent_ids.is_empty()).then(|| Family {
+        selected: selected.object_id.clone(),
+        parents: selected.parent_ids.clone(),
+    })
+}
+
+impl Family {
+    /// `object`'s color in the family view - `None` for the selected one
+    /// (its own color, under the crosshair).
+    fn color_of(&self, object: &ResultObject) -> Option<u32> {
+        if object.object_id == self.selected {
+            None
+        } else if object.parent_ids.contains(&self.selected) {
+            Some(CHILD_RGB)
+        } else if self.parents.contains(&object.object_id) {
+            Some(PARENT_RGB)
+        } else {
+            Some(DIMMED_RGB)
+        }
+    }
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::*;
+
+    fn object(id: &str, parents: &[&str]) -> ResultObject {
+        ResultObject {
+            object_id: id.into(),
+            class_id: 1,
+            bbox_px: [0, 0, 1, 1],
+            centroid_px: [0.0, 0.0],
+            area_px: 4,
+            means: vec![],
+            value: None,
+            track_id: None,
+            parent_ids: parents.iter().map(|p| p.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_selected_cell_shows_its_spots_and_dims_the_rest() {
+        let objects = [
+            object("cell", &[]),
+            object("spot1", &["cell"]),
+            object("spot2", &["other"]),
+            object("region", &[]),
+        ];
+        let family = family_of(&objects[0], &objects).expect("the cell has a child");
+        let colors: Vec<Option<u32>> = objects.iter().map(|o| family.color_of(o)).collect();
+        assert_eq!(colors, [None, Some(CHILD_RGB), Some(DIMMED_RGB), Some(DIMMED_RGB)]);
+    }
+
+    #[test]
+    fn the_card_counts_the_children_per_class_and_names_the_parent() {
+        let mut objects = vec![object("cell", &[]), object("spot1", &["cell"]), object("spot2", &["cell"])];
+        objects[0].class_id = 1;
+        objects[1].class_id = 2;
+        objects[2].class_id = 2;
+        let classes: HashMap<i32, (String, u32)> =
+            [(1, ("Cell".to_string(), 0)), (2, ("Spot".to_string(), 0))].into();
+        assert_eq!(children_text(&objects[0], &objects, &classes), "Spot · 2");
+        assert_eq!(parents_text(&objects[1], &objects, &classes), "Cell");
+        assert_eq!(children_text(&objects[1], &objects, &classes), "");
+    }
+
+    #[test]
+    fn a_selected_spot_shows_its_cell_and_without_relations_nothing_changes() {
+        let objects = [object("cell", &[]), object("spot", &["cell"]), object("alone", &[])];
+        let family = family_of(&objects[1], &objects).unwrap();
+        assert_eq!(family.color_of(&objects[0]), Some(PARENT_RGB));
+        assert!(family_of(&objects[2], &objects).is_none());
     }
 }

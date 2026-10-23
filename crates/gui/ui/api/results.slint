@@ -42,6 +42,11 @@ export struct SplitObject {
     area: string,
     mean: string,
     position: string,
+    // Relate Objects' links on this image: its children per class
+    // ("Spot · 7") and the classes of the objects it belongs to ("Cell") -
+    // "" without.
+    children: string,
+    parents: string,
 }
 
 // Tracks: a row of the image's tracks table.
@@ -450,6 +455,12 @@ export global ResultsState {
     in-out property <string> list-parent-summary: "";
     callback list-parent-selected(string, bool);
     callback list-parent-select-all(bool);
+    // Per list column: its cells open the children they count (a click on
+    // "Spot · Count"), and the bar above the list while down there.
+    in property <[bool]> list-column-drill: [];
+    callback list-drill(int /* row */, int /* column */);
+    in property <string> list-drill-label: "";
+    callback list-drill-up();
 
 
     // Rows (one row per object / per (image, class)) or the classes side by

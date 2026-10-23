@@ -367,6 +367,7 @@ fn main() {
                         object_classes: None,
                         columns: vec![Column::AreaSizePx],
                         with_coloc_details: false,
+                        related_to: None,
                         page: Pagination {
                             limit: 500,
                             after: None,
@@ -437,6 +438,7 @@ fn main() {
         object_classes: None,
         columns,
         with_coloc_details,
+        related_to: None,
         page: Pagination {
             limit: 500,
             after: None,

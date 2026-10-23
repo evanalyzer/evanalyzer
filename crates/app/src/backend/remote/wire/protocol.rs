@@ -603,6 +603,7 @@ mod tests {
             .unwrap();
         tracer.trace_simple_type::<crate::api::ChildValue>().unwrap();
         tracer.trace_simple_type::<crate::api::ParentValue>().unwrap();
+        tracer.trace_simple_type::<crate::api::RelatedTo>().unwrap();
         tracer.trace_simple_type::<crate::api::Column>().unwrap();
         tracer
             .trace_simple_type::<crate::api::ExportFormat>()
