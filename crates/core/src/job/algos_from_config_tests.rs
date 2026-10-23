@@ -493,6 +493,7 @@ fn colocalization_settings_convert_all_fields() {
         classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
         mark_objects_of: ObjectClass::Global(1),
         mark_as: ObjectClass::Global(5),
+        all_combinations: true,
         filter_classes: vec![ObjectClass::Global(3)],
         class_for_overlapping_areas: ObjectClass::Global(9),
         exclude_classes: vec![ObjectClass::Global(4)],
@@ -506,6 +507,7 @@ fn colocalization_settings_convert_all_fields() {
         vec![ObjectClass::Global(1), ObjectClass::Global(2)]
     );
     assert_eq!(result.mark_objects_of, ObjectClass::Global(1));
+    assert!(result.all_combinations);
     assert_eq!(result.mark_as, ObjectClass::Global(5));
     assert_eq!(result.filter_classes, vec![ObjectClass::Global(3)]);
     assert_eq!(result.class_for_overlapping_areas, ObjectClass::Global(9));

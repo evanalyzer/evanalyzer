@@ -97,6 +97,14 @@ pub struct Colocalization {
     #[cmdsmeta(summary = true, optional = true, display_name = "Colocalize")]
     pub classes_to_coloc: Vec<ObjectClass>,
 
+    /// Record every pair that overlaps, also of objects that don't overlap
+    /// an object of each class: one step with A, B and C shows A∩B, A∩C,
+    /// B∩C and A∩B∩C in the results' partner columns. Off: only the objects
+    /// overlapping every other class record partners. "As" and the overlap
+    /// regions always need every class.
+    #[cmdsmeta(optional = true, display_name = "All combinations")]
+    pub all_combinations: bool,
+
     /// Classes an object must NOT overlap to be considered colocalized.
     ///
     /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
@@ -285,6 +293,9 @@ impl ImageAlgorithm for Colocalization {
                 // For every other class collect the IDs of ROIs that spatially overlap the anchor
                 // with sufficient area.
                 let mut class_matches: IndexMap<ObjectClass, Vec<ObjectId>> = IndexMap::new();
+                // It overlaps an object of every other class (with "All
+                // combinations" a class may be missing: its pairs count too).
+                let mut overlaps_all = true;
 
                 for (other_idx, other_class) in self.classes_to_coloc.iter().enumerate() {
                     if other_idx == class_idx {
@@ -292,6 +303,10 @@ impl ImageAlgorithm for Colocalization {
                     }
                     let other_grid = match class_grids.get(other_class) {
                         Some(g) => g,
+                        None if self.all_combinations => {
+                            overlaps_all = false;
+                            continue;
+                        }
                         None => continue 'anchor,
                     };
                     let other_candidates = other_grid.candidates(anchor_object.bbox);
@@ -343,10 +358,17 @@ impl ImageAlgorithm for Colocalization {
                         candidates.into_iter().map(|(id, _)| id).collect();
 
                     if overlapping.is_empty() {
+                        if self.all_combinations {
+                            overlaps_all = false;
+                            continue;
+                        }
                         continue 'anchor;
                     }
 
                     class_matches.insert(*other_class, overlapping);
+                }
+                if class_matches.is_empty() {
+                    continue 'anchor;
                 }
 
                 // The anchor satisfies classes_to_coloc, but drop it if it also overlaps
@@ -366,8 +388,11 @@ impl ImageAlgorithm for Colocalization {
                     continue 'anchor;
                 }
 
-                // The anchor object overlaps with at least one object from every other class.
-                if self.mark_objects_of == ObjectClass::Unset || *anchor_class == self.mark_objects_of {
+                // Marked only when it overlaps an object of every other class.
+                if overlaps_all
+                    && (self.mark_objects_of == ObjectClass::Unset
+                        || *anchor_class == self.mark_objects_of)
+                {
                     marked.push(anchor_id.clone());
                 }
                 for (cls, ids) in &class_matches {
@@ -379,8 +404,11 @@ impl ImageAlgorithm for Colocalization {
                         .extend(ids.iter().cloned());
                 }
 
-                // Compute the N-way intersection area (chain of pairwise intersections).
-                if let ObjectClass::Global(overlap_class_id) = self.class_for_overlapping_areas {
+                // Compute the N-way intersection area (chain of pairwise intersections)
+                // - only where every class overlaps.
+                if overlaps_all
+                    && let ObjectClass::Global(overlap_class_id) = self.class_for_overlapping_areas
+                {
                     let overlap_class = ObjectClass::Global(overlap_class_id);
                     let mut states: Vec<(Object, Vec<ObjectId>)> = Vec::new();
 
@@ -731,6 +759,7 @@ mod tests {
                     classes_to_coloc: vec![CLASS_A, CLASS_B],
                     mark_objects_of: ObjectClass::Unset,
                     mark_as: ObjectClass::Unset,
+                    all_combinations: false,
                     filter_classes: vec![],
                     exclude_classes: if with_exclude { vec![CLASS_C] } else { vec![] },
                     class_for_overlapping_areas: CLASS_OVERLAP,
@@ -773,6 +802,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes,
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1041,6 +1071,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1068,6 +1099,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1105,6 +1137,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1137,6 +1170,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1172,6 +1206,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![CLASS_C], // only ROIs also carrying CLASS_C participate
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1205,6 +1240,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
@@ -1304,6 +1340,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
@@ -1387,6 +1424,151 @@ mod tests {
         }
     }
 
+    // --- "All combinations" ---
+
+    fn all_combinations_of(objects: &[(u128, [u32; 4], ObjectClass)]) -> GlobalPipelineCache {
+        let mut cache = GlobalPipelineCache::default();
+        for (id, bbox, class) in objects {
+            let object = make_filled_object(*id, *bbox, ImagePlane::default(), *class);
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            all_combinations: true,
+            mark_as: CLASS_MARK,
+            class_for_overlapping_areas: CLASS_OVERLAP,
+            ..coloc_with(SizeUnitsRel::Pixels, 0.0, ColocMultiplicity::ManyToMany, vec![])
+        };
+        run(&coloc, &mut cache);
+        cache
+    }
+
+    /// `id`'s partners per class, sorted by class.
+    fn partners_of(cache: &GlobalPipelineCache, id: u128) -> Vec<(ObjectClass, Vec<u128>)> {
+        let mut partners: Vec<(ObjectClass, Vec<u128>)> = cache
+            .object_cache
+            .get(&ObjectId(id))
+            .unwrap()
+            .colocalized_with
+            .iter()
+            .map(|(class, ids)| (*class, ids.iter().map(|i| i.0).collect()))
+            .collect();
+        partners.sort();
+        partners
+    }
+
+    fn is_marked(cache: &GlobalPipelineCache, id: u128) -> bool {
+        cache
+            .object_cache
+            .get(&ObjectId(id))
+            .unwrap()
+            .object_classes()
+            .contains(&CLASS_MARK)
+    }
+
+    /// A chain A–B–C (A and C don't touch): every pair is recorded; only
+    /// B overlaps both others - it alone is marked, and as no area is
+    /// shared by all three there is no overlap region.
+    #[test]
+    fn all_combinations_records_every_pair_of_a_chain() {
+        let cache = all_combinations_of(&[
+            (ID_A, [0, 0, 5, 5], CLASS_A),
+            (ID_B, [3, 3, 8, 8], CLASS_B),
+            (ID_C, [6, 6, 11, 11], CLASS_C),
+        ]);
+        assert_eq!(partners_of(&cache, ID_A), [(CLASS_B, vec![ID_B])]);
+        assert_eq!(
+            partners_of(&cache, ID_B),
+            [(CLASS_A, vec![ID_A]), (CLASS_C, vec![ID_C])]
+        );
+        assert_eq!(partners_of(&cache, ID_C), [(CLASS_B, vec![ID_B])]);
+        assert_eq!(
+            [ID_A, ID_B, ID_C].map(|id| is_marked(&cache, id)),
+            [false, true, false],
+            "only the one overlapping every class"
+        );
+        assert!(
+            !cache
+                .object_cache
+                .values()
+                .any(|o| o.object_classes().contains(&CLASS_OVERLAP)),
+            "no area shared by all three"
+        );
+    }
+
+    /// A hub A over B and C (B and C apart): A records both, B and C each
+    /// A; A is the one marked. Without the option B and C record nothing.
+    #[test]
+    fn all_combinations_gives_the_spokes_of_a_hub_their_pair() {
+        let objects = [
+            (ID_A, [0, 0, 10, 10], CLASS_A),
+            (ID_B, [1, 1, 4, 4], CLASS_B),
+            (ID_C, [6, 6, 9, 9], CLASS_C),
+        ];
+        let cache = all_combinations_of(&objects);
+        assert_eq!(
+            partners_of(&cache, ID_A),
+            [(CLASS_B, vec![ID_B]), (CLASS_C, vec![ID_C])]
+        );
+        assert_eq!(partners_of(&cache, ID_B), [(CLASS_A, vec![ID_A])]);
+        assert_eq!(partners_of(&cache, ID_C), [(CLASS_A, vec![ID_A])]);
+        assert_eq!([ID_A, ID_B, ID_C].map(|id| is_marked(&cache, id)), [true, false, false]);
+    }
+
+    /// With the option, each object's partners are exactly the objects of
+    /// each other class it overlaps - checked against every pair, on random
+    /// layouts.
+    #[test]
+    fn all_combinations_matches_every_overlapping_pair() {
+        let mut state = 0x1234_5678_u32;
+        let mut next = move |n: u32| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state % n
+        };
+        let classes = [CLASS_A, CLASS_B, CLASS_C];
+        for _ in 0..10 {
+            let mut objects = Vec::new();
+            let mut id = 1;
+            for class in classes {
+                for _ in 0..20 {
+                    let (x, y, w, h) = (next(50), next(50), 1 + next(15), 1 + next(15));
+                    objects.push((id, [x, y, x + w, y + h], class));
+                    id += 1;
+                }
+            }
+            let cache = all_combinations_of(&objects);
+            for (id, _, class) in &objects {
+                let object = cache.object_cache.get(&ObjectId(*id)).unwrap();
+                let mut expected: Vec<(ObjectClass, Vec<u128>)> = classes
+                    .iter()
+                    .filter(|other| *other != class)
+                    .map(|other| {
+                        let ids: Vec<u128> = objects
+                            .iter()
+                            .filter(|(_, _, c)| c == other)
+                            .filter(|(oid, _, _)| {
+                                object
+                                    .overlaps(cache.object_cache.get(&ObjectId(*oid)).unwrap())
+                                    .is_some()
+                            })
+                            .map(|(oid, _, _)| *oid)
+                            .collect();
+                        (*other, ids)
+                    })
+                    .filter(|(_, ids)| !ids.is_empty())
+                    .collect();
+                expected.sort();
+                let mut got = partners_of(&cache, *id);
+                for (_, ids) in &mut got {
+                    ids.sort();
+                }
+                assert_eq!(got, expected, "object {id}");
+            }
+        }
+    }
+
     // --- 3-class tests ---
 
     #[test]
@@ -1397,6 +1579,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1459,6 +1642,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
@@ -1503,6 +1687,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1552,6 +1737,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1604,6 +1790,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1660,6 +1847,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1694,6 +1882,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1726,6 +1915,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1761,6 +1951,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1981,6 +2172,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1992,6 +2184,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -2232,6 +2425,7 @@ mod tests {
                 classes_to_coloc: classes.to_vec(),
                 mark_objects_of: ObjectClass::Unset,
                 mark_as: ObjectClass::Unset,
+                all_combinations: false,
                 filter_classes: vec![],
                 exclude_classes: vec![],
                 class_for_overlapping_areas: ObjectClass::Unset,
@@ -2374,6 +2568,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -2451,6 +2646,7 @@ mod tests {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             mark_objects_of: ObjectClass::Unset,
             mark_as: ObjectClass::Unset,
+            all_combinations: false,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
