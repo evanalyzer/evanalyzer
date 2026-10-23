@@ -567,6 +567,7 @@ impl From<ColocalizationSettings> for Colocalization {
     fn from(_s: ColocalizationSettings) -> Self {
         Colocalization {
             classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
+            all_combinations: _s.all_combinations,
             exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
             min_coloc_area: _s.min_coloc_area,
             size_unit: _s.size_unit,

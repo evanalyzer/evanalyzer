@@ -443,6 +443,11 @@
       "description": "Calculates spatial colocalization and intersections between specified object classes.\n\nThis command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
       "type": "object",
       "properties": {
+        "allCombinations": {
+          "description": "Record every pair that overlaps, also of objects that don't overlap\nan object of each class: one step with A, B and C shows A∩B, A∩C,\nB∩C and A∩B∩C in the results' partner columns. Off: only the objects\noverlapping every other class record partners. \"As\" and the overlap\nregions always need every class.",
+          "type": "boolean",
+          "default": false
+        },
         "classForOverlappingAreas": {
           "description": "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class",
           "$ref": "#/$defs/ObjectClass",

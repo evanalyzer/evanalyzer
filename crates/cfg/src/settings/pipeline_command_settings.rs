@@ -2387,6 +2387,9 @@ impl Default for ClassifyObjectsSettings {
 fn _serde_default_colocalization_classes_to_coloc() -> Vec<ObjectClass> {
     vec![]
 }
+fn _serde_default_colocalization_all_combinations() -> bool {
+    bool::default()
+}
 fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
     vec![]
 }
@@ -2411,6 +2414,13 @@ pub struct ColocalizationSettings {
     /// records them as its partners - listed and counted in the results.
     #[serde(default = "_serde_default_colocalization_classes_to_coloc")]
     pub classes_to_coloc: Vec<ObjectClass>,
+    /// Record every pair that overlaps, also of objects that don't overlap
+    /// an object of each class: one step with A, B and C shows A∩B, A∩C,
+    /// B∩C and A∩B∩C in the results' partner columns. Off: only the objects
+    /// overlapping every other class record partners. "As" and the overlap
+    /// regions always need every class.
+    #[serde(default = "_serde_default_colocalization_all_combinations")]
+    pub all_combinations: bool,
     /// Classes an object must NOT overlap to be considered colocalized.
     ///
     /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
@@ -2452,6 +2462,7 @@ impl Default for ColocalizationSettings {
     fn default() -> Self {
         Self {
             classes_to_coloc: vec![],
+            all_combinations: bool::default(),
             exclude_classes: vec![],
             min_coloc_area: 0.0f32,
             size_unit: SizeUnitsRel::Pixels,
