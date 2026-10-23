@@ -11188,10 +11188,10 @@ mod tests {
         let (ui, _ui_state, _controller) = selected(vec![step("Colocalization")]);
         ui.global::<PipelinesPanelState>().invoke_param_changed(
             0,
-            "overlapping".into(),
+            "classes_to_coloc".into(),
             "toggle:3".into(),
         );
-        let param = ui_param(&ui, 0, "overlapping");
+        let param = ui_param(&ui, 0, "classes_to_coloc");
         assert_eq!(param.value, "3");
         let flags: Vec<String> = (0..param.options.row_count())
             .map(|i| param.options.row_data(i).unwrap().to_string())

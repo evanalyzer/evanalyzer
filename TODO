@@ -349,7 +349,7 @@ Relate objects (new command, category Object, `WholeImage`, after TileMerge; its
 - [ ] Later: distances (to the parent's centre/edge) as object measurements in the `measurements` table; "at least X % overlap" rule.
 
 Coloc (one job: mark by overlap + record who touches whom):
-- [x] Settings in plain words: "Mark objects of" A "that overlap all of" B, C… "but not" D "by at least" … "as" class (added to the matching A objects only - one side per step; the other direction is a second step). Optional "overlap regions as" class (area/intensity of the overlap itself).
+- [x] Settings (2026-10-23, simplified after trying it): "Colocalize" (the class list, as before - every class's objects checked, partners recorded on all sides), "But not", "By at least", "Partners", "Overlap regions as", and optional "Mark objects of" + "As" (the colocalizing objects of that class - or of every class when empty - get a class). An earlier one-sided version ("Mark objects of" required) silently gave nothing when left empty.
 - [x] Partners: all by default, stored on both sides (today's "Allow multi"); option "only the best-overlapping partner" (today's 1:1). The hidden 1:1 default that capped cells at 1 spot goes.
 - [x] Multiplicity "Multi coloc only for selected" (`MultiFor`): stays in Advanced for now, to be removed later (Relate covers it).
 - [ ] Help text: "marked" (A overlaps B and C, each on its own) is not "all three share an area" (the overlap region of A∩B∩C, only where it exists).

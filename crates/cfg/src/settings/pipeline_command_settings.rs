@@ -200,10 +200,11 @@ pub enum ObjectColocObjectsColocMultiplicitySettings {
     #[serde(alias = "one-to-one", alias = "oneToOne", alias = "one_to_one")]
     OneToOne,
     /// Only objects of these classes may have more than one partner; every
-    /// other class is capped to its best-overlapping one. E.g. with Cell and
-    /// Spot and `MultiFor([Cell])`, a cell can have any number of spots, but
-    /// each spot one cell (the one it overlaps most). Kept for older
-    /// pipelines - Relate Objects links spots to cells.
+    /// other class in `classes_to_coloc` is capped to its best-overlapping
+    /// one. E.g. with `classes_to_coloc: [Cell, Spot]` and `MultiFor([Cell])`,
+    /// a cell can have any number of spots, but each spot one cell (the one
+    /// it overlaps most). Kept for older pipelines - Relate Objects links
+    /// spots to cells.
     #[serde(alias = "multi-for", alias = "multiFor", alias = "multi_for")]
     MultiFor(Vec<ObjectClass>),
 }
@@ -2383,43 +2384,64 @@ impl Default for ClassifyObjectsSettings {
     }
 }
 
+fn _serde_default_colocalization_classes_to_coloc() -> Vec<ObjectClass> {
+    vec![]
+}
 fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
     vec![]
 }
-/// Marks the objects that overlap others - "are they at the same place?".
+fn _serde_default_colocalization_mark_objects_of() -> ObjectClass {
+    ObjectClass::default()
+}
+fn _serde_default_colocalization_mark_as() -> ObjectClass {
+    ObjectClass::default()
+}
+/// Calculates spatial colocalization and intersections between specified object classes.
 ///
-/// E.g. mark the ch1 spots that overlap a ch2 spot as "ch1 with ch2": the
-/// class counts them per image, and later steps can use it (Relate Objects:
-/// the double-positive spots per cell). Every pair that overlaps is
-/// recorded as partners on both sides - which spots touch spot A. With
-/// several classes to overlap, an object is marked when it overlaps an
-/// object of each, one at a time; the area all of them share is the
-/// optional overlap region.
+/// This command scans the object cache, groups objects by their designated classes,
+/// and performs spatial overlap analysis. It records colocalization relationships
+/// between intersecting entities and can optionally generate new child ROIs representing
+/// the precise intersection regions.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColocalizationSettings {
-    /// The objects that are checked and marked (e.g. the ch1 spots).
-    pub objects: ObjectClass,
-    /// They must overlap an object of each of these classes (e.g. the ch2
-    /// spots).
-    pub overlapping: Vec<ObjectClass>,
-    /// They must not overlap an object of any of these classes (e.g. a
-    /// dead-cell marker): "overlaps A and B, but not C".
+    /// The classes whose objects must overlap (e.g. the ch1 and the ch2
+    /// spots): each object overlapping an object of every other class
+    /// records them as its partners - listed and counted in the results.
+    #[serde(default = "_serde_default_colocalization_classes_to_coloc")]
+    pub classes_to_coloc: Vec<ObjectClass>,
+    /// Classes an object must NOT overlap to be considered colocalized.
+    ///
+    /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
+    /// Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
+    /// Without exclude_classes, any object satisfying that gets recorded as colocalized.
+    /// With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
+    /// So it's a "match A and B, but not C" filter
+    ///
+    /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
     #[serde(default = "_serde_default_colocalization_exclude_classes")]
     pub exclude_classes: Vec<ObjectClass>,
-    /// The overlap needed - also for an excluded class to count.
+    /// Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
-    /// Unit of the minimum overlap: pixels, nm² or % of the smaller object.
+    /// Size unit for the minimum coloc area size
     pub size_unit: SizeUnitsRel,
-    /// The class the matching objects get (e.g. "ch1 with ch2"). `Unset`:
-    /// only the partners are recorded.
-    pub mark_as: ObjectClass,
-    /// The area all overlapping objects share, as a new object of this
-    /// class - for its own area and intensity. `Unset`: none.
-    pub class_for_overlapping_areas: ObjectClass,
     /// Which overlapping objects count as partners.
     pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
+    /// Class of the overlapping area if needed
+    ///
+    /// If defined the overlapping coloc area is added as new object and labeled with this class
+    pub class_for_overlapping_areas: ObjectClass,
+    /// Optional: the objects of this class that colocalize also get the
+    /// class below (e.g. the ch1 spots overlapping a ch2 spot). `Unset`:
+    /// the colocalizing objects of every class.
+    #[serde(default = "_serde_default_colocalization_mark_objects_of")]
+    pub mark_objects_of: ObjectClass,
+    /// Optional: the class the colocalizing objects get (e.g. "ch1 with
+    /// ch2") - to count them per image or relate them to cells. `Unset`:
+    /// only the partners are recorded.
+    #[serde(default = "_serde_default_colocalization_mark_as")]
+    pub mark_as: ObjectClass,
     /// Optional additional label filters.
     ///
     /// Only classes which matches all of these filters are used for coloc calculation
@@ -2429,14 +2451,14 @@ pub struct ColocalizationSettings {
 impl Default for ColocalizationSettings {
     fn default() -> Self {
         Self {
-            objects: ObjectClass::default(),
-            overlapping: vec![],
+            classes_to_coloc: vec![],
             exclude_classes: vec![],
             min_coloc_area: 0.0f32,
             size_unit: SizeUnitsRel::Pixels,
-            mark_as: ObjectClass::default(),
-            class_for_overlapping_areas: ObjectClass::default(),
             multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
+            class_for_overlapping_areas: ObjectClass::default(),
+            mark_objects_of: ObjectClass::default(),
+            mark_as: ObjectClass::default(),
             filter_classes: vec![],
         }
     }

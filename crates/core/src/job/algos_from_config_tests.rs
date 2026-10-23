@@ -490,8 +490,8 @@ fn classify_objects_settings_clamp_area_and_circularity_fields() {
 #[test]
 fn colocalization_settings_convert_all_fields() {
     let settings = ColocalizationSettings {
-        objects: ObjectClass::Global(1),
-        overlapping: vec![ObjectClass::Global(2)],
+        classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
+        mark_objects_of: ObjectClass::Global(1),
         mark_as: ObjectClass::Global(5),
         filter_classes: vec![ObjectClass::Global(3)],
         class_for_overlapping_areas: ObjectClass::Global(9),
@@ -501,8 +501,11 @@ fn colocalization_settings_convert_all_fields() {
         min_coloc_area: 12.5,
     };
     let result = Colocalization::from(settings);
-    assert_eq!(result.objects, ObjectClass::Global(1));
-    assert_eq!(result.overlapping, vec![ObjectClass::Global(2)]);
+    assert_eq!(
+        result.classes_to_coloc,
+        vec![ObjectClass::Global(1), ObjectClass::Global(2)]
+    );
+    assert_eq!(result.mark_objects_of, ObjectClass::Global(1));
     assert_eq!(result.mark_as, ObjectClass::Global(5));
     assert_eq!(result.filter_classes, vec![ObjectClass::Global(3)]);
     assert_eq!(result.class_for_overlapping_areas, ObjectClass::Global(9));

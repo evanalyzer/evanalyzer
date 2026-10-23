@@ -22,11 +22,6 @@
 //! An annotated object's `parentId` and `children` go: links are `parents`
 //! now (parent class -> parent, set by Relate Objects), and annotations
 //! never had any.
-//!
-//! Colocalization marks the objects of one class now: its `classesToColoc`
-//! becomes `objects` (the first class - it was checked like every other) and
-//! `overlapping` (the rest), with no class to mark them with (`markAs`). A
-//! module parameter bound to `classes_to_coloc` sets `overlapping`.
 
 use serde_json::{Map, Value, json};
 
@@ -191,66 +186,10 @@ fn drop_object_relation_fields(raw: &mut Value) {
     }
 }
 
-/// Colocalization's `classesToColoc` -> `objects` + `overlapping` + `markAs`.
-fn migrate_colocalization(steps: Option<&mut Value>) {
-    let Some(Value::Array(steps)) = steps else {
-        return;
-    };
-    for step in steps {
-        let Some(Value::Object(command)) = step.get_mut("command") else {
-            continue;
-        };
-        let is_coloc = matches!(
-            command.get("type").and_then(Value::as_str),
-            Some("COLOCALIZATION" | "colocalization")
-        );
-        if !is_coloc {
-            continue;
-        }
-        let Some(Value::Array(classes)) = command.remove("classesToColoc") else {
-            continue;
-        };
-        let mut classes = classes.into_iter();
-        command.insert("objects".into(), classes.next().unwrap_or(json!("UNSET")));
-        command.insert("overlapping".into(), Value::Array(classes.collect()));
-        command.entry("markAs").or_insert(json!("UNSET"));
-    }
-}
-
-/// A module's bindings to `classes_to_coloc` bind `overlapping`.
-fn migrate_colocalization_bindings(module: &mut Value) {
-    let Some(Value::Array(parameters)) = module.get_mut("parameters") else {
-        return;
-    };
-    for parameter in parameters {
-        let Some(Value::Array(bindings)) = parameter.get_mut("bindings") else {
-            continue;
-        };
-        for binding in bindings {
-            if let Some(Value::String(param)) = binding.get_mut("param")
-                && param == "classes_to_coloc"
-            {
-                *param = "overlapping".into();
-            }
-        }
-    }
-}
-
 pub fn migrate_from_v3_to_v4(raw: &mut Value) {
     migrate_class_ids(raw);
     migrate_segmentation_class_settings(raw);
     drop_object_relation_fields(raw);
-    if let Some(Value::Array(pipelines)) = raw.get_mut("pipelines") {
-        for pipeline in pipelines {
-            migrate_colocalization(pipeline.get_mut("steps"));
-        }
-    }
-    if let Some(Value::Array(modules)) = raw.get_mut("modules") {
-        for module in modules {
-            migrate_colocalization_bindings(module);
-            migrate_colocalization(module.get_mut("steps"));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -289,32 +228,6 @@ mod tests {
         ]));
         let ids: Vec<u32> = classification.classes().iter().map(|c| c.id).collect();
         assert_eq!(ids, [0, 5, 4, 6]);
-    }
-
-    #[test]
-    fn colocalization_marks_the_first_class_and_overlaps_the_rest() {
-        let coloc = |classes: Value| {
-            json!({ "id": 3, "command": { "type": "COLOCALIZATION", "classesToColoc": classes,
-                "minColocArea": 0.0 } })
-        };
-        let mut raw = json!({
-            "pipelines": [{ "steps": [coloc(json!([{ "GLOBAL": 1 }, { "GLOBAL": 2 }, { "GLOBAL": 4 }]))] }],
-            "modules": [{
-                "steps": [coloc(json!([]))],
-                "parameters": [{ "bindings": [{ "step": 3, "param": "classes_to_coloc" }] }]
-            }]
-        });
-        migrate_from_v3_to_v4(&mut raw);
-        let command = &raw["pipelines"][0]["steps"][0]["command"];
-        assert_eq!(command["objects"], json!({ "GLOBAL": 1 }));
-        assert_eq!(command["overlapping"], json!([{ "GLOBAL": 2 }, { "GLOBAL": 4 }]));
-        assert_eq!(command["markAs"], json!("UNSET"));
-        assert!(command.get("classesToColoc").is_none());
-        assert_eq!(command["minColocArea"], json!(0.0), "the rest stays");
-        let module = &raw["modules"][0];
-        assert_eq!(module["steps"][0]["command"]["objects"], json!("UNSET"));
-        assert_eq!(module["steps"][0]["command"]["overlapping"], json!([]));
-        assert_eq!(module["parameters"][0]["bindings"][0]["param"], json!("overlapping"));
     }
 
     #[test]
