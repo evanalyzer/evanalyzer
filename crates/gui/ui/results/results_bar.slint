@@ -187,7 +187,8 @@ export component ResultsBarNav inherits HorizontalLayout {
                 for tab[i] in ResultsState.views: VerticalLayout {
                     alignment: center;
                     // The view shown is scrolled into sight - when it's
-                    // chosen, and when the tabs are made (opening results).
+                    // chosen, when the tabs are made (opening results) and
+                    // when it moves.
                     property <bool> shown: tab.id == ResultsState.active-view;
                     function into-sight() {
                         if self.x + tabs-flick.content-x < 0 {
@@ -202,6 +203,13 @@ export component ResultsBarNav inherits HorizontalLayout {
                         }
                     }
                     init => {
+                        if self.shown {
+                            self.into-sight();
+                        }
+                    }
+                    // The tabs made anew (an undo brought one back): laid
+                    // out only after `init`.
+                    changed x => {
                         if self.shown {
                             self.into-sight();
                         }

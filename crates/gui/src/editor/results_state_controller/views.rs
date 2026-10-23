@@ -147,6 +147,15 @@ impl ResultsStateController {
     pub(super) fn attach_views_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         // The project's views show before any analysis is opened.
         self.push_views_in_slint();
+        // An undo or redo brought other views back (a deleted tab, a
+        // rename): show them and the active one anew. Weak: `UiState`
+        // keeps the listener, and this controller keeps `UiState`.
+        let weak = Arc::downgrade(self);
+        self._app_state.on_results_views_restored(move || {
+            if let Some(manager) = weak.upgrade() {
+                manager.run_db_job(|manager| manager.load_active_view());
+            }
+        });
         let state = ui.global::<ResultsState>();
         let manager = self.clone();
         state.on_view_selected(move |id| manager.select_view(id as u32));

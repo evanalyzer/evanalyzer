@@ -92,6 +92,7 @@ pub struct UiState {
     /// Told when the image states change (the images panel's plate) - see
     /// `image_states`.
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    results_views_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     plane_listeners: Mutex<Vec<Box<dyn Fn(Option<u32>, u32) + Send + Sync>>>,
@@ -122,6 +123,7 @@ impl UiState {
             app_settings: Mutex::new(app_settings),
             local_backend,
             image_states_listener: Mutex::new(None),
+            results_views_listener: Mutex::new(None),
             image_opened_listeners: Mutex::new(Vec::new()),
             plane_listeners: Mutex::new(Vec::new()),
         }
@@ -178,6 +180,22 @@ impl UiState {
     /// Calls `f` when `image_states` changes.
     pub fn on_image_states_changed(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.image_states_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// Calls `f` when an undo or redo changed the project's results views.
+    pub fn on_results_views_restored(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.results_views_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    fn results_views_restored(&self) {
+        if let Some(listener) = self
+            .results_views_listener
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+        {
+            listener();
+        }
     }
 
     fn image_states_changed(&self) {
@@ -406,8 +424,10 @@ impl UiState {
         }
         drop(redo_stack);
 
+        let views_changed;
         {
             let mut project = self.app.get_project_write();
+            views_changed = project.settings.results_views != prev.results_views;
             project.settings = prev;
             // The restored settings may no longer contain the previously
             // selected object (or contain a different one reusing the same
@@ -418,6 +438,9 @@ impl UiState {
         self.force_next_checkpoint.store(true, Ordering::Relaxed);
         self.push_undo_redo_state_to_ui();
         self.mark_dirty();
+        if views_changed {
+            self.results_views_restored();
+        }
         true
     }
 
@@ -436,14 +459,19 @@ impl UiState {
         }
         drop(undo_stack);
 
+        let views_changed;
         {
             let mut project = self.app.get_project_write();
+            views_changed = project.settings.results_views != next.results_views;
             project.settings = next;
             project.set_selected_object(None);
         }
         self.force_next_checkpoint.store(true, Ordering::Relaxed);
         self.push_undo_redo_state_to_ui();
         self.mark_dirty();
+        if views_changed {
+            self.results_views_restored();
+        }
         true
     }
 
@@ -1221,6 +1249,37 @@ mod ui_state_tests {
 
         assert!(ui_state.redo());
         assert_eq!(name(&ui_state), "first edit");
+    }
+
+    #[test]
+    fn undo_and_redo_of_a_deleted_view_tell_the_views_listener() {
+        let ui_state = test_ui_state();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        ui_state.on_results_views_restored(move || {
+            seen.fetch_add(1, Ordering::Relaxed);
+        });
+        ui_state.get_project_write().results_views.views.pop();
+
+        ui_state.undo();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        ui_state.redo();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn undo_of_another_change_leaves_the_views_listener_alone() {
+        let ui_state = test_ui_state();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        ui_state.on_results_views_restored(move || {
+            seen.fetch_add(1, Ordering::Relaxed);
+        });
+        set_name(&ui_state, "first edit");
+
+        ui_state.undo();
+        ui_state.redo();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
