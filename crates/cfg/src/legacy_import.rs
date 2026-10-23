@@ -88,6 +88,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
         modules: vec![],
         editor: Default::default(),
+        results_views: Default::default(),
     }
 }
 

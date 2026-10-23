@@ -3,6 +3,7 @@
 
 mod colors;
 mod column;
+pub mod view_settings;
 
 pub(crate) use colors::value_to_color;
 pub use colors::{COLOR_SCALE_GRADIENT_STOPS, color_scale_gradient};

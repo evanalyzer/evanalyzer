@@ -121,6 +121,72 @@ pub struct ProjectSettings {
     /// settings, which images were previewed or analysed.
     #[serde(default)]
     pub editor: EditorSettings,
+
+    /// How the results of the project's analyses are shown: its views
+    /// (List, Plate, Charts, Tracks with their settings), the same for
+    /// every analysis.
+    #[serde(default)]
+    pub results_views: ResultsViews,
+}
+
+/// See `ProjectSettings::results_views`.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultsViews {
+    pub views: Vec<ResultsView>,
+    /// The view shown (its `id`).
+    pub active: u32,
+}
+
+/// A new project's views: one of each kind, so the Results look like the
+/// List / Plate / Charts / Tracks they always had until views are added.
+impl Default for ResultsViews {
+    fn default() -> Self {
+        let view = |id: u32, name: &str, kind: ResultsViewKind| ResultsView {
+            id,
+            name: name.to_string(),
+            kind,
+            split: false,
+            settings: serde_json::Value::Null,
+        };
+        Self {
+            views: vec![
+                view(1, "List", ResultsViewKind::List),
+                view(2, "Plate", ResultsViewKind::Plate),
+                view(3, "Charts", ResultsViewKind::Charts),
+                view(4, "Tracks", ResultsViewKind::Tracks),
+            ],
+            active: 1,
+        }
+    }
+}
+
+/// One view of the results: what it is (`kind`), whether the image is
+/// shown beside it, and its settings - classes, columns, aggregations, the
+/// plate's value, the chart's axes, ... The settings are the Results
+/// view's own (the GUI reads and writes them); `null` until first shown.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultsView {
+    /// Stable while the view exists (also when renamed or moved).
+    pub id: u32,
+    pub name: String,
+    pub kind: ResultsViewKind,
+    /// "Split with image".
+    #[serde(default)]
+    pub split: bool,
+    #[serde(default)]
+    pub settings: serde_json::Value,
+}
+
+/// What a results view shows.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ResultsViewKind {
+    List,
+    Plate,
+    Charts,
+    Tracks,
 }
 
 /// See `ProjectSettings::editor`.

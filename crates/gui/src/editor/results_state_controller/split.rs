@@ -87,9 +87,8 @@ impl ResultsStateController {
 
         let manager = self.clone();
         state.on_split_changed(move |on| {
-            manager
-                ._app_state
-                .update_app_settings(|s| s.results_split.on = on);
+            // The view shown remembers it.
+            manager.remember_view_split(on);
             // Tracks: one image's beside it, or every track.
             if manager.in_tracks() {
                 match on {

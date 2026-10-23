@@ -594,8 +594,7 @@ impl ResultsStateController {
         if let Some(ui) = self.ui.upgrade() {
             let state = ui.global::<ResultsState>();
             state.set_split(true);
-            self._app_state
-                .update_app_settings(|s| s.results_split.on = true);
+            self.remember_view_split(true);
         }
         self.tracks_show_track(rel_path, track_id);
     }

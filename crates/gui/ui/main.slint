@@ -203,9 +203,13 @@ export component AppWindow inherits Window {
     // Menus and popups stay inside the window (see `Ink.window-height`).
     init => {
         Ink.window-height = self.height;
+        Ink.window-width = self.width;
     }
     changed height => {
         Ink.window-height = self.height;
+    }
+    changed width => {
+        Ink.window-width = self.width;
     }
 
     callback apply_math();

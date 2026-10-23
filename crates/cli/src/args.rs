@@ -169,6 +169,17 @@ pub struct TableExportArgs {
     /// (`measurement:<key>`), none: all
     #[arg(long, conflicts_with = "tracks")]
     pub measurements: bool,
+
+    /// The project whose results view --view names (its .evaproj)
+    #[arg(long, requires = "view")]
+    pub project: Option<PathBuf>,
+
+    /// Export as this List view of --project shows the results: its
+    /// columns, classes, images and rows (a row per object, or per image
+    /// with its aggregations). --images, --classes and --group-by win over
+    /// it
+    #[arg(long, requires = "project", conflicts_with_all = ["tracks", "measurements"])]
+    pub view: Option<String>,
 }
 
 /// `--tracks`: a row per track instead of per object.

@@ -35,6 +35,13 @@
 - [ ] Linux packages: the app needs `libxkbcommon-x11` on X11 (winit panics without it) - list it as a dependency.
 
 ## Results
+- [x] Results views in the project (2026-10-23, design canvas "Results views in the project", boards 4 and 6): views replace List / Plate / Charts / Tracks as tabs in the bar; each a kind with its own settings (classes by id, columns by key), saved into the project as they change (marks it changed); + new (List/Plate/Charts/Tracks/copy), right-click: Show as, Rename, Duplicate, Back to how it was saved, Delete (not the last); split on/off per view (width stays a user setting); what an analysis lacks is named in a note and kept in the view; nothing kept in memory - switching queries anew; default views List, Plate, Charts, Tracks.
+  - [x] Checked in the real app (Xvfb, 2026-10-23): tabs before/after opening an analysis, switching keeps settings, + and tab menus, rename in the tab (double-click / Rename…, Enter, Esc), Move left/right, saved into the project file. Bar order: analysis ▾, views, … Z/T, Full | Split, Export.
+  - [x] Many views (2026-10-23): the tab row is capped at what the bar has room for and scrolls; the view shown is scrolled into sight (opening, choosing); an "All views" menu lists every view. Checked in the real app with 11 views.
+  - [ ] Proposal: move the plate's breadcrumb (Plate › Well › image) from the bar into the plate card's header - room for the tabs.
+  - [x] Export dialog starts from the active view (seeded again after a switch); CLI `export --project P --view NAME` (List views) - 2026-10-23.
+- [ ] Proposal: the editor's image chip (top bar) as a quick image picker - a dropdown with search (type, arrows, Enter), like Ctrl+P; today a click goes to the image list.
+  - [ ] `AppSettings.results_split.on` is no longer used (the view decides) - remove with the next settings cleanup.
 
 - [ ] Results › List: "Rows 1–200 of N" - the total needs a COUNT over the whole filter on every change (a second query per page/filter). Not now: the list must stay fast, and the page's rows say enough (2026-10-17).
 
