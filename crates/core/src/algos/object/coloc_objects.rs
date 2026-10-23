@@ -11,9 +11,11 @@
 //! Licensed under the **AGPL-3.0**.
 //!
 //! ## Overview
-//! This module implements spatial intersection algorithms that detect overlaps between
-//! specified object classes, establishing relational links or creating new intersection
-//! regions as distinct ROIs based on configuration settings.
+//! Answers "are these objects at the same place?": marks the objects of one
+//! class that overlap an object of every other class given (and none of the
+//! excluded ones) with a class, records which objects touch which (on both
+//! sides), and can add the overlap regions as objects of their own. Which
+//! object *belongs to* which (spots per cell) is Relate Objects' job.
 //!
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
@@ -29,25 +31,26 @@ use log::{debug, info, warn};
 use macros::CommandsMeta;
 use std::sync::Arc;
 
-/// How many partners an object may coloc with at once.
+/// Which overlapping objects count as partners.
 #[derive(CommandsMeta, Debug, PartialEq)]
 pub enum ColocMultiplicity {
-    /// Every object keeps only its single best-overlap match per other class -
-    /// e.g. a small object sitting on the border of two larger ones picks
-    /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
-    #[cmdsmeta(display_name = "No multi coloc (1:1)")]
-    OneToOne,
-
-    /// Every object may coloc with every overlapping partner meeting `min_coloc_area`.
-    #[cmdsmeta(display_name = "Allow multi coloc")]
+    /// Every overlapping object meeting the minimum overlap is a partner -
+    /// a spot touching two others has two.
+    #[cmdsmeta(display_name = "All partners")]
     ManyToMany,
 
-    /// Only objects of these classes may coloc with more than one partner;
-    /// every other class in `classes_to_coloc` is capped to its single
-    /// best-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and
-    /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
-    /// each spot colocs with exactly one cell (the one it overlaps most).
-    #[cmdsmeta(display_name = "Multi coloc only for selected")]
+    /// Only the partner with the largest overlap, per class - e.g. a small
+    /// object on the border of two larger ones picks the larger overlap;
+    /// ties go to the lower `ObjectId`.
+    #[cmdsmeta(display_name = "Only the best-overlapping partner")]
+    OneToOne,
+
+    /// Only objects of these classes may have more than one partner; every
+    /// other class is capped to its best-overlapping one. E.g. with Cell and
+    /// Spot and `MultiFor([Cell])`, a cell can have any number of spots, but
+    /// each spot one cell (the one it overlaps most). Kept for older
+    /// pipelines - Relate Objects links spots to cells.
+    #[cmdsmeta(display_name = "Several partners only for selected classes", visibility = Advanced)]
     MultiFor(Vec<ObjectClass>),
 }
 
@@ -76,52 +79,59 @@ impl MinOverlap {
     }
 }
 
-/// Calculates spatial colocalization and intersections between specified object classes.
+/// Marks the objects that overlap others - "are they at the same place?".
 ///
-/// This command scans the object cache, groups objects by their designated classes,
-/// and performs spatial overlap analysis. It records colocalization relationships
-/// between intersecting entities and can optionally generate new child ROIs representing
-/// the precise intersection regions.
+/// E.g. mark the ch1 spots that overlap a ch2 spot as "ch1 with ch2": the
+/// class counts them per image, and later steps can use it (Relate Objects:
+/// the double-positive spots per cell). Every pair that overlaps is
+/// recorded as partners on both sides - which spots touch spot A. With
+/// several classes to overlap, an object is marked when it overlaps an
+/// object of each, one at a time; the area all of them share is the
+/// optional overlap region.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "object")]
 pub struct Colocalization {
-    /// Theses are the classes the coloclization should be calculated for
-    pub classes_to_coloc: Vec<ObjectClass>,
+    /// The objects that are checked and marked (e.g. the ch1 spots).
+    #[cmdsmeta(summary = true, display_name = "Mark objects of")]
+    pub objects: ObjectClass,
+
+    /// They must overlap an object of each of these classes (e.g. the ch2
+    /// spots).
+    #[cmdsmeta(summary = true, display_name = "That overlap all of")]
+    pub overlapping: Vec<ObjectClass>,
+
+    /// They must not overlap an object of any of these classes (e.g. a
+    /// dead-cell marker): "overlaps A and B, but not C".
+    #[cmdsmeta(optional = true, display_name = "But not")]
+    pub exclude_classes: Vec<ObjectClass>,
+
+    /// The overlap needed - also for an excluded class to count.
+    #[cmdsmeta(default = 0.0, display_name = "By at least")]
+    pub min_coloc_area: f32,
+
+    /// Unit of the minimum overlap: pixels, nm² or % of the smaller object.
+    #[cmdsmeta(default = SizeUnitsRel::Pixels)]
+    pub size_unit: SizeUnitsRel,
+
+    /// The class the matching objects get (e.g. "ch1 with ch2"). `Unset`:
+    /// only the partners are recorded.
+    #[cmdsmeta(display_name = "As")]
+    pub mark_as: ObjectClass,
+
+    /// The area all overlapping objects share, as a new object of this
+    /// class - for its own area and intensity. `Unset`: none.
+    #[cmdsmeta(display_name = "Overlap regions as")]
+    pub class_for_overlapping_areas: ObjectClass,
+
+    /// Which overlapping objects count as partners.
+    #[cmdsmeta(default = ColocMultiplicity::ManyToMany, display_name = "Partners")]
+    pub multiplicity: ColocMultiplicity,
 
     /// Optional additional label filters.
     ///
     /// Only classes which matches all of these filters are used for coloc calculation
     #[cmdsmeta(visibility = Hidden)]
     pub filter_classes: Vec<ObjectClass>,
-
-    /// Class of the overlapping area if needed
-    ///
-    /// If defined the overlapping coloc area is added as new object and labeled with this class
-    pub class_for_overlapping_areas: ObjectClass,
-
-    /// How many partners an object may coloc with at once.
-    #[cmdsmeta(default = ColocMultiplicity::OneToOne, visibility = Advanced)]
-    pub multiplicity: ColocMultiplicity,
-
-    /// Size unit for the minimum coloc area size
-    #[cmdsmeta(default = SizeUnitsRel::Pixels)]
-    pub size_unit: SizeUnitsRel,
-
-    /// Minimum overlapping area size to count objects as coloc
-    #[cmdsmeta(default = 0.0)]
-    pub min_coloc_area: f32,
-
-    /// Classes an object must NOT overlap to be considered colocalized.
-    ///
-    /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
-    /// Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
-    /// Without exclude_classes, any object satisfying that gets recorded as colocalized.
-    /// With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
-    /// So it's a "match A and B, but not C" filter
-    ///
-    /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
-    #[cmdsmeta(optional = true, visibility = Advanced)]
-    pub exclude_classes: Vec<ObjectClass>,
 }
 
 impl ImageAlgorithm for Colocalization {
@@ -130,8 +140,12 @@ impl ImageAlgorithm for Colocalization {
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
         cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        // If there aren't at least two classes, colocalization is impossible.
-        if self.classes_to_coloc.len() < 2 {
+        // The marked objects' class first: only its objects are anchors.
+        let classes: Vec<ObjectClass> = std::iter::once(self.objects)
+            .chain(self.overlapping.iter().copied())
+            .filter(|c| *c != ObjectClass::Unset)
+            .collect();
+        if self.objects == ObjectClass::Unset || classes.len() < 2 {
             return Ok(());
         }
 
@@ -141,7 +155,7 @@ impl ImageAlgorithm for Colocalization {
         let mut class_buckets: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
             std::collections::HashMap::new();
 
-        for target_class in &self.classes_to_coloc {
+        for target_class in &classes {
             let mut matched_ids = Vec::new();
 
             for object in cache.object_cache.values() {
@@ -173,7 +187,7 @@ impl ImageAlgorithm for Colocalization {
 
         // ROIs carrying any of `exclude_classes` (subject to the same `filter_classes`).
         // An anchor overlapping one of these by at least `min_coloc_area` is dropped
-        // entirely, regardless of how well it matches `classes_to_coloc`.
+        // entirely, regardless of how well it matches the classes to overlap.
         let exclude_ids: Vec<ObjectId> = if self.exclude_classes.is_empty() {
             Vec::new()
         } else {
@@ -196,6 +210,8 @@ impl ImageAlgorithm for Colocalization {
             IndexMap<ObjectClass, Vec<ObjectId>>,
         > = std::collections::HashMap::new();
         let mut new_objects: Vec<Object> = Vec::new();
+        // The anchors that matched: they get `mark_as`.
+        let mut marked: Vec<ObjectId> = Vec::new();
         // Tracks which sorted sets of object IDs already produced an overlap object (avoids duplicates).
         let mut processed_combinations: std::collections::HashSet<Vec<ObjectId>> =
             std::collections::HashSet::new();
@@ -209,7 +225,7 @@ impl ImageAlgorithm for Colocalization {
         // even though it only "colocs" with the one it overlaps most.
         let mut best_partner: std::collections::HashMap<(ObjectId, ObjectClass), ObjectId> =
             std::collections::HashMap::new();
-        for (source_idx, source_class) in self.classes_to_coloc.iter().enumerate() {
+        for (source_idx, source_class) in classes.iter().enumerate() {
             if self.allows_multi(source_class) {
                 continue;
             }
@@ -217,7 +233,7 @@ impl ImageAlgorithm for Colocalization {
                 Some(b) => b,
                 None => continue,
             };
-            for (target_idx, target_class) in self.classes_to_coloc.iter().enumerate() {
+            for (target_idx, target_class) in classes.iter().enumerate() {
                 if target_idx == source_idx {
                     continue;
                 }
@@ -246,7 +262,9 @@ impl ImageAlgorithm for Colocalization {
 
         // --- PHASE 2: For each object, check whether it overlaps at least one object from every
         //              other class. Only then is it considered colocalized. ---
-        for (class_idx, anchor_class) in self.classes_to_coloc.iter().enumerate() {
+        // Only the objects to mark are anchors; their partners get the link
+        // back in phase 3.
+        for (class_idx, anchor_class) in classes.iter().enumerate().take(1) {
             let anchor_ids = match class_buckets.get(anchor_class) {
                 Some(b) => b.clone(),
                 None => continue,
@@ -262,7 +280,7 @@ impl ImageAlgorithm for Colocalization {
                 // with sufficient area.
                 let mut class_matches: IndexMap<ObjectClass, Vec<ObjectId>> = IndexMap::new();
 
-                for (other_idx, other_class) in self.classes_to_coloc.iter().enumerate() {
+                for (other_idx, other_class) in classes.iter().enumerate() {
                     if other_idx == class_idx {
                         continue;
                     }
@@ -325,7 +343,7 @@ impl ImageAlgorithm for Colocalization {
                     class_matches.insert(*other_class, overlapping);
                 }
 
-                // The anchor satisfies classes_to_coloc, but drop it if it also overlaps
+                // The anchor overlaps every class, but drop it if it also overlaps
                 // (by at least min_coloc_area) any object from an excluded class.
                 if exclude_grid
                     .candidates(anchor_object.bbox)
@@ -342,7 +360,9 @@ impl ImageAlgorithm for Colocalization {
                     continue 'anchor;
                 }
 
-                // The anchor object overlaps with at least one object from every other class.
+                // The anchor overlaps at least one object from every other class:
+                // it's marked, and it and its partners are linked both ways.
+                marked.push(anchor_id.clone());
                 for (cls, ids) in &class_matches {
                     overlap_matches
                         .entry(anchor_id.clone())
@@ -350,6 +370,14 @@ impl ImageAlgorithm for Colocalization {
                         .entry(*cls)
                         .or_default()
                         .extend(ids.iter().cloned());
+                    for partner in ids {
+                        overlap_matches
+                            .entry(partner.clone())
+                            .or_default()
+                            .entry(*anchor_class)
+                            .or_default()
+                            .push(anchor_id.clone());
+                    }
                 }
 
                 // Compute the N-way intersection area (chain of pairwise intersections).
@@ -409,11 +437,10 @@ impl ImageAlgorithm for Colocalization {
         }
 
         // --- PHASE 3: Write Back Results ---
-        // A object carrying more than one of `classes_to_coloc` is anchored once per
-        // class it belongs to (see PHASE 2), so the same partner id can be
-        // recomputed and `.extend()`-ed into `found_matches` more than once for a
-        // given target class. Dedup per class before writing back, mirroring
-        // `Object::add_colocalizing_object`.
+        // A partner overlapping several anchors collects one link back per
+        // anchor; an object of several of the classes can meet the same
+        // partner more than once. Dedup per class before writing back,
+        // mirroring `Object::add_colocalizing_object`.
         for (object_id, mut found_matches) in overlap_matches {
             for ids in found_matches.values_mut() {
                 ids.sort();
@@ -421,6 +448,13 @@ impl ImageAlgorithm for Colocalization {
             }
             if let Some(object) = cache.object_cache.get_mut(&object_id) {
                 object.colocalized_with.extend(found_matches);
+            }
+        }
+        if self.mark_as != ObjectClass::Unset {
+            for id in &marked {
+                if let Some(object) = cache.object_cache.get_mut(id) {
+                    object.add_object_class(self.mark_as, ctx.scope)?;
+                }
             }
         }
         for object in new_objects {
@@ -586,6 +620,7 @@ mod tests {
     const CLASS_B: ObjectClass = ObjectClass::Global(2);
     const CLASS_C: ObjectClass = ObjectClass::Global(3);
     const CLASS_OVERLAP: ObjectClass = ObjectClass::Global(99);
+    const CLASS_MARK: ObjectClass = ObjectClass::Global(50);
 
     // object IDs are set far above the ObjectId::next() counter range so that
     // counter-generated IDs from overlaps() never collide with test IDs in parallel runs.
@@ -693,7 +728,9 @@ mod tests {
                 }
 
                 let coloc = Colocalization {
-                    classes_to_coloc: vec![CLASS_A, CLASS_B],
+                    objects: CLASS_A,
+                    overlapping: vec![CLASS_B],
+                    mark_as: ObjectClass::Unset,
                     filter_classes: vec![],
                     exclude_classes: if with_exclude { vec![CLASS_C] } else { vec![] },
                     class_for_overlapping_areas: CLASS_OVERLAP,
@@ -733,7 +770,9 @@ mod tests {
         exclude_classes: Vec<ObjectClass>,
     ) -> Colocalization {
         Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes,
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -854,11 +893,10 @@ mod tests {
     }
 
     #[test]
-    fn exclusion_is_decided_per_object_as_documented() {
-        // C (excluded) touches only A. Per `exclude_classes`' doc, A gets no
-        // colocalization recorded for it; B didn't touch C, passes its own
-        // check and still lists A - same per-object model as the hub/spoke
-        // case, where a spoke failing the check is still listed by the hub.
+    fn an_excluded_object_is_neither_marked_nor_linked() {
+        // C (excluded) touches only A, the object checked: A isn't marked
+        // and no link is recorded - neither on A nor back on B (only the
+        // objects to mark are checked; B is a partner, not checked itself).
         let mut cache = GlobalPipelineCache::default();
         for (id, bbox, class) in [
             (ID_A, BOX_A, CLASS_A),
@@ -868,19 +906,22 @@ mod tests {
             let object = make_filled_object(id, bbox, ImagePlane::default(), class);
             cache.object_cache.insert(object.id.clone(), object);
         }
-        let coloc = coloc_with(
-            SizeUnitsRel::Pixels,
-            1.0,
-            ColocMultiplicity::ManyToMany,
-            vec![CLASS_C],
-        );
+        let coloc = Colocalization {
+            mark_as: CLASS_MARK,
+            ..coloc_with(
+                SizeUnitsRel::Pixels,
+                1.0,
+                ColocMultiplicity::ManyToMany,
+                vec![CLASS_C],
+            )
+        };
         run(&coloc, &mut cache);
 
         let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(a.colocalized_with.is_empty(), "excluded A records nothing");
-        let b_partners: Vec<&ObjectId> = b.colocalized_with.values().flatten().collect();
-        assert_eq!(b_partners, [&ObjectId(ID_A)]);
+        assert!(!a.object_classes().contains(&CLASS_MARK), "nor is it marked");
+        assert!(b.colocalized_with.is_empty(), "no link back either");
     }
 
     // -- minimum overlap: percent of the smaller object (new) -----------
@@ -999,7 +1040,9 @@ mod tests {
     #[test]
     fn fewer_than_two_classes_is_noop() {
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A],
+            objects: CLASS_A,
+            overlapping: vec![],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1024,7 +1067,9 @@ mod tests {
     #[test]
     fn overlapping_objects_are_colocalized() {
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1059,7 +1104,9 @@ mod tests {
     #[test]
     fn non_overlapping_objects_are_not_colocalized() {
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1089,7 +1136,9 @@ mod tests {
         // Cross-channel colocalization is the primary use case (e.g. DAPI channel vs GFP channel).
         // ROIs from different c-planes with matching XY extent must still colocalize.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1122,7 +1171,9 @@ mod tests {
     #[test]
     fn filter_class_excludes_objects_that_do_not_have_it() {
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![CLASS_C], // only ROIs also carrying CLASS_C participate
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1153,7 +1204,9 @@ mod tests {
     #[test]
     fn overlapping_area_is_added_as_new_object() {
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
@@ -1250,7 +1303,9 @@ mod tests {
         cache.object_cache.insert(object_b.id.clone(), object_b);
 
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
@@ -1276,14 +1331,78 @@ mod tests {
         assert_eq!(intensity.max_intensity, VALUE);
     }
 
+    // --- marking and partners on both sides ---
+
+    /// A ch1 spot touching two ch2 spots: marked once, both partners on it,
+    /// each partner linked back - or only the bigger overlap.
+    #[test]
+    fn a_spot_touching_two_others_is_marked_once_with_both_partners() {
+        let objects = || {
+            let mut cache = GlobalPipelineCache::default();
+            for (id, bbox, class) in [
+                (ID_A, [0, 0, 9, 3], CLASS_A),
+                (ID_B, [8, 0, 12, 3], CLASS_B),     // 2 columns on A
+                (ID_B + 1, [0, 2, 4, 6], CLASS_B), // 2 rows × 5 on A: larger
+            ] {
+                let object = make_filled_object(id, bbox, ImagePlane::default(), class);
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            cache
+        };
+        let coloc = |multiplicity| Colocalization {
+            mark_as: CLASS_MARK,
+            ..coloc_with(SizeUnitsRel::Pixels, 0.0, multiplicity, vec![])
+        };
+
+        let mut cache = objects();
+        run(&coloc(ColocMultiplicity::ManyToMany), &mut cache);
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(a.object_classes().contains(&CLASS_MARK));
+        assert_eq!(a.colocalized_with[&CLASS_B], [ObjectId(ID_B), ObjectId(ID_B + 1)]);
+        for id in [ID_B, ID_B + 1] {
+            let b = cache.object_cache.get(&ObjectId(id)).unwrap();
+            assert_eq!(b.colocalized_with[&CLASS_A], [ObjectId(ID_A)]);
+            assert!(!b.object_classes().contains(&CLASS_MARK), "one side is marked");
+        }
+
+        let mut cache = objects();
+        run(&coloc(ColocMultiplicity::OneToOne), &mut cache);
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(a.object_classes().contains(&CLASS_MARK));
+        assert_eq!(a.colocalized_with[&CLASS_B], [ObjectId(ID_B + 1)], "the bigger overlap");
+        let other = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
+        assert!(other.colocalized_with.is_empty(), "not a partner");
+    }
+
+    /// An object that overlaps nothing is neither marked nor linked.
+    #[test]
+    fn without_an_overlap_nothing_is_marked() {
+        let mut cache = GlobalPipelineCache::default();
+        for (id, bbox, class) in [(ID_A, [0, 0, 3, 3], CLASS_A), (ID_B, [10, 10, 13, 13], CLASS_B)] {
+            let object = make_filled_object(id, bbox, ImagePlane::default(), class);
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        let coloc = Colocalization {
+            mark_as: CLASS_MARK,
+            ..coloc_with(SizeUnitsRel::Pixels, 0.0, ColocMultiplicity::ManyToMany, vec![])
+        };
+        run(&coloc, &mut cache);
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!a.object_classes().contains(&CLASS_MARK));
+        assert!(a.colocalized_with.is_empty());
+    }
+
     // --- 3-class tests ---
 
     #[test]
     fn three_class_all_overlap_full_colocalization() {
         // A=[0,0,6,6], B=[2,2,8,8], C=[4,4,10,10] - every pair overlaps.
-        // Every object must be recorded as colocalized with both other classes.
+        // A is marked and lists both partners; B and C get the link back to
+        // A - not to each other (they aren't the objects checked).
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B, CLASS_C],
+            mark_as: CLASS_MARK,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1302,40 +1421,16 @@ mod tests {
         run(&coloc, &mut cache);
 
         let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(
-            a.colocalized_with.contains_key(&CLASS_B),
-            "A must coloc with B"
-        );
-        assert!(
-            a.colocalized_with.contains_key(&CLASS_C),
-            "A must coloc with C"
-        );
-        assert!(a.colocalized_with[&CLASS_B].contains(&ObjectId(ID_B)));
-        assert!(a.colocalized_with[&CLASS_C].contains(&ObjectId(ID_C)));
+        assert!(a.object_classes().contains(&CLASS_MARK), "A is marked");
+        assert_eq!(a.colocalized_with[&CLASS_B], [ObjectId(ID_B)]);
+        assert_eq!(a.colocalized_with[&CLASS_C], [ObjectId(ID_C)]);
 
-        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
-        assert!(
-            b.colocalized_with.contains_key(&CLASS_A),
-            "B must coloc with A"
-        );
-        assert!(
-            b.colocalized_with.contains_key(&CLASS_C),
-            "B must coloc with C"
-        );
-        assert!(b.colocalized_with[&CLASS_A].contains(&ObjectId(ID_A)));
-        assert!(b.colocalized_with[&CLASS_C].contains(&ObjectId(ID_C)));
-
-        let c = cache.object_cache.get(&ObjectId(ID_C)).unwrap();
-        assert!(
-            c.colocalized_with.contains_key(&CLASS_A),
-            "C must coloc with A"
-        );
-        assert!(
-            c.colocalized_with.contains_key(&CLASS_B),
-            "C must coloc with B"
-        );
-        assert!(c.colocalized_with[&CLASS_A].contains(&ObjectId(ID_A)));
-        assert!(c.colocalized_with[&CLASS_B].contains(&ObjectId(ID_B)));
+        for id in [ID_B, ID_C] {
+            let partner = cache.object_cache.get(&ObjectId(id)).unwrap();
+            assert!(!partner.object_classes().contains(&CLASS_MARK), "only A is marked");
+            let links: Vec<_> = partner.colocalized_with.iter().collect();
+            assert_eq!(links, [(&CLASS_A, &vec![ObjectId(ID_A)])], "{id}: back to A only");
+        }
     }
 
     #[test]
@@ -1343,7 +1438,9 @@ mod tests {
         // Inclusive bboxes: A=[0,5]×[0,5], B=[2,7]×[2,7], C=[4,9]×[4,9]
         // 3-way intersection = [4,5]×[4,5] = 2×2 = 4 pixels, bbox [4,4,5,5].
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B, CLASS_C],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
@@ -1383,9 +1480,11 @@ mod tests {
     fn three_class_hub_spoke_only_hub_colocalized() {
         // A=[0,0,10,10] (hub), B=[1,1,4,4] (top-left), C=[6,6,9,9] (bottom-right)
         // A overlaps both B and C, but B and C don't overlap each other.
-        // → only A is fully colocalized; B and C are not.
+        // → A is marked and lists both; B and C each get the link back to A.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B, CLASS_C],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1413,26 +1512,35 @@ mod tests {
             "A overlaps both → should be colocalized"
         );
 
-        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
-        assert!(
-            b.colocalized_with.is_empty(),
-            "B doesn't overlap C → must not be colocalized"
-        );
-
-        let c = cache.object_cache.get(&ObjectId(ID_C)).unwrap();
-        assert!(
-            c.colocalized_with.is_empty(),
-            "C doesn't overlap B → must not be colocalized"
-        );
+        for id in [ID_B, ID_C] {
+            let partner = cache.object_cache.get(&ObjectId(id)).unwrap();
+            let links: Vec<_> = partner.colocalized_with.iter().collect();
+            assert_eq!(links, [(&CLASS_A, &vec![ObjectId(ID_A)])], "{id}");
+        }
     }
 
     #[test]
     fn three_class_chain_only_middle_colocalized() {
         // A=[0,0,5,5], B=[3,3,8,8], C=[6,6,11,11]
         // A∩B=[3,3,5,5] ✓,  B∩C=[6,6,8,8] ✓,  A∩C=∅
-        // → B colocalized (overlaps A and C); A and C are not.
-        let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+        // → checking A: not marked (no C), nothing linked; checking B (the
+        //   middle): marked, A and C linked back to it.
+        let chain = || {
+            let mut cache = GlobalPipelineCache::default();
+            for (id, bbox, class) in [
+                (ID_A, [0, 0, 5, 5], CLASS_A),
+                (ID_B, [3, 3, 8, 8], CLASS_B),
+                (ID_C, [6, 6, 11, 11], CLASS_C),
+            ] {
+                let object = make_filled_object(id, bbox, ImagePlane::default(), class);
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            cache
+        };
+        let checking = |objects, overlapping| Colocalization {
+            objects,
+            overlapping,
+            mark_as: CLASS_MARK,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1440,37 +1548,25 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnitsRel::Pixels,
         };
-        let mut cache = GlobalPipelineCache::default();
-        let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
-        let object_b = make_filled_object(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
-        let object_c = make_filled_object(ID_C, [6, 6, 11, 11], ImagePlane::default(), CLASS_C);
-        cache.object_cache.insert(object_a.id.clone(), object_a);
-        cache.object_cache.insert(object_b.id.clone(), object_b);
-        cache.object_cache.insert(object_c.id.clone(), object_c);
 
-        run(&coloc, &mut cache);
+        let mut cache = chain();
+        run(&checking(CLASS_A, vec![CLASS_B, CLASS_C]), &mut cache);
+        for id in [ID_A, ID_B, ID_C] {
+            let object = cache.object_cache.get(&ObjectId(id)).unwrap();
+            assert!(object.colocalized_with.is_empty(), "{id}: A has no C");
+            assert!(!object.object_classes().contains(&CLASS_MARK), "{id}");
+        }
 
-        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(
-            a.colocalized_with.is_empty(),
-            "A doesn't overlap C → must not be colocalized"
-        );
-
+        let mut cache = chain();
+        run(&checking(CLASS_B, vec![CLASS_A, CLASS_C]), &mut cache);
         let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
-        assert!(
-            b.colocalized_with.contains_key(&CLASS_A),
-            "B overlaps both → should be colocalized"
-        );
-        assert!(
-            b.colocalized_with.contains_key(&CLASS_C),
-            "B overlaps both → should be colocalized"
-        );
-
-        let c = cache.object_cache.get(&ObjectId(ID_C)).unwrap();
-        assert!(
-            c.colocalized_with.is_empty(),
-            "C doesn't overlap A → must not be colocalized"
-        );
+        assert!(b.object_classes().contains(&CLASS_MARK), "B overlaps both");
+        assert_eq!(b.colocalized_with[&CLASS_A], [ObjectId(ID_A)]);
+        assert_eq!(b.colocalized_with[&CLASS_C], [ObjectId(ID_C)]);
+        for id in [ID_A, ID_C] {
+            let partner = cache.object_cache.get(&ObjectId(id)).unwrap();
+            assert_eq!(partner.colocalized_with[&CLASS_B], [ObjectId(ID_B)], "{id}");
+        }
     }
 
     #[test]
@@ -1482,7 +1578,9 @@ mod tests {
         // against, where the coloc-detail flat table showed an extra row for
         // the same object/partner pair.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B, CLASS_C],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1536,7 +1634,9 @@ mod tests {
         // A=[0,0,6,6], B=[2,2,8,8] (A∩B → would colocalize), C=[4,4,10,10] (excluded,
         // overlaps both). A and B must NOT be colocalized because each also overlaps C.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1568,7 +1668,9 @@ mod tests {
         // A=[0,0,4,4], B=[2,2,6,6] (A∩B → colocalize), C=[20,20,24,24] (excluded,
         // doesn't overlap anything). A and B should colocalize normally.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1598,7 +1700,9 @@ mod tests {
         // Same geometry as `three_class_all_overlap_full_colocalization` but with B
         // also acting as the (empty) exclude list - leaving it empty must be a no-op.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1631,7 +1735,9 @@ mod tests {
         // a spot that chose a different cell must not also show up here,
         // otherwise summing spots-per-cell across all cells would overcount.
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1849,7 +1955,9 @@ mod tests {
         // cells, as in a pipeline that colocs each spot channel with the cell
         // mask separately.
         let coloc_b = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -1858,7 +1966,9 @@ mod tests {
             size_unit: SizeUnitsRel::Pixels,
         };
         let coloc_c = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_C],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_C],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -2096,7 +2206,9 @@ mod tests {
             }
 
             let coloc = Colocalization {
-                classes_to_coloc: classes.to_vec(),
+                objects: classes[0],
+                overlapping: classes[1..].to_vec(),
+                mark_as: ObjectClass::Unset,
                 filter_classes: vec![],
                 exclude_classes: vec![],
                 class_for_overlapping_areas: ObjectClass::Unset,
@@ -2106,66 +2218,62 @@ mod tests {
             };
             run(&coloc, &mut cache);
 
-            for &anchor_class in &classes {
-                for anchor_id in &ids_by_class[&anchor_class] {
-                    let anchor_object = cache.object_cache.get(anchor_id).unwrap();
-
-                    // Raw per-other-class overlap lists, and whether the anchor overlaps
-                    // *every* other class - `execute` only records an anchor as
-                    // colocalized at all if it overlaps at least one object from every
-                    // other class-to-coloc (see `three_class_hub_spoke_only_hub_colocalized`
-                    // above), independent of `ManyToMany` allowing multiple partners
-                    // *within* a class.
-                    let mut raw: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
-                        std::collections::HashMap::new();
-                    let mut overlaps_every_other_class = true;
-                    for &other_class in &classes {
-                        if other_class == anchor_class {
-                            continue;
-                        }
-                        let matches: Vec<ObjectId> = ids_by_class[&other_class]
+            // The naive reference: every A object against every object of the
+            // other classes. An A object overlapping an object of each other
+            // class lists them all; each of those lists it back.
+            let overlap = |a: &ObjectId, b: &ObjectId| {
+                let (a, b) = (cache.object_cache.get(a).unwrap(), cache.object_cache.get(b).unwrap());
+                a.overlaps(b).is_some()
+            };
+            let mut expected: std::collections::HashMap<ObjectId, IndexMap<ObjectClass, Vec<ObjectId>>> =
+                std::collections::HashMap::new();
+            for anchor_id in &ids_by_class[&CLASS_A] {
+                let raw: Vec<(ObjectClass, Vec<ObjectId>)> = classes[1..]
+                    .iter()
+                    .map(|&other_class| {
+                        let partners = ids_by_class[&other_class]
                             .iter()
-                            .filter(|other_id| {
-                                cache
-                                    .object_cache
-                                    .get(*other_id)
-                                    .and_then(|other| anchor_object.overlaps(other))
-                                    .is_some()
-                            })
+                            .filter(|other| overlap(anchor_id, other))
                             .cloned()
                             .collect();
-                        if matches.is_empty() {
-                            overlaps_every_other_class = false;
-                        }
-                        raw.insert(other_class, matches);
-                    }
-
-                    for &other_class in &classes {
-                        if other_class == anchor_class {
-                            continue;
-                        }
-                        let mut expected = if overlaps_every_other_class {
-                            raw[&other_class].clone()
-                        } else {
-                            Vec::new()
-                        };
-                        expected.sort();
-
-                        let mut actual = anchor_object
-                            .colocalized_with
-                            .get(&other_class)
-                            .cloned()
-                            .unwrap_or_default();
-                        actual.sort();
-
-                        assert_eq!(
-                            actual, expected,
-                            "seed {seed}: anchor {anchor_id:?} ({anchor_class:?}) vs \
-                             {other_class:?} - grid-pruned result diverged from the naive \
-                             pairwise reference"
-                        );
-                    }
+                        (other_class, partners)
+                    })
+                    .collect();
+                if raw.iter().any(|(_, partners)| partners.is_empty()) {
+                    continue;
                 }
+                for (other_class, partners) in raw {
+                    for partner in &partners {
+                        expected
+                            .entry(partner.clone())
+                            .or_default()
+                            .entry(CLASS_A)
+                            .or_default()
+                            .push(anchor_id.clone());
+                    }
+                    expected
+                        .entry(anchor_id.clone())
+                        .or_default()
+                        .insert(other_class, partners);
+                }
+            }
+
+            for (id, object) in cache.object_cache.iter() {
+                let mut want = expected.remove(id).unwrap_or_default();
+                for partners in want.values_mut() {
+                    partners.sort();
+                }
+                want.sort_keys();
+                let mut got = object.colocalized_with.clone();
+                for partners in got.values_mut() {
+                    partners.sort();
+                }
+                got.sort_keys();
+                assert_eq!(
+                    got, want,
+                    "seed {seed}: {id:?} - grid-pruned result diverged from the naive \
+                     pairwise reference"
+                );
             }
         }
     }
@@ -2236,7 +2344,9 @@ mod tests {
             ]
         };
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
@@ -2311,7 +2421,9 @@ mod tests {
     #[test]
     fn three_class_hub_spoke_adds_no_overlap_object_without_a_common_area() {
         let coloc = Colocalization {
-            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            objects: CLASS_A,
+            overlapping: vec![CLASS_B, CLASS_C],
+            mark_as: ObjectClass::Unset,
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,

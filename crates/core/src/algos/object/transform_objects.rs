@@ -158,11 +158,7 @@ impl ImageAlgorithm for TransformObjects {
                 continue;
             };
             let geometry = self.transform_geometry(object, image_size, &px_sizes);
-            let (segmentation_class, parent_id, plane) = (
-                object.segmentation_class,
-                object.parent_id.clone(),
-                object.plane.clone(),
-            );
+            let (segmentation_class, plane) = (object.segmentation_class, object.plane.clone());
 
             // Build the transformed shape as its own (not-yet-inserted) object so
             // intensities can be sampled against the *new* mask via
@@ -172,7 +168,6 @@ impl ImageAlgorithm for TransformObjects {
             let transformed = Object::new(ObjectInit {
                 id: ObjectId::next(),
                 segmentation_class,
-                parent_id: parent_id.clone(),
                 plane: plane.clone(),
                 bbox: geometry.bbox,
                 area: geometry.area,

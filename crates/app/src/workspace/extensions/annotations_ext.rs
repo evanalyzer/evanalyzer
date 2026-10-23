@@ -114,7 +114,7 @@ pub(crate) fn same_shape(a: &ObjectMetricSettings, b: &ObjectMetricSettings) -> 
 
 /// A manual annotation from a preview object: same pixels and measurements,
 /// a new id, without the links to other pipeline objects (colocalization,
-/// parent/children, track) - those objects aren't manual annotations.
+/// parents, track) - those objects aren't manual annotations.
 fn manual_copy(
     object: &ObjectMetricSettings,
     object_class: Option<&ObjectClass>,
@@ -127,8 +127,7 @@ fn manual_copy(
     }
     copy.exclude_from_training = false;
     copy.colocalized_with.clear();
-    copy.parent_id = None;
-    copy.children.clear();
+    copy.parents.clear();
     copy.track = TrackSettings::default();
     copy
 }
@@ -293,8 +292,9 @@ mod tests {
         let mut project = project();
         let mut pipeline_object = object(7, &[A], 0);
         pipeline_object.segmentation_class = SegmentationClass(3);
-        pipeline_object.parent_id = Some(ObjectId(1));
-        pipeline_object.children = vec![ObjectId(2)];
+        pipeline_object
+            .parents
+            .insert(ObjectClass::Global(1), ObjectId(1));
         pipeline_object
             .colocalized_with
             .insert(B, vec![ObjectId(3)]);
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(copy.object_class, [A].into(), "its classes kept");
         assert_eq!(copy.mask_data, bitvec![u64, Lsb0; 1, 0, 1, 1]);
         assert_eq!(copy.area, 3);
-        assert!(copy.parent_id.is_none() && copy.children.is_empty());
+        assert!(copy.parents.is_empty());
         assert!(copy.colocalized_with.is_empty());
         assert!(!copy.exclude_from_training, "a training sample");
         assert_eq!(project.get_preview_objects().len(), 1, "the original stays");

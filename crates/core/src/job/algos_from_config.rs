@@ -110,10 +110,10 @@ impl From<ObjectClassifyObjectsClassifyMatchHandlingSettings> for ClassifyMatchH
 impl From<ObjectColocObjectsColocMultiplicitySettings> for ColocMultiplicity {
     fn from(_s: ObjectColocObjectsColocMultiplicitySettings) -> Self {
         match _s {
-            ObjectColocObjectsColocMultiplicitySettings::OneToOne => ColocMultiplicity::OneToOne,
             ObjectColocObjectsColocMultiplicitySettings::ManyToMany => {
                 ColocMultiplicity::ManyToMany
             }
+            ObjectColocObjectsColocMultiplicitySettings::OneToOne => ColocMultiplicity::OneToOne,
             ObjectColocObjectsColocMultiplicitySettings::MultiFor(v) => {
                 ColocMultiplicity::MultiFor(v)
             }
@@ -289,6 +289,15 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
             FiltersRankFilterRankFilterTypeSettings::Max => RankFilterType::Max,
             FiltersRankFilterRankFilterTypeSettings::Mean => RankFilterType::Mean,
             FiltersRankFilterRankFilterTypeSettings::Outliers(v) => RankFilterType::Outliers(v),
+        }
+    }
+}
+
+impl From<ObjectRelateObjectsRelateRuleSettings> for RelateRule {
+    fn from(_s: ObjectRelateObjectsRelateRuleSettings) -> Self {
+        match _s {
+            ObjectRelateObjectsRelateRuleSettings::CentreInside => RelateRule::CentreInside,
+            ObjectRelateObjectsRelateRuleSettings::LargestOverlap => RelateRule::LargestOverlap,
         }
     }
 }
@@ -557,13 +566,15 @@ impl From<ClassifyObjectsSettings> for ClassifyObjects {
 impl From<ColocalizationSettings> for Colocalization {
     fn from(_s: ColocalizationSettings) -> Self {
         Colocalization {
-            classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
-            filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
+            objects: _s.objects,
+            overlapping: _s.overlapping.into_iter().map(|v| v.into()).collect(),
+            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
+            min_coloc_area: _s.min_coloc_area,
+            size_unit: _s.size_unit,
+            mark_as: _s.mark_as,
             class_for_overlapping_areas: _s.class_for_overlapping_areas,
             multiplicity: ColocMultiplicity::from(_s.multiplicity),
-            size_unit: _s.size_unit,
-            min_coloc_area: _s.min_coloc_area,
-            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
+            filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -880,6 +891,17 @@ impl From<RankFilterSettings> for RankFilter {
     }
 }
 
+impl From<RelateObjectsSettings> for RelateObjects {
+    fn from(_s: RelateObjectsSettings) -> Self {
+        RelateObjects {
+            child_classes: _s.child_classes.into_iter().map(|v| v.into()).collect(),
+            parent_classes: _s.parent_classes.into_iter().map(|v| v.into()).collect(),
+            rule: RelateRule::from(_s.rule),
+            remove_without_parent: _s.remove_without_parent,
+        }
+    }
+}
+
 impl From<RollingBallSettings> for RollingBall {
     fn from(_s: RollingBallSettings) -> Self {
         RollingBall {
@@ -1174,6 +1196,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::RankFilter(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::RankFilter::from(settings),
+        ))),
+        PipelineCommand::RelateObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::RelateObjects::from(settings),
         ))),
         PipelineCommand::RollingBall(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::RollingBall::from(settings),

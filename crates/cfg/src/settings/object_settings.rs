@@ -65,9 +65,10 @@ pub struct ObjectMetricSettings {
     // Colocalization
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
 
-    // Relation
-    pub parent_id: Option<ObjectId>, // Who owns me?
-    pub children: Vec<ObjectId>,     // Who is part of me?
+    /// The objects this one belongs to, at most one per class: parent
+    /// class -> parent object (set by Relate Objects).
+    #[serde(default)]
+    pub parents: IndexMap<ObjectClass, ObjectId>,
 
     // Tracking
     pub track: TrackSettings,

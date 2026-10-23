@@ -30,15 +30,17 @@ fn segmentation_classes_count_as_the_object_class_they_become() {
 #[test]
 fn object_commands_report_inputs_filters_and_outputs() {
     let coloc = PipelineCommand::Colocalization(ColocalizationSettings {
-        classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
+        objects: ObjectClass::Global(1),
+        overlapping: vec![ObjectClass::Global(2)],
         filter_classes: vec![ObjectClass::Global(3)],
         exclude_classes: vec![ObjectClass::Global(4)],
+        mark_as: ObjectClass::Global(8),
         class_for_overlapping_areas: ObjectClass::Global(9),
         ..Default::default()
     });
     let mut classes = coloc.object_classes();
     classes.sort();
-    assert_eq!(classes, [1, 2, 3, 4, 9].map(ObjectClass::Global));
+    assert_eq!(classes, [1, 2, 3, 4, 8, 9].map(ObjectClass::Global));
 }
 
 #[test]

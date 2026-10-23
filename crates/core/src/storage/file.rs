@@ -138,8 +138,7 @@ impl PipelineResultExporter for CsvExporter {
                 "object_id".to_string(),
                 "segmentation_class".to_string(),
                 "object_class".to_string(),
-                "parent_id".to_string(),
-                "children".to_string(),
+                "parent_ids".to_string(),
                 "track_id".to_string(),
                 // Centroid
                 "centroid_x_px".to_string(),
@@ -233,16 +232,11 @@ impl PipelineResultExporter for CsvExporter {
             let feret = object.get_feret_diameter();
             let min_feret = object.get_min_feret_diameter();
 
-            let parent_id = object
-                .parent_id
-                .as_ref()
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-
-            let children = object
-                .children
+            // "Cell:<id>,Region:<id>" - the parent's class, then its id.
+            let parent_ids = object
+                .parents()
                 .iter()
-                .map(|id| id.to_string())
+                .map(|(class, id)| format!("{}:{}", self.class_label(class), id))
                 .collect::<Vec<_>>()
                 .join(",");
 
@@ -260,8 +254,7 @@ impl PipelineResultExporter for CsvExporter {
                     .map(|c| self.class_label(c))
                     .collect::<Vec<_>>()
                     .join(","),
-                parent_id,
-                children,
+                parent_ids,
                 object.track.id.0.to_string(),
                 // Centroid px & nm
                 format!("{:.2}", centroid.0),
@@ -876,17 +869,20 @@ mod tests {
         let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("lineage.tif");
 
-        let parent_id = ObjectId::next();
-        let child_1 = ObjectId::next();
-        let child_2 = ObjectId::next();
+        let cell = ObjectId::next();
+        let region = ObjectId::next();
 
         let object_id = ObjectId::next();
         let object = crate::object::Object::new(crate::object::ObjectInit {
             id: object_id.clone(),
             area: 10,
             bbox: [0, 0, 3, 3],
-            parent_id: Some(parent_id.clone()),
-            children: vec![child_1.clone(), child_2.clone()],
+            parents: [
+                (ObjectClass::Global(1), cell.clone()),
+                (ObjectClass::Global(2), region.clone()),
+            ]
+            .into_iter()
+            .collect(),
             touches_edge: true,
             track: Track {
                 id: TrackId(42),
@@ -903,10 +899,9 @@ mod tests {
         let (headers, rows) = parse_csv(&content);
         let row = row_by_object_id(&headers, &rows, &object_id.to_string());
 
-        assert_eq!(column(&headers, row, "parent_id"), parent_id.to_string());
         assert_eq!(
-            column(&headers, row, "children"),
-            format!("{},{}", child_1, child_2)
+            column(&headers, row, "parent_ids"),
+            format!("class_1:{cell},class_2:{region}")
         );
         assert_eq!(column(&headers, row, "touches_edge"), "true");
         assert_eq!(column(&headers, row, "track_id"), "42");

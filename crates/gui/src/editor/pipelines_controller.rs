@@ -8126,7 +8126,7 @@ mod tests {
     #[test]
     fn expanding_shows_the_advanced_settings_below_and_always_show_applies_to_every_step() {
         let (ui, _ui_state, _controller) =
-            selected(vec![step("ClassifyObjects"), step("Colocalization")]);
+            selected(vec![step("ClassifyObjects"), step("Voronoi")]);
         let panel = ui.global::<PipelinesPanelState>();
         let commands = || panel.get_active_commands();
 
@@ -8157,11 +8157,10 @@ mod tests {
             _ui_state.load_app_settings().always_show_advanced_settings,
             "remembered in the user settings"
         );
-        let coloc = commands().row_data(1).unwrap();
-        assert_eq!(
-            ui_names(&coloc.advanced_parameters),
-            ["multiplicity", "exclude_classes"]
-        );
+        let voronoi = commands().row_data(1).unwrap();
+        let (_, advanced) = declared_split("Voronoi");
+        assert!(!advanced.is_empty());
+        assert_eq!(ui_names(&voronoi.advanced_parameters), advanced);
     }
 
     #[test]
@@ -11156,10 +11155,10 @@ mod tests {
         let (ui, _ui_state, _controller) = selected(vec![step("Colocalization")]);
         ui.global::<PipelinesPanelState>().invoke_param_changed(
             0,
-            "classes_to_coloc".into(),
+            "overlapping".into(),
             "toggle:3".into(),
         );
-        let param = ui_param(&ui, 0, "classes_to_coloc");
+        let param = ui_param(&ui, 0, "overlapping");
         assert_eq!(param.value, "3");
         let flags: Vec<String> = (0..param.options.row_count())
             .map(|i| param.options.row_data(i).unwrap().to_string())

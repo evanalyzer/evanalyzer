@@ -65,7 +65,7 @@ fn create_results_schema(conn: &duckdb::Connection) {
             object_id UUID NOT NULL,
             seg_class_name VARCHAR, seg_class_id INTEGER,
             object_class_name VARCHAR, object_class_id INTEGER[],
-            parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
+            parent_ids MAP(INTEGER, UUID), track_id UBIGINT,
             centroid_x_px DOUBLE, centroid_y_px DOUBLE,
             centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
             bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER,

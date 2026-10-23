@@ -231,6 +231,12 @@ pub enum PipelineCommand {
     Propagation(PropagationSettings),
     #[serde(alias = "rank-filter", alias = "rankFilter", alias = "rank_filter")]
     RankFilter(RankFilterSettings),
+    #[serde(
+        alias = "relate-objects",
+        alias = "relateObjects",
+        alias = "relate_objects"
+    )]
+    RelateObjects(RelateObjectsSettings),
     #[serde(alias = "rolling-ball", alias = "rollingBall", alias = "rolling_ball")]
     RollingBall(RollingBallSettings),
     #[serde(alias = "save-image", alias = "saveImage", alias = "save_image")]
@@ -326,8 +332,8 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             id: 5,
             name: "Colocalization",
             category: CommandCategory::Object,
-            summary: "Calculates spatial colocalization and intersections between specified object classes.",
-            description: "This command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
+            summary: "Marks the objects that overlap others - \"are they at the same place?\".",
+            description: "E.g. mark the ch1 spots that overlap a ch2 spot as \"ch1 with ch2\": the\nclass counts them per image, and later steps can use it (Relate Objects:\nthe double-positive spots per cell). Every pair that overlaps is\nrecorded as partners on both sides - which spots touch spot A. With\nseveral classes to overlap, an object is marked when it overlaps an\nobject of each, one at a time; the area all of them share is the\noptional overlap region.",
         },
         CommandMeta {
             id: 6,
@@ -516,7 +522,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             name: "Propagation",
             category: CommandCategory::Object,
             summary: "Grows a region around each seed object through a channel.",
-            description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels and is linked to it (its parent).",
+            description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
         },
         CommandMeta {
             id: 33,
@@ -527,90 +533,97 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 34,
+            name: "Relate Objects",
+            category: CommandCategory::Object,
+            summary: "Links objects to the objects they belong to: each child (e.g.",
+            description: "a spot) gets at most one parent of each parent class (e.g. its cell).\n\nThe results then give per parent the number of its children and the\nmean, median, ... of their measurements, and the parent's values next to\neach child. A child already linked to a parent of one of these classes\nis linked anew - or unlinked when no parent matches.",
+        },
+        CommandMeta {
+            id: 35,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 35,
+            id: 36,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 36,
+            id: 37,
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 37,
+            id: 38,
             name: "SimpleTracker",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 38,
+            id: 39,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 39,
+            id: 40,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 40,
+            id: 41,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 41,
+            id: 42,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 42,
+            id: 43,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 43,
+            id: 44,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 44,
+            id: 45,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 45,
+            id: 46,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 46,
+            id: 47,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -702,27 +715,30 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         )),
         32 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
         33 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        34 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        35 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        36 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        37 => Some(PipelineCommand::SimpleTracker(
+        34 => Some(PipelineCommand::RelateObjects(
+            RelateObjectsSettings::default(),
+        )),
+        35 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        36 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        37 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        38 => Some(PipelineCommand::SimpleTracker(
             SimpleTrackerSettings::default(),
         )),
-        38 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        39 => Some(PipelineCommand::StructureTensor(
+        39 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        40 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        40 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        41 => Some(PipelineCommand::TransformObjects(
+        41 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        42 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        42 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        43 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        44 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        45 => Some(PipelineCommand::WeightedDeviation(
+        43 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        44 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        45 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        46 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        46 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        47 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -766,6 +782,7 @@ impl PipelineCommand {
         "pixel_classifier",
         "propagation",
         "rank_filter",
+        "relate_objects",
         "rolling_ball",
         "save_image",
         "script",
@@ -818,6 +835,7 @@ impl PipelineCommand {
             Self::PixelClassifier(_) => "pixel_classifier",
             Self::Propagation(_) => "propagation",
             Self::RankFilter(_) => "rank_filter",
+            Self::RelateObjects(_) => "relate_objects",
             Self::RollingBall(_) => "rolling_ball",
             Self::SaveImage(_) => "save_image",
             Self::Script(_) => "script",
@@ -893,6 +911,7 @@ impl PipelineCommand {
             "pixel_classifier" => Some(Self::PixelClassifier(PixelClassifierSettings::default())),
             "propagation" => Some(Self::Propagation(PropagationSettings::default())),
             "rank_filter" => Some(Self::RankFilter(RankFilterSettings::default())),
+            "relate_objects" => Some(Self::RelateObjects(RelateObjectsSettings::default())),
             "rolling_ball" => Some(Self::RollingBall(RollingBallSettings::default())),
             "save_image" => Some(Self::SaveImage(SaveImageSettings::default())),
             "script" => Some(Self::Script(ScriptSettings::default())),
@@ -950,6 +969,7 @@ impl PipelineCommand {
             Self::PixelClassifier(_) => "AI Pixel Classifier",
             Self::Propagation(_) => "Propagation",
             Self::RankFilter(_) => "RankFilter",
+            Self::RelateObjects(_) => "Relate Objects",
             Self::RollingBall(_) => "Rolling Ball",
             Self::SaveImage(_) => "SaveImage",
             Self::Script(_) => "Script",
@@ -1002,6 +1022,7 @@ impl PipelineCommand {
             Self::PixelClassifier(_) => &CommandCategory::Segment,
             Self::Propagation(_) => &CommandCategory::Object,
             Self::RankFilter(_) => &CommandCategory::Preprocess,
+            Self::RelateObjects(_) => &CommandCategory::Object,
             Self::RollingBall(_) => &CommandCategory::Preprocess,
             Self::SaveImage(_) => &CommandCategory::Preprocess,
             Self::Script(_) => &CommandCategory::Preprocess,
@@ -1094,6 +1115,11 @@ impl PipelineCommand {
                 CommandCategory::Dataset,
             ],
             Self::RankFilter(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::RelateObjects(_) => &[
+                CommandCategory::Object,
+                CommandCategory::Measure,
+                CommandCategory::Dataset,
+            ],
             Self::RollingBall(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::SaveImage(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Script(_) => &[
@@ -1133,7 +1159,7 @@ impl PipelineCommand {
             Self::Blur(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7)".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::Cellpose(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "input_channels".to_string(), display_name: "Input Channels".to_string(), description: "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.".to_string(), value: format!("{}", _s.input_channels), param_type: ParamType::Dropdown, options: vec!["1".to_string(), "2".to_string(), "3".to_string()], min: 1.0f32, max: 3.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "flow_iterations".to_string(), display_name: "Flow Iterations".to_string(), description: "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.".to_string(), value: format!("{}", _s.flow_iterations), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (200i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15i32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_resize".to_string(), display_name: "Max Resize".to_string(), description: "Longest image side, in pixels, the image is scaled down to before\nsegmentation; the masks are scaled back up to the original size\nafterwards. Smaller values make large cells look like the cell sizes\nthe model was trained on and are faster. The scale is taken from the\nfull image, so every tile is scaled the same. `0` keeps the full\nresolution (the Cellpose web demo uses `1000`).".to_string(), value: format!("{}", _s.max_resize), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "flow_threshold".to_string(), display_name: "Flow Threshold".to_string(), description: "Flow error threshold: an object whose shape doesn't match the flows\nthe model predicted (mean squared error above this value) is removed.\nIncrease to keep more objects, decrease to keep only clean ones. `0`\ndisables the check (Cellpose's default is `0.4`).".to_string(), value: format!("{}", _s.flow_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 10.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.4f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "cellpose_postprocessing".to_string(), display_name: "Cellpose Postprocessing".to_string(), description: "Build the objects from the flows exactly like Cellpose does: pixels\nfollow the interpolated flows, an object only starts where more than\n10 pixels end up together, and pixels that reach no such spot become\nbackground. Off, every spot any pixel ends up at starts an object,\nwhich can join touching cells. Cellpose also fills the holes inside\neach object - add a Fill Object Holes step after this one for that.".to_string(), value: format!("{}", _s.cellpose_postprocessing), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "replicate_gray_channel".to_string(), display_name: "Replicate Gray Channel".to_string(), description: "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.".to_string(), value: format!("{}", _s.replicate_gray_channel), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ClassifyObjects(_s) => [vec![ParameterDef { name: "origin_segmentation".to_string(), display_name: "Origin Segmentation".to_string(), description: "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nIf no seg class is selected the criteria are applied to all objects.".to_string(), value: _s.origin_segmentation.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiSegClass, options: (0u32..33u32).map(|__idx| if _s.origin_segmentation.iter().any(|c| c.as_u32() == __idx) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<SegmentationClass>::new()).iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.".to_string(), value: match _s.match_handling { ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove output class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove output class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Add class on mismatch".to_string(), "Remove output class on match".to_string(), "Remove output class on mismatch".to_string(), "Remove objects matching criteria".to_string(), "Keep objects matching criteria".to_string(), "Reclassify on match".to_string(), "Reclassify on mismatch".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectClassifyObjectsClassifyMatchHandlingSettings :: RemoveAllClassesIfNotMatch) { ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove output class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove output class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, advanced: false, option_advanced: vec![true, true, true, true, true, false, false, false], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Tag".to_string(), description: "Class label assigned to (or removed from) objects by the chosen operation\n\nUsed as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\nHas no effect when the selected operation only manipulates input classes or clears all classes.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "overlapping_with".to_string(), display_name: "Intersecting With".to_string(), description: "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_area`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.".to_string(), value: _s.overlapping_with.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_intersection_area".to_string(), display_name: "Min Intersection Area".to_string(), description: "Minimum intersection area with an `overlapping_with` object, in `size_unit`\n\nHas no effect while `overlapping_with` is Unset.".to_string(), value: format!("{}", _s.min_intersection_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit to use for object extraction".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_area".to_string(), display_name: "Min Area".to_string(), description: "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.min_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_area".to_string(), display_name: "Max Area".to_string(), description: "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.max_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2147483648.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_circularity".to_string(), display_name: "Min Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.min_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_circularity".to_string(), display_name: "Max Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.max_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_solidity".to_string(), display_name: "Min Solidity".to_string(), description: "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.min_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_solidity".to_string(), display_name: "Max Solidity".to_string(), description: "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.max_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_aspect_ratio".to_string(), display_name: "Min Aspect Ratio".to_string(), description: "Minimum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.min_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_aspect_ratio".to_string(), display_name: "Max Aspect Ratio".to_string(), description: "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.max_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2147483648.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_eccentricity".to_string(), display_name: "Min Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.min_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_eccentricity".to_string(), display_name: "Max Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.max_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_feret".to_string(), display_name: "Min Feret".to_string(), description: "Feret diameter threshold\n\nThe absolute shortest parallel distance across the object.\nThis represents the minimum sieve size a particle could pass through.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.min_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_feret".to_string(), display_name: "Max Feret".to_string(), description: "Maximum feret diameter threshold in selected unit (px or nm)\n\nThe absolute longest distance across the object at any angle.\nUsed to measure elongation or the maximum length of a particle.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.max_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2147483648.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "allow_edge_touching".to_string(), display_name: "Allow Edge Touching".to_string(), description: "Whether object can touch image edge".to_string(), value: format!("{}", _s.allow_edge_touching), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "intensity_filters".to_string(), display_name: "Intensity Filters".to_string(), description: "Intensity criteria, e.g. \"average in channel 1 brighter than 1200\"\n\nAll filters must match (logical AND), like every other criterion of\nthis command. Combine an `Above` and a `Below` filter on the same\nchannel and metric to select an intensity range. Empty: no intensity\ncriterion.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.intensity_filters.iter().map(|__item| [vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "Image channel whose intensity is compared (0-based)\n\nAn object without a measurement for this channel (the image has no\nsuch channel) never matches.".to_string(), value: __item.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (0)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "metric".to_string(), display_name: "Metric".to_string(), description: "Intensity statistic of the object to compare".to_string(), value: match __item.metric { ObjectClassifyObjectsIntensityMetricSettings::Avg => "Average".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Sum => "Sum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Min => "Minimum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Max => "Maximum".to_string() }, param_type: ParamType::Dropdown, options: vec!["Average".to_string(), "Sum".to_string(), "Minimum".to_string(), "Maximum".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectClassifyObjectsIntensityMetricSettings :: Avg) { ObjectClassifyObjectsIntensityMetricSettings::Avg => "Average".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Sum => "Sum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Min => "Minimum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Max => "Maximum".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }], vec![ParameterDef { name: "comparison".to_string(), display_name: "Comparison".to_string(), description: "Whether the object must be brighter or darker than the threshold".to_string(), value: match __item.comparison { ObjectClassifyObjectsIntensityComparisonSettings::Above => "Brighter than".to_string(), ObjectClassifyObjectsIntensityComparisonSettings::Below => "Darker than".to_string() }, param_type: ParamType::Dropdown, options: vec!["Brighter than".to_string(), "Darker than".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectClassifyObjectsIntensityComparisonSettings :: Above) { ObjectClassifyObjectsIntensityComparisonSettings::Above => "Brighter than".to_string(), ObjectClassifyObjectsIntensityComparisonSettings::Below => "Darker than".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "threshold".to_string(), display_name: "Threshold".to_string(), description: "Intensity threshold, in `unit`\n\nFor `Sum` this is the summed intensity of all object pixels, so it\nscales with the object's area.".to_string(), value: format!("{}", __item.threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of `threshold`\n\nbit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match __item.unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (PixelUnits :: Bit) { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, advanced: true, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::Colocalization(_s) => [vec![ParameterDef { name: "classes_to_coloc".to_string(), display_name: "Classes To Coloc".to_string(), description: "Theses are the classes the coloclization should be calculated for".to_string(), value: _s.classes_to_coloc.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes_to_coloc.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Class For Overlapping Areas".to_string(), description: "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class".to_string(), value: _s.class_for_overlapping_areas.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "multiplicity".to_string(), display_name: "Multiplicity".to_string(), description: "How many partners an object may coloc with at once.".to_string(), value: match _s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::OneToOne => "No multi coloc (1:1)".to_string(), ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "Allow multi coloc".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Multi coloc only for selected".to_string() }, param_type: ParamType::Dropdown, options: vec!["No multi coloc (1:1)".to_string(), "Allow multi coloc".to_string(), "Multi coloc only for selected".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectColocObjectsColocMultiplicitySettings :: OneToOne) { ObjectColocObjectsColocMultiplicitySettings::OneToOne => "No multi coloc (1:1)".to_string(), ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "Allow multi coloc".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Multi coloc only for selected".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], match &_s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::OneToOne => vec![], ObjectColocObjectsColocMultiplicitySettings::ManyToMany => vec![], ObjectColocObjectsColocMultiplicitySettings::MultiFor(__inner) => vec![ParameterDef { name: "multiplicity.0".to_string(), display_name: "Multi coloc only for selected".to_string(), description: "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).".to_string(), value: __inner.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if __inner.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }, vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for the minimum coloc area size".to_string(), value: match _s.size_unit { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string(), "%".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnitsRel :: Pixels) { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "Min Coloc Area".to_string(), description: "Minimum overlapping area size to count objects as coloc".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "Exclude Classes".to_string(), description: "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"".to_string(), value: _s.exclude_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::Colocalization(_s) => [vec![ParameterDef { name: "objects".to_string(), display_name: "Mark objects of".to_string(), description: "The objects that are checked and marked (e.g. the ch1 spots).".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "overlapping".to_string(), display_name: "That overlap all of".to_string(), description: "They must overlap an object of each of these classes (e.g. the ch2\nspots).".to_string(), value: _s.overlapping.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.overlapping.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "But not".to_string(), description: "They must not overlap an object of any of these classes (e.g. a\ndead-cell marker): \"overlaps A and B, but not C\".".to_string(), value: _s.exclude_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "By at least".to_string(), description: "The overlap needed - also for an excluded class to count.".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit of the minimum overlap: pixels, nm² or % of the smaller object.".to_string(), value: match _s.size_unit { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string(), "%".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnitsRel :: Pixels) { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mark_as".to_string(), display_name: "As".to_string(), description: "The class the matching objects get (e.g. \"ch1 with ch2\"). `Unset`:\nonly the partners are recorded.".to_string(), value: _s.mark_as.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Overlap regions as".to_string(), description: "The area all overlapping objects share, as a new object of this\nclass - for its own area and intensity. `Unset`: none.".to_string(), value: _s.class_for_overlapping_areas.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "multiplicity".to_string(), display_name: "Partners".to_string(), description: "Which overlapping objects count as partners.".to_string(), value: match _s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "All partners".to_string(), ObjectColocObjectsColocMultiplicitySettings::OneToOne => "Only the best-overlapping partner".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Several partners only for selected classes".to_string() }, param_type: ParamType::Dropdown, options: vec!["All partners".to_string(), "Only the best-overlapping partner".to_string(), "Several partners only for selected classes".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectColocObjectsColocMultiplicitySettings :: ManyToMany) { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "All partners".to_string(), ObjectColocObjectsColocMultiplicitySettings::OneToOne => "Only the best-overlapping partner".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Several partners only for selected classes".to_string() }, advanced: false, option_advanced: vec![false, false, true], section: String::new() }], match &_s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => vec![], ObjectColocObjectsColocMultiplicitySettings::OneToOne => vec![], ObjectColocObjectsColocMultiplicitySettings::MultiFor(__inner) => vec![ParameterDef { name: "multiplicity.0".to_string(), display_name: "Several partners only for selected classes".to_string(), description: "Only objects of these classes may have more than one partner; every\nother class is capped to its best-overlapping one. E.g. with Cell and\nSpot and `MultiFor([Cell])`, a cell can have any number of spots, but\neach spot one cell (the one it overlaps most). Kept for older\npipelines - Relate Objects links spots to cells.".to_string(), value: __inner.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if __inner.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }].concat(),
             Self::ColorFilterCommand(_s) => [vec![ParameterDef { name: "range.min_h".to_string(), display_name: "Min. Hue".to_string(), description: "Minimum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.min_h), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 360.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.max_h".to_string(), display_name: "Max. Hue".to_string(), description: "Maximum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.max_h), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 360.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (360.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.min_s".to_string(), display_name: "Min. Sat.".to_string(), description: "Minimum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_s), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.max_s".to_string(), display_name: "Max. Sat.".to_string(), description: "Maximum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_s), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.min_v".to_string(), display_name: "Min. Brightness".to_string(), description: "Minimum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_v), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.max_v".to_string(), display_name: "Max. Brightness".to_string(), description: "Maximum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_v), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ConnectedComponents(_s) => vec![ParameterDef { name: "min_size".to_string(), display_name: "Min Size".to_string(), description: "Minimum object size, in pixels, an object must have to be kept.\n\nAfter labeling, connected components with a pixel count below this\nthreshold are discarded (their pixels are reset to background) and\nthe remaining object IDs are re-compacted to a contiguous range.\nUseful for suppressing noise/speckle artifacts before they reach\ndownstream measurement or classification steps. A value of 0 (the\ndefault) disables filtering.".to_string(), value: format!("{}", _s.min_size), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0i32)), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::DistanceTransform(_s) => [vec![ParameterDef { name: "threshold".to_string(), display_name: "Threshold".to_string(), description: "Values less than or equal to this are treated as background (distance = 0).".to_string(), value: format!("{}", _s.threshold), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "edges_are_background".to_string(), display_name: "Edges Are Background".to_string(), description: "If true, the pixels outside the image boundary are treated as background.".to_string(), value: format!("{}", _s.edges_are_background), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1162,6 +1188,7 @@ impl PipelineCommand {
             Self::PixelClassifier(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a trained pixel classifier model, saved from the AI training dialog.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["evamodel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_mapping".to_string(), display_name: "Segmentation Mapping".to_string(), description: "Maps the model's predicted classes to this project's segmentation classes.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.segmentation_mapping.iter().map(|__item| [vec![ParameterDef { name: "model_class".to_string(), display_name: "Model Class".to_string(), description: "The class the classifier model predicts.".to_string(), value: format!("{}", __item.model_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (ModelSegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The project's own segmentation class pixels predicted as\n`model_class` are written as.".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Propagation(_s) => [vec![ParameterDef { name: "seeds".to_string(), display_name: "Seeds".to_string(), description: "Objects carrying this class are the seeds (e.g. nuclei): each grows\ninto one region.".to_string(), value: _s.seeds.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "growth_channel".to_string(), display_name: "Growth Channel".to_string(), description: "The channel the regions grow through (e.g. the cell or membrane\nstain).".to_string(), value: _s.growth_channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask".to_string(), display_name: "Mask".to_string(), description: "Regions only cover pixels of objects carrying this class (e.g. the\nthresholded cell stain). `Unset`: the whole image.".to_string(), value: _s.mask.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "regularization".to_string(), display_name: "Regularization".to_string(), description: "How much plain distance counts against the change in brightness\n(λ): larger values split more by distance, `0` by brightness only.".to_string(), value: format!("{}", _s.regularization), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "The class the grown regions get.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_at_edges".to_string(), display_name: "Exclude At Edges".to_string(), description: "Discard regions that touch the image border.".to_string(), value: format!("{}", _s.exclude_at_edges), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::RankFilter(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRankFilterRankFilterTypeSettings::default()) { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false], section: String::new() }], match &_s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => vec![], FiltersRankFilterRankFilterTypeSettings::Min => vec![], FiltersRankFilterRankFilterTypeSettings::Max => vec![], FiltersRankFilterRankFilterTypeSettings::Mean => vec![], FiltersRankFilterRankFilterTypeSettings::Outliers(__inner) => vec![ParameterDef { name: "filter_type.0".to_string(), display_name: "Outliers".to_string(), description: "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }].concat(),
+            Self::RelateObjects(_s) => [vec![ParameterDef { name: "child_classes".to_string(), display_name: "Children".to_string(), description: "The objects to link to a parent (e.g. spots).".to_string(), value: _s.child_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.child_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "parent_classes".to_string(), display_name: "Parents".to_string(), description: "The classes of the objects they belong to (e.g. Cell); a child gets\nat most one parent of each.".to_string(), value: _s.parent_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.parent_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "rule".to_string(), display_name: "A child belongs to the parent if".to_string(), description: "How a child is matched to a parent.".to_string(), value: match _s.rule { ObjectRelateObjectsRelateRuleSettings::CentreInside => "Its centre is in the parent".to_string(), ObjectRelateObjectsRelateRuleSettings::LargestOverlap => "It overlaps the parent most".to_string() }, param_type: ParamType::Dropdown, options: vec!["Its centre is in the parent".to_string(), "It overlaps the parent most".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectRelateObjectsRelateRuleSettings :: CentreInside) { ObjectRelateObjectsRelateRuleSettings::CentreInside => "Its centre is in the parent".to_string(), ObjectRelateObjectsRelateRuleSettings::LargestOverlap => "It overlaps the parent most".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "remove_without_parent".to_string(), display_name: "Remove children without a parent".to_string(), description: "Remove the children that don't get a parent of every parent class\n(e.g. keep only the spots inside cells).".to_string(), value: format!("{}", _s.remove_without_parent), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::RollingBall(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the ball or paraboloid in pixels.\n\nThis should be at least as large as the radius of the largest\nobject in the image that is not part of the background.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 64.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (4.0f64)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: match _s.ball_type { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRollingBallBallTypeSettings::default()) { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::SaveImage(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "Name the image should be stord under".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "display_classes".to_string(), display_name: "Display Classes".to_string(), description: "Shows the selected classes in the image".to_string(), value: _s.display_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.display_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Which image from the pipeline should be stored".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSaveImageImageSourceSettings :: Image) { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "opacity".to_string(), display_name: "Opacity".to_string(), description: "Opacity in percent of the filled `display_classes` objects (0 = only\nthe contours, 100 = solid). Contours are always drawn opaque.".to_string(), value: format!("{}", _s.opacity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 5.0000f32, groups: vec![], default_value: format!("{}", (50u32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Script(_s) => [vec![ParameterDef { name: "classes".to_string(), display_name: "Classes".to_string(), description: "Object classes the script creates or uses. Commands the script runs\nmay only use these classes, so the pipeline knows them without\nrunning the script.".to_string(), value: _s.classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Script source code".to_string(), value: _s.source.clone(), param_type: ParamType::Script, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String :: from ("print(`Hello world from a ${image_width}x${image_height} tile`);\n")).clone(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1238,6 +1265,7 @@ impl PipelineCommand {
             Self::PixelClassifier(_) => String::new(),
             Self::Propagation(_) => String::new(),
             Self::RankFilter(_) => String::new(),
+            Self::RelateObjects(_) => String::new(),
             Self::RollingBall(_) => String::new(),
             Self::SaveImage(_) => String::new(),
             Self::Script(_) => String::new(),
@@ -1365,8 +1393,10 @@ impl PipelineCommand {
                 classes.push(s.overlapping_with);
             }
             Self::Colocalization(s) => {
-                classes.extend(s.classes_to_coloc.iter().copied());
-                classes.extend(s.filter_classes.iter().copied());
+                classes.push(s.objects);
+                classes.extend(s.overlapping.iter().copied());
+                classes.extend(s.exclude_classes.iter().copied());
+                classes.push(s.mark_as);
                 classes.push(s.class_for_overlapping_areas);
                 #[allow(unreachable_patterns)]
                 match &s.multiplicity {
@@ -1375,7 +1405,7 @@ impl PipelineCommand {
                     }
                     _ => {}
                 }
-                classes.extend(s.exclude_classes.iter().copied());
+                classes.extend(s.filter_classes.iter().copied());
             }
             Self::ColorFilterCommand(_) => {}
             Self::ConnectedComponents(_) => {}
@@ -1430,6 +1460,10 @@ impl PipelineCommand {
                 classes.push(s.output_class);
             }
             Self::RankFilter(_) => {}
+            Self::RelateObjects(s) => {
+                classes.extend(s.child_classes.iter().copied());
+                classes.extend(s.parent_classes.iter().copied());
+            }
             Self::RollingBall(_) => {}
             Self::SaveImage(s) => {
                 classes.extend(s.display_classes.iter().copied());
@@ -1771,23 +1805,64 @@ impl PipelineCommand {
                 }
             }
             Self::Colocalization(s) => {
-                if param_name == "classes_to_coloc" {
+                if param_name == "objects" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.objects = v;
+                    }
+                }
+                if param_name == "overlapping" {
                     if let Some(id) = value
                         .strip_prefix("toggle:")
                         .and_then(ObjectClass::from_text)
                     {
-                        if s.classes_to_coloc.contains(&id) {
-                            s.classes_to_coloc.retain(|c| *c != id);
+                        if s.overlapping.contains(&id) {
+                            s.overlapping.retain(|c| *c != id);
                         } else {
-                            s.classes_to_coloc.push(id);
+                            s.overlapping.push(id);
                         }
                     } else {
-                        s.classes_to_coloc = value
+                        s.overlapping = value
                             .split(',')
                             .filter(|x| !x.trim().is_empty())
                             .filter_map(ObjectClass::from_text)
                             .filter(|c| *c != ObjectClass::Unset)
                             .collect();
+                    }
+                }
+                if param_name == "exclude_classes" {
+                    if let Some(id) = value
+                        .strip_prefix("toggle:")
+                        .and_then(ObjectClass::from_text)
+                    {
+                        if s.exclude_classes.contains(&id) {
+                            s.exclude_classes.retain(|c| *c != id);
+                        } else {
+                            s.exclude_classes.push(id);
+                        }
+                    } else {
+                        s.exclude_classes = value
+                            .split(',')
+                            .filter(|x| !x.trim().is_empty())
+                            .filter_map(ObjectClass::from_text)
+                            .filter(|c| *c != ObjectClass::Unset)
+                            .collect();
+                    }
+                }
+                if param_name == "min_coloc_area" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.min_coloc_area = v;
+                    }
+                }
+                if param_name == "size_unit" {
+                    s.size_unit = match value {
+                        "nm" => SizeUnitsRel::NanoMeter,
+                        "%" => SizeUnitsRel::Percent,
+                        _ => SizeUnitsRel::Pixels,
+                    };
+                }
+                if param_name == "mark_as" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.mark_as = v;
                     }
                 }
                 if param_name == "class_for_overlapping_areas" {
@@ -1797,13 +1872,11 @@ impl PipelineCommand {
                 }
                 if param_name == "multiplicity" {
                     s.multiplicity = match value {
-                        "No multi coloc (1:1)" => {
+                        "All partners" => ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
+                        "Only the best-overlapping partner" => {
                             ObjectColocObjectsColocMultiplicitySettings::OneToOne
                         }
-                        "Allow multi coloc" => {
-                            ObjectColocObjectsColocMultiplicitySettings::ManyToMany
-                        }
-                        "Multi coloc only for selected" => {
+                        "Several partners only for selected classes" => {
                             ObjectColocObjectsColocMultiplicitySettings::MultiFor(vec![])
                         }
                         _ => (s.multiplicity).clone(),
@@ -1830,37 +1903,6 @@ impl PipelineCommand {
                                 .filter(|c| *c != ObjectClass::Unset)
                                 .collect();
                         }
-                    }
-                }
-                if param_name == "size_unit" {
-                    s.size_unit = match value {
-                        "nm" => SizeUnitsRel::NanoMeter,
-                        "%" => SizeUnitsRel::Percent,
-                        _ => SizeUnitsRel::Pixels,
-                    };
-                }
-                if param_name == "min_coloc_area" {
-                    if let Ok(v) = value.parse::<f32>() {
-                        s.min_coloc_area = v;
-                    }
-                }
-                if param_name == "exclude_classes" {
-                    if let Some(id) = value
-                        .strip_prefix("toggle:")
-                        .and_then(ObjectClass::from_text)
-                    {
-                        if s.exclude_classes.contains(&id) {
-                            s.exclude_classes.retain(|c| *c != id);
-                        } else {
-                            s.exclude_classes.push(id);
-                        }
-                    } else {
-                        s.exclude_classes = value
-                            .split(',')
-                            .filter(|x| !x.trim().is_empty())
-                            .filter_map(ObjectClass::from_text)
-                            .filter(|c| *c != ObjectClass::Unset)
-                            .collect();
                     }
                 }
             }
@@ -2434,6 +2476,60 @@ impl PipelineCommand {
                             *__inner = v;
                         }
                     }
+                }
+            }
+            Self::RelateObjects(s) => {
+                if param_name == "child_classes" {
+                    if let Some(id) = value
+                        .strip_prefix("toggle:")
+                        .and_then(ObjectClass::from_text)
+                    {
+                        if s.child_classes.contains(&id) {
+                            s.child_classes.retain(|c| *c != id);
+                        } else {
+                            s.child_classes.push(id);
+                        }
+                    } else {
+                        s.child_classes = value
+                            .split(',')
+                            .filter(|x| !x.trim().is_empty())
+                            .filter_map(ObjectClass::from_text)
+                            .filter(|c| *c != ObjectClass::Unset)
+                            .collect();
+                    }
+                }
+                if param_name == "parent_classes" {
+                    if let Some(id) = value
+                        .strip_prefix("toggle:")
+                        .and_then(ObjectClass::from_text)
+                    {
+                        if s.parent_classes.contains(&id) {
+                            s.parent_classes.retain(|c| *c != id);
+                        } else {
+                            s.parent_classes.push(id);
+                        }
+                    } else {
+                        s.parent_classes = value
+                            .split(',')
+                            .filter(|x| !x.trim().is_empty())
+                            .filter_map(ObjectClass::from_text)
+                            .filter(|c| *c != ObjectClass::Unset)
+                            .collect();
+                    }
+                }
+                if param_name == "rule" {
+                    s.rule = match value {
+                        "Its centre is in the parent" => {
+                            ObjectRelateObjectsRelateRuleSettings::CentreInside
+                        }
+                        "It overlaps the parent most" => {
+                            ObjectRelateObjectsRelateRuleSettings::LargestOverlap
+                        }
+                        _ => (s.rule).clone(),
+                    };
+                }
+                if param_name == "remove_without_parent" {
+                    s.remove_without_parent = value == "true";
                 }
             }
             Self::RollingBall(s) => {
@@ -3067,6 +3163,7 @@ impl PipelineCommand {
             }
             Self::Propagation(_) => {}
             Self::RankFilter(_) => {}
+            Self::RelateObjects(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
             Self::Script(_) => {}
@@ -3155,6 +3252,7 @@ impl PipelineCommand {
             }
             Self::Propagation(_) => {}
             Self::RankFilter(_) => {}
+            Self::RelateObjects(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
             Self::Script(_) => {}

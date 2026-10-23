@@ -932,9 +932,8 @@ fn check_definition(
             continue;
         };
         if let PipelineCommand::Colocalization(coloc) = command
-            && let Some(local) = coloc
-                .classes_to_coloc
-                .iter()
+            && let Some(local) = std::iter::once(&coloc.objects)
+                .chain(&coloc.overlapping)
                 .find(|c| matches!(c, ObjectClass::Local(_)))
         {
             problems.push(ModuleProblem::warning(
@@ -943,6 +942,23 @@ fn check_definition(
                 named(format!(
                     "step {} colocalizes with the module class {} - its links are dropped when \
                      the module is done, so the results have no colocalization counts for it",
+                    step.id,
+                    local.to_text()
+                )),
+            ));
+        }
+        if let PipelineCommand::RelateObjects(relate) = command
+            && let Some(local) = relate
+                .parent_classes
+                .iter()
+                .find(|c| matches!(c, ObjectClass::Local(_)))
+        {
+            problems.push(ModuleProblem::warning(
+                key,
+                None,
+                named(format!(
+                    "step {} links to parents of the module class {} - those links are dropped \
+                     when the module is done, so the results have no children per parent for it",
                     step.id,
                     local.to_text()
                 )),
@@ -1028,7 +1044,7 @@ mod tests {
     use evanalyzer_cfg::settings::modules::{ModuleParameterDef, ParamBinding, ParamValue};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         BlurSettings, ColocalizationSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
-        VoronoiSettings,
+        RelateObjectsSettings, VoronoiSettings,
     };
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 
@@ -1259,7 +1275,16 @@ mod tests {
         definition.steps.push(step(
             2,
             PipelineCommand::Colocalization(ColocalizationSettings {
-                classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Local(1)],
+                objects: ObjectClass::Global(1),
+                overlapping: vec![ObjectClass::Local(1)],
+                ..Default::default()
+            }),
+        ));
+        definition.steps.push(step(
+            3,
+            PipelineCommand::RelateObjects(RelateObjectsSettings {
+                child_classes: vec![ObjectClass::Global(1)],
+                parent_classes: vec![ObjectClass::Local(1)],
                 ..Default::default()
             }),
         ));
@@ -1290,6 +1315,10 @@ mod tests {
         let text = messages(&problems).join("\n");
         assert!(
             text.contains("colocalizes with the module class L1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("links to parents of the module class L1"),
             "{text}"
         );
         assert!(text.contains("\"Nothing\" sets nothing"), "{text}");
@@ -1338,7 +1367,7 @@ mod tests {
             step(
                 2,
                 PipelineCommand::Colocalization(ColocalizationSettings {
-                    classes_to_coloc: vec![
+                    overlapping: vec![
                         ObjectClass::Global(1),
                         ObjectClass::Global(2),
                         ObjectClass::Global(3),
@@ -1355,7 +1384,7 @@ mod tests {
             },
             ParamBinding {
                 step: StepId(2),
-                param: "classes_to_coloc".into(),
+                param: "overlapping".into(),
             },
         ];
         let text = messages(&check_module(&project, "SMOOTH")).join("\n");

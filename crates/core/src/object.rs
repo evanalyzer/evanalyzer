@@ -55,9 +55,11 @@ pub struct Object {
     // Colocalization
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
 
-    // Relation
-    pub parent_id: Option<ObjectId>, // Who owns me?
-    pub children: Vec<ObjectId>,     // Who is part of me?
+    /// The objects this one belongs to, at most one per class: parent
+    /// class -> parent object. Only Relate Objects links (see
+    /// [`set_parent`](Self::set_parent)); its children are the objects
+    /// pointing here, so they aren't stored.
+    parents: IndexMap<ObjectClass, ObjectId>,
 
     // Tracking
     pub track: Track,
@@ -124,8 +126,9 @@ pub struct ObjectInit {
     pub object_class: HashSet<ObjectClass>,
     pub scope: Scope,
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
-    pub parent_id: Option<ObjectId>,
-    pub children: Vec<ObjectId>,
+    /// Kept links of an object rebuilt from another (a stored object, a
+    /// transformed one) - new links only come from Relate Objects.
+    pub parents: IndexMap<ObjectClass, ObjectId>,
     pub track: Track,
     pub area: usize,
     pub bbox: [u32; 4],
@@ -213,8 +216,7 @@ impl Object {
             object_class: init.object_class,
             scope: init.scope,
             colocalized_with: init.colocalized_with,
-            parent_id: init.parent_id,
-            children: init.children,
+            parents: init.parents,
             track: init.track,
             area: init.area,
             bbox: init.bbox,
@@ -291,6 +293,36 @@ impl Object {
         coloc_per_class.push(object_id);
         coloc_per_class.sort();
         coloc_per_class.dedup();
+    }
+
+    /// The objects this one belongs to: parent class -> parent object.
+    pub fn parents(&self) -> &IndexMap<ObjectClass, ObjectId> {
+        &self.parents
+    }
+
+    /// The parent of class `class`, if linked.
+    pub fn parent(&self, class: &ObjectClass) -> Option<&ObjectId> {
+        self.parents.get(class)
+    }
+
+    /// Links this object to `parent` as its parent of class `class`
+    /// (`None`: unlinks it). Crate-only: Relate Objects is the one step that
+    /// links objects.
+    pub(crate) fn set_parent(&mut self, class: ObjectClass, parent: Option<ObjectId>) {
+        match parent {
+            Some(parent) => {
+                self.parents.insert(class, parent);
+            }
+            None => {
+                self.parents.shift_remove(&class);
+            }
+        }
+    }
+
+    /// Keeps only the links `keep` picks (e.g. drops those to removed
+    /// objects).
+    pub(crate) fn retain_parents(&mut self, mut keep: impl FnMut(&ObjectClass, &ObjectId) -> bool) {
+        self.parents.retain(|class, parent| keep(class, parent));
     }
 
     /// Whether the object is of `object_class`, as named by a command
@@ -686,8 +718,7 @@ impl Object {
             // training dialog, not something re-derived here.
             exclude_from_training: false,
             colocalized_with: self.colocalized_with.clone(),
-            parent_id: self.parent_id.clone(),
-            children: self.children.clone(),
+            parents: self.parents.clone(),
             track: TrackSettings {
                 id: self.track.id.clone(),
                 object_ids: self.track.object_ids.clone(),
@@ -777,8 +808,7 @@ impl Object {
             // Stored and annotated objects only have project classes.
             scope: Scope::Global,
             colocalized_with: s.colocalized_with,
-            parent_id: s.parent_id,
-            children: s.children,
+            parents: s.parents,
             track: Track {
                 id: s.track.id,
                 object_ids: s.track.object_ids,
@@ -816,6 +846,34 @@ impl Object {
             },
             source_tile: ImageTile::default(),
         })
+    }
+
+    /// How many pixels this object shares with `other` - the area of
+    /// [`overlaps`](Self::overlaps), without building the intersection.
+    pub fn overlap_area(&self, other: &Self) -> usize {
+        let [s_xmin, s_ymin, s_xmax, _] = self.bbox;
+        let [o_xmin, o_ymin, o_xmax, _] = other.bbox;
+        let (x_min, y_min) = (s_xmin.max(o_xmin), s_ymin.max(o_ymin));
+        let (x_max, y_max) = (s_xmax.min(o_xmax), self.bbox[3].min(other.bbox[3]));
+        // bbox[2]/[3] are INCLUSIVE.
+        if x_min > x_max || y_min > y_max {
+            return 0;
+        }
+        let s_width = (s_xmax - s_xmin + 1) as usize;
+        let o_width = (o_xmax - o_xmin + 1) as usize;
+        let mut area = 0;
+        for y in y_min..=y_max {
+            let s_row = (y - s_ymin) as usize * s_width;
+            let o_row = (y - o_ymin) as usize * o_width;
+            for x in x_min..=x_max {
+                let s = self.mask_data.get(s_row + (x - s_xmin) as usize);
+                let o = other.mask_data.get(o_row + (x - o_xmin) as usize);
+                if s.is_some_and(|b| *b) && o.is_some_and(|b| *b) {
+                    area += 1;
+                }
+            }
+        }
+        area
     }
 
     /// Computes the intersection with another object.
@@ -898,7 +956,6 @@ impl Object {
         Some(Object::new(ObjectInit {
             id: ObjectId::next(), // Typically initialized empty or generated by your core engine later
             segmentation_class: self.segmentation_class.clone(),
-            parent_id: Some(self.id.clone()), // Tracks lineage ancestry
             area,
             bbox: [overlap_xmin, overlap_ymin, overlap_xmax, overlap_ymax],
             mask_data: overlap_mask,
@@ -1035,7 +1092,7 @@ impl Object {
     /// intersection (AND), union (OR), symmetric difference (XOR), or set difference
     /// (Subtract, A \ B). Used for object-pair "object math" - unlike a pixel-level
     /// binary-image operation, this keeps the result tied to exactly the input object(s)
-    /// it came from (via `parent_id`, set by the caller), and only ever touches the
+    /// it came from, and only ever touches the
     /// small bbox window spanned by the operands instead of rasterizing the whole
     /// tile/image.
     ///

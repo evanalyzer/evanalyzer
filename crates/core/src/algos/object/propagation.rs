@@ -39,7 +39,7 @@ use std::collections::BinaryHeap;
 /// to the seed it is reached from at the lowest cost, a step costing more
 /// the more the stain's brightness changes - so neighbouring cells meet
 /// where the stain is dim, not halfway between their nuclei. Each region
-/// keeps its seed's pixels and is linked to it (its parent).
+/// keeps its seed's pixels (Relate Objects links it to its seed).
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "object")]
 pub struct Propagation {
@@ -129,7 +129,6 @@ impl ImageAlgorithm for Propagation {
                 sum_x2: region.sum_x2,
                 sum_y2: region.sum_y2,
                 sum_xy: region.sum_xy,
-                parent_id: Some(seed.id.clone()),
                 ..Default::default()
             });
             object.add_object_class(self.output_class, ctx.scope)?;
@@ -749,21 +748,15 @@ mod tests {
     }
 
     /// The border falls on the bright stripe, not halfway (column 10);
-    /// each cell is linked to its nucleus and holds it.
+    /// each cell holds its nucleus.
     #[test]
-    fn cells_meet_at_the_stripe_and_know_their_nucleus() {
+    fn cells_meet_at_the_stripe_and_hold_their_nucleus() {
         let mut cache = cache_with_two_nuclei();
         run(&step(), &mut cache).unwrap();
         let cells = cells(&cache);
         assert_eq!(cells.len(), 2);
-        let left = cells
-            .iter()
-            .find(|c| c.parent_id == Some(ObjectId(1)))
-            .unwrap();
-        let right = cells
-            .iter()
-            .find(|c| c.parent_id == Some(ObjectId(2)))
-            .unwrap();
+        let left = cells.iter().min_by_key(|c| c.bbox[0]).unwrap();
+        let right = cells.iter().max_by_key(|c| c.bbox[0]).unwrap();
         assert_eq!(left.area + right.area, 200, "every pixel is taken");
         assert!(
             left.bbox[2] >= 11,

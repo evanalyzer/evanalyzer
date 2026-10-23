@@ -329,32 +329,40 @@ Decided - to build, in this order:
 
 ## Relate objects and Coloc (decided 2026-10-23, design canvas "Object relations in the results", VISION.md §7.0)
 
-Rule for users: "Is X part of Y?" → Relate. "Are X and Y at the same place?" → Coloc. Both together: Coloc/Classify marks the objects (a class) in the pipeline, Relate links them to the parent. No backwards compatibility (alpha).
+Two meanings, two commands, two link columns (like CellProfiler's RelateObjects / MaskObjects split):
+- Coloc = "touches / at the same place": equal objects, no direction, many ↔ many. Marks objects (a class) and stores all partners (`coloc_partner_ids`).
+- Relate = "belongs to": hierarchy, at most one parent per class (`parent_ids`). Every count/mean per parent comes from Relate.
+Rule for users: "Is X part of Y? / per cell" → Relate. "Do X and Y touch? / with which?" → Coloc. Both: Coloc marks (e.g. "ch1 with ch2"), Relate links that class to cells. No backwards compatibility (alpha).
 
 Data model:
 - [ ] `Object.parent_id` + `children` → `parents: IndexMap<ObjectClass, ObjectId>` (at most one parent per class; key = the parent class set in Relate). Only Relate writes it (no public setter elsewhere); `end_scope` keeps clearing freed links.
 - [ ] Voronoi, Propagation, ObjectMath, `Object::overlaps` (coloc overlap objects), TransformObjects: stop writing `parent_id` (nothing reads it today).
-- [ ] DuckDB `objects.parent_id VARCHAR` / `children VARCHAR` → `parent_ids MAP(INTEGER, UUID)` (like `coloc_partner_ids`); CSV file export the same. Children are `GROUP BY parent_ids[class]`, no column.
+- [ ] DuckDB `objects.parent_id VARCHAR` / `children VARCHAR` → `parent_ids MAP(INTEGER, UUID)`; CSV file export the same. Children are `GROUP BY parent_ids[class]`, no column.
+- [ ] `coloc_partner_ids MAP(INTEGER, UUID[])` stays, meaning "touches": all partners per class, on both sides.
 
 Relate objects (new command, category Object, `WholeImage`, after TileMerge; its own code - shares only `BboxGrid` and `Object::overlaps` with Coloc):
-- [ ] Settings: parent class, child classes, rule "centre inside" (default) / "largest overlap", children without a parent: keep / remove.
+- [ ] Settings: parent classes (one or more - a child gets one parent per class, e.g. Cell and Region), child classes, rule "centre inside" (default) / "largest overlap", children without a parent: keep / remove.
 - [ ] Owns `parents[parent class]` for every object of its child classes: sets or clears it.
 - [ ] Checked against CellProfiler RelateObjects on the same labels (counts identical).
 - [ ] Preview (board 5): children in their parent's colour with a line to its centre, children without a parent as a dashed orange ring, "312 of 340 linked · 28 without a parent" in the settings.
-- [ ] A ready-made module "Cell from nucleus": Propagation/Voronoi → Relate → ObjectMath (cytoplasm).
+- [ ] Ready-made modules: "Cell from nucleus" (Propagation/Voronoi → Relate → ObjectMath), "Colocalizing spots per cell" (Coloc marks → Relate to cells).
 - [ ] Later: distances (to the parent's centre/edge) as object measurements in the `measurements` table; "at least X % overlap" rule.
+
+Coloc (one job: mark by overlap + record who touches whom):
+- [ ] Settings in plain words: "Mark objects of" A "that overlap all of" B, C… "but not" D "by at least" … "as" class (added to the matching A objects only - one side per step; the other direction is a second step). Optional "overlap regions as" class (area/intensity of the overlap itself).
+- [ ] Partners: all by default, stored on both sides (today's "Allow multi"); option "only the best-overlapping partner" (today's 1:1). The hidden 1:1 default that capped cells at 1 spot goes.
+- [ ] Multiplicity "Multi coloc only for selected" (`MultiFor`): stays in Advanced for now, to be removed later (Relate covers it).
+- [ ] Help text: "marked" (A overlaps B and C, each on its own) is not "all three share an area" (the overlap region of A∩B∩C, only where it exists).
+- [ ] ClassifyObjects "Intersecting With" (`overlapping_with`): stays in Advanced for now, to be removed later (Coloc's marking covers it; "bright and overlapping" = Coloc marks, then Classify on that class).
 
 Results (aggregates computed by the queries, nothing stored):
 - [ ] List "Children" group (board 1): child classes (with the Relate step that linked them) × the Aggregate picker (Count, Mean, Median, Sum, Min, Max) × the ticked columns; columns grouped under the class; saved in the view (`ViewSettings`). Same values in Plate, Charts, Export, CLI.
-- [ ] Drill-down (board 3): a click on a child count opens those children, breadcrumb back.
-- [ ] List "Linked objects" group (boards 3, U1, U7, U12): the linked object's id (click → its row) and chosen columns of it, next to each row - one group for Relate's parent ("Parent · Cell (Relate)") and Coloc 1:1 partners ("Partner · Spot ch2 (Coloc)"). Filter All / With a link / Without (U6).
-- [ ] Split view (board 4): selected object yellow, its children outlined, the rest dimmed; card with children per class and the parent.
-- [ ] Editor object details: "Parent: Cell", "Children: Spot 7" next to "Coloc with".
-
-Coloc (back to "at the same place"):
-- [ ] Results: the "Coloc details" switch (list + export dialog) becomes a row type: "A row per · Objects | Images | Overlapping pairs" (board U12) - one row per pair, both objects' columns side by side, offered when the results have coloc partners; the Objects export follows it (replaces the "List (Coloc Details)" sheet / `list_coloc_details.csv`). 1:1 partners also as "Linked objects" columns; a click on an overlap count opens that object's partners. No use case lost (decided 2026-10-23).
-- [ ] Export: the new values are ordinary `Column` variants (child aggregates, linked-object columns, "Overlapping X", "% overlapping X") with `key()`/`from_key()`, so every export kind, the CLI `--columns`/`--view` and Plate/Charts get them; the export dialog's column picker gets the Children and Linked objects groups.
-- [ ] CLI: `export --colocalized` and `--split-colocalized` always fail today ("isn't supported by the current results backend") - remove them or rebuild them on "Overlaps X".
-- [ ] Column "Coloc with ‹class›" → "Overlaps ‹class›" (per object). Per image / well / plate: "Objects overlapping ‹class›" (objects with ≥1 partner) and "% overlapping ‹class›" instead of summing partner counts (which counts pairs).
-- [ ] Multiplicity "Multi coloc only for selected" (`MultiFor`): stays in Advanced for now, to be removed later (Relate covers it).
+- [ ] Drill-down (boards 3, U5): a click on a child count or a partner count opens those objects, breadcrumb back.
+- [ ] List "Linked objects" group (boards U1, U12): Parent (Relate) - its id (click → its row) and chosen columns; Partners (Coloc) - their ids (click → their rows) and their count per class ("touches N"). No means of partner values (that is Relate's job). Filter All / With a link / Without (U6).
+- [ ] Row type "A row per · Objects | Images | Overlapping pairs" (board U12): one row per partner pair from `coloc_partner_ids`, both objects' columns side by side; offered when the results have partners. Replaces the "Coloc details" switch (list + export dialog; `ListFilter::with_coloc_details`, `ViewSettings::coloc_details`, `build_coloc_detail_rows` become the row type).
+- [ ] Column "Coloc with ‹class›" → "Partners ‹class› · Count" (per object; aggregates like any column). Per image "how many overlap" = the count of the marking class. "% overlapping" later with math between columns.
+- [ ] Split view (board 4): selected object yellow, its children outlined, the rest dimmed; card with children per class, the parent and the partners ("Touches: Spot ch2 8a21…, 8b07…").
+- [ ] Editor object details: "Parent: Cell", "Children: Spot 7", "Touches: Spot ch2 2".
+- [ ] Export: the new values are ordinary `Column` variants (child aggregates, parent columns, partner count) with `key()`/`from_key()`, so every export kind, the CLI `--columns`/`--view` and Plate/Charts get them; the export dialog's column picker gets the Children and Linked objects groups; the Objects export follows the row type (pairs replace the "List (Coloc Details)" sheet / `list_coloc_details.csv`).
+- [ ] CLI: `export --colocalized` and `--split-colocalized` always fail today ("isn't supported by the current results backend") - remove them or rebuild them on the marking class.
 - [ ] Tell the alpha testers: "spots per cell" with Coloc 1:1 (the default) counted at most 1 spot per cell - redo it with Relate.

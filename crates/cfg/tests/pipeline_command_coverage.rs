@@ -389,7 +389,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 47] = [
+    let expected: [(&str, &[CommandCategory]); 48] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -431,6 +431,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Propagation", &[Object, Measure, Dataset]),
         ("ObjectMath", &[Object, Measure, Dataset]),
         ("AI Pixel Classifier", &[InstanceSegmentation]),
+        ("Relate Objects", &[Object, Measure, Dataset]),
         ("RankFilter", &[Segment, Preprocess]),
         ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
@@ -652,6 +653,8 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
         ("ClassifyObjects", "output_class"),
         ("ClassifyObjects", "overlapping_with"),
         ("Colocalization", "class_for_overlapping_areas"),
+        ("Colocalization", "objects"),
+        ("Colocalization", "mark_as"),
         ("ObjectMath", "input_class"),
         ("ObjectMath", "other_class"),
         ("ObjectMath", "output_class"),
@@ -682,7 +685,9 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
 fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
     let multi_obj_class_fields: &[(&str, &str)] = &[
         ("ClassifyObjects", "input_classes"),
-        ("Colocalization", "classes_to_coloc"),
+        ("Colocalization", "overlapping"),
+        ("Relate Objects", "child_classes"),
+        ("Relate Objects", "parent_classes"),
         // Colocalization.filter_classes is `#[cmdsmeta(visible = false)]`, so it
         // never reaches `to_parameters()` - not tested here.
         ("Colocalization", "exclude_classes"),
@@ -1019,7 +1024,7 @@ fn apply_param_change_rank_filter_switches_to_and_edits_a_tuple_variant() {
 
 #[test]
 fn apply_param_change_colocalization_multiplicity_switches_to_and_edits_multi_for() {
-    // "Multi coloc only for selected" carries data
+    // "Several partners only for selected classes" carries data
     // (`MultiFor(Vec<ObjectClass>)`): switching to it constructs the variant
     // with an empty class list (same mechanism as the RankFilter test above,
     // just for a `Vec<ObjectClass>` payload instead of a bare `f32`), and the
@@ -1027,12 +1032,12 @@ fn apply_param_change_colocalization_multiplicity_switches_to_and_edits_multi_fo
     // field, using the same comma-list/toggle: syntax every other
     // MultiObjClass field supports.
     let mut cmd = default_command(id_of("Colocalization")).unwrap();
-    assert_eq!(param_value(&cmd, "multiplicity"), "No multi coloc (1:1)");
+    assert_eq!(param_value(&cmd, "multiplicity"), "All partners");
 
-    cmd.apply_param_change("multiplicity", "Multi coloc only for selected");
+    cmd.apply_param_change("multiplicity", "Several partners only for selected classes");
     assert_eq!(
         param_value(&cmd, "multiplicity"),
-        "Multi coloc only for selected"
+        "Several partners only for selected classes"
     );
     assert_eq!(param_value(&cmd, "multiplicity.0"), "");
 
@@ -1043,8 +1048,8 @@ fn apply_param_change_colocalization_multiplicity_switches_to_and_edits_multi_fo
     assert_eq!(param_value(&cmd, "multiplicity.0"), "2");
 
     // Switching away and back must not resurrect the old class list.
-    cmd.apply_param_change("multiplicity", "Allow multi coloc");
-    cmd.apply_param_change("multiplicity", "Multi coloc only for selected");
+    cmd.apply_param_change("multiplicity", "Only the best-overlapping partner");
+    cmd.apply_param_change("multiplicity", "Several partners only for selected classes");
     assert_eq!(param_value(&cmd, "multiplicity.0"), "");
 }
 

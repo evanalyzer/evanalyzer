@@ -482,7 +482,6 @@ impl ImageAlgorithm for Voronoi {
                 sum_x2: sum_x2[i],
                 sum_y2: sum_y2[i],
                 sum_xy: sum_xy[i],
-                parent_id: Some(center_id.clone()),
                 ..Default::default()
             });
             object.add_object_class(self.output_class, ctx.scope)?;
