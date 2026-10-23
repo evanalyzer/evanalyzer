@@ -175,6 +175,10 @@ export struct PipelineCommand {
         // values never go unnoticed).
         advanced-count: int,
         advanced-changed: int,
+        // The settings whose dropdowns get more options in the advanced
+        // section ("Partners") - with no advanced setting of their own, the
+        // open section would otherwise look empty.
+        advanced-options-in: string,
         // A module card: the module library has a newer version ("3"), or empty.
         update-version: string,
         // The sections of `parameters`, in order - "" (no section) first

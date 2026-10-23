@@ -1,5 +1,43 @@
+use crate::api::Aggregation;
 use evanalyzer_cfg::{core_types::ObjectClass, settings::classification_settings::Class};
 use serde::{Deserialize, Serialize};
+
+/// What a [`Column::Children`] column shows about a parent's children.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ChildValue {
+    /// How many children it has (0 without any).
+    Count,
+    /// An aggregate of one of their columns (empty without children).
+    Of(Aggregation, Box<Column>),
+}
+
+/// The children of a class linked to the row's object by Relate Objects
+/// (`parent_ids[parent_class]` is the row's object): their number or an
+/// aggregate of their values - e.g. the spots per cell and their mean
+/// intensity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ChildColumn {
+    /// The class the children were linked through - the row's class.
+    pub parent_class: ObjectClass,
+    pub child_class: ObjectClass,
+    pub value: ChildValue,
+}
+
+/// What a [`Column::Parent`] column shows about a row's parent.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ParentValue {
+    /// Its object id (empty without a parent).
+    Id,
+    /// One of its columns - e.g. its cell's area next to each spot.
+    Of(Box<Column>),
+}
+
+/// The row's parent of a class (Relate Objects, `parent_ids[parent_class]`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ParentColumn {
+    pub parent_class: ObjectClass,
+    pub value: ParentValue,
+}
 
 /// A measurement step's measurement as a column: its key in the
 /// `measurements` table and how it reads.
@@ -38,6 +76,77 @@ pub enum Column {
     IntensityMax(u32),
     /// A measurement step's measurement (`measurements` table).
     Measurement(MeasurementColumn),
+    /// The row's children of a class: their number or an aggregate.
+    Children(ChildColumn),
+    /// The row's parent of a class: its id or one of its columns.
+    Parent(ParentColumn),
+}
+
+/// The class part of a relation column's key: the class's number, or
+/// `unset`.
+fn class_key_part(class: &ObjectClass) -> String {
+    match class {
+        ObjectClass::Global(n) => n.to_string(),
+        ObjectClass::Unset | ObjectClass::Local(_) => "unset".to_string(),
+    }
+}
+
+fn class_from_key_part(part: &str) -> Option<ObjectClass> {
+    match part {
+        "unset" => Some(ObjectClass::Unset),
+        n => n.parse().ok().map(ObjectClass::Global),
+    }
+}
+
+/// An aggregation in a key.
+fn aggregation_key(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "avg",
+        Aggregation::Min => "min",
+        Aggregation::Max => "max",
+        Aggregation::Stddev => "stddev",
+        Aggregation::Sum => "sum",
+        Aggregation::Median => "median",
+        Aggregation::Skewness => "skewness",
+    }
+}
+
+fn aggregation_from_key(key: &str) -> Option<Aggregation> {
+    Some(match key {
+        "avg" => Aggregation::Avg,
+        "min" => Aggregation::Min,
+        "max" => Aggregation::Max,
+        "stddev" => Aggregation::Stddev,
+        "sum" => Aggregation::Sum,
+        "median" => Aggregation::Median,
+        "skewness" => Aggregation::Skewness,
+        _ => return None,
+    })
+}
+
+/// An aggregation as the user reads it ("Mean").
+pub fn aggregation_label(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "Mean",
+        Aggregation::Min => "Min",
+        Aggregation::Max => "Max",
+        Aggregation::Stddev => "Std dev",
+        Aggregation::Sum => "Sum",
+        Aggregation::Median => "Median",
+        Aggregation::Skewness => "Skewness",
+    }
+}
+
+/// A class's name, or "class N" for one `classes` doesn't know.
+fn class_label(class: &ObjectClass, classes: &[Class]) -> String {
+    classes
+        .iter()
+        .find(|c| c.global() == *class)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| match class {
+            ObjectClass::Global(n) => format!("class {n}"),
+            ObjectClass::Unset | ObjectClass::Local(_) => "unset".to_string(),
+        })
 }
 
 /// How a measurement column's [`Column::as_key`] starts.
@@ -85,6 +194,31 @@ impl Column {
             Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),
             Column::IntensityMax(channel) => format!("intensity_max_gray_ch{channel}"),
             Column::Measurement(m) => format!("{MEASUREMENT_KEY_PREFIX}{}", m.key),
+            // children:<parent>:<child>:count | ...:<aggregation>:<column key>
+            Column::Children(c) => {
+                let classes_part = format!(
+                    "children:{}:{}",
+                    class_key_part(&c.parent_class),
+                    class_key_part(&c.child_class)
+                );
+                match &c.value {
+                    ChildValue::Count => format!("{classes_part}:count"),
+                    ChildValue::Of(aggregation, column) => format!(
+                        "{classes_part}:{}:{}",
+                        aggregation_key(aggregation),
+                        column.as_key(classes)
+                    ),
+                }
+            }
+            // parent:<parent>:id | parent:<parent>:<column key>
+            Column::Parent(p) => match &p.value {
+                ParentValue::Id => format!("parent:{}:id", class_key_part(&p.parent_class)),
+                ParentValue::Of(column) => format!(
+                    "parent:{}:{}",
+                    class_key_part(&p.parent_class),
+                    column.as_key(classes)
+                ),
+            },
         }
     }
 
@@ -123,16 +257,38 @@ impl Column {
             Column::ColocCount(class_id) => classes
                 .iter()
                 .find(|class| class.global() == *class_id)
-                .map(|class| format!("Coloc with {}", class.name))
+                .map(|class| format!("Partners {} · Count", class.name))
                 .unwrap_or_else(|| match class_id {
-                    ObjectClass::Global(n) => format!("Coloc with class {n}"),
-                    ObjectClass::Unset | ObjectClass::Local(_) => "Coloc with unset".to_string(),
+                    ObjectClass::Global(n) => format!("Partners class {n} · Count"),
+                    ObjectClass::Unset | ObjectClass::Local(_) => {
+                        "Partners unset · Count".to_string()
+                    }
                 }),
             Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
             Column::IntensityMin(channel) => format!("Min Intensity (Ch {channel})"),
             Column::IntensityMax(channel) => format!("Max Intensity (Ch {channel})"),
             Column::Measurement(m) => format!("{} · {}", m.step, m.name),
+            Column::Children(c) => {
+                let child = class_label(&c.child_class, classes);
+                match &c.value {
+                    ChildValue::Count => format!("{child} · Count"),
+                    ChildValue::Of(aggregation, column) => format!(
+                        "{child} · {} · {}",
+                        aggregation_label(aggregation),
+                        column.display_label(classes)
+                    ),
+                }
+            }
+            Column::Parent(p) => {
+                let parent = class_label(&p.parent_class, classes);
+                match &p.value {
+                    ParentValue::Id => format!("Parent {parent}"),
+                    ParentValue::Of(column) => {
+                        format!("Parent {parent} · {}", column.display_label(classes))
+                    }
+                }
+            }
         }
     }
 
@@ -153,7 +309,14 @@ impl Column {
     pub fn is_aggregable(&self) -> bool {
         !matches!(
             self,
-            Column::ObjectId | Column::TrackId | Column::ImageName | Column::ObjectClass
+            Column::ObjectId
+                | Column::TrackId
+                | Column::ImageName
+                | Column::ObjectClass
+                | Column::Parent(ParentColumn {
+                    value: ParentValue::Id,
+                    ..
+                })
         )
     }
 
@@ -161,6 +324,34 @@ impl Column {
     /// resolve a `"n_colocalized_class_{name}"` key back to the class's id;
     /// `None` if `name` isn't (or no longer is) a registered class.
     pub fn from_key(key: &str, classes: &[Class]) -> Option<Self> {
+        if let Some(rest) = key.strip_prefix("children:") {
+            let mut parts = rest.splitn(4, ':');
+            let parent_class = class_from_key_part(parts.next()?)?;
+            let child_class = class_from_key_part(parts.next()?)?;
+            let value = match parts.next()? {
+                "count" => ChildValue::Count,
+                aggregation => ChildValue::Of(
+                    aggregation_from_key(aggregation)?,
+                    Box::new(Column::from_key(parts.next()?, classes)?),
+                ),
+            };
+            return Some(Column::Children(ChildColumn {
+                parent_class,
+                child_class,
+                value,
+            }));
+        }
+        if let Some(rest) = key.strip_prefix("parent:") {
+            let (class, value) = rest.split_once(':')?;
+            let value = match value {
+                "id" => ParentValue::Id,
+                column => ParentValue::Of(Box::new(Column::from_key(column, classes)?)),
+            };
+            return Some(Column::Parent(ParentColumn {
+                parent_class: class_from_key_part(class)?,
+                value,
+            }));
+        }
         if let Some(name) = key.strip_prefix("n_colocalized_class_") {
             let class_id = classes.iter().find(|class| class.name == name)?.global();
             return Some(Column::ColocCount(class_id));

@@ -301,6 +301,13 @@ impl ResultsStateController {
             list.transpond = view.transposed;
             list.with_coloc_details = view.coloc_details;
             list.image_state = image_state_of_key(&view.images);
+            list.children = view
+                .children
+                .iter()
+                .map(|(p, c)| (ObjectClass::Global(*p), ObjectClass::Global(*c)))
+                .collect();
+            list.child_aggregations = view.child_aggregations.clone();
+            list.parents = view.parents.iter().copied().map(ObjectClass::Global).collect();
         }
 
         {
@@ -423,6 +430,13 @@ impl ResultsStateController {
                 transposed: filter.transpond,
                 coloc_details: filter.with_coloc_details,
                 images: image_state_key(filter.image_state).into(),
+                children: filter
+                    .children
+                    .iter()
+                    .filter_map(|(p, c)| Some((class_id(*p)?, class_id(*c)?)))
+                    .collect(),
+                child_aggregations: filter.child_aggregations.clone(),
+                parents: filter.parents.iter().filter_map(|p| class_id(*p)).collect(),
             }
         };
         let kept = |slot: &Option<(String, String)>, now: String| match slot {
@@ -641,6 +655,9 @@ impl ResultsStateController {
             transpond: false,
             group_by: ListGroupBy::Objects,
             aggregations: vec![Aggregation::Avg],
+            children: Vec::new(),
+            child_aggregations: vec![Aggregation::Avg],
+            parents: Vec::new(),
         };
         let chart_column = first(is_chartable_column);
         *self.chart_filter.lock().expect("Poisoned") = ChartFilter {
@@ -670,10 +687,23 @@ impl ResultsStateController {
                 filter.transpond,
                 filter.with_coloc_details,
                 filter.image_state,
+                (
+                    filter.children.clone(),
+                    filter.child_aggregations.clone(),
+                    filter.parents.clone(),
+                ),
             )
         };
-        let (list_classes, list_columns, aggregations, group_by, transpond, coloc, image_state) =
-            list;
+        let (
+            list_classes,
+            list_columns,
+            aggregations,
+            group_by,
+            transpond,
+            coloc,
+            image_state,
+            (children, child_aggregations, parents),
+        ) = list;
         let class_items: Vec<MultiSelectItem> = class_filter_items(&classes, false)
             .into_iter()
             .zip(&classes)
@@ -687,8 +717,64 @@ impl ResultsStateController {
             class_items.len(),
             "Classes",
         );
+        // The children's and the parents' columns come from their own groups.
+        let plain_columns: Vec<ColumnEntry> = available
+            .iter()
+            .filter(|entry| !matches!(entry.key, Column::Children(_) | Column::Parent(_)))
+            .cloned()
+            .collect();
         let column_items_list =
-            column_items(&available, &classes, |key| list_columns.contains(key));
+            column_items(&plain_columns, &classes, |key| list_columns.contains(key));
+        let class_label = |class: ObjectClass| {
+            classes
+                .iter()
+                .find(|c| c.global() == class)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| format!("class {}", class.to_u32().unwrap_or_default()))
+        };
+        // The links Relate Objects made, from the results' columns.
+        let children_items: Vec<MultiSelectItem> = available
+            .iter()
+            .filter_map(|entry| match &entry.key {
+                Column::Children(c) if c.value == ChildValue::Count => {
+                    let link = (c.parent_class, c.child_class);
+                    Some(MultiSelectItem {
+                        key: link_key(link).into(),
+                        value: format!(
+                            "{} in {}",
+                            class_label(c.child_class),
+                            class_label(c.parent_class)
+                        )
+                        .into(),
+                        color: Color::default(),
+                        group: "".into(),
+                        selected: children.contains(&link),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        let parent_items: Vec<MultiSelectItem> = available
+            .iter()
+            .filter_map(|entry| match &entry.key {
+                Column::Parent(p) => Some(MultiSelectItem {
+                    key: p.parent_class.to_u32()?.to_string().into(),
+                    value: format!("Parent · {}", class_label(p.parent_class)).into(),
+                    color: Color::default(),
+                    group: "".into(),
+                    selected: parents.contains(&p.parent_class),
+                }),
+                _ => None,
+            })
+            .collect();
+        let children_summary = list_summary(children.len(), children_items.len(), "Children");
+        let parent_summary = list_summary(parents.len(), parent_items.len(), "Linked objects");
+        let child_aggregation_items = aggregation_items(&child_aggregations);
+        let child_aggregate_summary =
+            list_summary(child_aggregations.len(), AGGREGATIONS.len(), "Aggregations");
+        let has_partners = available
+            .iter()
+            .any(|entry| matches!(entry.key, Column::ColocCount(_)));
         let columns_summary = list_summary(
             column_items_list
                 .iter()
@@ -796,11 +882,21 @@ impl ResultsStateController {
             state.set_list_columns_summary(columns_summary);
             state.set_list_aggregation_items(model(aggregation_items_list));
             state.set_list_aggregate(aggregate_summary);
-            let per_image = group_by == ListGroupBy::Images;
-            state.set_list_group_by_items(model(group_by_items(per_image)));
-            state.set_list_group_by_summary(if per_image { "Images" } else { "Objects" }.into());
+            let rows = match (group_by, coloc) {
+                (ListGroupBy::Images, _) => ("images", "Images"),
+                (ListGroupBy::Objects, true) => ("pairs", "Overlapping pairs"),
+                (ListGroupBy::Objects, false) => ("objects", "Objects"),
+            };
+            state.set_list_group_by_items(model(group_by_items(rows.0, has_partners)));
+            state.set_list_group_by_summary(rows.1.into());
             state.set_list_transpond(transpond);
             state.set_list_with_coloc_details(coloc);
+            state.set_list_children_items(model(children_items));
+            state.set_list_children_summary(children_summary.into());
+            state.set_list_child_aggregation_items(model(child_aggregation_items));
+            state.set_list_child_aggregate(child_aggregate_summary.into());
+            state.set_list_parent_items(model(parent_items));
+            state.set_list_parent_summary(parent_summary.into());
             let state_items: Vec<MultiSelectItem> = image_state_items()
                 .into_iter()
                 .map(|mut item| {

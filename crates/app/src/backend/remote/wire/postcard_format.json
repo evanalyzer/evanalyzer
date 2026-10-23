@@ -1,5 +1,5 @@
 {
-  "protocol_version": 27,
+  "protocol_version": 28,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -198,6 +198,44 @@
         }
       }
     },
+    "ChildColumn": {
+      "STRUCT": [
+        {
+          "parent_class": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "child_class": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "value": {
+            "TYPENAME": "ChildValue"
+          }
+        }
+      ]
+    },
+    "ChildValue": {
+      "ENUM": {
+        "0": {
+          "Count": "UNIT"
+        },
+        "1": {
+          "Of": {
+            "TUPLE": [
+              {
+                "TYPENAME": "Aggregation"
+              },
+              {
+                "TYPENAME": "Column"
+              }
+            ]
+          }
+        }
+      }
+    },
     "Class": {
       "STRUCT": [
         {
@@ -335,6 +373,20 @@
           "Measurement": {
             "NEWTYPE": {
               "TYPENAME": "MeasurementColumn"
+            }
+          }
+        },
+        "18": {
+          "Children": {
+            "NEWTYPE": {
+              "TYPENAME": "ChildColumn"
+            }
+          }
+        },
+        "19": {
+          "Parent": {
+            "NEWTYPE": {
+              "TYPENAME": "ParentColumn"
             }
           }
         }
@@ -761,6 +813,34 @@
           }
         }
       ]
+    },
+    "ParentColumn": {
+      "STRUCT": [
+        {
+          "parent_class": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "value": {
+            "TYPENAME": "ParentValue"
+          }
+        }
+      ]
+    },
+    "ParentValue": {
+      "ENUM": {
+        "0": {
+          "Id": "UNIT"
+        },
+        "1": {
+          "Of": {
+            "NEWTYPE": {
+              "TYPENAME": "Column"
+            }
+          }
+        }
+      }
     },
     "PlaneFilter": {
       "STRUCT": [

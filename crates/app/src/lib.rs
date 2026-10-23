@@ -88,6 +88,7 @@ pub mod results {
     pub use crate::api::CellValue;
     pub use crate::api::ColorScale;
     pub use crate::api::ColorSchema;
+    pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue};
     pub use crate::api::Column;
     pub use crate::api::ColumnEntry;
     pub use crate::api::DatabaseResult;

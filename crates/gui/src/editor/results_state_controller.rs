@@ -11,6 +11,7 @@ use crate::{
     ResultsRailMode, ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
+use evanalyzer_app::results::ChildValue;
 use evanalyzer_app::results::ColorScale;
 use evanalyzer_app::results::ColorSchema;
 use evanalyzer_app::results::Column;
@@ -150,6 +151,12 @@ struct ListFilter {
     pub group_by: ListGroupBy,
     /// Unused in Objects mode.
     pub aggregations: Vec<Aggregation>,
+    /// The Children group: (parent class, child class) links shown.
+    pub children: Vec<(ObjectClass, ObjectClass)>,
+    /// The children's aggregates of each ticked column (besides the count).
+    pub child_aggregations: Vec<Aggregation>,
+    /// The Linked objects group: the parent classes shown.
+    pub parents: Vec<ObjectClass>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -877,7 +884,85 @@ impl ResultsStateController {
                         "images" => ListGroupBy::Images,
                         _ => ListGroupBy::Objects,
                     };
-                    manager.list_filter.lock().expect("Poisened").group_by = group_by;
+                    let mut filter = manager.list_filter.lock().expect("Poisened");
+                    filter.group_by = group_by;
+                    // A row per pair of overlapping objects (was the "Coloc
+                    // details" switch).
+                    filter.with_coloc_details = key.as_str() == "pairs";
+                    drop(filter);
+                    manager.refresh_list();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_children_selected(move |key, selected| {
+                    let Some(link) = link_from_key(key.as_str()) else {
+                        return;
+                    };
+                    let mut filter = manager.list_filter.lock().expect("Poisened");
+                    filter.children.retain(|l| *l != link);
+                    if selected {
+                        filter.children.push(link);
+                        filter.children.sort();
+                    }
+                    drop(filter);
+                    manager.push_view_controls_in_slint();
+                    manager.refresh_list();
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_children_select_all(move |all| {
+                    let links = match all {
+                        true => manager.available_links(),
+                        false => Vec::new(),
+                    };
+                    manager.list_filter.lock().expect("Poisened").children = links;
+                    manager.push_view_controls_in_slint();
+                    manager.refresh_list();
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_parent_select_all(move |all| {
+                    let mut parents: Vec<ObjectClass> = match all {
+                        true => manager.available_links().into_iter().map(|(p, _)| p).collect(),
+                        false => Vec::new(),
+                    };
+                    parents.dedup();
+                    manager.list_filter.lock().expect("Poisened").parents = parents;
+                    manager.push_view_controls_in_slint();
+                    manager.refresh_list();
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_child_aggregation_selected(move |key, selected| {
+                    let Some(aggregation) = aggregation_from_key(key.as_str()) else {
+                        return;
+                    };
+                    let mut filter = manager.list_filter.lock().expect("Poisened");
+                    filter.child_aggregations.retain(|a| *a != aggregation);
+                    if selected {
+                        filter.child_aggregations.push(aggregation);
+                        filter.child_aggregations.sort();
+                    }
+                    drop(filter);
+                    manager.push_view_controls_in_slint();
+                    manager.refresh_list();
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_parent_selected(move |key, selected| {
+                    let Ok(id) = key.as_str().parse::<u32>() else {
+                        return;
+                    };
+                    let class = ObjectClass::Global(id);
+                    let mut filter = manager.list_filter.lock().expect("Poisened");
+                    filter.parents.retain(|p| *p != class);
+                    if selected {
+                        filter.parents.push(class);
+                        filter.parents.sort();
+                    }
+                    drop(filter);
+                    manager.push_view_controls_in_slint();
                     manager.refresh_list();
                 });
 
@@ -2679,6 +2764,9 @@ impl ResultsStateController {
                     transpond: false,
                     group_by: ListGroupBy::Objects,
                     aggregations: vec![Aggregation::Avg],
+                    children: Vec::new(),
+                    child_aggregations: vec![Aggregation::Avg],
+                    parents: Vec::new(),
                 };
 
                 // Charts default to the first aggregable column for both
@@ -2764,7 +2852,7 @@ impl ResultsStateController {
                             image_state_items(),
                         ))));
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
-                            group_by_items(false),
+                            group_by_items("objects", false),
                         ))));
                         state.set_list_aggregate(list_summary(1, AGGREGATIONS.len(), "Aggregations"));
                         state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
@@ -2833,6 +2921,21 @@ impl ResultsStateController {
     // Called whenever a filter (plane, image, class or column selection)
     // changes: the previous page number no longer means anything for the new
     // filter, so jump back to page 1.
+    /// The (parent class, child class) links of the open results.
+    fn available_links(&self) -> Vec<(ObjectClass, ObjectClass)> {
+        self.available_columns
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .filter_map(|entry| match &entry.key {
+                Column::Children(c) if c.value == ChildValue::Count => {
+                    Some((c.parent_class, c.child_class))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn refresh_list(&self) {
         *self.list_page.lock().expect("Poisned") = 0;
         *self.list_page_cursors.lock().expect("Poisned") = vec![None];
@@ -3514,7 +3617,12 @@ impl ResultsStateController {
         } else {
             Some(list_filter.object_classes.clone())
         };
-        let columns = list_filter.columns.clone();
+        let columns = evanalyzer_app::results::view_settings::with_related_columns(
+            &list_filter.columns,
+            &list_filter.children,
+            &list_filter.child_aggregations,
+            &list_filter.parents,
+        );
         let with_coloc_details = list_filter.with_coloc_details;
         let transpond_table = list_filter.transpond;
         let group_by = list_filter.group_by;
@@ -4564,11 +4672,19 @@ impl ResultsStateController {
         } else {
             list_filter.object_classes.clone()
         };
-        let columns = if list_filter.columns.is_empty() {
+        let base_columns = if list_filter.columns.is_empty() {
             DEFAULT_LIST_COLUMNS.to_vec()
         } else {
             list_filter.columns.clone()
         };
+        // The view's Children and Linked objects columns too.
+        let columns = evanalyzer_app::results::view_settings::with_related_columns(
+            &base_columns,
+            &list_filter.children,
+            &list_filter.child_aggregations,
+            &list_filter.parents,
+        );
+        let overlapping_pairs = list_filter.with_coloc_details;
         // Export always uses `ColorScale::Auto` (see `read_export_settings`)
         // - the dialog exposes no manual min/max override, so the current
         // Matrix view's own scale (which may be pinned) isn't mirrored here.
@@ -4626,10 +4742,28 @@ impl ResultsStateController {
             "Classes",
         );
 
+        // The picker lists the composed children's / parents' columns of
+        // the view as well - the results only offer their count and id.
+        let mut dialog_columns: Vec<ColumnEntry> = available_columns.clone();
+        for column in &columns {
+            if dialog_columns.iter().any(|entry| entry.key == *column) {
+                continue;
+            }
+            let group = match column {
+                Column::Children(_) => "Children",
+                Column::Parent(_) => "Parent",
+                _ => continue,
+            };
+            dialog_columns.push(ColumnEntry {
+                display_name: column.display_label(&classes),
+                key: column.clone(),
+                group: group.into(),
+            });
+        }
         let column_items_vec =
-            column_items(&available_columns, &classes, |key| columns.contains(key));
-        let column_groups_vec = column_groups(&available_columns);
-        let column_summary = list_summary(columns.len(), available_columns.len(), "Columns");
+            column_items(&dialog_columns, &classes, |key| columns.contains(key));
+        let column_groups_vec = column_groups(&dialog_columns);
+        let column_summary = list_summary(columns.len(), dialog_columns.len(), "Columns");
 
         let aggregation_items_vec = aggregation_items(&aggregations);
         let aggregation_summary =
@@ -4682,7 +4816,7 @@ impl ResultsStateController {
         state.set_square_size_summary(format!("{square_size} px").into());
 
         state.set_with_list_view(false);
-        state.set_with_list_coloc_details(false);
+        state.set_with_list_coloc_details(overlapping_pairs);
         state.set_with_list_one_file_per_image(true);
         state.set_with_grouped_by_image_list(true);
         state.set_with_plate_heatmap_view(rail_mode == ResultsRailMode::Matrix);
@@ -5255,23 +5389,37 @@ fn image_state_items() -> Vec<MultiSelectItem> {
     .collect()
 }
 
-fn group_by_items(selected_images: bool) -> Vec<MultiSelectItem> {
-    vec![
-        MultiSelectItem {
-            key: "objects".into(),
-            value: "Objects".into(),
-            color: Color::default(),
-            group: "".into(),
-            selected: !selected_images,
-        },
-        MultiSelectItem {
-            key: "images".into(),
-            value: "Images".into(),
-            color: Color::default(),
-            group: "".into(),
-            selected: selected_images,
-        },
-    ]
+/// "A row per": Objects, Images and - when the results have
+/// Colocalization partners (`pairs`) - Overlapping pairs; `selected` is the
+/// chosen one's key.
+fn group_by_items(selected: &str, pairs: bool) -> Vec<MultiSelectItem> {
+    let item = |key: &str, value: &str| MultiSelectItem {
+        key: key.into(),
+        value: value.into(),
+        color: Color::default(),
+        group: "".into(),
+        selected: key == selected,
+    };
+    let mut items = vec![item("objects", "Objects"), item("images", "Images")];
+    if pairs {
+        items.push(item("pairs", "Overlapping pairs"));
+    }
+    items
+}
+
+/// A Children group item's key ("<parent id>:<child id>") for a link.
+fn link_key((parent, child): (ObjectClass, ObjectClass)) -> String {
+    let id = |class: ObjectClass| class.to_u32().map_or("unset".to_string(), |n| n.to_string());
+    format!("{}:{}", id(parent), id(child))
+}
+
+/// The link a Children group item's key names.
+fn link_from_key(key: &str) -> Option<(ObjectClass, ObjectClass)> {
+    let (parent, child) = key.split_once(':')?;
+    Some((
+        ObjectClass::Global(parent.parse().ok()?),
+        ObjectClass::Global(child.parse().ok()?),
+    ))
 }
 
 // Distinct group names in first-seen order, so the dropdown renders sections
@@ -6610,6 +6758,68 @@ pub(crate) mod tests {
         );
         // Column 2's 200-char cell is clamped at the max.
         assert_eq!(widths[2], 260.0);
+    }
+
+    /// Relate Objects' links show up as the Children and Linked objects
+    /// groups; ticking them adds the related columns to the list, and
+    /// "Overlapping pairs" is a row type.
+    #[test]
+    fn the_children_and_linked_objects_groups_add_their_columns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        duckdb::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "UPDATE objects SET parent_ids = MAP {1: '00000000-0000-0000-0000-000000000000'::UUID} \
+                 WHERE object_id = '00000000-0000-0000-0000-000000000002'",
+                [],
+            )
+            .unwrap();
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        let state = ui.global::<ResultsState>();
+        let values = |items: slint::ModelRc<MultiSelectItem>| -> Vec<String> {
+            items.iter().map(|item| item.value.to_string()).collect()
+        };
+        assert_eq!(values(state.get_list_children_items()), ["ClassB in ClassA"]);
+        assert_eq!(values(state.get_list_parent_items()), ["Parent · ClassA"]);
+        assert!(
+            values(state.get_list_group_by_items()).contains(&"Overlapping pairs".to_string()),
+            "the results have colocalization partners"
+        );
+
+        state.invoke_list_columns_select_none();
+        state.invoke_list_columns_item_selected("area_px".into(), true);
+        state.invoke_list_children_selected("1:2".into(), true);
+        state.invoke_list_parent_selected("1".into(), true);
+        drain_ui_queue();
+        let filter = controller.list_filter.lock().unwrap();
+        assert_eq!(filter.children, [(ObjectClass::Global(1), ObjectClass::Global(2))]);
+        assert_eq!(filter.parents, [ObjectClass::Global(1)]);
+        drop(filter);
+        let headers: Vec<String> = state
+            .get_list_column_headers()
+            .iter()
+            .map(|h| h.to_string())
+            .collect();
+        for wanted in [
+            "Area [px]",
+            "ClassB · Count",
+            "ClassB · Mean · Area [px]",
+            "Parent ClassA",
+            "Parent ClassA · Area [px]",
+        ] {
+            assert!(headers.iter().any(|h| h == wanted), "{wanted} in {headers:?}");
+        }
+
+        state.invoke_list_group_by_selected("pairs".into());
+        assert!(controller.list_filter.lock().unwrap().with_coloc_details);
+        state.invoke_list_group_by_selected("objects".into());
+        assert!(!controller.list_filter.lock().unwrap().with_coloc_details);
     }
 
     #[test]

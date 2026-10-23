@@ -435,6 +435,22 @@ export global ResultsState {
     in-out property <bool> list-with-coloc-details: false;
     callback list-with-coloc-details-changed(bool);
 
+    // The Children group (Relate Objects' links, "Spot in Cell"): ticked
+    // ones add their count and the aggregates below of the ticked columns.
+    in-out property <[MultiSelectItem]> list-children-items: [];
+    in-out property <string> list-children-summary: "";
+    callback list-children-selected(string, bool);
+    callback list-children-select-all(bool);
+    in-out property <[MultiSelectItem]> list-child-aggregation-items: [];
+    in-out property <string> list-child-aggregate: "";
+    callback list-child-aggregation-selected(string, bool);
+    // The Linked objects group: ticked parent classes add the parent's id
+    // and the ticked columns of it on each row.
+    in-out property <[MultiSelectItem]> list-parent-items: [];
+    in-out property <string> list-parent-summary: "";
+    callback list-parent-selected(string, bool);
+    callback list-parent-select-all(bool);
+
 
     // Rows (one row per object / per (image, class)) or the classes side by
     // side: per image one column block per class (`transpond_table` on

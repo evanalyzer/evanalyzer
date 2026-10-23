@@ -400,6 +400,7 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         self.add_measurement_values(objects.iter_mut(), &ordered_columns)?;
+        self.add_related_values(objects.iter_mut(), &ordered_columns)?;
 
         let (row_names, rows, row_locations) = if details_active {
             self.build_coloc_detail_rows(
@@ -440,6 +441,75 @@ impl ResultsGenerator {
             source_object_count: objects.len(),
             row_locations,
         })
+    }
+
+    /// Reads the values of the children's / parent's columns among `columns`
+    /// for `objects` (a page of the list) - the same SQL as the per-image,
+    /// plate and chart views, so the numbers agree. One query for the page.
+    fn add_related_values<'a>(
+        &self,
+        objects: impl Iterator<Item = &'a mut ObjectRow>,
+        columns: &[Column],
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let related: Vec<&Column> = columns
+            .iter()
+            .filter(|c| matches!(c, Column::Children(_) | Column::Parent(_)))
+            .collect();
+        if related.is_empty() {
+            return Ok(());
+        }
+        let mut objects: HashMap<String, &mut ObjectRow> =
+            objects.map(|o| (o.object_id.clone(), o)).collect();
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let ids = sql_string_in_list(&objects.keys().cloned().collect::<Vec<_>>());
+        let expressions = related
+            .iter()
+            .map(|c| related_value_expr(c))
+            .collect::<Result<Vec<_>, _>>()?;
+        let sql = format!(
+            "SELECT object_id::VARCHAR, {} FROM objects WHERE object_id IN ({ids})",
+            expressions
+                .iter()
+                .map(|e| format!("CAST({e} AS VARCHAR)"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let keys: Vec<String> = related.iter().map(|c| c.as_key(&[])).collect();
+        let texts: Vec<bool> = related
+            .iter()
+            .map(|c| {
+                matches!(
+                    c,
+                    Column::Parent(ParentColumn {
+                        value: ParentValue::Id,
+                        ..
+                    })
+                )
+            })
+            .collect();
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let mut rows = stmt.query([]).map_err(err)?;
+        while let Some(row) = rows.next().map_err(err)? {
+            let id: String = row.get(0).map_err(err)?;
+            let Some(object) = objects.get_mut(&id) else {
+                continue;
+            };
+            for (i, key) in keys.iter().enumerate() {
+                let text: Option<String> = row.get(i + 1).map_err(err)?;
+                let value = text.and_then(|t| {
+                    if texts[i] {
+                        Some(RelatedValue::Text(t))
+                    } else {
+                        t.parse().ok().map(RelatedValue::Number)
+                    }
+                });
+                object.related.insert(key.clone(), value);
+            }
+        }
+        Ok(())
     }
 
     /// Reads the values of the measurement columns among `columns` for
@@ -1137,6 +1207,7 @@ impl ResultsGenerator {
             .collect::<Result<_, _>>()
             .map_err(err)?;
         self.add_measurement_values(objects.values_mut(), &block_columns)?;
+        self.add_related_values(objects.values_mut(), &block_columns)?;
 
         let mut row_names = Vec::new();
         let mut rows: Vec<Vec<Cell>> = Vec::new();
@@ -2590,7 +2661,73 @@ impl ResultsGenerator {
             ret.push(entry(Column::Measurement(column), "Measurements"));
         }
 
+        // The links Relate Objects made: per (parent class, child class) the
+        // children's count, per parent class the parent's id - the List's
+        // Children and Linked objects groups are built from these.
+        let relations = self.get_relations()?;
+        for (parent_class, child_class) in &relations {
+            ret.push(entry(
+                Column::Children(ChildColumn {
+                    parent_class: *parent_class,
+                    child_class: *child_class,
+                    value: ChildValue::Count,
+                }),
+                "Children",
+            ));
+        }
+        let mut parents: Vec<ObjectClass> = relations.iter().map(|(p, _)| *p).collect();
+        parents.dedup();
+        for parent_class in parents {
+            ret.push(entry(
+                Column::Parent(ParentColumn {
+                    parent_class,
+                    value: ParentValue::Id,
+                }),
+                "Parent",
+            ));
+        }
+
         Ok(ret)
+    }
+
+    /// The (parent class, child class) pairs Relate Objects linked in these
+    /// results, sorted - none in results without `parent_ids`.
+    pub fn get_relations(&self) -> Result<Vec<(ObjectClass, ObjectClass)>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let has_column: bool = self
+            .database
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.columns \
+                 WHERE table_name = 'objects' AND column_name = 'parent_ids'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(err)?;
+        if !has_column {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .database
+            .prepare(
+                "SELECT DISTINCT parent_key, UNNEST(object_class_id) AS child_key FROM \
+                 (SELECT UNNEST(map_keys(parent_ids)) AS parent_key, object_class_id \
+                 FROM objects WHERE cardinality(parent_ids) > 0) ORDER BY 1, 2",
+            )
+            .map_err(err)?;
+        let pairs = stmt
+            .query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?)))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(pairs
+            .into_iter()
+            .filter_map(|(parent, child)| {
+                Some((
+                    ObjectClass::Global(u32::try_from(parent).ok()?),
+                    ObjectClass::Global(u32::try_from(child).ok()?),
+                ))
+            })
+            .collect())
     }
 
     /// The measurements of this analysis (`measurement_info`), by step and
@@ -2763,6 +2900,16 @@ struct ObjectRow {
     /// The selected measurements' values, by key - filled after the rows
     /// are read (`ResultsGenerator::add_measurement_values`).
     measurements: HashMap<String, f64>,
+    /// The selected children's / parent's values, by column key (`None`:
+    /// no value) - filled with the measurements.
+    related: HashMap<String, Option<RelatedValue>>,
+}
+
+/// A [`Column::Children`] / [`Column::Parent`] value of a list row.
+#[derive(Clone)]
+enum RelatedValue {
+    Number(f64),
+    Text(String),
 }
 
 /// Which of `ObjectRow`'s source columns a given column selection actually
@@ -2938,6 +3085,7 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         disabled: row.get(22)?,
         track_id: row.get(23)?,
         measurements: HashMap::new(),
+        related: HashMap::new(),
     })
 }
 
@@ -3357,6 +3505,25 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
                 .map_or(CellValue::Empty, |v| CellValue::Float(*v as f32)),
             ..no_bg
         },
+        Column::Children(_) | Column::Parent(_) => {
+            let count = matches!(
+                column,
+                Column::Children(ChildColumn {
+                    value: ChildValue::Count,
+                    ..
+                })
+            );
+            Cell {
+                value: match object.related.get(&column.as_key(&[])).cloned().flatten() {
+                    Some(RelatedValue::Number(v)) if count => CellValue::Integer(v as i32),
+                    Some(RelatedValue::Number(v)) => CellValue::Float(v as f32),
+                    Some(RelatedValue::Text(text)) => CellValue::String(text),
+                    None if count => CellValue::Integer(0),
+                    None => CellValue::Empty,
+                },
+                ..no_bg
+            }
+        }
     }
 }
 
@@ -3429,6 +3596,24 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         Column::IntensityMin(channel) => format!("intensity_min_gray[{}]", channel + 1),
         Column::IntensityMax(channel) => format!("intensity_max_gray[{}]", channel + 1),
         Column::Measurement(m) => measurement_value_expr(m),
+        Column::Children(c) => children_value_expr(c)?,
+        Column::Parent(ParentColumn {
+            parent_class,
+            value: ParentValue::Of(column),
+        }) => format!(
+            "(SELECT pv.v FROM (SELECT object_id AS oid, {} AS v FROM objects) pv \
+             WHERE pv.oid = parent_ids[{}])",
+            column_aggregate_expr(column)?,
+            coloc_class_key(*parent_class)
+        ),
+        Column::Parent(ParentColumn {
+            value: ParentValue::Id,
+            ..
+        }) => {
+            return Err(InternalErrors::InvalidArgument(
+                "a parent's id cannot be aggregated".into(),
+            ));
+        }
         // Handled by `aggregate_sql` before this function is ever called
         // with `Column::Count` — `COUNT(*)` doesn't fit the "aggregate
         // function wraps a per-row scalar expression" shape every other
@@ -3450,6 +3635,44 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
             )));
         }
     })
+}
+
+/// A [`Column::Children`] value for the object of the row: the number of
+/// its children of the class, or an aggregate of their values. Like
+/// [`measurement_value_expr`] it refers to the row only by `object_id` (the
+/// inner query renames its own), so it works whatever `objects` is called.
+fn children_value_expr(c: &ChildColumn) -> Result<String, InternalErrors> {
+    let (value, aggregate) = match &c.value {
+        ChildValue::Count => ("1".to_string(), "count"),
+        ChildValue::Of(aggregation, column) => {
+            (column_aggregate_expr(column)?, aggregation_sql_fn(aggregation))
+        }
+    };
+    let child_filter = match c.child_class {
+        ObjectClass::Global(n) => format!(" AND list_contains(object_class_id, {n})"),
+        ObjectClass::Unset | ObjectClass::Local(_) => String::new(),
+    };
+    Ok(format!(
+        "(SELECT {aggregate}(cv.v) FROM (SELECT parent_ids[{parent}] AS pid, {value} AS v \
+         FROM objects WHERE parent_ids[{parent}] IS NOT NULL{child_filter}) cv \
+         WHERE cv.pid = object_id)",
+        parent = coloc_class_key(c.parent_class),
+    ))
+}
+
+/// The SQL of a [`Column::Children`] / [`Column::Parent`] column for a list
+/// row: the parent's id as text, everything else as [`column_aggregate_expr`].
+fn related_value_expr(column: &Column) -> Result<String, InternalErrors> {
+    match column {
+        Column::Parent(ParentColumn {
+            parent_class,
+            value: ParentValue::Id,
+        }) => Ok(format!(
+            "CAST(parent_ids[{}] AS VARCHAR)",
+            coloc_class_key(*parent_class)
+        )),
+        _ => column_aggregate_expr(column),
+    }
 }
 
 /// A measurement's value for the object of the row - its own (a value per
@@ -4388,6 +4611,195 @@ mod tests {
         Pagination {
             limit: 1000,
             after: None,
+        }
+    }
+
+    // -- relations (Relate Objects) ------------------------------------------
+
+    const CELL: ObjectClass = ObjectClass::Global(1);
+    const SPOT: ObjectClass = ObjectClass::Global(2);
+
+    /// The id `seed_db` gives the `idx`-th object.
+    fn seeded_id(idx: usize) -> String {
+        format!("00000000-0000-0000-0000-{idx:012}")
+    }
+
+    /// Two cells (100 px, 200 px) and four spots (10, 20, 30, 40 px): the
+    /// first two spots in cell 0, the third in cell 1, the last in none.
+    fn cells_with_spots() -> ResultsGenerator {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "Cell", 1, 100),
+            ObjectSpec::new("img1.tif", "Cell", 1, 200),
+            ObjectSpec::new("img1.tif", "Spot", 2, 10),
+            ObjectSpec::new("img1.tif", "Spot", 2, 20),
+            ObjectSpec::new("img1.tif", "Spot", 2, 30),
+            ObjectSpec::new("img1.tif", "Spot", 2, 40),
+        ]);
+        for (spot, cell) in [(2, 0), (3, 0), (4, 1)] {
+            generator
+                .database
+                .execute(
+                    &format!(
+                        "UPDATE objects SET parent_ids = MAP {{1: '{}'::UUID}} \
+                         WHERE object_id = '{}'",
+                        seeded_id(cell),
+                        seeded_id(spot)
+                    ),
+                    [],
+                )
+                .unwrap();
+        }
+        generator
+    }
+
+    fn children(value: ChildValue) -> Column {
+        Column::Children(ChildColumn {
+            parent_class: CELL,
+            child_class: SPOT,
+            value,
+        })
+    }
+
+    fn parent(value: ParentValue) -> Column {
+        Column::Parent(ParentColumn {
+            parent_class: CELL,
+            value,
+        })
+    }
+
+    fn list_of(generator: &ResultsGenerator, class: ObjectClass, columns: Vec<Column>) -> DatabaseResult {
+        generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![class]),
+                columns,
+                with_coloc_details: false,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap()
+    }
+
+    fn number(cell: &Cell) -> Option<f64> {
+        match &cell.value {
+            CellValue::Integer(v) => Some(*v as f64),
+            CellValue::Float(v) => Some(*v as f64),
+            CellValue::Empty => None,
+            other => panic!("expected a number, got {:?}", std::mem::discriminant(other)),
+        }
+    }
+
+    #[test]
+    fn the_links_are_offered_as_children_and_parent_columns() {
+        let columns = cells_with_spots().get_available_columns().unwrap();
+        let keys: Vec<&Column> = columns.iter().map(|c| &c.key).collect();
+        assert!(keys.contains(&&children(ChildValue::Count)));
+        assert!(keys.contains(&&parent(ParentValue::Id)));
+        let unlinked = open(&[ObjectSpec::new("img1.tif", "Cell", 1, 100)]);
+        assert!(
+            !unlinked
+                .get_available_columns()
+                .unwrap()
+                .iter()
+                .any(|c| matches!(c.key, Column::Children(_) | Column::Parent(_)))
+        );
+    }
+
+    #[test]
+    fn a_cell_row_shows_its_spots_count_and_mean() {
+        let generator = cells_with_spots();
+        let mean_area = children(ChildValue::Of(Aggregation::Avg, Box::new(Column::AreaSizePx)));
+        let result = list_of(
+            &generator,
+            CELL,
+            vec![Column::AreaSizePx, children(ChildValue::Count), mean_area],
+        );
+        assert_eq!(
+            result.column_names,
+            ["Area [px]", "Spot · Count", "Spot · Mean · Area [px]"]
+        );
+        let rows: Vec<Vec<Option<f64>>> = result
+            .rows
+            .iter()
+            .map(|row| row.iter().map(number).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                vec![Some(100.0), Some(2.0), Some(15.0)],
+                vec![Some(200.0), Some(1.0), Some(30.0)]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_spot_row_shows_its_cell_and_the_cells_values() {
+        let generator = cells_with_spots();
+        let result = list_of(
+            &generator,
+            SPOT,
+            vec![
+                Column::AreaSizePx,
+                parent(ParentValue::Id),
+                parent(ParentValue::Of(Box::new(Column::AreaSizePx))),
+            ],
+        );
+        assert_eq!(result.column_names[1], "Parent Cell");
+        assert_eq!(result.column_names[2], "Parent Cell · Area [px]");
+        let rows: Vec<(f64, String, Option<f64>)> = result
+            .rows
+            .iter()
+            .map(|row| {
+                let id = match &row[1].value {
+                    CellValue::String(id) => id.clone(),
+                    CellValue::Empty => "-".into(),
+                    _ => panic!("expected the parent's id"),
+                };
+                (number(&row[0]).unwrap(), id, number(&row[2]))
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (10.0, seeded_id(0), Some(100.0)),
+                (20.0, seeded_id(0), Some(100.0)),
+                (30.0, seeded_id(1), Some(200.0)),
+                (40.0, "-".into(), None),
+            ]
+        );
+    }
+
+    /// Per image the children's count is aggregated over the cells like
+    /// any column: the mean and the sum of spots per cell.
+    #[test]
+    fn spots_per_cell_are_aggregated_per_image() {
+        let generator = cells_with_spots();
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![CELL]),
+                columns: vec![children(ChildValue::Count)],
+                aggregation: vec![Aggregation::Avg, Aggregation::Sum],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let values: Vec<Option<f64>> = result.rows[0][2..].iter().map(number).collect();
+        assert_eq!(values, [Some(1.5), Some(3.0)]);
+    }
+
+    #[test]
+    fn relation_columns_round_trip_through_their_keys() {
+        for column in [
+            children(ChildValue::Count),
+            children(ChildValue::Of(Aggregation::Median, Box::new(Column::IntensityAvg(2)))),
+            parent(ParentValue::Id),
+            parent(ParentValue::Of(Box::new(Column::Circularity))),
+        ] {
+            let key = column.as_key(&[]);
+            assert_eq!(Column::from_key(&key, &[]), Some(column), "{key}");
         }
     }
 
@@ -6556,11 +6968,11 @@ mod tests {
         let classes: Vec<Class> = vec![];
         assert_eq!(
             Column::ColocCount(ObjectClass::Global(7)).display_label(&classes),
-            "Coloc with class 7"
+            "Partners class 7 · Count"
         );
         assert_eq!(
             Column::ColocCount(ObjectClass::Unset).display_label(&classes),
-            "Coloc with unset"
+            "Partners unset · Count"
         );
     }
 

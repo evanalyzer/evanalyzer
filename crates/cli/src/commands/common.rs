@@ -99,11 +99,6 @@ pub enum ResolvedGrouping {
 }
 
 pub fn resolve_grouping(args: &GroupArgs) -> Result<ResolvedGrouping, InternalErrors> {
-    if args.split_colocalized {
-        return Err(InternalErrors::InvalidArgument(
-            "--split-colocalized isn't supported by the current results backend".to_string(),
-        ));
-    }
     let time_course = |lines: TimeCourseLines, grouping: Grouping| {
         let statistics: Vec<TimeCourseStat> = match args.agg.is_empty() {
             true => TimeCourseStat::DEFAULT.to_vec(),
@@ -296,13 +291,6 @@ mod tests {
         );
         assert_eq!(settings.normalize, TimeCourseNormalize::RelativeToStart);
         assert_eq!(settings.layout, TimeCourseLayout::Both);
-        assert!(
-            resolve_grouping(&GroupArgs {
-                split_colocalized: true,
-                ..Default::default()
-            })
-            .is_err()
-        );
     }
 
     #[test]
