@@ -95,6 +95,7 @@ pub fn created_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> 
             .map(|(i, m)| (format!("class_mapping.{i}.object_class"), m.object_class))
             .collect(),
         PipelineCommand::Voronoi(s) => vec![("output_class".into(), s.output_class)],
+        PipelineCommand::Propagation(s) => vec![("output_class".into(), s.output_class)],
         PipelineCommand::ObjectMath(s) => vec![(
             "output_class".into(),
             new_unless_in_place(s.output_class, s.input_class),
@@ -141,6 +142,7 @@ pub fn read_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> {
             ("other_class".into(), s.other_class),
         ],
         PipelineCommand::Voronoi(s) => vec![("centers".into(), s.centers), ("mask".into(), s.mask)],
+        PipelineCommand::Propagation(s) => vec![("seeds".into(), s.seeds), ("mask".into(), s.mask)],
         PipelineCommand::TransformObjects(s) => vec![("input_class".into(), s.input_class)],
         _ => Vec::new(),
     };

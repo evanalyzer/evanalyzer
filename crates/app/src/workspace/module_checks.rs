@@ -1864,6 +1864,50 @@ mod tests {
         assert_eq!(unmade(&project), Vec::<String>::new());
     }
 
+    /// Propagation gives its regions their class: Relate Objects working on
+    /// them has something to work on (it was reported as nothing).
+    #[test]
+    fn the_regions_propagation_grows_are_objects_to_work_on() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            PropagationSettings, RelateObjectsSettings,
+        };
+        let mut project = spots_project();
+        project.classification.classes_mut().push(Class {
+            id: 5,
+            name: "Cells".into(),
+            ..Default::default()
+        });
+        let relate = step(
+            3,
+            PipelineCommand::RelateObjects(RelateObjectsSettings {
+                child_classes: vec![ObjectClass::Global(1)],
+                parent_classes: vec![ObjectClass::Global(5)],
+                ..Default::default()
+            }),
+        );
+        let unmade = |project: &ProjectSettings| -> Vec<String> {
+            check_project(project)
+                .into_iter()
+                .filter(|p| p.message.contains("nothing to work on"))
+                .map(|p| p.message)
+                .collect()
+        };
+        project.pipelines[0].steps.push(relate);
+        assert_eq!(unmade(&project).len(), 1, "no step gives class 5 yet");
+        project.pipelines[0].steps.insert(
+            1,
+            step(
+                2,
+                PipelineCommand::Propagation(PropagationSettings {
+                    seeds: ObjectClass::Global(1),
+                    output_class: ObjectClass::Global(5),
+                    ..Default::default()
+                }),
+            ),
+        );
+        assert_eq!(unmade(&project), Vec::<String>::new());
+    }
+
     /// Without a class mapping, Extract Objects gives each segmentation
     /// class's objects the project class with the same number - nothing to
     /// warn about, and the classes it may make are not "never made".

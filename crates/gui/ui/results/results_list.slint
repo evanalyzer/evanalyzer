@@ -196,6 +196,39 @@ export component ResultsListView inherits Rectangle {
                 horizontal-stretch: 1;
                 spacing: 0px;
 
+                // -- Down to one object's children (a click on a count) --
+                if ResultsState.list-drill-label != "": Rectangle {
+                    height: Ink.head-h;
+                    border-width: 0px;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        InkButton {
+                            y: (parent.height - self.height) / 2;
+                            small: true;
+                            text: "← Back";
+                            clicked => {
+                                ResultsState.list-drill-up();
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: ResultsState.list-drill-label;
+                            font-size: Ink.fs-body;
+                            font-weight: 600;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Ink.border-soft;
+                    }
+                }
+
                 // -- What is shown, the pages --
                 Rectangle {
                     height: Ink.head-h;
@@ -528,16 +561,25 @@ export component ResultsListView inherits Rectangle {
                                             border-radius: 4px;
                                             background: row.class-color;
                                         }
+                                        property <bool> drill: ResultsState.list-column-drill.length > c-index
+                                            && ResultsState.list-column-drill[c-index] && cell != "0" && cell != "";
                                         if col-visible: Text {
                                             x: c-index == row.class-column ? 14px : 0px;
                                             text: cell;
                                             width: ResultsState.list-column-widths[c-index] * 1px - self.x;
                                             font-size: Ink.fs-body;
                                             font-family: Ink.font-mono;
-                                            color: row.failed ? Ink.warn : Ink.text;
+                                            color: row.failed ? Ink.warn : drill ? Ink.focus : Ink.text;
                                             overflow: elide;
                                             vertical-alignment: center;
                                             horizontal-alignment: start;
+                                        }
+                                        // A children's count: down to them.
+                                        if col-visible && drill: TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                ResultsState.list-drill(index, c-index);
+                                            }
                                         }
                                     }
                                     Rectangle { }

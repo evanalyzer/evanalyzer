@@ -82,8 +82,16 @@ export component ObjectDetails inherits Rectangle {
             label: "Shared by";
             value: root.sel.label_count + " objects";
         }
+        if root.sel.parents != "": InkFact {
+            label: "Parent";
+            value: root.sel.parents;
+        }
+        if root.sel.children != "": InkFact {
+            label: "Children";
+            value: root.sel.children;
+        }
         if root.sel.coloc-with != "": InkFact {
-            label: "Coloc with";
+            label: "Touches";
             value: root.sel.coloc-with;
         }
         // One line per channel of the image (not per measured value): the

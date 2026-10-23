@@ -1996,6 +1996,7 @@ fn stream_list_pages(
                 object_classes: object_classes.clone(),
                 columns: export.columns.clone(),
                 with_coloc_details,
+                related_to: None,
                 page: Pagination {
                     limit: PAGE_SIZE,
                     after: cursor.take(),

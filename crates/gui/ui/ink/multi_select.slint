@@ -496,6 +496,10 @@ export component InkCheckList inherits VerticalLayout {
         spacing: 8px;
         Text {
             horizontal-stretch: 1;
+            // A long title shortens itself rather than widening the
+            // column it sits in (which cut off everything on the right).
+            min-width: 0px;
+            overflow: elide;
             text: root.title;
             font-size: Ink.fs-caption;
             font-weight: 600;

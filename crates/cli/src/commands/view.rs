@@ -275,6 +275,7 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
         object_classes: (!object_classes.is_empty()).then_some(object_classes),
         columns,
         with_coloc_details: false,
+        related_to: None,
         page: Pagination {
             limit: limit as i32,
             after: None,
@@ -459,6 +460,7 @@ mod tests {
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
+            related_to: None,
             page: Pagination {
                 limit: args.limit as i32,
                 after: None,

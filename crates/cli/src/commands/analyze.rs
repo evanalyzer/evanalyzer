@@ -456,6 +456,7 @@ mod tests {
                         object_classes: None,
                         columns: expected_columns.clone(),
                         with_coloc_details: false,
+                        related_to: None,
                         page: Pagination {
                             limit: 1_000_000,
                             after: None,

@@ -98,6 +98,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
                 Column::AreaSizeNm,
             ],
             with_coloc_details: false,
+            related_to: None,
             page: Pagination {
                 limit: 500,
                 after: None,

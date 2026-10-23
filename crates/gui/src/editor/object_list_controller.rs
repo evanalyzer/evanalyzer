@@ -167,8 +167,11 @@ impl ObjectListController {
                                 .map(|i| (manual_len + i) as i32)
                                 .unwrap_or(-1)
                         });
+                    let (parents, children) = relations_text(&object, &preview_objects, &project);
                     class_state.set_selected_object(ObjectItemDataSlint {
                         editable: project.is_manual_object(object.id.clone()),
+                        parents: parents.into(),
+                        children: children.into(),
                         ..object_rust_to_object_slint(
                             &object,
                             &project,
@@ -544,6 +547,49 @@ fn coloc_text(object: &ObjectMetricSettings, project: &ProjectWithRuntime) -> St
         .join(", ")
 }
 
+/// A class's name, or "Class N" for one the project doesn't have.
+fn class_name(class: &evanalyzer_cfg::core_types::ObjectClass, project: &ProjectWithRuntime) -> String {
+    project
+        .get_class_from_id(class)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| format!("Class {}", class.to_i32()))
+}
+
+/// The object card's Relate Objects lines: the classes of the objects
+/// `object` belongs to ("Cell, Region"), and how many objects of `others`
+/// belong to it, per their class ("Spot · 7").
+fn relations_text(
+    object: &ObjectMetricSettings,
+    others: &[ObjectMetricSettings],
+    project: &ProjectWithRuntime,
+) -> (String, String) {
+    let parents = object
+        .parents
+        .keys()
+        .map(|class| class_name(class, project))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut children: Vec<(String, usize)> = Vec::new();
+    for child in others.iter().filter(|o| o.parents.values().any(|p| *p == object.id)) {
+        let mut classes: Vec<&evanalyzer_cfg::core_types::ObjectClass> =
+            child.object_class.iter().collect();
+        classes.sort();
+        let name = classes
+            .first()
+            .map_or_else(|| "Unclassified".to_string(), |c| class_name(c, project));
+        match children.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, count)) => *count += 1,
+            None => children.push((name, 1)),
+        }
+    }
+    let children = children
+        .iter()
+        .map(|(name, count)| format!("{name} · {count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (parents, children)
+}
+
 fn object_rust_to_object_slint(
     object: &ObjectMetricSettings,
     project: &ProjectWithRuntime,
@@ -614,6 +660,9 @@ fn object_rust_to_object_slint(
         } else {
             "".into()
         },
+        // Set by the caller, which has the other objects.
+        parents: "".into(),
+        children: "".into(),
         bbox_x: object.bbox[0] as f32,
         bbox_y: object.bbox[1] as f32,
         bbox_w: (object.bbox[2].saturating_sub(object.bbox[0]) + 1) as f32,
@@ -1018,6 +1067,38 @@ mod tests {
         assert_eq!(selected.coloc_with.as_str(), "CY5 · 2");
         let row = object_rust_to_object_slint(&object, &project, 1, false, 0, Some(16));
         assert_eq!(row.coloc_with.as_str(), "", "rows don't need it");
+    }
+
+    /// The object card names the cell a spot belongs to, and the cell its
+    /// spots per class.
+    #[test]
+    fn the_selected_object_names_its_parent_and_counts_its_children() {
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes_mut().push(class(1, "Cell", 0x112233));
+        project.classification.classes_mut().push(class(2, "Spot", 0x445566));
+        let cell = ObjectMetricSettings {
+            id: evanalyzer_cfg::core_types::ObjectId(1),
+            object_class: [ObjectClass::Global(1)].into(),
+            ..Default::default()
+        };
+        let spot = |id| {
+            let mut spot = ObjectMetricSettings {
+                id: evanalyzer_cfg::core_types::ObjectId(id),
+                object_class: [ObjectClass::Global(2)].into(),
+                ..Default::default()
+            };
+            spot.parents.insert(ObjectClass::Global(1), cell.id.clone());
+            spot
+        };
+        let others = vec![cell.clone(), spot(2), spot(3)];
+        assert_eq!(
+            relations_text(&cell, &others, &project),
+            (String::new(), "Spot · 2".to_string())
+        );
+        assert_eq!(
+            relations_text(&spot(2), &others, &project),
+            ("Cell".to_string(), String::new())
+        );
     }
 
     #[test]

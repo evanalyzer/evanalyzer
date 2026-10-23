@@ -375,20 +375,25 @@ export component SplitSelection inherits Rectangle {
                     { k: "Area", v: ResultsState.split-sel.area },
                     { k: ResultsState.split-channels.length > 0 ? "Mean " + ResultsState.split-channels[ResultsState.split-channel] : "Mean", v: ResultsState.split-sel.mean },
                     { k: "Position", v: ResultsState.split-sel.position },
-                ]: HorizontalLayout {
-                    spacing: 8px;
-                    Text {
-                        width: 96px;
-                        text: fact.k;
-                        font-size: Ink.fs-caption;
-                        color: #A1A1AA;
-                        overflow: elide;
-                    }
-                    Text {
-                        text: fact.v;
-                        font-size: Ink.fs-caption;
-                        font-family: Ink.font-mono;
-                        color: #F4F4F5;
+                    { k: "Children", v: ResultsState.split-sel.children },
+                    { k: "Parent", v: ResultsState.split-sel.parents },
+                ]: VerticalLayout {
+                    // Children / Parent only when the object has them.
+                    if fact.v != "": HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            width: 96px;
+                            text: fact.k;
+                            font-size: Ink.fs-caption;
+                            color: #A1A1AA;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: fact.v;
+                            font-size: Ink.fs-caption;
+                            font-family: Ink.font-mono;
+                            color: #F4F4F5;
+                        }
                     }
                 }
             }

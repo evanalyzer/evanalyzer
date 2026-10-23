@@ -447,11 +447,16 @@ impl ResultCharts {
             Some(column) => chart_value_expr(column)?,
             None => "NULL".to_string(),
         };
+        // Results from before Relate Objects have no `parent_ids`.
+        let parents_expr = match database.has_parent_ids()? {
+            true => "CAST(map_values(parent_ids) AS VARCHAR[])",
+            false => "NULL",
+        };
         let sql = format!(
             "SELECT object_id::VARCHAR, coalesce(object_class_id[1], -1), \
              bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
              centroid_x_px, centroid_y_px, area_px, intensity_mean_gray, \
-             ({value_expr})::DOUBLE, NULLIF(track_id, 0) \
+             ({value_expr})::DOUBLE, NULLIF(track_id, 0), {parents_expr} \
              FROM objects WHERE image_rel_path = ? AND z_stack = ? AND t_stack = ? \
              ORDER BY object_id"
         );
@@ -486,6 +491,16 @@ impl ResultCharts {
                     means,
                     value: row.get(10)?,
                     track_id: row.get(11)?,
+                    parent_ids: match row.get::<_, duckdb::types::Value>(12)? {
+                        duckdb::types::Value::List(values) => values
+                            .into_iter()
+                            .filter_map(|v| match v {
+                                duckdb::types::Value::Text(id) => Some(id),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    },
                 })
             },
         )

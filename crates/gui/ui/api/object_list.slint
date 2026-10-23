@@ -26,6 +26,10 @@ export struct ObjectItemDataSlint {
     // The classes it colocalizes with and how many of their objects ("CY5
     // · 2, FITC · 1") - the selected object only; "" none.
     coloc-with: string,
+    // The objects it belongs to ("Cell, Region") and its children per class
+    // ("Spot · 7") - Relate Objects' links; the selected object only.
+    parents: string,
+    children: string,
     // Count of ROIs sharing the same segmentation label – populated for all rows
     label_count: int,
     // Its bounding box in full-image pixels - where the object card on the
