@@ -452,11 +452,15 @@ impl ResultCharts {
             true => "CAST(map_values(parent_ids) AS VARCHAR[])",
             false => "NULL",
         };
+        let mask_expr = match database.has_masks()? {
+            true => "mask",
+            false => "NULL::BLOB",
+        };
         let sql = format!(
             "SELECT object_id::VARCHAR, coalesce(object_class_id[1], -1), \
              bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
              centroid_x_px, centroid_y_px, area_px, intensity_mean_gray, \
-             ({value_expr})::DOUBLE, NULLIF(track_id, 0), {parents_expr} \
+             ({value_expr})::DOUBLE, NULLIF(track_id, 0), {parents_expr}, {mask_expr} \
              FROM objects WHERE image_rel_path = ? AND z_stack = ? AND t_stack = ? \
              ORDER BY object_id"
         );
@@ -501,6 +505,7 @@ impl ResultCharts {
                             .collect(),
                         _ => Vec::new(),
                     },
+                    mask: row.get::<_, Option<Vec<u8>>>(13)?.unwrap_or_default(),
                 })
             },
         )
@@ -1106,6 +1111,45 @@ mod tests {
         values.sort_by(f64::total_cmp);
         assert_eq!(values, [10.0, 20.0, 30.0]);
         assert_eq!(result[0].area_px as f64, result[0].value.unwrap());
+    }
+
+    /// Results that keep masks give each object its own; results without
+    /// (written before they did) none - the split view draws ellipses then.
+    #[test]
+    fn image_objects_bring_their_masks_when_the_results_keep_them() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let filter = ImageObjectsFilter {
+            image_rel_path: "img1.tif".into(),
+            plane: plane(),
+            value_column: None,
+        };
+        let objects = || {
+            ResultCharts {}
+                .image_objects(&generator, &filter)
+                .expect("objects")
+        };
+        let [without] = &objects()[..] else {
+            panic!("one object");
+        };
+        assert!(without.mask.is_empty());
+        assert_eq!(without.decoded_mask(), None);
+
+        let [x0, y0, x1, y1] = without.bbox_px;
+        let len = ((x1 - x0 + 1) * (y1 - y0 + 1)) as usize;
+        let mut mask = bitvec::vec::BitVec::<u64, bitvec::order::Lsb0>::repeat(true, len);
+        mask.set(0, false);
+        let conn = generator.connection();
+        conn.execute_batch("ALTER TABLE objects ADD COLUMN mask BLOB")
+            .unwrap();
+        conn.execute(
+            "UPDATE objects SET mask = ?",
+            [evanalyzer_core::encode_mask(&mask)],
+        )
+        .unwrap();
+        let [with] = &objects()[..] else {
+            panic!("one object");
+        };
+        assert_eq!(with.decoded_mask(), Some(mask));
     }
 
     /// Tracks: an image's tracks on its plane, each its points in time

@@ -1,12 +1,13 @@
 //! The results' split view on the image: every object of the analysis on
-//! the shown image as an ellipse in its box (the results keep boxes, not
-//! outlines), in its class's color or the value's heatmap color - all
+//! the shown image as its mask's outline - an ellipse in its box when the
+//! results keep no masks - in its class's color or the value's heatmap color - all
 //! alike: the selected one is marked by the viewer's yellow crosshair, so
 //! selecting draws nothing again here. Drawn instead of the project's
 //! objects (see `ViewportController::sync_objects_to_slint_viewport`).
 //! With tracks (Results › Tracks) each track's path up to the time point
 //! shown goes under them as a trail, fading into the past.
 
+use bitvec::prelude::*;
 use evanalyzer_app::results::ImageTracks;
 use std::sync::Arc;
 
@@ -15,6 +16,9 @@ use std::sync::Arc;
 pub struct ResultsOverlay {
     /// `[xmin, ymin, xmax, ymax]` (inclusive) and RGB.
     pub objects: Vec<([u32; 4], [u8; 3])>,
+    /// The objects' masks, by index: a bit per pixel of the box, row by
+    /// row. Missing (results without masks): an ellipse in the box.
+    pub masks: Vec<Option<Arc<BitVec<u64, Lsb0>>>>,
     /// The tracks' trails, under the objects.
     pub trails: Option<Arc<TrailsOverlay>>,
 }
@@ -62,7 +66,7 @@ pub fn draw_results_overlay(
     if let Some(trails) = &overlay.trails {
         draw_trails(buffer, trails, buf_w, buf_h, zoom, off_x, off_y);
     }
-    for (bbox, rgb) in &overlay.objects {
+    for (i, (bbox, rgb)) in overlay.objects.iter().enumerate() {
         let (dim, half) = (1.0, HALF_OUTLINE);
         // The box's outer edges on screen (`xmax` is inclusive).
         let x0 = bbox[0] as f32 * zoom + off_x;
@@ -84,6 +88,10 @@ pub fn draw_results_overlay(
                     }
                 }
             }
+            continue;
+        }
+        if let Some(mask) = overlay.masks.get(i).and_then(Option::as_deref) {
+            draw_mask(buffer, buf_w, buf_h, *bbox, mask, *rgb, zoom, off_x, off_y);
             continue;
         }
         // Pixels whose centre lies within ~`half` px of the ellipse are its
@@ -136,6 +144,65 @@ pub fn draw_results_overlay(
             for x in in1..xs.end {
                 edge(x, row);
             }
+        }
+    }
+}
+
+/// The image pixel of `bbox`'s `mask` (bit per pixel, row by row) at
+/// `(mx, my)` from the box's corner is set - off the box: not.
+fn mask_at(mask: &BitSlice<u64, Lsb0>, bbox: [u32; 4], mx: i64, my: i64) -> bool {
+    let (bw, bh) = (
+        (bbox[2] - bbox[0] + 1) as i64,
+        (bbox[3] - bbox[1] + 1) as i64,
+    );
+    mx >= 0
+        && my >= 0
+        && mx < bw
+        && my < bh
+        && mask.get((my * bw + mx) as usize).is_some_and(|b| *b)
+}
+
+/// `mask` (of `bbox`) as `draw_results_overlay` places image pixels: its
+/// pixels tinted, the outline where a step of the outline's width (in
+/// screen pixels) leaves it - also zoomed out, where an image pixel is
+/// less than a screen pixel.
+#[allow(clippy::too_many_arguments)]
+fn draw_mask(
+    buffer: &mut [slint::Rgba8Pixel],
+    buf_w: u32,
+    buf_h: u32,
+    bbox: [u32; 4],
+    mask: &BitSlice<u64, Lsb0>,
+    rgb: [u8; 3],
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) {
+    let (w, h) = (buf_w as i64, buf_h as i64);
+    let x0 = bbox[0] as f32 * zoom + off_x;
+    let y0 = bbox[1] as f32 * zoom + off_y;
+    let x1 = (bbox[2] + 1) as f32 * zoom + off_x;
+    let y1 = (bbox[3] + 1) as f32 * zoom + off_y;
+    let xs = (x0.floor() as i64).max(0)..(x1.ceil() as i64).min(w);
+    let ys = (y0.floor() as i64).max(0)..(y1.ceil() as i64).min(h);
+    // The outline's width, in image pixels.
+    let step = 2.0 * HALF_OUTLINE / zoom;
+    let at = |mx: f32, my: f32| mask_at(mask, bbox, mx.floor() as i64, my.floor() as i64);
+    for y in ys {
+        // Position in the box, in image pixels.
+        let fy = (y as f32 + 0.5 - off_y) / zoom - bbox[1] as f32;
+        let row = &mut buffer[(y * w) as usize..((y + 1) * w) as usize];
+        for x in xs.clone() {
+            let fx = (x as f32 + 0.5 - off_x) / zoom - bbox[0] as f32;
+            if !at(fx, fy) {
+                continue;
+            }
+            let edge = !at(fx - step, fy)
+                || !at(fx + step, fy)
+                || !at(fx, fy - step)
+                || !at(fx, fy + step);
+            let alpha = if edge { OUTLINE_ALPHA } else { FILL_ALPHA };
+            blend(&mut row[x as usize], rgb, alpha);
         }
     }
 }
@@ -334,8 +401,8 @@ pub fn focus_view(
     (zoom, v_w / 2.0 - cx * zoom, v_h / 2.0 - cy * zoom)
 }
 
-/// The object under the screen point `(x, y)`: the smallest whose ellipse
-/// holds it, else the nearest within 6 px of its box.
+/// The object under the screen point `(x, y)`: the smallest whose mask
+/// (without one: ellipse) holds it, else the nearest within 6 px of its box.
 pub fn object_at(
     overlay: &ResultsOverlay,
     x: f32,
@@ -353,8 +420,17 @@ pub fn object_at(
         let (x1, y1) = ((bbox[2] + 1) as f32, (bbox[3] + 1) as f32);
         let (rx, ry) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
         let (dx, dy) = ((ix - (x0 + x1) / 2.0) / rx, (iy - (y0 + y1) / 2.0) / ry);
+        let inside = match overlay.masks.get(i).and_then(Option::as_deref) {
+            Some(mask) => mask_at(
+                mask,
+                *bbox,
+                (ix - x0).floor() as i64,
+                (iy - y0).floor() as i64,
+            ),
+            None => dx * dx + dy * dy <= 1.0,
+        };
         // Inside: ranked by size. Near the box: by distance, after any inside.
-        let score = if dx * dx + dy * dy <= 1.0 {
+        let score = if inside {
             rx * ry
         } else {
             let gx = (x0 - ix).max(ix - x1).max(0.0);
@@ -410,6 +486,7 @@ mod tests {
                 .collect(),
         };
         ResultsOverlay {
+            masks: Vec::new(),
             objects: Vec::new(),
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: Arc::new(ImageTracks {
@@ -472,6 +549,7 @@ mod tests {
             ..ImageTracks::default()
         });
         let overlay = |frames, selected, only_selected| ResultsOverlay {
+            masks: Vec::new(),
             objects: Vec::new(),
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: tracks.clone(),
@@ -564,7 +642,16 @@ mod tests {
     fn a_link_is_drawn_between_its_two_points() {
         // 100 wide, as `alpha_at` reads.
         let mut buf = buffer(100, 20);
-        draw_links(&mut buf, &[((5.0, 10.0), (35.0, 10.0))], [255, 0, 0], 100, 20, 1.0, 0.0, 0.0);
+        draw_links(
+            &mut buf,
+            &[((5.0, 10.0), (35.0, 10.0))],
+            [255, 0, 0],
+            100,
+            20,
+            1.0,
+            0.0,
+            0.0,
+        );
         assert!(alpha_at(&buf, 20, 10) > 0, "on the line");
         assert_eq!(alpha_at(&buf, 20, 2), 0, "not beside it");
     }
@@ -572,6 +659,7 @@ mod tests {
     #[test]
     fn an_object_is_a_ring_with_a_faint_inside() {
         let overlay = ResultsOverlay {
+            masks: Vec::new(),
             objects: vec![([10, 10, 29, 29], [255, 0, 0])],
             trails: None,
         };
@@ -584,10 +672,63 @@ mod tests {
         assert_eq!(at(20, 20).r, 255);
     }
 
+    /// A 20 x 20 ring, 5 px thick, in the box `[10, 10, 29, 29]`.
+    fn ring_overlay() -> ResultsOverlay {
+        let mut mask = BitVec::<u64, Lsb0>::repeat(false, 400);
+        for y in 0..20 {
+            for x in 0..20 {
+                let inner = (5..15).contains(&x) && (5..15).contains(&y);
+                mask.set(y * 20 + x, !inner);
+            }
+        }
+        ResultsOverlay {
+            objects: vec![([10, 10, 29, 29], [255, 0, 0])],
+            masks: vec![Some(Arc::new(mask))],
+            trails: None,
+        }
+    }
+
+    #[test]
+    fn an_object_with_a_mask_is_drawn_as_its_mask() {
+        let overlay = ring_overlay();
+        for zoom in [1.0, 3.0] {
+            let n = (40.0 * zoom) as usize;
+            let mut buf = buffer(n as u32, n as u32);
+            draw_results_overlay(&mut buf, &overlay, n as u32, n as u32, zoom, 0.0, 0.0);
+            let at = |x: f32, y: f32| buf[(y * zoom) as usize * n + (x * zoom) as usize];
+            assert!(
+                at(10.0, 10.0).a > 200,
+                "the box's corner: the mask's, outlined"
+            );
+            assert!(at(12.5, 20.0).a > 0, "inside the ring: tinted");
+            assert!(at(12.5, 20.0).a < 40, "... faintly");
+            assert!(at(14.5, 20.0).a > 200, "its inner edge outlined");
+            assert_eq!(at(20.0, 20.0).a, 0, "the hole");
+        }
+    }
+
+    #[test]
+    fn a_click_in_a_masks_hole_is_not_on_it() {
+        // Around the ring a larger object without a mask (an ellipse).
+        let mut overlay = ring_overlay();
+        overlay.objects.push(([0, 0, 39, 39], [0, 255, 0]));
+        assert_eq!(
+            object_at(&overlay, 12.0, 20.0, 1.0, 0.0, 0.0),
+            Some(0),
+            "on the ring"
+        );
+        assert_eq!(
+            object_at(&overlay, 20.0, 20.0, 1.0, 0.0, 0.0),
+            Some(1),
+            "in its hole: the one around it"
+        );
+    }
+
     /// The row runs give the pixels the per-pixel rule gives.
     #[test]
     fn the_fast_fill_matches_the_pixel_by_pixel_ellipse() {
         let overlay = ResultsOverlay {
+            masks: Vec::new(),
             objects: vec![
                 ([3, 7, 61, 40], [255, 0, 0]),
                 ([10, 10, 13, 90], [0, 255, 0]),
@@ -644,6 +785,7 @@ mod tests {
             ([12, 12, 60, 60], 0.0),
         ] {
             let overlay = ResultsOverlay {
+                masks: Vec::new(),
                 objects: vec![(bbox, [255, 0, 0])],
                 trails: None,
             };
@@ -654,6 +796,7 @@ mod tests {
         // Zoomed in, a large object across the right edge, its inside
         // beyond: the case seen in the app.
         let overlay = ResultsOverlay {
+            masks: Vec::new(),
             objects: vec![([1300, 0, 1400, 100], [255, 0, 0])],
             trails: None,
         };
@@ -665,6 +808,7 @@ mod tests {
     #[test]
     fn every_object_is_drawn_alike() {
         let overlay = ResultsOverlay {
+            masks: Vec::new(),
             objects: vec![([0, 0, 9, 9], [255, 0, 0]), ([20, 0, 29, 9], [0, 255, 0])],
             trails: None,
         };
@@ -678,6 +822,7 @@ mod tests {
     #[test]
     fn a_tiny_or_far_object_is_still_a_dot_and_off_screen_ones_are_skipped() {
         let overlay = ResultsOverlay {
+            masks: Vec::new(),
             objects: vec![
                 ([100, 100, 101, 101], [0, 0, 255]),
                 ([5000, 5000, 5100, 5100], [0, 0, 255]),
@@ -714,6 +859,7 @@ mod tests {
     #[test]
     fn a_click_picks_the_smallest_object_under_it_or_the_nearest() {
         let overlay = ResultsOverlay {
+            masks: Vec::new(),
             objects: vec![
                 ([0, 0, 99, 99], [0; 3]),
                 ([40, 40, 59, 59], [0; 3]),

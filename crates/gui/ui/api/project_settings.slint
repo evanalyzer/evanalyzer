@@ -29,6 +29,9 @@ export struct ProjectSettingsSlint {
     // *out* of merging; all-"0" (the default) merges everything.
     // `connectivity`: 0 = four-connected, 1 = eight-connected.
     tile_merge_enabled: bool,
+    // The results keep each object's mask (its outline in Results' split
+    // view) - off: a smaller results file, ellipses in the split view.
+    store_object_masks: bool,
     tile_merge_classes_to_not_merge_flags: [string],
     tile_merge_connectivity: int,
     tile_merge_max_fragments_per_group: int,
@@ -46,6 +49,7 @@ export global ProjectSettingsState {
         well_auto: true,
         well_values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
         tile_merge_enabled: true,
+        store_object_masks: true,
         tile_merge_classes_to_not_merge_flags: [
             "0",
             "0",

@@ -115,6 +115,7 @@ mod tests {
             breakpoint: None,
             max_visible_tiles: None,
             breakpoint_tiles: 1,
+            whole_image: false,
         })
         .unwrap();
         drain(&job);
@@ -163,6 +164,7 @@ mod tests {
             breakpoint: None,
             max_visible_tiles: None,
             breakpoint_tiles: 1,
+            whole_image: false,
         })
         .unwrap();
         drain(&job);
@@ -184,5 +186,41 @@ mod tests {
             matches!(values[..], [(MeasurementRegion::Image, r)] if (-1.0..=1.0).contains(&r)),
             "{values:?}"
         );
+    }
+
+    /// The tiles a preview of the fixture image runs.
+    fn tiles_run(whole_image: bool, max_visible_tiles: Option<u32>) -> usize {
+        let (dir, settings) = project_with_fixture_image();
+        let job = start_preview(PreviewRequest {
+            settings,
+            project_path: dir.path().to_path_buf(),
+            // Beside the image: none of it in view.
+            viewport: PreviewViewport {
+                offset_x: 100_000.0,
+                offset_y: 100_000.0,
+                viewport_width: 256.0,
+                viewport_height: 256.0,
+                zoom: 8.0,
+            },
+            breakpoint: None,
+            max_visible_tiles,
+            breakpoint_tiles: 1,
+            whole_image,
+        })
+        .unwrap();
+        let events = drain(&job);
+        job.wait().unwrap();
+        events
+            .iter()
+            .filter(|e| matches!(e, ProgressEvent::TileCompleted { .. }))
+            .count()
+    }
+
+    #[test]
+    fn a_whole_image_preview_runs_every_tile_also_out_of_view() {
+        assert_eq!(tiles_run(false, None), 0, "nothing in view");
+        assert_eq!(tiles_run(true, None), 1, "the image's one tile");
+        // The viewport's limit isn't the whole image's.
+        assert_eq!(tiles_run(true, Some(1)), 1);
     }
 }

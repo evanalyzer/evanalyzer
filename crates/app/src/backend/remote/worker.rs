@@ -1273,6 +1273,7 @@ mod session_tests {
                 breakpoint: None,
                 max_visible_tiles: None,
                 breakpoint_tiles: 1,
+                whole_image: false,
             })
         };
         let (session, rx) = session_with(FailingBackend {

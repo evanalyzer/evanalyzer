@@ -4,8 +4,8 @@ use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, Measurem
 use crate::storage::stored_object::{ObjectFilter, StoredObject};
 use crate::storage::{DatasetStore, ImageSummary, PipelineResultExporter};
 use duckdb::arrow::array::{
-    ArrayBuilder, ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, ListBuilder, MapBuilder,
-    StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
+    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float64Builder, Int32Builder,
+    ListBuilder, MapBuilder, StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
 };
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::types::Value;
@@ -114,6 +114,9 @@ pub struct DuckDbExporter {
     conn: Mutex<Connection>,
     /// Maps ObjectClass → human-readable name from project classification settings.
     pub class_names: HashMap<ObjectClass, (String, u32)>,
+    /// Each object's mask is stored (`objects.mask`, see `mask_codec`) - the
+    /// project's "Store object masks"; else the column stays NULL.
+    store_masks: bool,
 }
 
 impl DuckDbExporter {
@@ -217,7 +220,14 @@ impl DuckDbExporter {
         Ok(Self {
             conn: Mutex::new(conn),
             class_names,
+            store_masks: true,
         })
+    }
+
+    /// Whether the objects' masks are stored (default: they are).
+    pub fn with_masks(mut self, store: bool) -> Self {
+        self.store_masks = store;
+        self
     }
 
     // Plain display name for `object_class_name`
@@ -233,6 +243,7 @@ impl DuckDbExporter {
         Ok(Self {
             conn: Mutex::new(shared_connection(path)?),
             class_names: HashMap::new(),
+            store_masks: true,
         })
     }
 
@@ -468,6 +479,8 @@ struct ObjectColumns {
     /// `intensity_{sum,mean,min,max}_{raw,scaled}`, in table order.
     intensities: [ListBuilder<Float64Builder>; INTENSITY_COLUMNS.len()],
     coloc_partner_ids: MapBuilder<Int32Builder, ListBuilder<StringBuilder>>,
+    /// The mask, run-length encoded (`mask_codec`); NULL when not stored.
+    mask: BinaryBuilder,
     f64: Vec<Float64Builder>,
 }
 
@@ -522,6 +535,7 @@ impl ObjectColumns {
                 Int32Builder::new(),
                 ListBuilder::new(StringBuilder::new()),
             ),
+            mask: BinaryBuilder::with_capacity(rows, rows * 16),
             f64: (0..F64_COLUMNS)
                 .map(|_| Float64Builder::with_capacity(rows))
                 .collect(),
@@ -731,6 +745,7 @@ impl ObjectColumns {
             columns.push((name, arr(builder)));
         }
         columns.push(("coloc_partner_ids", arr(&mut self.coloc_partner_ids)));
+        columns.push(("mask", arr(&mut self.mask)));
         RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))
     }
 }
@@ -812,7 +827,11 @@ CREATE TABLE IF NOT EXISTS objects (
     intensity_max_gray           DOUBLE[],
     -- Colocalization partners: partner object class id -> the ids of the
     -- partner objects of that class (key -1: partners without a class).
-    coloc_partner_ids            MAP(INTEGER, UUID[])
+    coloc_partner_ids            MAP(INTEGER, UUID[]),
+    -- The object's mask relative to its bounding box (row by row): the
+    -- lengths of its alternating unset / set runs as LEB128 varints (see
+    -- evanalyzer_core's mask_codec.rs). NULL when not stored.
+    mask                         BLOB
 );
 
 CREATE TABLE IF NOT EXISTS images (
@@ -1046,6 +1065,12 @@ impl DuckDbExporter {
             c.image_bit_depth.append_value(nr_of_bits as u8);
             c.append_intensities(&object.intensities, bit_max);
             c.append_coloc(&object.colocalized_with)?;
+            if self.store_masks {
+                c.mask
+                    .append_value(crate::storage::mask_codec::encode_mask(&object.mask_data));
+            } else {
+                c.mask.append_null();
+            }
         }
         columns.finish().map(Some)
     }
@@ -1936,6 +1961,64 @@ mod tests {
         assert_eq!(spots_per_cell, 1, "children are a query on the parent ids");
     }
 
+    /// The mask is stored run-length encoded and reads back as it was; with
+    /// masks off the column is NULL.
+    #[test]
+    fn export_stores_the_mask_unless_switched_off() {
+        let ring = || {
+            // A 5 × 5 ring: the border set, the inside not.
+            let mut mask = BitVec::<u64, Lsb0>::repeat(true, 25);
+            for (x, y) in [
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (1, 2),
+                (2, 2),
+                (3, 2),
+                (1, 3),
+                (2, 3),
+                (3, 3),
+            ] {
+                mask.set(y * 5 + x, false);
+            }
+            let mut object = Object::new(ObjectInit {
+                id: ObjectId(1),
+                bbox: [10, 10, 14, 14],
+                mask_data: mask,
+                area: 16,
+                ..Default::default()
+            });
+            object
+                .add_object_class(
+                    ObjectClass::Global(1),
+                    crate::pipeline::scope::Scope::Global,
+                )
+                .unwrap();
+            object
+        };
+        for store in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("results.evadb");
+            let exporter = test_exporter(&path).with_masks(store);
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_rel_path = PathBuf::from("a.tif");
+            cache.object_cache.insert(ObjectId(1), ring());
+            exporter.export(&cache).unwrap();
+            let conn = shared_connection(&path).unwrap();
+            let blob: Option<Vec<u8>> = conn
+                .query_row("SELECT mask FROM objects", [], |row| row.get(0))
+                .unwrap();
+            match store {
+                true => {
+                    let bytes = blob.expect("stored");
+                    let mask = crate::storage::mask_codec::decode_mask(&bytes, 25).unwrap();
+                    assert_eq!(mask, ring().mask_data);
+                }
+                false => assert!(blob.is_none(), "switched off"),
+            }
+        }
+    }
+
     /// The centroid is the mean pixel position; the box's centre is stored
     /// next to it.
     #[test]
@@ -1959,7 +2042,10 @@ mod tests {
             ..Default::default()
         });
         object
-            .add_object_class(ObjectClass::Global(1), crate::pipeline::scope::Scope::Global)
+            .add_object_class(
+                ObjectClass::Global(1),
+                crate::pipeline::scope::Scope::Global,
+            )
             .unwrap();
         cache.object_cache.insert(ObjectId(1), object);
 
@@ -2089,7 +2175,11 @@ mod tests {
 
         let row = &store.get_objects(&ObjectFilter::default()).unwrap()[0];
         assert_eq!(row.z_stack, 2);
-        assert_eq!(row.centroid_px, (11.5, 20.0), "the mean position of its pixels");
+        assert_eq!(
+            row.centroid_px,
+            (11.5, 20.0),
+            "the mean position of its pixels"
+        );
         assert_eq!(row.bbox_px, [10, 20, 14, 30]);
         assert_eq!(row.area_px, 4);
         assert_eq!(row.object_classes, [ObjectClass::Global(1)]);

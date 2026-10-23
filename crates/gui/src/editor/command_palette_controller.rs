@@ -22,6 +22,7 @@ const ACTIONS: &[(&str, &str, &str)] = &[
     ("settings", "Project settings…", ""),
     ("run", "Run analysis…", ""),
     ("preview", "Refresh preview", "F5"),
+    ("preview-whole", "Preview the whole image", "Shift F5"),
     ("add-step", "Add step…", ""),
     ("new-pipeline", "New pipeline", ""),
     ("mode-images", "Show images", "Ctrl 1"),
@@ -209,6 +210,7 @@ fn run(ui: &AppWindow, id: &str) {
                 .set_active_dialog(DialogType::ProjectSettings),
             "run" => panel.invoke_run_all(),
             "preview" => panel.invoke_dry_run(),
+            "preview-whole" => panel.invoke_preview_whole_image(),
             "add-step" => {
                 layout.set_mode(WorkspaceMode::Pipelines);
                 panel.invoke_insert_step(

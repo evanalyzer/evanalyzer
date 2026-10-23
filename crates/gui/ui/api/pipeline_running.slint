@@ -44,6 +44,11 @@ export global PreviewRunState {
     in-out property <bool> done: false;
     in-out property <bool> has-error: false;
     in-out property <string> status-message: "";
+    // Of the whole image, not just what is in view: its note stays once it
+    // is done, with the objects found - until a change makes it outdated.
+    in-out property <bool> whole-image: false;
+    in-out property <bool> outdated: false;
+    in-out property <int> objects: 0;
     callback cancel();
     callback close();
 }

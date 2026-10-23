@@ -10,6 +10,8 @@ pub struct PipelineTask {
     pub project_settings: ProjectSettings,
     pub project_path: PathBuf,
     pub preview: bool,
+    /// A preview of the whole image, not just the part in view.
+    pub whole_image: bool,
     /// Optional breakpoint: (pipeline_id, step_id, mode).
     pub breakpoint: Option<(PipelineId, StepId, BreakpointMode)>,
     /// Optional user-chosen name for a full (non-preview) run, forwarded to
@@ -30,6 +32,7 @@ impl Default for PipelineTask {
             project_settings: ProjectSettings::default(),
             project_path: PathBuf::default(),
             preview: false,
+            whole_image: false,
             breakpoint: None,
             job_name: None,
             attach: None,

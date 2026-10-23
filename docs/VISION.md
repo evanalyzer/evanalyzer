@@ -257,7 +257,7 @@ Status 2026-10-12: no pipeline step fills these fields yet.
 - `Object` already has `parent_id`, `children` and `track`. The results table has `parent_id`, `children` and `track_id` columns.
 - `ExecutionScope::WholeImage` steps run once per image after all tiles (used by Voronoi and `TileMerge`).
 - The executor analyses **one plane (t, z) at a time** and discards its objects afterwards.
-- The results database stores centroid, bounding box, area, shape and intensities, but **no masks**.
+- The results database stores centroid, bounding box, area, shape and intensities, and (since 2026-10-23, switchable per project) each object's mask as run lengths in `objects.mask` - see `storage/mask_codec.rs`.
 
 ### 7.0 Decided: relations data model (2026-10-23)
 
@@ -303,7 +303,7 @@ Best practice:
 | **Tracking** | **Dataset step** "Link tracks" (see section 6), on the objects in the results database | Linking needs all frames, but the pipeline sees only one. Centroid, area and intensities are already stored. Re-linking with other parameters takes seconds instead of re-segmenting the movie. TrackMate also keeps detection and linking separate for this reason. |
 
 Limits of this split:
-- **Linking by mask overlap** can't run on the database, because it has no masks. Either use bounding-box overlap as an approximation, or later add a pipeline step that links each frame to the previous one. The executor already processes time points in order, so that would cost one frame of objects in RAM.
+- **Linking by mask overlap** on the database needs its `mask` column (projects can switch it off). Either use bounding-box overlap as an approximation, or later add a pipeline step that links each frame to the previous one. The executor already processes time points in order, so that would cost one frame of objects in RAM.
 - **Distances from a child to its parent's edge** also need masks, so they belong in the pipeline step too.
 
 ### 7.3 How to show them

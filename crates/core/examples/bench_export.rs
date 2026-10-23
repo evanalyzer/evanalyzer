@@ -11,7 +11,11 @@
 // channels, 1.4M objects with colocalization).
 //
 // Usage: cargo run --release -p evanalyzer_core --example bench_export -- \
-//     <out.evadb> [--images N] [--objects-per-image N]
+//     <out.evadb> [--images N] [--objects-per-image N] [--object-size N]
+//
+// `--object-size N` (default 4: a solid 4 × 4 square): a round object with
+// a ragged edge in an N × N box, like a real cell or nucleus - what object
+// masks cost depends on their shape. `BENCH_MASKS=0` doesn't store masks.
 
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
@@ -45,7 +49,42 @@ fn peak_rss_mb() -> f64 {
         .map_or(0.0, |kb| kb / 1024.0)
 }
 
-fn object(id: u128) -> Object {
+/// A round mask with a ragged edge in a `size` × `size` box (`size` <= 4:
+/// solid), and its area.
+fn mask(id: u128, size: u32) -> (BitVec<u64, Lsb0>, usize) {
+    if size <= 4 {
+        return (
+            BitVec::repeat(true, (size * size) as usize),
+            (size * size) as usize,
+        );
+    }
+    let r = size as f32 / 2.0;
+    // Every object its own outline, like real ones (a handful of shapes
+    // would let DuckDB store each only once).
+    let h = (id as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .rotate_left(29)
+        .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    let bumps = 3 + (h % 5) as u32;
+    let phase = ((h >> 8) % 628) as f32 / 100.0;
+    let depth = 0.06 + ((h >> 20) % 10) as f32 / 100.0;
+    let mut mask = BitVec::<u64, Lsb0>::repeat(false, (size * size) as usize);
+    let mut area = 0;
+    for y in 0..size {
+        for x in 0..size {
+            let (dx, dy) = (x as f32 + 0.5 - r, y as f32 + 0.5 - r);
+            let angle = dy.atan2(dx);
+            let ragged = r * (0.85 + depth * (angle * bumps as f32 + phase).sin());
+            if (dx * dx + dy * dy).sqrt() <= ragged {
+                mask.set((y * size + x) as usize, true);
+                area += 1;
+            }
+        }
+    }
+    (mask, area)
+}
+
+fn object(id: u128, size: u32) -> Object {
     let class = (id % 21) as u32 + 1;
     let mut object_class: HashSet<ObjectClass> = HashSet::from([ObjectClass::Global(class)]);
     if id % 20 == 0 {
@@ -78,16 +117,17 @@ fn object(id: u128) -> Object {
         };
         colocalized_with.insert(ObjectClass::Global(class % 21 + 2), partners);
     }
-    let x = (id % 1000) as u32 * 4;
-    let y = (id / 1000 % 1000) as u32 * 4;
+    let x = (id % 1000) as u32 * size;
+    let y = (id / 1000 % 1000) as u32 * size;
+    let (mask_data, area) = mask(id, size);
     Object::new(ObjectInit {
         id: ObjectId(id),
         object_class,
         intensities,
         colocalized_with,
-        bbox: [x, y, x + 3, y + 3],
-        mask_data: BitVec::<u64, Lsb0>::repeat(true, 16),
-        area: 16,
+        bbox: [x, y, x + size - 1, y + size - 1],
+        mask_data,
+        area,
         ..Default::default()
     })
 }
@@ -100,6 +140,7 @@ fn main() {
     );
     let images = arg_value("--images", 1776);
     let per_image = arg_value("--objects-per-image", 2150);
+    let size = arg_value("--object-size", 4) as u32;
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(format!("{}.wal", out.display()));
 
@@ -121,7 +162,8 @@ fn main() {
             app_version: "v1.0.0".into(),
         },
     )
-    .expect("create exporter");
+    .expect("create exporter")
+    .with_masks(std::env::var("BENCH_MASKS").as_deref() != Ok("0"));
 
     // Objects are built outside the timed section; only writing is timed.
     let mut write_time = std::time::Duration::ZERO;
@@ -133,7 +175,7 @@ fn main() {
         for _ in 0..per_image {
             cache
                 .object_cache
-                .insert(ObjectId(next_id), object(next_id));
+                .insert(ObjectId(next_id), object(next_id, size));
             next_id += 1;
         }
         let start = Instant::now();

@@ -510,7 +510,10 @@ mod tests {
         assert_eq!(cache.len(), 10);
         assert!(cache.get(&ObjectId(10)).unwrap().parents().is_empty());
         assert_eq!(
-            cache.get(&ObjectId(11)).unwrap().parent(&ObjectClass::Global(1)),
+            cache
+                .get(&ObjectId(11))
+                .unwrap()
+                .parent(&ObjectClass::Global(1)),
             Some(&ObjectId(11))
         );
     }

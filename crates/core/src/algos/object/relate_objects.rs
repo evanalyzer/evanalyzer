@@ -97,7 +97,11 @@ impl ImageAlgorithm for RelateObjects {
         // The links, worked out first and written after: the cache can't be
         // read and changed at the same time.
         let mut links: Vec<(ObjectId, ObjectClass, Option<ObjectId>)> = Vec::new();
-        for parent_class in self.parent_classes.iter().filter(|c| **c != ObjectClass::Unset) {
+        for parent_class in self
+            .parent_classes
+            .iter()
+            .filter(|c| **c != ObjectClass::Unset)
+        {
             let parents: Vec<ObjectId> = cache
                 .object_cache
                 .iter()
@@ -269,7 +273,12 @@ mod tests {
         assert_eq!(parent(&cache, 11, CELL), Some(2));
         assert_eq!(parent(&cache, 12, CELL), None, "outside every cell");
         assert!(
-            cache.object_cache.get(&ObjectId(1)).unwrap().parents().is_empty(),
+            cache
+                .object_cache
+                .get(&ObjectId(1))
+                .unwrap()
+                .parents()
+                .is_empty(),
             "the cells get no parent"
         );
     }
@@ -380,7 +389,10 @@ mod tests {
         run(&step, &mut cache).unwrap();
         assert!(cache.object_cache.get(&ObjectId(10)).is_some());
         assert!(cache.object_cache.get(&ObjectId(11)).is_none());
-        assert!(cache.object_cache.get(&ObjectId(1)).is_some(), "parents stay");
+        assert!(
+            cache.object_cache.get(&ObjectId(1)).is_some(),
+            "parents stay"
+        );
     }
 
     /// An object of both classes (e.g. all objects are "Object") is never
@@ -490,7 +502,8 @@ mod tests {
         );
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let labels = |key: &str| -> Vec<u32> { serde_json::from_value(cases[1][key].clone()).unwrap() };
+        let labels =
+            |key: &str| -> Vec<u32> { serde_json::from_value(cases[1][key].clone()).unwrap() };
         let parents = from_labels(&labels("parents"), 64, 0, CELL);
         let children = from_labels(&labels("children"), 64, 1000, SPOT);
         let mut overlapping = 0;

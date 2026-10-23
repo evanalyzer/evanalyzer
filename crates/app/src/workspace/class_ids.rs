@@ -507,9 +507,10 @@ mod tests {
         object
             .colocalized_with
             .insert(ObjectClass::Global(3), vec![]);
-        object
-            .parents
-            .insert(ObjectClass::Global(3), evanalyzer_cfg::core_types::ObjectId(7));
+        object.parents.insert(
+            ObjectClass::Global(3),
+            evanalyzer_cfg::core_types::ObjectId(7),
+        );
         let mut series = evanalyzer_cfg::settings::images_settings::SeriesSettings::default();
         series.objects.push(object);
         let mut image = evanalyzer_cfg::settings::images_settings::ImageEntry::default();

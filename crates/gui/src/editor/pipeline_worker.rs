@@ -139,6 +139,7 @@ impl PipelineWorker {
         let self_handle = Arc::clone(self);
         {
             let is_preview = task.preview;
+            let whole_image = task.whole_image;
             // The image (and series) a preview runs for: its objects go on
             // that one only - not on the next image, if the user switched
             // meanwhile.
@@ -180,8 +181,26 @@ impl PipelineWorker {
                     breakpoint_tiles: memory.effective_breakpoint_tiles(
                         crate::editor::viewport_cache::this_computer_ram_bytes(),
                     ),
+                    whole_image,
                 }) {
                     Ok(job) => job,
+                    Err(StartPreviewError::TooManyTiles { tiles, max }) if whole_image => {
+                        // A whole slide: the analysis is the way there.
+                        let message = format!(
+                            "The image is too large to preview whole: {tiles} tiles of 4096 px \
+                             (max {max}). Run the analysis on it instead."
+                        );
+                        let ui_handle = self.app_state.ui_handle.clone();
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_handle.upgrade() {
+                                let preview = ui.global::<PreviewRunState>();
+                                preview.set_status_message(message.into());
+                                preview.set_has_error(true);
+                                preview.set_done(true);
+                            }
+                        });
+                        return;
+                    }
                     Err(StartPreviewError::TooManyTiles { tiles, max }) => {
                         // Tell the user to zoom in instead of silently grinding
                         // through hundreds of tiles.
@@ -494,6 +513,8 @@ impl PipelineWorker {
                     log::warn!("Could not forget analysis {id} on the server: {e}");
                 }
             }
+            // The whole image's objects, for its note.
+            let mut objects_found = None;
             let (status_message, is_error) = match job_result {
                 Err(_) if connection_lost && job_id.is_some() => (
                     "The connection to the server was lost. The analysis keeps running \
@@ -521,6 +542,7 @@ impl PipelineWorker {
                         // fragments stay displayed as two separate objects even
                         // though the backend merged them.
                         if let Some(final_objects) = output.preview_objects {
+                            objects_found = Some(final_objects.len());
                             let mut project = self_handle.app_state.get_project_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_objects.extend(final_objects);
@@ -573,9 +595,14 @@ impl PipelineWorker {
                     }
 
                     // The preview's pill goes on success or cancel, and stays
-                    // on an error. Open dialogs stay open.
+                    // on an error - and with the whole image's count. Open
+                    // dialogs stay open.
                     if is_preview && !is_error {
-                        ui.global::<PreviewRunState>().set_shown(false);
+                        let preview = ui.global::<PreviewRunState>();
+                        match objects_found.filter(|_| whole_image) {
+                            Some(found) => preview.set_objects(found as i32),
+                            None => preview.set_shown(false),
+                        }
                     }
                 }
             });
@@ -831,6 +858,7 @@ mod tests {
                 project_settings: self.settings.clone(),
                 project_path: self.dir.path().to_path_buf(),
                 preview,
+                whole_image: false,
                 breakpoint: None,
                 job_name: Some("worker_test".into()),
                 attach: None,

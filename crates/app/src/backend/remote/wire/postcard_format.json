@@ -1,5 +1,5 @@
 {
-  "protocol_version": 28,
+  "protocol_version": 29,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1176,6 +1176,11 @@
         {
           "parent_ids": {
             "SEQ": "STR"
+          }
+        },
+        {
+          "mask": {
+            "SEQ": "U8"
           }
         }
       ]

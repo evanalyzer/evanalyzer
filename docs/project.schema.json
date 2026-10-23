@@ -41,6 +41,13 @@
     "plate": {
       "$ref": "#/$defs/PlateSettings"
     },
+    "resultsStorage": {
+      "description": "What the results store of each object.",
+      "$ref": "#/$defs/ResultsStorageSettings",
+      "default": {
+        "storeObjectMasks": true
+      }
+    },
     "resultsViews": {
       "description": "How the results of the project's analyses are shown: its views\n(List, Plate, Charts, Tracks with their settings), the same for\nevery analysis.",
       "$ref": "#/$defs/ResultsViews",
@@ -3649,6 +3656,17 @@
           "description": "How a child is matched to a parent.",
           "$ref": "#/$defs/ObjectRelateObjectsRelateRuleSettings",
           "default": "CENTRE_INSIDE"
+        }
+      }
+    },
+    "ResultsStorageSettings": {
+      "description": "What the results store of each object.",
+      "type": "object",
+      "properties": {
+        "storeObjectMasks": {
+          "description": "Each object's mask (its outline in the results' split view, for\nexport) - off: smaller results, the objects drawn as ellipses.",
+          "type": "boolean",
+          "default": true
         }
       }
     },

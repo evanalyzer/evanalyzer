@@ -166,8 +166,7 @@ fn migrate_segmentation_class_settings(raw: &mut Value) {
 
 /// Drops `parentId` / `children` from the annotated objects.
 fn drop_object_relation_fields(raw: &mut Value) {
-    let Some(Value::Object(images)) = raw.get_mut("images").and_then(|i| i.get_mut("list"))
-    else {
+    let Some(Value::Object(images)) = raw.get_mut("images").and_then(|i| i.get_mut("list")) else {
         return;
     };
     for image in images.values_mut() {

@@ -548,7 +548,10 @@ fn coloc_text(object: &ObjectMetricSettings, project: &ProjectWithRuntime) -> St
 }
 
 /// A class's name, or "Class N" for one the project doesn't have.
-fn class_name(class: &evanalyzer_cfg::core_types::ObjectClass, project: &ProjectWithRuntime) -> String {
+fn class_name(
+    class: &evanalyzer_cfg::core_types::ObjectClass,
+    project: &ProjectWithRuntime,
+) -> String {
     project
         .get_class_from_id(class)
         .map(|c| c.name.clone())
@@ -570,7 +573,10 @@ fn relations_text(
         .collect::<Vec<_>>()
         .join(", ");
     let mut children: Vec<(String, usize)> = Vec::new();
-    for child in others.iter().filter(|o| o.parents.values().any(|p| *p == object.id)) {
+    for child in others
+        .iter()
+        .filter(|o| o.parents.values().any(|p| *p == object.id))
+    {
         let mut classes: Vec<&evanalyzer_cfg::core_types::ObjectClass> =
             child.object_class.iter().collect();
         classes.sort();
@@ -1074,8 +1080,14 @@ mod tests {
     #[test]
     fn the_selected_object_names_its_parent_and_counts_its_children() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes_mut().push(class(1, "Cell", 0x112233));
-        project.classification.classes_mut().push(class(2, "Spot", 0x445566));
+        project
+            .classification
+            .classes_mut()
+            .push(class(1, "Cell", 0x112233));
+        project
+            .classification
+            .classes_mut()
+            .push(class(2, "Spot", 0x445566));
         let cell = ObjectMetricSettings {
             id: evanalyzer_cfg::core_types::ObjectId(1),
             object_class: [ObjectClass::Global(1)].into(),

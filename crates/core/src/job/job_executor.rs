@@ -1487,8 +1487,10 @@ impl<'a> JobExecutor {
         let tile_size = self.preview_tile_size();
         let tiles = self.prepare_tile_iterator(full_width, full_height, tile_size);
         match &self.preview_tile_settings {
-            Some(settings) => tiles.filter(|t| settings.is_tile_visible(t)).count(),
-            None => tiles.count(),
+            Some(settings) if !settings.process_all_tiles => {
+                tiles.filter(|t| settings.is_tile_visible(t)).count()
+            }
+            _ => tiles.count(),
         }
     }
 
@@ -1675,7 +1677,14 @@ impl<'a> JobExecutor {
     }
 
     fn preview_tile_size(&self) -> usize {
-        let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
+        // All tiles: as big as they get - fewer seams to merge, and the
+        // limit on a whole-image preview doesn't depend on the zoom.
+        let Some(zoom) = self
+            .preview_tile_settings
+            .as_ref()
+            .filter(|s| !s.process_all_tiles)
+            .map(|s| s.zoom)
+        else {
             return MAX_TILE_SIZE;
         };
         if zoom >= 8.0 {

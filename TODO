@@ -372,3 +372,10 @@ Results (aggregates computed by the queries, nothing stored):
 - [ ] Linked objects: the parent's columns are the ticked ones (one picker less than board U1's "Its columns"); a picker of its own if users need other columns.
 - [x] Editor viewer: the selected object was drawn magenta-ish, not yellow - `Color::from_argb_u8(0xfc, 0xe9, 0x03, alpha)` had the alpha last (Slint: alpha first) - 2026-10-23.
 - [x] Results split view: the image drawer's OBJECTS list picks which classes are drawn on the split image (session only, not saved in the view); "Overlapping pairs" → "Coloc pairs", "Partners X · Count" → "Coloc with X" - 2026-10-23.
+
+## Whole image preview and object masks (2026-10-23)
+
+- [x] Whole image preview: top bar button / Shift+F5 / command palette - the visible tiles first, then the rest (4096 px tiles, `PreviewRequest::whole_image`, core `process_all_tiles`). Class counts and the object list are then the whole image's; the pill stays with "Whole image: N objects". A setting change cancels a running one and marks a finished one outdated; another image closes it. Refused above 16 full tiles (a whole slide: run the analysis).
+- [ ] Whole image preview on a whole slide: a warning with the estimated time instead of the refusal, if users ask for it.
+- [x] Object masks in the results (`objects.mask BLOB`, run lengths, `storage/mask_codec.rs`), switch Settings › Objects › "Keep object outlines in the results" (`resultsStorage.storeObjectMasks`, on by default). Results' split view draws them (ellipses without). Cost in BENCHMARK.md.
+- [ ] Editor: an object's mask from the results (e.g. compare a run with the preview).

@@ -120,7 +120,7 @@ pub fn generate_analyze_job_from_project_settings(
 
     let db_out_name = output_path.join(format!("{job_name}.{RESULTS_FILE_EXTENSION}"));
     let database_storage = match DuckDbExporter::new(&db_out_name, class_names, &config.meta) {
-        Ok(exp) => Arc::new(exp),
+        Ok(exp) => Arc::new(exp.with_masks(config.results_storage.store_object_masks)),
         Err(e) => {
             error!(
                 "Failed to open result database {}: {e}",

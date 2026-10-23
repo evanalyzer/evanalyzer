@@ -199,6 +199,7 @@ impl PipelinesController {
             let weak = weak.clone();
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(manager) = weak.upgrade() {
+                    manager.whole_image_preview_outdated(true);
                     manager.schedule_auto_preview();
                 }
             })
@@ -226,6 +227,13 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>().on_dry_run(move || {
                 manager.trigger_pipeline_preview_execution();
             });
+
+            // The whole image previewed
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_preview_whole_image(move || {
+                    manager.trigger_whole_image_preview();
+                });
 
             // Auto preview toggled
             let manager = self.clone();
@@ -2714,6 +2722,7 @@ impl PipelinesController {
             },
             pipelines: project.pipelines.clone(),
             tile_merge: project.tile_merge.clone(),
+            results_storage: project.results_storage.clone(),
             modules: project.modules.clone(),
             // The preview needs none of the editor's state.
             editor: Default::default(),
@@ -2776,6 +2785,40 @@ impl PipelinesController {
     ///    to zero and shows the preview's pill over the image.
     /// 4. **Asynchronous Dispatch**: Offloads the generated `PipelineTask` directly to the pipeline worker.
     pub fn trigger_pipeline_preview_execution(&self) {
+        self.start_preview(false);
+    }
+
+    /// The preview of the whole image (the visible part first): the counts
+    /// of all its objects. Replaced by the next preview, cancelled by a
+    /// change (see [`Self::whole_image_preview_outdated`]).
+    pub fn trigger_whole_image_preview(&self) {
+        self.start_preview(true);
+    }
+
+    /// A change the whole-image preview doesn't show: a running one is
+    /// cancelled - it would take long for a result that is already wrong -
+    /// and a finished one marked outdated, or its note closed when
+    /// `another_image` is shown. On the UI thread.
+    fn whole_image_preview_outdated(&self, another_image: bool) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let preview = ui.global::<PreviewRunState>();
+        if !preview.get_whole_image() || !preview.get_shown() {
+            return;
+        }
+        if preview.get_done() {
+            if another_image {
+                preview.set_shown(false);
+            } else {
+                preview.set_outdated(true);
+            }
+        } else if let Some(cancel) = self.preview_cancel_flag.lock().unwrap().as_ref() {
+            cancel.cancel();
+        }
+    }
+
+    fn start_preview(&self, whole_image: bool) {
         // Dialogs don't block the window, and the preview's pill isn't a
         // dialog: it runs with one open (e.g. the step settings while
         // tuning) - except while an analysis runs with the steps locked
@@ -2839,6 +2882,7 @@ impl PipelinesController {
                 .unwrap_or(current_project)
                 .to_path_buf(),
             preview: true,
+            whole_image,
             breakpoint,
             job_name: None,
             attach: None,
@@ -2852,6 +2896,9 @@ impl PipelinesController {
             preview.set_total(0);
             preview.set_done(false);
             preview.set_has_error(false);
+            preview.set_whole_image(whole_image);
+            preview.set_outdated(false);
+            preview.set_objects(0);
             preview.set_shown(true);
         }
 
@@ -3172,6 +3219,7 @@ impl PipelinesController {
                 .unwrap_or(current_project)
                 .to_path_buf(),
             preview: false,
+            whole_image: false,
             breakpoint: None,
             job_name,
             attach: None,
@@ -3244,6 +3292,7 @@ impl PipelinesController {
             crate::editor::measurements_panel::sync(&ui, &self.app_state);
         }
 
+        self.whole_image_preview_outdated(false);
         self.schedule_auto_preview();
     }
 
@@ -8164,8 +8213,7 @@ mod tests {
 
     #[test]
     fn expanding_shows_the_advanced_settings_below_and_always_show_applies_to_every_step() {
-        let (ui, _ui_state, _controller) =
-            selected(vec![step("ClassifyObjects"), step("Voronoi")]);
+        let (ui, _ui_state, _controller) = selected(vec![step("ClassifyObjects"), step("Voronoi")]);
         let panel = ui.global::<PipelinesPanelState>();
         let commands = || panel.get_active_commands();
 
@@ -11685,6 +11733,33 @@ mod tests {
 
         assert!(preview.is_cancelled());
         assert!(!analysis.is_cancelled());
+    }
+
+    /// A change while the whole image is previewed cancels it; once done,
+    /// it is marked outdated - another image closes its note. A preview of
+    /// the view is left alone.
+    #[test]
+    fn a_change_cancels_or_outdates_the_whole_image_preview() {
+        let (ui, _ui_state, controller) = selected(vec![]);
+        let state = ui.global::<PreviewRunState>();
+        let preview = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        *controller.preview_cancel_flag.lock().unwrap() = Some(preview.clone());
+        state.set_shown(true);
+
+        // Of the view: nothing happens.
+        controller.whole_image_preview_outdated(false);
+        assert!(!preview.is_cancelled());
+
+        state.set_whole_image(true);
+        controller.whole_image_preview_outdated(false);
+        assert!(preview.is_cancelled(), "running: cancelled");
+
+        state.set_done(true);
+        controller.whole_image_preview_outdated(false);
+        assert!(state.get_outdated() && state.get_shown(), "done: outdated");
+
+        controller.whole_image_preview_outdated(true);
+        assert!(!state.get_shown(), "another image: closed");
     }
 
     #[test]
