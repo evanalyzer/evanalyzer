@@ -5368,6 +5368,7 @@ impl PipelinesController {
                             show_advanced_by_id.get(&step_id).copied().unwrap_or(false);
                         let show_advanced = always_show_advanced || step_show_advanced;
                         let (advanced_count, advanced_changed) = advanced_stats(&d.parameters);
+                        let options_in = advanced_options_in(&d.parameters);
                         let exposed = d.exposed.clone();
                         let notes = d.notes.clone();
                         // The pinned settings, advanced ones too: for the Tuning panel.
@@ -5629,6 +5630,7 @@ impl PipelinesController {
                             advanced_parameters: ModelRc::new(VecModel::from(advanced_params)),
                             show_advanced: step_show_advanced,
                             advanced_count: advanced_count as i32,
+                            advanced_options_in: options_in.into(),
                             advanced_changed: advanced_changed as i32,
                             update_version: d.update_version.into(),
                             help: d.help.into(),
@@ -6706,6 +6708,17 @@ fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
 /// dropdown options, so the row appears even when a step's only advanced item
 /// is an option - and how many advanced settings differ from their default.
 /// (A selected advanced option isn't "changed": it stays visible anyway.)
+/// The names of the basic settings whose dropdowns have advanced options,
+/// e.g. "Partners" - where the advanced section's extra choices appear.
+fn advanced_options_in(params: &[ParameterDef]) -> String {
+    params
+        .iter()
+        .filter(|p| !p.advanced && p.option_advanced.iter().any(|&advanced| advanced))
+        .map(|p| p.display_name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn advanced_stats(params: &[ParameterDef]) -> (usize, usize) {
     let mut count = 0;
     let mut changed = 0;
@@ -7966,6 +7979,26 @@ mod tests {
             option_advanced: vec![],
             section: String::new(),
         }
+    }
+
+    #[test]
+    fn the_settings_with_advanced_options_are_named_for_the_open_section() {
+        let mut partners = def("multiplicity", "All", "All", false);
+        partners.display_name = "Partners".into();
+        partners.options = vec!["All".into(), "Best".into(), "Selected".into()];
+        partners.option_advanced = vec![false, false, true];
+        let mut plain = def("rule", "a", "a", false);
+        plain.option_advanced = vec![false, false];
+        let advanced_itself = {
+            let mut p = def("mode", "x", "x", true);
+            p.option_advanced = vec![false, true];
+            p
+        };
+        assert_eq!(
+            advanced_options_in(&[partners, plain, advanced_itself]),
+            "Partners",
+            "a setting that is advanced itself shows in the section anyway"
+        );
     }
 
     #[test]

@@ -696,18 +696,46 @@ impl Object {
         self.centroid
     }
 
+    /// The mean pixel position, from the mask a word at a time: the sum of
+    /// the set bits' positions (six popcounts per 64-bit word) and of their
+    /// rows (one count per row) give `Σx = Σposition - width·Σy` - exact,
+    /// without visiting each pixel.
     fn compute_centroid(&self) -> (f32, f32) {
-        let [x_min, y_min, x_max, _] = self.bbox;
-        let width = (x_max - x_min + 1) as u64;
-        let (mut sum_x, mut sum_y, mut count) = (0u64, 0u64, 0u64);
-        for index in self.mask_data.iter_ones() {
-            sum_x += index as u64 % width;
-            sum_y += index as u64 / width;
-            count += 1;
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        let width = (x_max - x_min + 1) as usize;
+        let height = (y_max - y_min + 1) as usize;
+        let mask = &self.mask_data[..self.mask_data.len().min(width * height)];
+
+        // Bits whose position (0..64) has bit k set, for k = 0..6.
+        const BIT_OF_POSITION: [u64; 6] = [
+            0xAAAA_AAAA_AAAA_AAAA,
+            0xCCCC_CCCC_CCCC_CCCC,
+            0xF0F0_F0F0_F0F0_F0F0,
+            0xFF00_FF00_FF00_FF00,
+            0xFFFF_0000_FFFF_0000,
+            0xFFFF_FFFF_0000_0000,
+        ];
+        let (mut count, mut sum_position) = (0u64, 0u64);
+        for (i, chunk) in mask.chunks(64).enumerate() {
+            let word: u64 = chunk.load_le();
+            let ones = word.count_ones() as u64;
+            let within: u64 = BIT_OF_POSITION
+                .iter()
+                .enumerate()
+                .map(|(k, m)| ((word & m).count_ones() as u64) << k)
+                .sum();
+            count += ones;
+            sum_position += ones * 64 * i as u64 + within;
         }
         if count == 0 {
             return self.get_bbox_center();
         }
+        let sum_y: u64 = mask
+            .chunks(width)
+            .enumerate()
+            .map(|(y, row)| y as u64 * row.count_ones() as u64)
+            .sum();
+        let sum_x = sum_position - width as u64 * sum_y;
         (
             (x_min as f64 + sum_x as f64 / count as f64) as f32,
             (y_min as f64 + sum_y as f64 / count as f64) as f32,
@@ -1465,6 +1493,41 @@ mod tests {
         assert!((x - (10.0 + 10.0 / 9.0)).abs() < 1e-4, "{x}");
         assert!((y - (20.0 + 26.0 / 9.0)).abs() < 1e-4, "{y}");
         assert_eq!(object.get_bbox_center(), (12.0, 22.0));
+    }
+
+    /// The word-at-a-time centroid equals the mean of the pixels visited
+    /// one by one, for masks of every width (rows across word borders).
+    #[test]
+    fn the_centroid_matches_the_pixel_by_pixel_mean() {
+        let mut state = 0x9E37_79B9_u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        for _ in 0..500 {
+            let (w, h) = (1 + next() % 90, 1 + next() % 40);
+            let (x0, y0) = (next() % 1000, next() % 1000);
+            let density = 1 + next() % 4;
+            let mask: BitVec<u64, Lsb0> =
+                (0..w * h).map(|_| next() % density == 0).collect();
+            let object = Object::new(ObjectInit {
+                bbox: [x0, y0, x0 + w - 1, y0 + h - 1],
+                area: mask.count_ones(),
+                mask_data: mask.clone(),
+                ..Default::default()
+            });
+            let n = mask.count_ones() as f64;
+            if n == 0.0 {
+                continue;
+            }
+            let mx = mask.iter_ones().map(|i| (i as u32 % w) as f64).sum::<f64>() / n;
+            let my = mask.iter_ones().map(|i| (i as u32 / w) as f64).sum::<f64>() / n;
+            let (cx, cy) = object.get_centroid();
+            assert!((cx as f64 - (x0 as f64 + mx)).abs() < 1e-3, "{w}×{h}");
+            assert!((cy as f64 - (y0 as f64 + my)).abs() < 1e-3, "{w}×{h}");
+        }
     }
 
     #[test]

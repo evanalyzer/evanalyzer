@@ -2547,6 +2547,13 @@ component StepRow inherits Rectangle {
                     }
                 }
 
+                if (step.show-advanced || PipelinesPanelState.always-show-advanced) && step.advanced-options-in != "": Text {
+                    text: "More choices in: " + step.advanced-options-in;
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-dim;
+                    wrap: word-wrap;
+                }
+
                 for p in step.advanced-parameters: InlineParamRow {
                     toggle-pin => {
                         PipelinesPanelState.toggle-pin(step.id, p.name);
@@ -3720,6 +3727,12 @@ export component StepSettingsDialog inherits InkDialog {
                         }
 
                         if on-advanced || root.searching: VerticalLayout {
+                            if on-advanced && cmd.advanced-options-in != "": Text {
+                                text: "More choices in: " + cmd.advanced-options-in;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                wrap: word-wrap;
+                            }
                             for p in cmd.advanced-parameters: VerticalLayout {
                                 padding-bottom: !root.searching || root.matches(p) ? 6px : 0px;
                                 if !root.searching || root.matches(p): InlineParamRow {

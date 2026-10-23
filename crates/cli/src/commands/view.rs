@@ -251,12 +251,6 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
         return Ok(());
     }
 
-    if args.filter.colocalized.is_some() {
-        return Err(InternalErrors::InvalidArgument(
-            "--colocalized isn't supported by the current results backend".to_string(),
-        ));
-    }
-
     let images = db.get_images()?;
     let classes = db.get_object_classes()?;
     let image_names: Vec<String> = images.iter().map(|image| image.name.clone()).collect();

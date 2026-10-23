@@ -433,6 +433,25 @@ Single-threaded; a grid over the parents' boxes, so each spot is tested
 against a handful of cells. The ~100 MB on top of the objects are the
 grid, the id lists and the links before they are written.
 
+### Centroid as centre of mass, bbox centre and parent ids stored (2026-10-23)
+
+`get_centroid()` is now the mean pixel position (was the bounding box's
+centre, now `get_bbox_center()` and its own columns); `parent_ids` replaces
+`parent_id`/`children`. Last commit vs. this change, alternated with 10 s
+pauses, 22 cores:
+
+| Benchmark | Before | After |
+|---|---|---|
+| `bench_pipeline` 200 × 2048², 8 threads (4 runs each) | 6.05 / 5.53 / 5.35 / 5.44 s (mean 5.59) | 5.97 / 5.60 / 5.46 / 5.72 s (mean 5.69) |
+| `bench_export` 3.8M objects (2 runs each) | 33.0 / 32.7 s, 2.28-2.39 GB | 34.9 / 34.2 s, 2.40-2.43 GB |
+
+A first version walked every mask pixel for the centroid: +0.25 s in
+`bench_pipeline`. Now it is computed a 64-bit word at a time (six popcounts
+per word for the bit positions, a count per row for y) - the same result,
+no measurable cost (a build without any centroid: mean 5.60 s). The writer's
+~5 % are the four `bbox_center_*` columns and the `parent_ids` map; the file
+is 1,317 MB instead of 1,309 MB.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

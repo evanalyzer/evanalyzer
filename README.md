@@ -382,8 +382,8 @@ evanalyzer cli export chart heatmap   --db job.evadb --out heatmap.png \
   --metric count --cell-size 256
 ```
 
-All `export` and `view` subcommands accept `--image <name>`, `--class <name>`
-(repeatable) and `--colocalized <true|false>` to filter rows first.
+All `export` and `view` subcommands accept `--image <name>` and `--class <name>`
+(repeatable) to filter rows first.
 
 ### Command summary
 

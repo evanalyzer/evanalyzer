@@ -6,11 +6,11 @@ use crate::commands::common::{
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::global::SpeedUnit;
 use evanalyzer_app::project::load_project;
-use evanalyzer_app::results::Column;
+use evanalyzer_app::results::{ChildValue, Column};
 use evanalyzer_app::results::ExportFormat;
 use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::view_settings::{
-    DEFAULT_LIST_COLUMNS, ListView, ViewSettings, resolve_columns,
+    DEFAULT_LIST_COLUMNS, ListView, ViewSettings, resolve_columns, with_related_columns,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::ObjectClass;
@@ -113,11 +113,6 @@ fn export_table(
     }
     let db = backend.open_results(&args.db)?;
     let db = db.as_ref();
-    if args.filter.colocalized.is_some() {
-        return Err(InternalErrors::InvalidArgument(
-            "--colocalized isn't supported by the current results backend".to_string(),
-        ));
-    }
     let mut grouping = resolve_grouping(&args.group)?;
     let mut image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
     let mut object_classes = resolve_object_classes(db, &args.filter.classes)?;
@@ -126,6 +121,8 @@ fn export_table(
         .into_iter()
         .map(|entry| entry.key)
         .collect();
+    // A row per pair of overlapping objects (a view's "Overlapping pairs").
+    let mut overlapping_pairs = false;
     // --view: as that List view of the project shows these results; the
     // explicit flags win.
     if let (Some(project), Some(name)) = (&args.project, &args.view) {
@@ -145,7 +142,31 @@ fn export_table(
                 missing.join(", ")
             );
         }
-        columns = found;
+        // The view's Children and Linked objects groups, as far as these
+        // results have the links.
+        let links: Vec<(ObjectClass, ObjectClass)> = available
+            .iter()
+            .filter_map(|entry| match &entry.key {
+                Column::Children(c) if c.value == ChildValue::Count => {
+                    Some((c.parent_class, c.child_class))
+                }
+                _ => None,
+            })
+            .collect();
+        let children: Vec<(ObjectClass, ObjectClass)> = list
+            .children
+            .iter()
+            .map(|(p, c)| (ObjectClass::Global(*p), ObjectClass::Global(*c)))
+            .filter(|link| links.contains(link))
+            .collect();
+        let parents: Vec<ObjectClass> = list
+            .parents
+            .iter()
+            .map(|p| ObjectClass::Global(*p))
+            .filter(|p| links.iter().any(|(parent, _)| parent == p))
+            .collect();
+        columns = with_related_columns(&found, &children, &list.child_aggregations, &parents);
+        overlapping_pairs = list.coloc_details;
         if args.filter.classes.is_empty()
             && let Some(ids) = &list.classes
         {
@@ -187,6 +208,7 @@ fn export_table(
         image_rel_paths,
         columns,
         object_classes,
+        with_list_coloc_details: overlapping_pairs,
         ..Default::default()
     };
     let document = match grouping {

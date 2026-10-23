@@ -238,10 +238,6 @@ pub struct FilterArgs {
     #[arg(long = "class")]
     pub classes: Vec<String>,
 
-    /// Restrict to colocalized (true) or non-colocalized (false) ROIs only
-    #[arg(long)]
-    pub colocalized: Option<bool>,
-
     /// Transponod output table
     #[arg(long)]
     pub transpond: Option<bool>,
@@ -304,10 +300,6 @@ pub struct GroupArgs {
     /// one file each, next to --out as <name>_<value>.csv) or both
     #[arg(long, value_enum, default_value = "long")]
     pub layout: LayoutKind,
-
-    /// Additionally split each group into a colocalizing / non-colocalizing row
-    #[arg(long)]
-    pub split_colocalized: bool,
 
     /// Additionally split each group by object class
     #[arg(long)]

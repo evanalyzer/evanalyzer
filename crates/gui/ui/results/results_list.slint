@@ -130,13 +130,45 @@ export component ResultsListView inherits Rectangle {
                             select-all => { ResultsState.list-aggregation-select-all(); }
                             select-none => { ResultsState.list-aggregation-select-none(); }
                         }
-                        // Switches, as on board L.
-                        if ResultsState.list-group-by-summary == "Objects": InkSwitch {
-                            text: "Coloc details";
-                            checked: ResultsState.list-with-coloc-details;
-                            toggled(on) => {
-                                ResultsState.list-with-coloc-details = on;
-                                ResultsState.list-with-coloc-details-changed(on);
+                        // Relate Objects' links (design canvas "Object relations
+                        // in the results", board 1 and U1): the children's count
+                        // and aggregates, the parent's values.
+                        if ResultsState.list-children-items.length > 0: InkCheckList {
+                            title: "CHILDREN · " + ResultsState.list-children-summary;
+                            items <=> ResultsState.list-children-items;
+                            list-height: 72px;
+                            item-selected(key, value, selected) => {
+                                ResultsState.list-children-selected(key, selected);
+                            }
+                            select-all => {
+                                ResultsState.list-children-select-all(true);
+                            }
+                            select-none => {
+                                ResultsState.list-children-select-all(false);
+                            }
+                        }
+                        if ResultsState.list-children-items.length > 0: InkMultiSelect {
+                            label: "Of the columns";
+                            summary-text: ResultsState.list-child-aggregate;
+                            items <=> ResultsState.list-child-aggregation-items;
+                            multi-select: true;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.list-child-aggregation-selected(key, selected);
+                            }
+                        }
+                        if ResultsState.list-parent-items.length > 0: InkCheckList {
+                            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
+                            items <=> ResultsState.list-parent-items;
+                            list-height: 72px;
+                            item-selected(key, value, selected) => {
+                                ResultsState.list-parent-selected(key, selected);
+                            }
+                            select-all => {
+                                ResultsState.list-parent-select-all(true);
+                            }
+                            select-none => {
+                                ResultsState.list-parent-select-all(false);
                             }
                         }
                         InkSwitch {
