@@ -59,7 +59,7 @@ fn create_schema(conn: &Connection) {
             seg_class_name        VARCHAR, seg_class_id INTEGER,
             object_class_name     VARCHAR, object_class_id INTEGER[],
             parent_ids             MAP(INTEGER, UUID), track_id UBIGINT,
-            centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
+            centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE, bbox_center_x_px DOUBLE, bbox_center_y_px DOUBLE, bbox_center_x_nm DOUBLE, bbox_center_y_nm DOUBLE,
             bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
             bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
             area_px UBIGINT, area_nm2 DOUBLE, perimeter_px DOUBLE, perimeter_nm DOUBLE,

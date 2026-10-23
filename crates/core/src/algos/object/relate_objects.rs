@@ -171,7 +171,8 @@ impl RelateObjects {
         candidates.sort_by(|(a, _), (b, _)| a.cmp(b));
         match self.rule {
             RelateRule::CentreInside => {
-                let (x, y) = centre_of_mass(child)?;
+                let (x, y) = child.get_centroid();
+                let (x, y) = (x.round() as u32, y.round() as u32);
                 candidates
                     .into_iter()
                     .find(|(_, parent)| parent.is_part_of(x, y))
@@ -189,25 +190,6 @@ impl RelateObjects {
             }
         }
     }
-}
-
-/// The pixel at the centre of mass of `object`'s mask (rounded), `None` for
-/// an empty mask.
-fn centre_of_mass(object: &Object) -> Option<(u32, u32)> {
-    let [x_min, y_min, x_max, _] = object.bbox;
-    let width = (x_max - x_min + 1) as usize;
-    let (mut sum_x, mut sum_y, mut count) = (0u64, 0u64, 0u64);
-    for index in object.mask_data.iter_ones() {
-        sum_x += (index % width) as u64;
-        sum_y += (index / width) as u64;
-        count += 1;
-    }
-    if count == 0 {
-        return None;
-    }
-    let x = x_min as f64 + sum_x as f64 / count as f64;
-    let y = y_min as f64 + sum_y as f64 / count as f64;
-    Some((x.round() as u32, y.round() as u32))
 }
 
 #[cfg(test)]

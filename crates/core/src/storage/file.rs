@@ -145,6 +145,10 @@ impl PipelineResultExporter for CsvExporter {
                 "centroid_y_px".to_string(),
                 "centroid_x_nm".to_string(),
                 "centroid_y_nm".to_string(),
+                "bbox_center_x_px".to_string(),
+                "bbox_center_y_px".to_string(),
+                "bbox_center_x_nm".to_string(),
+                "bbox_center_y_nm".to_string(),
                 // Bounding Box
                 "bbox_xmin_px".to_string(),
                 "bbox_ymin_px".to_string(),
@@ -229,6 +233,7 @@ impl PipelineResultExporter for CsvExporter {
             let ellipse = object.get_ellipse();
             let solidity = object.get_solidity();
             let centroid = object.get_centroid();
+            let bbox_center = object.get_bbox_center();
             let feret = object.get_feret_diameter();
             let min_feret = object.get_min_feret_diameter();
 
@@ -261,6 +266,10 @@ impl PipelineResultExporter for CsvExporter {
                 format!("{:.2}", centroid.1),
                 format!("{:.2}", centroid.0 as f64 * px.px_size_x as f64),
                 format!("{:.2}", centroid.1 as f64 * px.px_size_y as f64),
+                format!("{:.2}", bbox_center.0),
+                format!("{:.2}", bbox_center.1),
+                format!("{:.2}", bbox_center.0 as f64 * px.px_size_x as f64),
+                format!("{:.2}", bbox_center.1 as f64 * px.px_size_y as f64),
                 // Bounding box px & nm
                 object.bbox[0].to_string(),
                 object.bbox[1].to_string(),
