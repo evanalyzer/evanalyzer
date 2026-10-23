@@ -932,8 +932,9 @@ fn check_definition(
             continue;
         };
         if let PipelineCommand::Colocalization(coloc) = command
-            && let Some(local) = std::iter::once(&coloc.objects)
-                .chain(&coloc.overlapping)
+            && let Some(local) = coloc
+                .classes_to_coloc
+                .iter()
                 .find(|c| matches!(c, ObjectClass::Local(_)))
         {
             problems.push(ModuleProblem::warning(
@@ -1275,8 +1276,7 @@ mod tests {
         definition.steps.push(step(
             2,
             PipelineCommand::Colocalization(ColocalizationSettings {
-                objects: ObjectClass::Global(1),
-                overlapping: vec![ObjectClass::Local(1)],
+                classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Local(1)],
                 ..Default::default()
             }),
         ));
@@ -1367,7 +1367,7 @@ mod tests {
             step(
                 2,
                 PipelineCommand::Colocalization(ColocalizationSettings {
-                    overlapping: vec![
+                    classes_to_coloc: vec![
                         ObjectClass::Global(1),
                         ObjectClass::Global(2),
                         ObjectClass::Global(3),
@@ -1384,7 +1384,7 @@ mod tests {
             },
             ParamBinding {
                 step: StepId(2),
-                param: "overlapping".into(),
+                param: "classes_to_coloc".into(),
             },
         ];
         let text = messages(&check_module(&project, "SMOOTH")).join("\n");

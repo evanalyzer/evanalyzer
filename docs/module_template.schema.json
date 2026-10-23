@@ -449,16 +449,24 @@
       }
     },
     "ColocalizationSettings": {
-      "description": "Marks the objects that overlap others - \"are they at the same place?\".\n\nE.g. mark the ch1 spots that overlap a ch2 spot as \"ch1 with ch2\": the\nclass counts them per image, and later steps can use it (Relate Objects:\nthe double-positive spots per cell). Every pair that overlaps is\nrecorded as partners on both sides - which spots touch spot A. With\nseveral classes to overlap, an object is marked when it overlaps an\nobject of each, one at a time; the area all of them share is the\noptional overlap region.",
+      "description": "Calculates spatial colocalization and intersections between specified object classes.\n\nThis command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
       "type": "object",
       "properties": {
         "classForOverlappingAreas": {
-          "description": "The area all overlapping objects share, as a new object of this\nclass - for its own area and intensity. `Unset`: none.",
+          "description": "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
+        "classesToColoc": {
+          "description": "The classes whose objects must overlap (e.g. the ch1 and the ch2\nspots): each object overlapping an object of every other class\nrecords them as its partners - listed and counted in the results.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
         "excludeClasses": {
-          "description": "They must not overlap an object of any of these classes (e.g. a\ndead-cell marker): \"overlaps A and B, but not C\".",
+          "description": "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"",
           "type": "array",
           "default": [],
           "items": {
@@ -474,12 +482,17 @@
           }
         },
         "markAs": {
-          "description": "The class the matching objects get (e.g. \"ch1 with ch2\"). `Unset`:\nonly the partners are recorded.",
+          "description": "Optional: the class the colocalizing objects get (e.g. \"ch1 with\nch2\") - to count them per image or relate them to cells. `Unset`:\nonly the partners are recorded.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "markObjectsOf": {
+          "description": "Optional: the objects of this class that colocalize also get the\nclass below (e.g. the ch1 spots overlapping a ch2 spot). `Unset`:\nthe colocalizing objects of every class.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
         "minColocArea": {
-          "description": "The overlap needed - also for an excluded class to count.",
+          "description": "Minimum overlapping area size to count objects as coloc",
           "type": "number",
           "format": "float",
           "default": 0.0
@@ -489,21 +502,8 @@
           "$ref": "#/$defs/ObjectColocObjectsColocMultiplicitySettings",
           "default": "MANY_TO_MANY"
         },
-        "objects": {
-          "description": "The objects that are checked and marked (e.g. the ch1 spots).",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "UNSET"
-        },
-        "overlapping": {
-          "description": "They must overlap an object of each of these classes (e.g. the ch2\nspots).",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          }
-        },
         "sizeUnit": {
-          "description": "Unit of the minimum overlap: pixels, nm² or % of the smaller object.",
+          "description": "Size unit for the minimum coloc area size",
           "$ref": "#/$defs/SizeUnitsRel",
           "default": "PIXELS"
         }
@@ -1891,7 +1891,7 @@
           "const": "ONE_TO_ONE"
         },
         {
-          "description": "Only objects of these classes may have more than one partner; every\nother class is capped to its best-overlapping one. E.g. with Cell and\nSpot and `MultiFor([Cell])`, a cell can have any number of spots, but\neach spot one cell (the one it overlaps most). Kept for older\npipelines - Relate Objects links spots to cells.",
+          "description": "Only objects of these classes may have more than one partner; every\nother class in `classes_to_coloc` is capped to its best-overlapping\none. E.g. with `classes_to_coloc: [Cell, Spot]` and `MultiFor([Cell])`,\na cell can have any number of spots, but each spot one cell (the one\nit overlaps most). Kept for older pipelines - Relate Objects links\nspots to cells.",
           "type": "object",
           "properties": {
             "MULTI_FOR": {

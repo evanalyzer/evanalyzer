@@ -653,7 +653,7 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
         ("ClassifyObjects", "output_class"),
         ("ClassifyObjects", "overlapping_with"),
         ("Colocalization", "class_for_overlapping_areas"),
-        ("Colocalization", "objects"),
+        ("Colocalization", "mark_objects_of"),
         ("Colocalization", "mark_as"),
         ("ObjectMath", "input_class"),
         ("ObjectMath", "other_class"),
@@ -685,7 +685,7 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
 fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
     let multi_obj_class_fields: &[(&str, &str)] = &[
         ("ClassifyObjects", "input_classes"),
-        ("Colocalization", "overlapping"),
+        ("Colocalization", "classes_to_coloc"),
         ("Relate Objects", "child_classes"),
         ("Relate Objects", "parent_classes"),
         // Colocalization.filter_classes is `#[cmdsmeta(visible = false)]`, so it

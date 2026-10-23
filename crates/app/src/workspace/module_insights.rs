@@ -127,11 +127,7 @@ pub fn read_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> {
             read
         }
         PipelineCommand::AiObjectClassifier(s) => list("input_classes", &s.input_classes),
-        PipelineCommand::Colocalization(s) => {
-            let mut read = vec![("objects".to_string(), s.objects)];
-            read.extend(list("overlapping", &s.overlapping));
-            read
-        }
+        PipelineCommand::Colocalization(s) => list("classes_to_coloc", &s.classes_to_coloc),
         PipelineCommand::RelateObjects(s) => {
             let mut read = list("child_classes", &s.child_classes);
             read.extend(list("parent_classes", &s.parent_classes));

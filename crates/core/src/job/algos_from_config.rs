@@ -566,14 +566,14 @@ impl From<ClassifyObjectsSettings> for ClassifyObjects {
 impl From<ColocalizationSettings> for Colocalization {
     fn from(_s: ColocalizationSettings) -> Self {
         Colocalization {
-            objects: _s.objects,
-            overlapping: _s.overlapping.into_iter().map(|v| v.into()).collect(),
+            classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
             exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
             min_coloc_area: _s.min_coloc_area,
             size_unit: _s.size_unit,
-            mark_as: _s.mark_as,
-            class_for_overlapping_areas: _s.class_for_overlapping_areas,
             multiplicity: ColocMultiplicity::from(_s.multiplicity),
+            class_for_overlapping_areas: _s.class_for_overlapping_areas,
+            mark_objects_of: _s.mark_objects_of,
+            mark_as: _s.mark_as,
             filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
         }
     }
