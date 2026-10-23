@@ -68,6 +68,7 @@ fn create_results_schema(conn: &duckdb::Connection) {
             parent_ids MAP(INTEGER, UUID), track_id UBIGINT,
             centroid_x_px DOUBLE, centroid_y_px DOUBLE,
             centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
+            bbox_center_x_px DOUBLE, bbox_center_y_px DOUBLE, bbox_center_x_nm DOUBLE, bbox_center_y_nm DOUBLE,
             bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER,
             bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
             bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE,

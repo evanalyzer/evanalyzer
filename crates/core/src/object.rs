@@ -105,9 +105,10 @@ pub struct Object {
     // a `Object { .. }` struct literal illegal outside this module, which forces all
     // external construction through [`Object::new`] — the one path that is guaranteed
     // to call [`finalize_geometry`](Self::finalize_geometry). Callers read them via
-    // `get_perimeter()` / `get_ellipse()`.
+    // `get_perimeter()` / `get_ellipse()` / `get_centroid()`.
     perimeter: f32,
     ellipse: FittingEllipse,
+    centroid: (f32, f32),
 }
 
 /// Caller-settable fields for building a [`Object`] via [`Object::new`].
@@ -232,6 +233,7 @@ impl Object {
             source_tile: init.source_tile,
             perimeter: 0.0,
             ellipse: FittingEllipse::default(),
+            centroid: (0.0, 0.0),
         };
         object.finalize_geometry();
         object
@@ -383,6 +385,7 @@ impl Object {
     pub(crate) fn finalize_geometry(&mut self) {
         self.perimeter = self.compute_perimeter();
         self.ellipse = self.compute_ellipse();
+        self.centroid = self.compute_centroid();
     }
 
     /// Returns the fitted ellipse (major/minor axes, angle, eccentricity)
@@ -685,8 +688,35 @@ impl Object {
         }
     }
 
-    /// Calculates centroid coordinates (center of mass).
+    /// The centroid: the mean position of the object's pixels (its centre
+    /// of mass, not weighted by intensity) - as CellProfiler's and Fiji's.
+    /// The bounding box's centre for an object without pixels. Precomputed
+    /// by [`finalize_geometry`](Self::finalize_geometry).
     pub fn get_centroid(&self) -> (f32, f32) {
+        self.centroid
+    }
+
+    fn compute_centroid(&self) -> (f32, f32) {
+        let [x_min, y_min, x_max, _] = self.bbox;
+        let width = (x_max - x_min + 1) as u64;
+        let (mut sum_x, mut sum_y, mut count) = (0u64, 0u64, 0u64);
+        for index in self.mask_data.iter_ones() {
+            sum_x += index as u64 % width;
+            sum_y += index as u64 / width;
+            count += 1;
+        }
+        if count == 0 {
+            return self.get_bbox_center();
+        }
+        (
+            (x_min as f64 + sum_x as f64 / count as f64) as f32,
+            (y_min as f64 + sum_y as f64 / count as f64) as f32,
+        )
+    }
+
+    /// The centre of the bounding box - the centroid only for symmetric
+    /// shapes.
+    pub fn get_bbox_center(&self) -> (f32, f32) {
         let [x_min, y_min, x_max, y_max] = self.bbox;
         let x_center = (x_min as f32 + x_max as f32) / 2.0;
         let y_center = (y_min as f32 + y_max as f32) / 2.0;
@@ -1020,7 +1050,7 @@ impl Object {
         scale_y: f32,
         image_size: ImageSize,
     ) -> TransformedGeometry {
-        let (cx, cy) = self.get_centroid();
+        let (cx, cy) = self.get_bbox_center();
         let [x_min, y_min, x_max, y_max] = self.bbox;
         let project = |v: f32, c: f32, s: f32| c + (v - c) * s;
         let bbox_f = [
@@ -1046,7 +1076,7 @@ impl Object {
     /// Builds the rasterized geometry of a filled circle with the given `diameter`, centered
     /// on `self`'s bounding-box center.
     pub fn circle_geometry(&self, diameter: f32, image_size: ImageSize) -> TransformedGeometry {
-        let (cx, cy) = self.get_centroid();
+        let (cx, cy) = self.get_bbox_center();
         // A radius of 0 would rasterize to an empty mask; floor it to a single pixel.
         let radius = (diameter / 2.0).max(0.5);
         let bbox_f = [cx - radius, cy - radius, cx + radius, cy + radius];
@@ -1066,7 +1096,7 @@ impl Object {
         scale: f32,
         image_size: ImageSize,
     ) -> TransformedGeometry {
-        let (cx, cy) = self.get_centroid();
+        let (cx, cy) = self.get_bbox_center();
         let ellipse = self.get_ellipse();
         // Degenerate ROIs (e.g. a single pixel) have zero moments; floor the semi-axes to a
         // single pixel so they still rasterize to something instead of vanishing.
@@ -1392,6 +1422,7 @@ mod tests {
         );
         assert_eq!(object.area, 5);
         assert_eq!(object.get_centroid(), (11.0, 21.0));
+        assert_eq!(object.get_bbox_center(), (11.0, 21.0), "symmetric");
         // Moments: x 11,10,11,12,11 / y 20,21,21,21,22.
         assert_eq!((object.sum_x, object.sum_y), (55, 105));
         assert_eq!(
@@ -1412,6 +1443,38 @@ mod tests {
             (settings.z_stack, settings.c_stack, settings.t_stack),
             (2, 1, 3)
         );
+    }
+
+    /// An L: the centroid is the mean of its pixels, not its box's centre.
+    #[test]
+    fn the_centroid_is_the_mean_pixel_position_not_the_box_centre() {
+        // A full first column and a full last row of a 5×5 box at (10, 20).
+        let mut mask = BitVec::<u64, Lsb0>::repeat(false, 25);
+        for i in 0..5 {
+            mask.set(i * 5, true);
+            mask.set(20 + i, true);
+        }
+        let object = Object::new(ObjectInit {
+            bbox: [10, 20, 14, 24],
+            mask_data: mask,
+            area: 9,
+            ..Default::default()
+        });
+        // x: 0,0,0,0,0 + 1,2,3,4 → 10/9; y: 0..4 + 4,4,4,4 → 26/9.
+        let (x, y) = object.get_centroid();
+        assert!((x - (10.0 + 10.0 / 9.0)).abs() < 1e-4, "{x}");
+        assert!((y - (20.0 + 26.0 / 9.0)).abs() < 1e-4, "{y}");
+        assert_eq!(object.get_bbox_center(), (12.0, 22.0));
+    }
+
+    #[test]
+    fn an_object_without_pixels_has_its_box_centre_as_centroid() {
+        let object = Object::new(ObjectInit {
+            bbox: [0, 0, 2, 4],
+            mask_data: BitVec::<u64, Lsb0>::repeat(false, 15),
+            ..Default::default()
+        });
+        assert_eq!(object.get_centroid(), (1.0, 2.0));
     }
 
     #[test]

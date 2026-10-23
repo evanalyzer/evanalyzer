@@ -410,6 +410,10 @@ enum F64 {
     CentroidYPx,
     CentroidXNm,
     CentroidYNm,
+    BboxCenterXPx,
+    BboxCenterYPx,
+    BboxCenterXNm,
+    BboxCenterYNm,
     BboxXminNm,
     BboxYminNm,
     BboxXmaxNm,
@@ -608,6 +612,10 @@ impl ObjectColumns {
             f(F64::CentroidYPx),
             f(F64::CentroidXNm),
             f(F64::CentroidYNm),
+            f(F64::BboxCenterXPx),
+            f(F64::BboxCenterYPx),
+            f(F64::BboxCenterXNm),
+            f(F64::BboxCenterYNm),
         ];
         let doubles_2 = [
             f(F64::BboxXminNm),
@@ -662,7 +670,7 @@ impl ObjectColumns {
             a16,
             a17,
         ] = doubles_3;
-        let [c0, c1, c2, c3] = doubles_1;
+        let [c0, c1, c2, c3, m0, m1, m2, m3] = doubles_1;
         let [p0, p1, p2] = doubles_4;
         let columns: Vec<(&str, ArrayRef)> = vec![
             ("image_name", arr(&mut self.image_name)),
@@ -681,6 +689,10 @@ impl ObjectColumns {
             ("centroid_y_px", c1),
             ("centroid_x_nm", c2),
             ("centroid_y_nm", c3),
+            ("bbox_center_x_px", m0),
+            ("bbox_center_y_px", m1),
+            ("bbox_center_x_nm", m2),
+            ("bbox_center_y_nm", m3),
             ("bbox_xmin_px", arr(b0)),
             ("bbox_ymin_px", arr(b1)),
             ("bbox_xmax_px", arr(b2)),
@@ -747,6 +759,12 @@ CREATE TABLE IF NOT EXISTS objects (
     centroid_y_px        DOUBLE,
     centroid_x_nm        DOUBLE,
     centroid_y_nm        DOUBLE,
+    -- The centroid is the mean position of the object's pixels; the
+    -- bounding box's centre differs from it for asymmetric shapes.
+    bbox_center_x_px     DOUBLE,
+    bbox_center_y_px     DOUBLE,
+    bbox_center_x_nm     DOUBLE,
+    bbox_center_y_nm     DOUBLE,
     bbox_xmin_px         UINTEGER,
     bbox_ymin_px         UINTEGER,
     bbox_xmax_px         UINTEGER,
@@ -987,6 +1005,11 @@ impl DuckDbExporter {
             c.f64(F64::CentroidYPx, centroid_y_px);
             c.f64(F64::CentroidXNm, centroid_x_px * pxx);
             c.f64(F64::CentroidYNm, centroid_y_px * pxy);
+            let (box_x, box_y) = object.get_bbox_center();
+            c.f64(F64::BboxCenterXPx, box_x as f64);
+            c.f64(F64::BboxCenterYPx, box_y as f64);
+            c.f64(F64::BboxCenterXNm, box_x as f64 * pxx);
+            c.f64(F64::BboxCenterYNm, box_y as f64 * pxy);
             for (column, value) in c.bbox_px.iter_mut().zip(object.bbox) {
                 column.append_value(value);
             }
@@ -1913,6 +1936,49 @@ mod tests {
         assert_eq!(spots_per_cell, 1, "children are a query on the parent ids");
     }
 
+    /// The centroid is the mean pixel position; the box's centre is stored
+    /// next to it.
+    #[test]
+    fn export_writes_the_centroid_and_the_bounding_box_centre() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        // An L: a full first column and a full last row of a 4×4 box.
+        let mut mask = bitvec::vec::BitVec::<u64, bitvec::order::Lsb0>::repeat(false, 16);
+        for i in 0..4 {
+            mask.set(i * 4, true);
+            mask.set(12 + i, true);
+        }
+        let mut object = Object::new(crate::object::ObjectInit {
+            id: ObjectId(1),
+            bbox: [0, 0, 3, 3],
+            mask_data: mask,
+            area: 7,
+            ..Default::default()
+        });
+        object
+            .add_object_class(ObjectClass::Global(1), crate::pipeline::scope::Scope::Global)
+            .unwrap();
+        cache.object_cache.insert(ObjectId(1), object);
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let values: (f64, f64, f64, f64) = conn
+            .query_row(
+                "SELECT centroid_x_px, centroid_y_px, bbox_center_x_px, bbox_center_y_px FROM objects",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        // x: 0,0,0,0 + 1,2,3 → 6/7; y: 0,1,2,3 + 3,3,3 → 15/7.
+        assert!((values.0 - 6.0 / 7.0).abs() < 1e-4, "{values:?}");
+        assert!((values.1 - 15.0 / 7.0).abs() < 1e-4, "{values:?}");
+        assert_eq!((values.2, values.3), (1.5, 1.5));
+    }
+
     // ---- reading objects back for dataset steps ----
 
     fn test_exporter(path: &Path) -> DuckDbExporter {
@@ -1937,9 +2003,18 @@ mod tests {
     /// An object of class `class` in frame `t`, its id's high bits set so
     /// the UUID round trip is checked over all 128 bits.
     fn frame_object(id: u128, class: u32, t: i32) -> Object {
-        let mut object = object_in_classes(u128::MAX - id, &[class]);
+        // 4 pixels: the first 4 of the box's top row.
+        let mut mask = BitVec::<u64, Lsb0>::repeat(false, 5 * 11);
+        mask[..4].fill(true);
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(u128::MAX - id),
+            object_class: [ObjectClass::Global(class)].into(),
+            bbox: [10, 20, 14, 30],
+            mask_data: mask,
+            area: 4,
+            ..Default::default()
+        });
         object.plane = crate::ImagePlane { z: 2, c: 0, t };
-        object.bbox = [10, 20, 14, 30];
         object.intensities.insert(
             1,
             Intensity {
@@ -2014,7 +2089,7 @@ mod tests {
 
         let row = &store.get_objects(&ObjectFilter::default()).unwrap()[0];
         assert_eq!(row.z_stack, 2);
-        assert_eq!(row.centroid_px, (12.0, 25.0), "centre of the bounding box");
+        assert_eq!(row.centroid_px, (11.5, 20.0), "the mean position of its pixels");
         assert_eq!(row.bbox_px, [10, 20, 14, 30]);
         assert_eq!(row.area_px, 4);
         assert_eq!(row.object_classes, [ObjectClass::Global(1)]);

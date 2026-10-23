@@ -67,7 +67,7 @@ const CREATE_TABLES: &str = "
         seg_class_name        VARCHAR, seg_class_id INTEGER,
         object_class_name     VARCHAR, object_class_id INTEGER[],
         parent_ids             MAP(INTEGER, UUID), track_id UBIGINT,
-        centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
+        centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE, bbox_center_x_px DOUBLE, bbox_center_y_px DOUBLE, bbox_center_x_nm DOUBLE, bbox_center_y_nm DOUBLE,
         bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
         bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
         area_px UBIGINT, area_nm2 DOUBLE, perimeter_px DOUBLE, perimeter_nm DOUBLE,
@@ -165,6 +165,10 @@ fn seed_db(path: &PathBuf, n_classes: usize, objects_per_image_class: usize) -> 
                                 0.0,                   // centroid_y_px
                                 0.0,                   // centroid_x_nm
                                 0.0,                   // centroid_y_nm
+                                0.0,                   // bbox_center_x_px
+                                0.0,                   // bbox_center_y_px
+                                0.0,                   // bbox_center_x_nm
+                                0.0,                   // bbox_center_y_nm
                                 0u32,                  // bbox_xmin_px
                                 0u32,                  // bbox_ymin_px
                                 0u32,                  // bbox_xmax_px
