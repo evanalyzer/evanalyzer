@@ -766,6 +766,33 @@ precision). Left: the tiles' 58 s - the steps add up to ~15 s per tile
 (Median Subtract 4.8 s per call), the rest is reading the slide (not
 measured yet).
 
+### Whole slide's tiles: reading and Median Subtract (2026-10-24)
+
+Per tile (new debug line "tile (x, y): read … s, all … s"): a full 4096²
+tile takes ~55 s with 21 tiles at once, 35-41 s of it reading. The 5-channel
+series is 5 z-planes × 5 channels of JPEG 2000 tiles (512², 25,650 at full
+resolution, max projection over z): ~1,600 decoded per 4096² tile, ~8 ms
+each on one core (bioformats-rs' openjpeg2-pure-rs) - 13-14 s per tile
+alone, 35-41 s when 21 tiles share this laptop CPU (Core Ultra 9 185H: 6 P +
+10 E cores). Reading is bioformats-rs' part (not changed here).
+
+Median Subtract was the biggest step: 174-183 s CPU per run (42 calls,
+4.8 s per 4096² tile, radius 3: 37 values ranked per pixel). Now a sliding
+histogram (Huang) for gray values - raw or scaled to 0..1 (the pipeline's
+images are scaled; 8-bit too) - when each level holds one value; bitmaps of
+the used levels let the median jump; the same values bit for bit (checked
+against ranking every window, NaN/ties/RGB/-0.0 fallback). Rows in parallel.
+
+| | before | after |
+|---|---|---|
+| Median Subtract, whole slide (CPU, 42 calls) | 174-183 s | 33 s |
+| 4096² random 200..3200, one P-core | 3.9-4.4 s | 2.8-3.0 s |
+| Whole slide: 21 tiles / wall | 58-63 s / 76-78 s | 50 s / 67-69 s |
+| 81 images | 13.6-13.7 s | 14.4 s (no median; machine busier) |
+
+Exported objects: 0 rows differ from before, whole slide and 81 images.
+(The machine had load 4-9 from outside during these runs.)
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

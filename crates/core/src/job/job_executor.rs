@@ -834,6 +834,7 @@ impl<'a> JobExecutor {
                     // `prepare_pipeline_cache`'s doc comment) - the pool's
                     // per-tile lock contention cost more wall-clock time
                     // than the reader construction it was meant to save.
+                    let tile_start = Instant::now();
                     let reader = ImageReader::new(image_path, ReadMode::Default)?;
 
                     let mut cache = self.prepare_pipeline_cache(
@@ -858,6 +859,7 @@ impl<'a> JobExecutor {
                         nr_c_stacks,
                         reuse_variants,
                     )?;
+                    let read_s = tile_start.elapsed().as_secs_f64();
 
                     let mut stop_capture: Option<crate::pipeline::pipeline::BreakpointCapture> =
                         None;
@@ -904,6 +906,14 @@ impl<'a> JobExecutor {
                     }
                     // Every pipeline ran on this tile: its shared slots are done.
                     cache.clear_shared_slots();
+                    debug!(
+                        "tile ({}, {}) {}x{}: read {read_s:.2} s, all {:.2} s",
+                        tile.offset_x,
+                        tile.offset_y,
+                        tile.width,
+                        tile.height,
+                        tile_start.elapsed().as_secs_f64()
+                    );
 
                     // Snapshot: send the captured buffers but continue merging normally.
                     if let Some(capture) = snapshot_capture {
@@ -3569,6 +3579,225 @@ mod full_run_integration_tests {
             job.run(1, tx, Arc::new(AtomicBool::new(false)))
                 .unwrap_or_else(|e| panic!("{source:?}: {e}"));
             assert!(!out_objects.lock().unwrap().is_empty(), "{source:?}");
+        }
+    }
+
+    /// A synthetic 16-bit image made of ties: 3 x 3 spots (2900) on a grid
+    /// whose spacing alternates 40 / 41 px, so Voronoi cells have pixels
+    /// exactly as far from two spots (x = 40, 121) - and bars (4000) lying
+    /// across two cells: at x 77..=84 exactly half in each (Coloc / Relate
+    /// ties, three of them), at x 36..=44 across a column of equidistant pixels.
+    fn write_tie_image(dir: &std::path::Path) -> PathBuf {
+        let (width, height) = (170u32, 120u32);
+        let mut image = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_pixel(
+            width,
+            height,
+            image::Luma([200]),
+        );
+        for cy in [20u32, 60, 100] {
+            for cx in [20u32, 60, 101, 141] {
+                for y in cy - 1..=cy + 1 {
+                    for x in cx - 1..=cx + 1 {
+                        image.put_pixel(x, y, image::Luma([2900]));
+                    }
+                }
+            }
+        }
+        for (x0, x1, y) in [
+            (77u32, 84u32, 20u32),
+            (77, 84, 60),
+            (77, 84, 100),
+            (36, 44, 60),
+            (118, 124, 100),
+        ] {
+            for x in x0..=x1 {
+                image.put_pixel(x, y, image::Luma([4000]));
+            }
+        }
+        let path = dir.join("ties.tif");
+        image.save(&path).unwrap();
+        path
+    }
+
+    /// Threshold `min..=max` of channel 0 → objects of class `class`.
+    fn objects_pipeline(id: u32, min: f32, max: f32, class: u32) -> Pipeline {
+        let mut pipeline = Pipeline::new(
+            PipelineId(id),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_command(Box::new(Threshold {
+            thresholds: vec![ThresholdEntry {
+                method: ThresholdMethod::Manual,
+                min_threshold: min,
+                max_threshold: max,
+                unit: PixelUnits::Bit,
+                segmentation_class: SegmentationClass(class),
+                value_source: ThresholdValueSource::ActualImage,
+            }],
+        }));
+        pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
+        pipeline.add_command(Box::new(ExtractObjects {
+            max_objects_before_fail: 100_000,
+            class_mapping: vec![],
+        }));
+        pipeline
+    }
+
+    /// Spots, bars, Voronoi cells around the spots, the bars colocalized
+    /// with one cell each (their overlap as objects) and related to one -
+    /// run with `threads`; every exported object as text without ids
+    /// (partners and parents by their box), sorted.
+    fn tie_run(dir: &std::path::Path, threads: usize) -> Vec<String> {
+        let image_path = write_tie_image(dir);
+        let rel_path = PathBuf::from(image_path.file_name().unwrap());
+        let mut series = BTreeMap::new();
+        series.insert(0, SeriesSettings::default());
+        let mut images = IndexMap::new();
+        images.insert(
+            rel_path.clone(),
+            ImageEntry {
+                rel_path,
+                file_size: 0,
+                selected_series: 0,
+                series,
+            },
+        );
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = JobExecutor::new(
+            PathBuf::new(),
+            std::env::temp_dir(),
+            images,
+            dir.to_path_buf(),
+            GlobalImageSettings::default(),
+            Arc::new(MemoryExporter {
+                out_objects: out_objects.clone(),
+                ..Default::default()
+            }),
+            None,
+            Default::default(),
+        );
+        let (spot, cell, bar, overlap) = (
+            ObjectClass::Global(1),
+            ObjectClass::Global(2),
+            ObjectClass::Global(3),
+            ObjectClass::Global(4),
+        );
+        job.add_pre_process_pipeline(objects_pipeline(1, 2500.0, 3500.0, 1));
+        job.add_pre_process_pipeline(objects_pipeline(2, 3600.0, 65535.0, 3));
+        let mut whole = Pipeline::new(
+            PipelineId(3),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        whole.add_command(Box::new(crate::algos::Voronoi {
+            centers: spot,
+            center_filter_classes: vec![],
+            mask: ObjectClass::Unset,
+            mask_filter_classes: vec![],
+            output_class: cell,
+            unit: evanalyzer_cfg::core_types::SizeUnits::Pixels,
+            max_radius: 0.0,
+            exclude_areas_at_the_edges: false,
+            exclude_areas_with_no_center: false,
+        }));
+        whole.add_command(Box::new(crate::algos::Colocalization {
+            classes_to_coloc: vec![cell, bar],
+            all_combinations: false,
+            exclude_classes: vec![],
+            min_coloc_area: 0.0,
+            size_unit: evanalyzer_cfg::core_types::SizeUnitsRel::Pixels,
+            multiplicity: crate::algos::ColocMultiplicity::OneToOne,
+            class_for_overlapping_areas: overlap,
+            mark_objects_of: ObjectClass::Unset,
+            mark_as: ObjectClass::Unset,
+            filter_classes: vec![],
+        }));
+        whole.add_command(Box::new(crate::algos::RelateObjects {
+            child_classes: vec![bar],
+            parent_classes: vec![cell],
+            rule: crate::algos::RelateRule::LargestOverlap,
+            remove_without_parent: false,
+        }));
+        job.add_post_process_pipeline(whole);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(threads, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap();
+
+        let objects = out_objects.lock().unwrap();
+        let boxes: std::collections::HashMap<ObjectId, [u32; 4]> =
+            objects.iter().map(|o| (o.id.clone(), o.bbox)).collect();
+        let mut described: Vec<String> = objects
+            .iter()
+            .map(|o| {
+                let mut classes: Vec<String> =
+                    o.object_class.iter().map(|c| format!("{c:?}")).collect();
+                classes.sort();
+                let mut partners: Vec<String> = o
+                    .colocalized_with
+                    .iter()
+                    .map(|(class, ids)| {
+                        let mut at: Vec<_> = ids.iter().map(|id| boxes.get(id)).collect();
+                        at.sort();
+                        format!("{class:?} {at:?}")
+                    })
+                    .collect();
+                partners.sort();
+                let mut parents: Vec<String> = o
+                    .parents
+                    .iter()
+                    .map(|(class, id)| format!("{class:?} {:?}", boxes.get(id)))
+                    .collect();
+                parents.sort();
+                let mut intensities: Vec<String> = o
+                    .intensities
+                    .iter()
+                    .map(|(channel, i)| format!("{channel} {i:?}"))
+                    .collect();
+                intensities.sort();
+                let mask: String = o
+                    .mask_data
+                    .iter()
+                    .map(|bit| if *bit { '1' } else { '0' })
+                    .collect();
+                format!(
+                    "{classes:?} {:?} {} {mask} {partners:?} {parents:?} {intensities:?}",
+                    o.bbox, o.area
+                )
+            })
+            .collect();
+        described.sort();
+        described
+    }
+
+    /// The same image and project give the very same objects in every run
+    /// and with any number of threads - also where steps meet ties (object
+    /// ids are random, so nothing may depend on them).
+    #[test]
+    fn a_run_gives_the_same_objects_every_time_and_with_any_number_of_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = tie_run(dir.path(), 1);
+        assert!(
+            first
+                .iter()
+                .filter(|o| o.starts_with("[\"Global(2)\"]"))
+                .count()
+                == 12,
+            "one Voronoi cell per spot"
+        );
+        assert!(
+            first.iter().any(|o| o.starts_with("[\"Global(4)\"]")),
+            "the bars' overlaps with their cells"
+        );
+        for (run, threads) in [4, 4, 1, 8].into_iter().enumerate() {
+            assert_eq!(
+                tie_run(dir.path(), threads),
+                first,
+                "run {} with {threads} threads",
+                run + 2
+            );
         }
     }
 

@@ -128,8 +128,105 @@ impl ImageAlgorithm for RankFilter {
 }
 
 impl RankFilter {
-    /// Generic processing function to handle 1 or 3 channels
+    /// Filters `img` (1 or 3 channels): the median (and outliers, which
+    /// need it) of gray values - raw or scaled to 0..1 - with a sliding
+    /// histogram, everything else by gathering each window.
     fn process_image<const C: usize>(
+        &self,
+        img: &Image<f32, C>,
+    ) -> Result<Image<f32, C>, InternalErrors> {
+        let median = matches!(
+            self.filter_type,
+            RankFilterType::Median | RankFilterType::Outliers(_)
+        );
+        match median.then(|| GrayLevels::of(img.as_slice())).flatten() {
+            Some(levels) => self.process_histogram(img, &levels),
+            None => self.process_gathered(img),
+        }
+    }
+
+    /// The median of gray values (`levels`: each value a level 0..=65535,
+    /// NaN left out) with a histogram slid along each row (Huang): one step right takes out the
+    /// left edge of each kernel row and puts in the new right edge (2 × 7
+    /// counts for radius 3, not all 37 values ranked), and the median moves
+    /// from where it was - 256 coarse levels skip the empty runs. The same
+    /// values as [`Self::process_gathered`], bit for bit; rows in parallel.
+    fn process_histogram<const C: usize>(
+        &self,
+        img: &Image<f32, C>,
+        levels: &GrayLevels,
+    ) -> Result<Image<f32, C>, InternalErrors> {
+        use rayon::prelude::*;
+        let (line_radii, k_radius, _) = get_kernel_geometry(self.radius);
+        let k_height = (2 * k_radius + 1) as usize;
+        let kr = k_radius as usize;
+        let (width, height) = (img.width(), img.height());
+        let src_data = img.as_slice();
+        let mut out_image = Image::<f32, C>::new(img.size(), vec![0.0f32; width * height * C])
+            .map_err(InternalErrors::from_kornia)?;
+        let cache_width = width + 2 * kr;
+
+        out_image
+            .as_slice_mut()
+            .par_chunks_mut(width * C)
+            .enumerate()
+            .for_each(|(y, out_row)| {
+                // The rows as gray levels (`NO_LEVEL`: NaN), converted once.
+                let mut local_cache = vec![0u32; cache_width * k_height];
+                let mut window = SlidingMedian::new();
+                for c in 0..C {
+                    let channel_offset = c * width * height;
+                    // The kernel's rows around `y` (clamped), padded left and
+                    // right with the edge values - as `process_gathered`.
+                    for ky in 0..k_height {
+                        let yi =
+                            (y as i32 + ky as i32 - k_radius).clamp(0, height as i32 - 1) as usize;
+                        let row = &mut local_cache[ky * cache_width..(ky + 1) * cache_width];
+                        let src = &src_data[channel_offset + yi * width..][..width];
+                        let level = |v: f32| levels.level(v);
+                        for (to, v) in row[kr..kr + width].iter_mut().zip(src) {
+                            *to = level(*v);
+                        }
+                        row[..kr].fill(level(src[0]));
+                        row[kr + width..].fill(level(src[width - 1]));
+                    }
+                    // Kernel row `ky`'s value `dx` from the window's centre `x`.
+                    let at = |ky: usize, x: usize, dx: i32| {
+                        local_cache[((ky * cache_width + x + kr) as i32 + dx) as usize]
+                    };
+                    window.clear();
+                    for ky in 0..k_height {
+                        for dx in line_radii[2 * ky]..=line_radii[2 * ky + 1] {
+                            window.insert(at(ky, 0, dx));
+                        }
+                    }
+                    for x in 0..width {
+                        if x > 0 {
+                            for ky in 0..k_height {
+                                window.remove(at(ky, x - 1, line_radii[2 * ky]));
+                                window.insert(at(ky, x, line_radii[2 * ky + 1]));
+                            }
+                        }
+                        let pixel_idx = (y * width + x) * C + c;
+                        out_row[x * C + c] = match window.median() {
+                            None => NAN,
+                            Some(level) => match (self.filter_type, levels.value[level]) {
+                                (RankFilterType::Outliers(t), med) => {
+                                    let cur = src_data[pixel_idx];
+                                    if (cur - med).abs() > t { med } else { cur }
+                                }
+                                (_, med) => med,
+                            },
+                        };
+                    }
+                }
+            });
+        Ok(out_image)
+    }
+
+    /// Every window gathered and ranked on its own - the mean, and the
+    /// reference the sliding histogram is checked against.
+    fn process_gathered<const C: usize>(
         &self,
         img: &Image<f32, C>,
     ) -> Result<Image<f32, C>, InternalErrors> {
@@ -221,6 +318,192 @@ impl RankFilter {
             }
         }
         Ok(out_image)
+    }
+}
+
+/// A window value that isn't counted (NaN).
+const NO_LEVEL: u32 = u32::MAX;
+
+/// An image's values as gray levels 0..=65535: `level = v · scale`,
+/// rounded (scale 1 for raw gray values, 65535 for values scaled to 0..1 -
+/// 8-bit ones too: 65535 = 255 · 257). Only when each level holds a single
+/// value (bit for bit - so -0.0 next to 0.0 doesn't) - the value kept per
+/// level is then exactly the image's, and the levels are in the values'
+/// order.
+struct GrayLevels {
+    scale: f32,
+    value: Vec<f32>,
+}
+
+impl GrayLevels {
+    fn of(values: &[f32]) -> Option<Self> {
+        let max = values
+            .iter()
+            .filter(|v| !v.is_nan())
+            .fold(f32::MIN, |m, v| m.max(*v));
+        let scale = if max <= 1.0 { 65535.0 } else { 1.0 };
+        let mut value = vec![f32::NAN; 65536];
+        for v in values {
+            if v.is_nan() {
+                continue;
+            }
+            let scaled = v * scale;
+            if !(0.0..=65535.0).contains(&scaled) {
+                return None;
+            }
+            let level = (scaled + 0.5) as usize;
+            let kept = &mut value[level];
+            if kept.is_nan() {
+                *kept = *v;
+            } else if kept.to_bits() != v.to_bits() {
+                return None;
+            }
+        }
+        Some(Self { scale, value })
+    }
+
+    /// `v`'s level (`NO_LEVEL` for NaN).
+    fn level(&self, v: f32) -> u32 {
+        if v.is_nan() {
+            NO_LEVEL
+        } else {
+            (v * self.scale + 0.5) as u32
+        }
+    }
+}
+
+/// The values of a window as counts per gray value (NaN not counted), with
+/// its median kept up to date. A window holds few values (37 for radius 3)
+/// over 65536 levels: bitmaps of the levels in use let the median jump to
+/// the next one instead of walking through the empty ones.
+struct SlidingMedian {
+    count: Vec<u16>,
+    /// Bit per level: in use.
+    used: Vec<u64>,
+    /// Bit per word of `used`: any in use.
+    used_words: [u64; 16],
+    n: usize,
+    /// The level the median was last found at, and how many values lie
+    /// below it.
+    at: usize,
+    below: usize,
+}
+
+impl SlidingMedian {
+    fn new() -> Self {
+        Self {
+            count: vec![0; 65536],
+            used: vec![0; 1024],
+            used_words: [0; 16],
+            n: 0,
+            at: 0,
+            below: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        if self.n > 0 {
+            self.count.fill(0);
+            self.used.fill(0);
+            self.used_words = [0; 16];
+        }
+        self.n = 0;
+        self.at = 0;
+        self.below = 0;
+    }
+
+    fn insert(&mut self, level: u32) {
+        if level == NO_LEVEL {
+            return;
+        }
+        let level = level as usize;
+        if self.count[level] == 0 {
+            self.used[level >> 6] |= 1 << (level & 63);
+            self.used_words[level >> 12] |= 1 << ((level >> 6) & 63);
+        }
+        self.count[level] += 1;
+        self.n += 1;
+        if level < self.at {
+            self.below += 1;
+        }
+    }
+
+    fn remove(&mut self, level: u32) {
+        if level == NO_LEVEL {
+            return;
+        }
+        let level = level as usize;
+        self.count[level] -= 1;
+        if self.count[level] == 0 {
+            self.used[level >> 6] &= !(1 << (level & 63));
+            if self.used[level >> 6] == 0 {
+                self.used_words[level >> 12] &= !(1 << ((level >> 6) & 63));
+            }
+        }
+        self.n -= 1;
+        if level < self.at {
+            self.below -= 1;
+        }
+    }
+
+    /// The next level in use above `level` (one must exist).
+    fn next_used(&self, level: usize) -> usize {
+        let level = level + 1;
+        let word = level >> 6;
+        let bits = self.used[word] & (!0u64 << (level & 63));
+        if bits != 0 {
+            return (word << 6) + bits.trailing_zeros() as usize;
+        }
+        let mut w = word + 1;
+        loop {
+            let group = w >> 6;
+            let words = self.used_words[group] & (!0u64 << (w & 63));
+            if words != 0 {
+                let w = (group << 6) + words.trailing_zeros() as usize;
+                return (w << 6) + self.used[w].trailing_zeros() as usize;
+            }
+            w = (group + 1) << 6;
+        }
+    }
+
+    /// The next level in use below `level` (one must exist).
+    fn previous_used(&self, level: usize) -> usize {
+        let level = level - 1;
+        let word = level >> 6;
+        let bits = self.used[word] & (!0u64 >> (63 - (level & 63)));
+        if bits != 0 {
+            return (word << 6) + 63 - bits.leading_zeros() as usize;
+        }
+        let mut w = word - 1;
+        loop {
+            let group = w >> 6;
+            let words = self.used_words[group] & (!0u64 >> (63 - (w & 63)));
+            if words != 0 {
+                let w = (group << 6) + 63 - words.leading_zeros() as usize;
+                return (w << 6) + 63 - self.used[w].leading_zeros() as usize;
+            }
+            w = (group << 6) - 1;
+        }
+    }
+
+    /// The level of the value of rank n/2 (0-based) - what `select_nth`
+    /// picks.
+    fn median(&mut self) -> Option<usize> {
+        if self.n == 0 {
+            return None;
+        }
+        let rank = self.n / 2;
+        // Down while the median lies below `at`.
+        while self.below > rank {
+            self.at = self.previous_used(self.at);
+            self.below -= self.count[self.at] as usize;
+        }
+        // Up while it lies above `at`.
+        while self.below + self.count[self.at] as usize <= rank {
+            self.below += self.count[self.at] as usize;
+            self.at = self.next_used(self.at);
+        }
+        Some(self.at)
     }
 }
 
@@ -500,5 +783,144 @@ mod tests {
             assert_eq!(*out_img.get_pixel(0, 0, 0).unwrap(), 5.0);
         }
         Ok(())
+    }
+
+    /// A pseudo-random image: few distinct values (many ties), some NaN;
+    /// with `floats` also -0.0, negative and fractional values.
+    fn test_image<const C: usize>(
+        width: usize,
+        height: usize,
+        seed: u64,
+        floats: bool,
+    ) -> Image<f32, C> {
+        let mut state = seed;
+        let data = (0..width * height * C)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                match (state >> 33) % 23 {
+                    0 => f32::NAN,
+                    1 if floats => -0.0,
+                    2 => 0.0,
+                    3 => 65535.0,
+                    k if floats => (k % 9) as f32 * 1.5 - 3.0,
+                    k => ((k % 9) * 300) as f32,
+                }
+            })
+            .collect();
+        Image::<f32, C>::new(ImageSize { width, height }, data).unwrap()
+    }
+
+    /// The sliding histogram gives what gathering every window gives, bit
+    /// for bit (median, outliers; radii 0.5 to 6; gray and RGB; images
+    /// narrower than the kernel; NaN, ties) - and other values (-0.0,
+    /// fractions) go the gathering way, also the same.
+    #[test]
+    fn the_sliding_histogram_matches_gathering_every_window() {
+        let bits = |img: &[f32]| img.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        for (k, (width, height)) in [(37, 23), (3, 9), (1, 1), (64, 2)].into_iter().enumerate() {
+            for radius in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.2, 6.0] {
+                for filter_type in [RankFilterType::Median, RankFilterType::Outliers(400.0)] {
+                    let filter = RankFilter {
+                        radius,
+                        filter_type,
+                    };
+                    let what = format!("{width}x{height} r {radius} {filter_type:?}");
+                    let gray = test_image::<1>(width, height, k as u64 + 1, false);
+                    assert!(GrayLevels::of(gray.as_slice()).is_some());
+                    assert_eq!(
+                        bits(filter.process_image(&gray).unwrap().as_slice()),
+                        bits(filter.process_gathered(&gray).unwrap().as_slice()),
+                        "gray {what}"
+                    );
+                    let rgb = test_image::<3>(width, height, k as u64 + 7, false);
+                    assert_eq!(
+                        bits(filter.process_image(&rgb).unwrap().as_slice()),
+                        bits(filter.process_gathered(&rgb).unwrap().as_slice()),
+                        "rgb {what}"
+                    );
+                    let scaled = Image::<f32, 1>::new(
+                        gray.size(),
+                        gray.as_slice().iter().map(|v| v / 65535.0).collect(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        bits(filter.process_image(&scaled).unwrap().as_slice()),
+                        bits(filter.process_gathered(&scaled).unwrap().as_slice()),
+                        "scaled to 0..1 {what}"
+                    );
+                    let floats = test_image::<1>(width, height, k as u64 + 3, true);
+                    assert_eq!(
+                        bits(filter.process_image(&floats).unwrap().as_slice()),
+                        bits(filter.process_gathered(&floats).unwrap().as_slice()),
+                        "floats {what}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Speed: median radius 3 on a 4096² 16-bit-like image, sliding
+    /// histogram vs gathering every window.
+    ///
+    /// `cargo test --release -p evanalyzer_core --lib bench_rank_filter_median -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_rank_filter_median() {
+        let size: usize = std::env::var("BENCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4096);
+        let mut state = 3u64;
+        let data: Vec<f32> = (0..size * size)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (200 + (state >> 33) % 3000) as f32
+            })
+            .collect();
+        let img = Image::<f32, 1>::new(
+            ImageSize {
+                width: size,
+                height: size,
+            },
+            data,
+        )
+        .unwrap();
+        let filter = RankFilter {
+            radius: 3.0,
+            filter_type: RankFilterType::Median,
+        };
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        for (name, sorted) in [
+            ("gathered", false),
+            ("histogram", true),
+            ("gathered", false),
+            ("histogram", true),
+        ] {
+            let start = std::time::Instant::now();
+            pool.install(|| {
+                if sorted {
+                    std::hint::black_box(filter.process_image(&img).unwrap());
+                } else {
+                    std::hint::black_box(filter.process_gathered(&img).unwrap());
+                }
+            });
+            println!(
+                "{name:<9} {size}² one thread: {:.2} s",
+                start.elapsed().as_secs_f64()
+            );
+        }
+        let start = std::time::Instant::now();
+        std::hint::black_box(filter.process_image(&img).unwrap());
+        println!(
+            "histogram {size}² all threads: {:.2} s",
+            start.elapsed().as_secs_f64()
+        );
     }
 }
