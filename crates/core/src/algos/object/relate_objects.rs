@@ -171,8 +171,9 @@ impl RelateObjects {
             .filter(|id| id != child_id)
             .filter_map(|id| cache.object_cache.get(&id).map(|parent| (id, parent)))
             .collect();
-        // Lowest id first: the tie-break.
-        candidates.sort_by(|(a, _), (b, _)| a.cmp(b));
+        // In image order: the tie-break (`Object::position_cmp`) - the same in
+        // every run, unlike the ids.
+        candidates.sort_by(|(_, a), (_, b)| a.position_cmp(b));
         match self.rule {
             RelateRule::CentreInside => {
                 let (x, y) = child.get_centroid();
@@ -448,6 +449,21 @@ mod tests {
                 object
             })
             .collect()
+    }
+
+    /// An equal overlap with two cells goes to the cell first in reading order
+    /// (the left one), whichever has the lower id - the ids are random.
+    #[test]
+    fn a_tie_goes_to_the_first_parent_in_reading_order_not_the_lower_id() {
+        for (left, right) in [(1, 2), (2, 1)] {
+            let mut cache = cache(vec![
+                filled(left, [0, 0, 9, 9], CELL),
+                filled(right, [10, 0, 19, 9], CELL),
+                filled(100, [8, 4, 11, 5], SPOT),
+            ]);
+            run(&step(RelateRule::LargestOverlap), &mut cache).unwrap();
+            assert_eq!(parent(&cache, 100, CELL), Some(left), "left id {left}");
+        }
     }
 
     /// "It overlaps the parent most" gives each child the parent

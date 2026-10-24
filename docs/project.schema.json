@@ -2466,7 +2466,7 @@
           "const": "MANY_TO_MANY"
         },
         {
-          "description": "Only the partner with the largest overlap, per class - e.g. a small\nobject on the border of two larger ones picks the larger overlap;\nties go to the lower `ObjectId`.",
+          "description": "Only the partner with the largest overlap, per class - e.g. a small\nobject on the border of two larger ones picks the larger overlap;\nties go to the one further up (then further left).",
           "type": "string",
           "const": "ONE_TO_ONE"
         },

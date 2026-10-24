@@ -273,7 +273,9 @@ impl ImageAlgorithm for Voronoi {
 
         // --- Phase 1: Collect filtered center objects and their seed coordinates ---
         // Seed point is the bounding-box centre, matching the C++ reference implementation.
-        let centers: Vec<(ObjectId, f64, f64)> = cache
+        // In image order: a pixel equally far from two centres goes to the first
+        // (`Object::position_cmp`) - the same in every run, unlike the ids.
+        let mut center_objects: Vec<&Object> = cache
             .object_cache
             .values()
             .filter(|object| {
@@ -283,6 +285,10 @@ impl ImageAlgorithm for Voronoi {
                         .iter()
                         .all(|f| object.is_of(f, ctx.scope))
             })
+            .collect();
+        center_objects.sort_by(|a, b| a.position_cmp(b));
+        let centers: Vec<(ObjectId, f64, f64)> = center_objects
+            .into_iter()
             .map(|object| {
                 let [x_min, y_min, x_max, y_max] = object.bbox;
                 let cx = (x_min + x_max) as f64 / 2.0;
@@ -485,12 +491,13 @@ impl ImageAlgorithm for Voronoi {
                 ..Default::default()
             });
             object.add_object_class(self.output_class, ctx.scope)?;
-            // `Object::new` only derives geometry from the mask; Voronoi regions never
-            // pass through `ExtractObjects` (the step that normally samples pixel data),
-            // so they need their own intensity measurement pass here.
-            object.intensities = object.measure_intensities(cache);
             new_objects.push(object);
         }
+        // `Object::new` only derives geometry from the mask; Voronoi regions never
+        // pass through `ExtractObjects` (the step that normally samples pixel data),
+        // so they need their own intensity measurement pass here - all together,
+        // tile by tile.
+        Object::measure_intensities_of(&mut new_objects, cache);
 
         // --- Phase 6: Insert the new ROIs into the cache ---
         for object in new_objects {
@@ -727,6 +734,31 @@ mod tests {
         assert_eq!(intensity.avg_intensity, VALUE);
         assert_eq!(intensity.min_intensity, VALUE);
         assert_eq!(intensity.max_intensity, VALUE);
+    }
+
+    /// A pixel as far from two centres goes to the one first in reading order
+    /// (here the left one), whichever has the lower id - the ids are random,
+    /// the regions must be the same in every run.
+    #[test]
+    fn a_tied_pixel_goes_to_the_first_centre_in_reading_order_not_the_lower_id() {
+        for (left_id, right_id) in [(ID_A, ID_B), (ID_B, ID_A)] {
+            let mut ctx = make_ctx(9, 3);
+            let mut cache = GlobalPipelineCache::default();
+            for (id, cx) in [(left_id, 2), (right_id, 6)] {
+                cache.object_cache.insert(
+                    ObjectId(id),
+                    make_filled_object(id, center_bbox(cx, 1), CENTER_CLASS),
+                );
+            }
+            run(&default_voronoi(), &mut ctx, &mut cache);
+            let mut regions: Vec<(u32, usize)> = voronoi_objects(&cache)
+                .iter()
+                .map(|r| (r.bbox[0], r.area))
+                .collect();
+            regions.sort();
+            // Columns 0-4 (x = 4 is the tie) and 5-8, 3 rows each.
+            assert_eq!(regions, vec![(0, 15), (5, 12)], "left id {left_id}");
+        }
     }
 
     #[test]

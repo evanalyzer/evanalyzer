@@ -230,6 +230,15 @@ fn main() {
         .query_row("SELECT count(*) FROM objects", [], |r| r.get(0))
         .unwrap();
     println!("objects in db: {objects}");
+    // To compare runs: identical inputs must give identical sums.
+    let (area, intensity): (i64, f64) = conn
+        .query_row(
+            "SELECT sum(area_px)::BIGINT, sum(list_sum(intensity_sum_gray)) FROM objects",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    println!("sum area_px: {area}  sum intensity: {intensity:.6}");
     let mpx = images as f64 * (size as f64 * size as f64) / 1e6;
     println!(
         "threads={parallelism} images={images} size={size} result={:?} time={elapsed:.2}s  {:.2} img/s  {:.1} MPx/s",

@@ -719,6 +719,53 @@ load ~11, so both are slower than in the section above):
 | Peak RSS | 3.16-3.18 GB | 2.57-2.64 GB |
 | File after checkpoint | 2425 MB | 1802-1805 MB (-26 %) |
 
+## Reproducible runs and the whole slide's whole-image phase (2026-10-24)
+
+The performance-check project (`tests/performance-check`, its own repo:
+81 × 2048² `.vsi`, and one 5-channel whole slide in 21 tiles), run through
+`evanalyzer cli analyze` + CSV export, objects compared row by row without
+their ids (`cmp.py`-style: rows only in one run).
+
+**Same input, same objects.** Ties were broken by `ObjectId` - UUID v7,
+random below the millisecond - so each run picked differently:
+
+| Run vs run | before | after |
+|---|---|---|
+| 81 images (Coloc "only the best partner") | 9-15 of 298,262 objects differ | 0 |
+| Whole slide (Voronoi cells) | 1,657-1,711 of 99,473 differ | 0 |
+
+Coloc, Voronoi and Relate now break ties by position
+(`Object::position_cmp`: the first pixel in reading order - how
+scipy/scikit-image number labels, so CellProfiler's "lower label" ties
+fall the same way).
+
+**Whole slide 131 s → 76 s.** With `--log-level
+info,evanalyzer_core::algos=debug,evanalyzer_core::job::job_executor=debug`
+(new: a line per step and per phase): 21 tiles 58-60 s (parallel), then
+single-threaded Tile Merge 50 s and Voronoi 19 s. Tile Merge measured its
+258 merged objects (188M px) one by one, each fetching its tiles from the
+image cache - 1,821 loads of 64 MB from the spill files (Voronoi 568).
+Now `Object::measure_intensities_of`: tile by tile, each channel tile
+fetched once, objects in parallel (an object over several tiles keeps one
+accumulator per channel until its last tile; from 65,536 values on gray
+values are counted per level, 256 KB per channel however big). Also fixed:
+the histogram path for median/quartiles expected values 0..1 - with raw
+gray values it never ran (selection instead; same numbers, slower).
+
+| Whole slide (old / new build alternated) | before | after |
+|---|---|---|
+| Wall | 139 / 154 / 118 / 135 s | 78 / 75 s |
+| Peak RSS | 9.1-9.2 GB | 7.8-8.3 GB |
+| Cores used (avg) | 6.3-7.5 | 11.5-12.0 |
+| Tile Merge / Voronoi | 50 / 19 s | 7.0 / 6.5 s |
+| Disk loads after the tiles | 2,389 | 210 |
+| 81 images | 13.0-14.7 s, 3.0-3.1 GB | 13.6-13.7 s, 3.0-3.1 GB |
+
+The exported values are the same as before (0 rows differ at the CSV's
+precision). Left: the tiles' 58 s - the steps add up to ~15 s per tile
+(Median Subtract 4.8 s per call), the rest is reading the slide (not
+measured yet).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -748,6 +795,7 @@ graphics driver).
 | Running a pipeline with intensity spread: 200 images 2048², 8 threads | 1.1-1.16 GB | 2026-10-24 | Measurement storage and object intensity spread |
 | Expand Without Overlap, 42,000 objects on 8192², margin 8 / 100 px | 255 / 861 MB (test process; 100 px measured before the smaller feature transform) | 2026-10-24 | Expand Without Overlap |
 | Measure Object Neighbors, 42,000 objects on 8192², expand until adjacent | 925 MB (test process) | 2026-10-24 | Measure Object Neighbors |
+| Whole slide (5 channels, 21 tiles, 99,473 objects), performance-check project | 7.8-8.3 GB (was 9.1-9.2 GB) | 2026-10-24 | Reproducible runs and the whole slide |
 | Measure Texture, 8192² image + 74,529 objects | 603 MB (test process, ~520 MB of it the test image) | 2026-10-24 | Measure Texture |
 | Results views, 5.6M objects, measurement columns (plate, per image, list, histogram) | 113-228 MB (query process) | 2026-10-24 | Measurement storage and object intensity spread |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |

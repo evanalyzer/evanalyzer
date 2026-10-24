@@ -269,6 +269,24 @@ impl Object {
         object
     }
 
+    /// An order by where the object lies: its first pixel in reading order
+    /// (top to bottom, left to right - the order scipy/scikit-image number
+    /// labels, so CellProfiler's "lower label" ties come out the same), then
+    /// box, area and mask. The same in every run, unlike the ids (random
+    /// within a millisecond). For tie-breaks: two objects differ here unless
+    /// they cover the very same pixels.
+    pub fn position_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let first = |o: &Self| {
+            (
+                o.bbox[1],
+                o.bbox[0] as usize + o.mask_data.first_one().unwrap_or(0),
+            )
+        };
+        (first(self), self.bbox, self.area)
+            .cmp(&(first(other), other.bbox, other.area))
+            .then_with(|| self.mask_data.cmp(&other.mask_data))
+    }
+
     /// Checks if a global coordinate (x, y) is within the object's mask.
     pub fn is_part_of(&self, x: u32, y: u32) -> bool {
         let [x_min, y_min, x_max, y_max] = self.bbox;
@@ -1075,6 +1093,137 @@ impl Object {
         acc.finish()
     }
 
+    /// Measures every object of `objects` (into its `intensities`) as
+    /// [`Self::measure_intensities`] does one by one, but tile by tile: each
+    /// channel tile is fetched from the cache once - not once per object,
+    /// which on a whole slide read the same tiles from disk again and again -
+    /// and the objects in parallel. An object inside one tile is measured
+    /// while that tile is loaded; one over several keeps its sums (bounded:
+    /// gray values are counted) until its last tile.
+    pub fn measure_intensities_of(objects: &mut [Object], cache: &GlobalPipelineCache) {
+        use rayon::prelude::*;
+        let mut keys: Vec<(i32, ImageTile)> = cache.channel_keys().collect();
+        keys.sort_by_key(|(channel, t)| (t.offset_y, t.offset_x, *channel));
+        let tiles: Vec<ImageTile> = keys.chunk_by(|a, b| a.1 == b.1).map(|c| c[0].1).collect();
+        // The tiles in rows (the same offset_y), to find an object's quickly.
+        let rows: Vec<&[ImageTile]> = tiles.chunk_by(|a, b| a.offset_y == b.offset_y).collect();
+        let row_starts: Vec<usize> = rows
+            .iter()
+            .scan(0, |start, row| {
+                let s = *start;
+                *start += row.len();
+                Some(s)
+            })
+            .collect();
+        // Each object's tiles (indices into `tiles`, in order).
+        let object_tiles: Vec<Vec<usize>> = objects
+            .par_iter()
+            .map(|o| {
+                let [x0, y0, x1, y1] = o.bbox.map(|v| v as usize);
+                let mut found = Vec::new();
+                for (row, start) in rows.iter().zip(&row_starts) {
+                    let t = row[0];
+                    if t.offset_y > y1 || y0 >= t.offset_y + t.height {
+                        continue;
+                    }
+                    for (k, t) in row.iter().enumerate() {
+                        if t.offset_x <= x1 && x0 < t.offset_x + t.width {
+                            found.push(start + k);
+                        }
+                    }
+                }
+                found
+            })
+            .collect();
+        let mut by_tile: Vec<Vec<usize>> = vec![Vec::new(); tiles.len()];
+        for (i, found) in object_tiles.iter().enumerate() {
+            for &t in found {
+                by_tile[t].push(i);
+            }
+        }
+
+        let mut results: Vec<IndexMap<i32, Intensity>> = vec![IndexMap::new(); objects.len()];
+        // Objects over several tiles: one accumulator per channel, so a huge
+        // object's channels are added in parallel too.
+        let mut channels: Vec<i32> = keys.iter().map(|(channel, _)| *channel).collect();
+        channels.sort_unstable();
+        channels.dedup();
+        let mut spanning: Vec<(usize, i32, intensities::IntensityAccumulator)> = object_tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, found)| found.len() > 1)
+            .flat_map(|(i, _)| {
+                channels
+                    .iter()
+                    .map(move |&c| (i, c, intensities::IntensityAccumulator::default()))
+            })
+            .collect();
+        let objects_ref: &[Object] = objects;
+        for (t, (tile, members)) in tiles.iter().zip(&by_tile).enumerate() {
+            if members.is_empty() {
+                continue;
+            }
+            let containers: Vec<(i32, std::sync::Arc<crate::ImageContainer>)> = keys
+                .iter()
+                .filter(|(_, k)| k == tile)
+                .filter_map(|key| {
+                    let address = crate::pipeline::pipeline_cache::CacheAddress::Channel(*key);
+                    Some((key.0, cache.image_cache.get(&address)?))
+                })
+                .collect();
+            let channel_tiles: Vec<intensities::ChannelTile<'_>> = containers
+                .iter()
+                .filter_map(|(channel, image)| {
+                    intensities::ChannelTile::from_container(*channel, *tile, image)
+                })
+                .collect();
+            let measured: Vec<(usize, IndexMap<i32, Intensity>)> = members
+                .par_iter()
+                .filter(|&&i| object_tiles[i].len() == 1)
+                .map(|&i| {
+                    let mut acc = intensities::IntensityAccumulator::default();
+                    intensities::MaskIntensities::add_intensities(
+                        &objects_ref[i],
+                        &channel_tiles,
+                        &mut acc,
+                    );
+                    (i, acc.finish())
+                })
+                .collect();
+            for (i, intensities) in measured {
+                results[i] = intensities;
+            }
+            spanning
+                .par_iter_mut()
+                .filter(|(i, ..)| object_tiles[*i].contains(&t))
+                .for_each(|(i, channel, acc)| {
+                    let own: Vec<intensities::ChannelTile<'_>> = channel_tiles
+                        .iter()
+                        .filter(|c| c.channel == *channel)
+                        .copied()
+                        .collect();
+                    intensities::MaskIntensities::add_intensities(&objects_ref[*i], &own, acc)
+                });
+            // Done after their last tile: finished, their sums freed.
+            let (done, rest): (Vec<_>, Vec<_>) = spanning
+                .into_iter()
+                .partition(|(i, ..)| object_tiles[*i].last() == Some(&t));
+            spanning = rest;
+            let finished: Vec<(usize, IndexMap<i32, Intensity>)> = done
+                .into_par_iter()
+                .map(|(i, _, acc)| (i, acc.finish()))
+                .collect();
+            // In channel order (as `done` is): the same order as an object's
+            // inside one tile.
+            for (i, intensities) in finished {
+                results[i].extend(intensities);
+            }
+        }
+        for (object, intensities) in objects.iter_mut().zip(results) {
+            object.intensities = intensities;
+        }
+    }
+
     /// Builds the rasterized geometry of `self` scaled by `(scale_x, scale_y)` around its
     /// bounding-box center.
     ///
@@ -1821,6 +1970,113 @@ mod tests {
             99.0,
             "object at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
         );
+    }
+
+    /// Tile by tile gives every object what measuring it alone gives -
+    /// inside one tile, over two and over four, two channels, objects big
+    /// enough for counted gray values among them.
+    #[test]
+    fn measure_intensities_of_matches_measuring_one_by_one() {
+        use crate::ImageContainer;
+        use crate::image::ManagedImage;
+        use crate::image::Point2d;
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use kornia_image::Image;
+        use std::sync::Arc;
+
+        const SIZE: usize = 400;
+        const TILE: usize = 160;
+        let mut cache = GlobalPipelineCache::default();
+        for channel in 0..2 {
+            for (x0, y0) in (0..3).flat_map(|ty| (0..3).map(move |tx| (tx * TILE, ty * TILE))) {
+                let (w, h) = ((SIZE - x0).min(TILE), (SIZE - y0).min(TILE));
+                let samples: Vec<f32> = (0..w * h)
+                    .map(|i| {
+                        let (x, y) = (x0 + i % w, y0 + i / w);
+                        ((x * 31 + y * 17 + channel * 7) % 4000) as f32
+                    })
+                    .collect();
+                let image = ImageContainer::F32Gray(ManagedImage {
+                    data: Image::<f32, 1>::from_size_slice(
+                        ImageSize {
+                            width: w,
+                            height: h,
+                        },
+                        &samples,
+                    )
+                    .unwrap(),
+                    tile_offset: Point2d { x: x0, y: y0 },
+                    plane: None,
+                });
+                let tile = ImageTile {
+                    offset_x: x0,
+                    offset_y: y0,
+                    width: w,
+                    height: h,
+                };
+                cache.add_to_channel_cache(Arc::new(image), channel as i32, tile);
+            }
+        }
+        // (bbox) - every other mask pixel set.
+        let boxes: [[u32; 4]; 5] = [
+            [10, 10, 40, 30],     // inside one tile
+            [150, 20, 170, 60],   // over two (left/right)
+            [20, 150, 50, 170],   // over two (top/bottom)
+            [140, 140, 180, 175], // over four
+            [0, 0, 399, 399],     // the whole image (80,000 px): counted gray values
+        ];
+        let mut objects: Vec<Object> = boxes
+            .iter()
+            .enumerate()
+            .map(|(i, &bbox)| {
+                let w = (bbox[2] - bbox[0] + 1) as usize;
+                let h = (bbox[3] - bbox[1] + 1) as usize;
+                let mask: BitVec<u64, Lsb0> = (0..w * h).map(|k| k % 2 == 0).collect();
+                Object::new(ObjectInit {
+                    id: ObjectId(i as u128 + 1),
+                    bbox,
+                    area: mask.count_ones(),
+                    mask_data: mask,
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let one_by_one: Vec<IndexMap<i32, Intensity>> = objects
+            .iter()
+            .map(|o| o.measure_intensities(&cache))
+            .collect();
+        Object::measure_intensities_of(&mut objects, &cache);
+        for (object, expected) in objects.iter().zip(&one_by_one) {
+            assert_eq!(object.intensities.len(), 2, "object {:?}", object.id);
+            for (channel, e) in expected {
+                let got = &object.intensities[channel];
+                let what = format!("object {:?} channel {channel}", object.id);
+                // The sums in another tile order: equal up to rounding.
+                assert!(
+                    (got.sum_intensity - e.sum_intensity).abs() <= 1e-9 * e.sum_intensity,
+                    "{what}"
+                );
+                assert_eq!(
+                    (got.min_intensity, got.max_intensity),
+                    (e.min_intensity, e.max_intensity),
+                    "{what}"
+                );
+                assert_eq!(got.median_intensity, e.median_intensity, "{what}");
+                assert_eq!(
+                    got.lower_quartile_intensity, e.lower_quartile_intensity,
+                    "{what}"
+                );
+                assert_eq!(
+                    got.upper_quartile_intensity, e.upper_quartile_intensity,
+                    "{what}"
+                );
+                assert_eq!(got.mad_intensity, e.mad_intensity, "{what}");
+                assert!(
+                    (got.std_intensity - e.std_intensity).abs() <= 1e-9 * e.std_intensity,
+                    "{what}"
+                );
+            }
+        }
     }
 
     #[test]

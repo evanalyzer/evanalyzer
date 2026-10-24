@@ -43,7 +43,7 @@ pub enum ColocMultiplicity {
 
     /// Only the partner with the largest overlap, per class - e.g. a small
     /// object on the border of two larger ones picks the larger overlap;
-    /// ties go to the lower `ObjectId`.
+    /// ties go to the one further up (then further left).
     #[cmdsmeta(display_name = "Only the best-overlapping partner")]
     OneToOne,
 
@@ -333,8 +333,8 @@ impl ImageAlgorithm for Colocalization {
                         // Keep only the single best match (largest overlap area) per
                         // class - ties (equal overlap area, e.g. an object sitting
                         // exactly on the border between two equally-overlapping
-                        // partners) go to the lower ObjectId, so the pick is
-                        // deterministic rather than depending on cache iteration order.
+                        // partners) go to the one further up/left (`Object::position_cmp`),
+                        // so the pick is the same in every run - ids are random.
                         candidates = best_partner
                             .get(&(anchor_id.clone(), *other_class))
                             .and_then(|best_id| {
@@ -532,8 +532,9 @@ impl Colocalization {
     }
 
     /// Finds the single overlapping object in `bucket` with the largest overlap
-    /// area against `object` (meeting `min_overlap`), ties broken toward the lower
-    /// `ObjectId` for a deterministic pick independent of cache iteration order.
+    /// area against `object` (meeting `min_overlap`), ties broken toward the one
+    /// further up/left ([`Object::position_cmp`]) - the same pick in every run,
+    /// which the ids (random within a millisecond) wouldn't give.
     fn best_overlap(
         object: &Object,
         exclude_id: &ObjectId,
@@ -545,20 +546,17 @@ impl Colocalization {
             .iter()
             .filter(|other_id| *other_id != exclude_id)
             .filter_map(|other_id| {
-                cache
-                    .object_cache
-                    .get(other_id)
-                    .and_then(|r| {
-                        object
-                            .overlaps(r)
-                            .filter(|intersection| min_overlap.is_met(intersection.area, object, r))
-                    })
-                    .map(|intersection| (other_id.clone(), intersection.area))
+                cache.object_cache.get(other_id).and_then(|r| {
+                    object
+                        .overlaps(r)
+                        .filter(|intersection| min_overlap.is_met(intersection.area, object, r))
+                        .map(|intersection| (other_id.clone(), r, intersection.area))
+                })
             })
-            .max_by(|(id_a, area_a), (id_b, area_b)| {
-                area_a.cmp(area_b).then_with(|| id_b.cmp(id_a))
+            .max_by(|(_, a, area_a), (_, b, area_b)| {
+                area_a.cmp(area_b).then_with(|| b.position_cmp(a))
             })
-            .map(|(id, _)| id)
+            .map(|(id, ..)| id)
     }
 }
 
@@ -2001,8 +1999,10 @@ mod tests {
         };
         let mut cache = GlobalPipelineCache::default();
 
-        const ID_CELL_A: u128 = 900_001; // lower id - wins area ties
-        const ID_CELL_B: u128 = 900_002;
+        // Cell A (left) wins area ties by position - with the higher id, to show
+        // the id plays no part.
+        const ID_CELL_A: u128 = 900_002;
+        const ID_CELL_B: u128 = 900_001;
         const ID_SPOT_BORDER: u128 = 900_003; // straddles both cells, equal overlap area
         const ID_SPOT_IN_A: u128 = 900_004;
         const ID_SPOT_IN_B: u128 = 900_005;
@@ -2035,7 +2035,7 @@ mod tests {
         run(&coloc, &mut cache);
 
         // Cell A (listed in MultiFor) sees every spot that picked it, including
-        // the border spot (tie broken toward the lower ObjectId, Cell A).
+        // the border spot (tie broken toward the cell further left, Cell A).
         let cell_a = cache.object_cache.get(&ObjectId(ID_CELL_A)).unwrap();
         let mut a_spots = cell_a.colocalized_with[&CLASS_B].clone();
         a_spots.sort();
@@ -2060,12 +2060,12 @@ mod tests {
 
         // The border spot overlaps both cells by the exact same area, so it
         // picks exactly one partner - not both - breaking the tie toward the
-        // lower ObjectId (Cell A).
+        // cell further left (Cell A).
         let spot_border = cache.object_cache.get(&ObjectId(ID_SPOT_BORDER)).unwrap();
         assert_eq!(
             spot_border.colocalized_with[&CLASS_A],
             vec![ObjectId(ID_CELL_A)],
-            "an equal-overlap tie must resolve to the lower ObjectId, not both cells"
+            "an equal-overlap tie must resolve to the cell further left, not both cells"
         );
 
         // Spots overlapping only one cell are unaffected by the cap.
@@ -2095,11 +2095,12 @@ mod tests {
         //   Cell 2 [40,49]x[0,9]    - isolated, only touched by channel B
         //   Cell 3 [60,69]x[0,9]    - isolated, only touched by channel C
         //
-        // IDs are chosen so ties resolve deterministically: Cell 0 beats Cell 1 for
-        // the B border, and Cell 4 beats Cell 1 for the C border (lower ObjectId
-        // wins a tie), leaving Cell 1 as the loser of both.
+        // Ties go to the cell first in reading order (`Object::position_cmp`), not
+        // to an id: Cell 0 beats Cell 1 for the B border (further left), Cell 1
+        // beats Cell 4 for the C border (further up). Cell 1 has the highest id -
+        // it still wins the C tie.
         const ID_CELL_0: u128 = 910_000;
-        const ID_CELL_1: u128 = 910_100; // deliberately highest id - loses both border ties
+        const ID_CELL_1: u128 = 910_100;
         const ID_CELL_2: u128 = 910_002;
         const ID_CELL_3: u128 = 910_003;
         const ID_CELL_4: u128 = 910_004;
@@ -2266,7 +2267,7 @@ mod tests {
             "Cell 3 is never touched by channel B"
         );
 
-        // Cell 0 wins the B border tie (lower id than Cell 1): 3 direct + 3 border = 6.
+        // Cell 0 wins the B border tie (left of Cell 1): 3 direct + 3 border = 6.
         assert_eq!(
             coloc_count(&cache, ID_CELL_0, CLASS_B),
             6,
@@ -2278,7 +2279,7 @@ mod tests {
             "Cell 0 gets its 3 direct C spots, no C border"
         );
 
-        // Cell 1 loses both border ties, left with just its direct spots.
+        // Cell 1 loses the B border tie, wins the C border tie (above Cell 4).
         assert_eq!(
             coloc_count(&cache, ID_CELL_1, CLASS_B),
             3,
@@ -2286,12 +2287,11 @@ mod tests {
         );
         assert_eq!(
             coloc_count(&cache, ID_CELL_1, CLASS_C),
-            3,
-            "Cell 1 loses the C border tie to Cell 4"
+            6,
+            "Cell 1 wins the C border tie over Cell 4"
         );
 
-        // Cell 4 has no direct spots of its own; it wins the C border tie
-        // (lower id than Cell 1).
+        // Cell 4 has no direct spots of its own and loses the C border tie.
         assert_eq!(
             coloc_count(&cache, ID_CELL_4, CLASS_B),
             0,
@@ -2299,8 +2299,8 @@ mod tests {
         );
         assert_eq!(
             coloc_count(&cache, ID_CELL_4, CLASS_C),
-            3,
-            "Cell 4 wins the C border tie"
+            0,
+            "Cell 4 loses the C border tie to Cell 1"
         );
 
         // Sums across all cells must equal the number of spots that found a
@@ -2372,10 +2372,10 @@ mod tests {
             let spot = cache.object_cache.get(id).unwrap();
             assert_eq!(spot.colocalized_with[&CLASS_A], vec![ObjectId(ID_CELL_0)]);
         }
-        // The C border spots must all resolve to Cell 4.
+        // The C border spots must all resolve to Cell 1 (above Cell 4).
         for id in &c_border {
             let spot = cache.object_cache.get(id).unwrap();
-            assert_eq!(spot.colocalized_with[&CLASS_A], vec![ObjectId(ID_CELL_4)]);
+            assert_eq!(spot.colocalized_with[&CLASS_A], vec![ObjectId(ID_CELL_1)]);
         }
 
         // Cell 1's B-list must be exactly its direct spots (the border spots it
@@ -2390,14 +2390,23 @@ mod tests {
             "Cell 1 must not list a B spot it merely touches but didn't win"
         );
 
-        // Cell 1's C-list must be exactly its direct spots (the C border went to Cell 4).
+        // Cell 1's C-list: its direct spots and the C border it won.
         let mut cell_1_c = cell_1.colocalized_with[&CLASS_C].clone();
         cell_1_c.sort();
-        let mut expected_cell_1_c = c_direct_1.clone();
+        let mut expected_cell_1_c = [c_direct_1.clone(), c_border.clone()].concat();
         expected_cell_1_c.sort();
         assert_eq!(
             cell_1_c, expected_cell_1_c,
-            "Cell 1 must not list a C spot it merely touches but didn't win"
+            "Cell 1 lists its direct C spots and the C border it won"
+        );
+        // Cell 4 touches the C border too but didn't win it: no C spots.
+        let cell_4 = cache.object_cache.get(&ObjectId(ID_CELL_4)).unwrap();
+        assert!(
+            cell_4
+                .colocalized_with
+                .get(&CLASS_C)
+                .is_none_or(|v| v.is_empty()),
+            "Cell 4 must not list a C spot it merely touches but didn't win"
         );
     }
 

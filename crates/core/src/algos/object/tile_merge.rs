@@ -101,6 +101,10 @@ impl ImageAlgorithm for TileMerge {
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let groups = group_candidates(cache, &self.classes_to_not_merge);
+        // Each merged object with the fragments it replaces (and whether they
+        // had intensities) - measured all together below, tile by tile.
+        let mut merges: Vec<(Vec<ObjectId>, bool)> = Vec::new();
+        let mut merged_objects: Vec<Object> = Vec::new();
 
         for (_, group_ids) in groups {
             if group_ids.len() > self.max_fragments_per_group as usize {
@@ -187,7 +191,7 @@ impl ImageAlgorithm for TileMerge {
                 }
 
                 let first = object_refs[0];
-                let mut merged = Object::new(ObjectInit {
+                let merged = Object::new(ObjectInit {
                     id: ObjectId::next(),
                     segmentation_class: first.segmentation_class,
                     object_class,
@@ -206,22 +210,31 @@ impl ImageAlgorithm for TileMerge {
                     ..Default::default()
                 });
 
-                // Measured again on the merged mask, from every tile it covers - the
-                // median, quartiles, ... can't be combined from the fragments'.
-                merged.intensities = merged.measure_intensities(cache);
-                if merged.intensities.is_empty()
-                    && object_refs.iter().any(|o| !o.intensities.is_empty())
-                {
-                    return Err(InternalErrors::Internal(
-                        "Tile merge: the channels to measure a merged object aren't loaded".into(),
-                    ));
-                }
-
-                for id in &ids {
-                    cache.object_cache.remove(id);
-                }
-                cache.object_cache.insert(merged.id.clone(), merged);
+                let had_intensities = object_refs.iter().any(|o| !o.intensities.is_empty());
+                merges.push((ids, had_intensities));
+                merged_objects.push(merged);
             }
+        }
+
+        // Measured again on the merged masks, from every tile they cover - the
+        // median, quartiles, ... can't be combined from the fragments'.
+        let start = std::time::Instant::now();
+        Object::measure_intensities_of(&mut merged_objects, cache);
+        log::debug!(
+            "tile merge: {} merged objects measured in {:.2} s",
+            merged_objects.len(),
+            start.elapsed().as_secs_f64()
+        );
+        for ((ids, had_intensities), merged) in merges.into_iter().zip(merged_objects) {
+            if merged.intensities.is_empty() && had_intensities {
+                return Err(InternalErrors::Internal(
+                    "Tile merge: the channels to measure a merged object aren't loaded".into(),
+                ));
+            }
+            for id in &ids {
+                cache.object_cache.remove(id);
+            }
+            cache.object_cache.insert(merged.id.clone(), merged);
         }
 
         Ok(())

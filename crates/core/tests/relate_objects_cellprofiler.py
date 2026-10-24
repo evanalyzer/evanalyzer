@@ -64,6 +64,17 @@ def paint(labels, rng, count, size):
     return labels
 
 
+def in_reading_order(labels):
+    """The labels renumbered by their first pixel in reading order - as
+    scipy/scikit-image number a segmentation's labels (and EVA breaks ties:
+    the object whose first pixel comes first)."""
+    values, first = np.unique(labels.ravel(), return_index=True)
+    order = [v for _, v in sorted(zip(first, values)) if v != 0]
+    lookup = np.zeros(labels.max() + 1, dtype=int)
+    lookup[order] = np.arange(1, len(order) + 1)
+    return lookup[labels]
+
+
 def case(name, parents, children):
     # relate_labels only calls static methods on `self`.
     _, parents_of_children = Objects.relate_labels(Objects, parents, children)
@@ -94,8 +105,8 @@ def main():
     rng = np.random.default_rng(20261023)
     for i in range(6):
         size = (64, 64)
-        parents = paint(np.zeros(size, dtype=int), rng, 12, 18)
-        children = paint(np.zeros(size, dtype=int), rng, 40, 4)
+        parents = in_reading_order(paint(np.zeros(size, dtype=int), rng, 12, 18))
+        children = in_reading_order(paint(np.zeros(size, dtype=int), rng, 40, 4))
         cases.append(case(f"random {i}", parents, children))
 
     with open("relate_objects_cellprofiler.json", "w") as out:

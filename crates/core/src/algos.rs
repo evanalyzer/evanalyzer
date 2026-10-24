@@ -187,6 +187,13 @@ pub trait ImageAlgorithm: Send + Sync {
         if self.scratch_is_workspace() {
             ctx.prepare_scratch_matching_image()?;
         }
-        self.execute(ctx, cache)
+        let start = std::time::Instant::now();
+        let result = self.execute(ctx, cache);
+        log::debug!(
+            "step {}: {:.1} ms",
+            self.name(),
+            start.elapsed().as_secs_f64() * 1e3
+        );
+        result
     }
 }

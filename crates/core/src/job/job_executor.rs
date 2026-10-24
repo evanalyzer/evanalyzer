@@ -26,7 +26,7 @@ use evanalyzer_cfg::{
 };
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
-use log::{info, warn};
+use log::{debug, info, warn};
 use rayon::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -985,6 +985,7 @@ impl<'a> JobExecutor {
                 };
 
                 // Execute the tiles in prallel
+                let tiles_start = Instant::now();
                 let stack_result = visible_tiles
                     .par_iter()
                     .map(|&tile| run_tile(tile, progress.clone()))
@@ -999,6 +1000,11 @@ impl<'a> JobExecutor {
                             .try_reduce(|| acc.clone(), merge_caches)
                     });
 
+                debug!(
+                    "{image_rel_path:?} t={t} z={z}: {} tiles in {:.2} s",
+                    visible_tiles.len() + hidden_tiles.len(),
+                    tiles_start.elapsed().as_secs_f64()
+                );
                 let stack_merge_result = stack_result.and_then(|mut merged_cache| {
                     merged_cache.annotated_objects = plane_annotations;
                     merged_cache.measurements.z_stack = z;
@@ -1041,6 +1047,7 @@ impl<'a> JobExecutor {
                             .filter(|b| b.pipeline_id == *pipe_id)
                             .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                             .unwrap_or((None, false));
+                        let pipeline_start = Instant::now();
                         let result = p.run_commands(
                             self.output_path.clone(),
                             None,
@@ -1049,6 +1056,10 @@ impl<'a> JobExecutor {
                             snapshot_mode,
                         )?;
                         merged_cache = result.cache;
+                        debug!(
+                            "{image_rel_path:?} t={t} z={z}: whole-image pipeline {pipe_id} in {:.2} s",
+                            pipeline_start.elapsed().as_secs_f64()
+                        );
 
                         // One reserved unit per non-empty whole-image
                         // pipeline (see `whole_image_units_per_stack`) - a
@@ -1082,7 +1093,13 @@ impl<'a> JobExecutor {
                     merged_cache
                         .object_cache
                         .retain(|_, object| object.scope() == Scope::Global);
+                    let export_start = Instant::now();
                     exporter.export(&merged_cache)?;
+                    debug!(
+                        "{image_rel_path:?} t={t} z={z}: export of {} objects in {:.2} s",
+                        merged_cache.object_cache.len(),
+                        export_start.elapsed().as_secs_f64()
+                    );
                     if let Some(reason) = &merged_cache.measurements.excluded {
                         exclusions.push((t, z, reason.clone()));
                     }

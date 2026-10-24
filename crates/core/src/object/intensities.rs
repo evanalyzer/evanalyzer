@@ -62,7 +62,10 @@ impl Intensity {
     /// Sets how `values` - the object's pixel values in this channel (put in
     /// order here) - spread, from its `avg_intensity`; NaN without values.
     pub fn set_spread(&mut self, values: &mut [f32]) {
-        let spread = Spread::of(values, self.avg_intensity);
+        self.set_spread_to(Spread::of(values, self.avg_intensity));
+    }
+
+    fn set_spread_to(&mut self, spread: Option<Spread>) {
         let [std, median, lower, upper, mad] = spread.map_or([f64::NAN; 5], |s| {
             [s.std, s.median, s.lower_quartile, s.upper_quartile, s.mad]
         });
@@ -177,23 +180,24 @@ impl Spread {
 }
 
 impl Spread {
-    /// The order statistics from a histogram of `values` over 65535 levels
-    /// (exact for 8- and 16-bit images: 65535 = 255 · 257) - one pass over
-    /// the pixels instead of several, for big objects. `None` (the caller
-    /// selects instead) when the values span more levels than pays off, or
-    /// two different values fall into one level (a float image): each level
-    /// keeps the exact value it holds, so the numbers are the same as by
-    /// sorting.
+    /// The order statistics from a histogram of `values` - one level per
+    /// gray value (raw 8/16-bit values), or 65535 levels over 0..1 (exact
+    /// for 8- and 16-bit images scaled to 0..1: 65535 = 255 · 257) - one pass
+    /// over the pixels instead of several, for big objects. `None` (the
+    /// caller selects instead) when the values span more levels than pays
+    /// off, or two different values fall into one level (a float image):
+    /// each level keeps the exact value it holds, so the numbers are the
+    /// same as by sorting.
     fn from_histogram(values: &[f32], mean: f64) -> Option<Self> {
-        const LEVELS: f32 = 65535.0;
-        // Rounded (values aren't negative here); `round` is a slow call.
-        let level = |v: f32| (v * LEVELS + 0.5) as usize;
         let (min, max) = values
             .iter()
             .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
         if !(min.is_finite() && max.is_finite()) || min < 0.0 {
             return None;
         }
+        let levels: f32 = if max <= 1.0 { 65535.0 } else { 1.0 };
+        // Rounded (values aren't negative here); `round` is a slow call.
+        let level = |v: f32| (v * levels + 0.5) as usize;
         let first = level(min);
         let bins = level(max) - first + 1;
         // Zeroing and scanning the bins must cost less than selecting.
@@ -211,12 +215,23 @@ impl Spread {
             }
             count[b] += 1;
         }
-        let n = values.len();
+        Some(Self::from_counts(
+            &count,
+            |b| value[b] as f64,
+            values.len(),
+            mean,
+        ))
+    }
+
+    /// The spread of `n` values given as how many fall on each level
+    /// (`count`, in order) and the value of each level (`value`).
+    fn from_counts(count: &[u32], value: impl Fn(usize) -> f64, n: usize, mean: f64) -> Self {
+        let bins = count.len();
         // Over the levels (the same sum as over the pixels, in another order).
         let variance = count
             .iter()
-            .zip(&value)
-            .map(|(c, v)| *c as f64 * (*v as f64 - mean).powi(2))
+            .enumerate()
+            .map(|(b, c)| *c as f64 * (value(b) - mean).powi(2))
             .sum::<f64>()
             / n as f64;
         // The i-th value in order (0-based): its level by the counts.
@@ -225,10 +240,10 @@ impl Spread {
             for (b, c) in count.iter().enumerate() {
                 seen += *c as usize;
                 if seen > i {
-                    return value[b] as f64;
+                    return value(b);
                 }
             }
-            value[bins - 1] as f64
+            value(bins - 1)
         };
         let median = quantile(n, 0.5, nth);
         let lower_quartile = quantile(n, 0.25, nth);
@@ -236,7 +251,7 @@ impl Spread {
         // The distances from the median in order: walking out from it over
         // the levels, like `median_distance` over sorted values.
         let split = (0..bins)
-            .find(|&b| count[b] > 0 && value[b] as f64 >= median)
+            .find(|&b| count[b] > 0 && value(b) >= median)
             .unwrap_or(bins);
         let mad = quantile(n, 0.5, |k| {
             // Whole levels at a time: all of a level's values are equally far.
@@ -248,8 +263,8 @@ impl Spread {
                 while right < bins && count[right] == 0 {
                     right += 1;
                 }
-                let from_left = (left > 0).then(|| median - value[left - 1] as f64);
-                let from_right = (right < bins).then(|| value[right] as f64 - median);
+                let from_left = (left > 0).then(|| median - value(left - 1));
+                let from_right = (right < bins).then(|| value(right) - median);
                 let (distance, taken) = match (from_left, from_right) {
                     (Some(l), Some(r)) if l <= r => {
                         left -= 1;
@@ -271,13 +286,13 @@ impl Spread {
                 }
             }
         });
-        Some(Self {
+        Self {
             std: variance.sqrt(),
             median,
             lower_quartile,
             upper_quartile,
             mad,
-        })
+        }
     }
 }
 
@@ -373,6 +388,81 @@ struct ChannelSums {
     min: f32,
     max: f32,
     values: Vec<f32>,
+    /// From [`LIST_UP_TO`] values on, whole gray values 0..=65535 (8/16-bit
+    /// images) are counted per value here instead of listed (256 KB however
+    /// big the object); `values` then holds none.
+    counts: Option<Box<[u32]>>,
+}
+
+/// Values listed per channel before whole gray values are counted instead.
+const LIST_UP_TO: usize = 1 << 16;
+
+/// Counts per gray value: 0..=65535.
+const GRAY_LEVELS: usize = 1 << 16;
+
+impl ChannelSums {
+    fn new() -> Self {
+        Self {
+            sum: 0.0,
+            min: f32::MAX,
+            max: f32::MIN,
+            values: Vec::new(),
+            counts: None,
+        }
+    }
+
+    fn push(&mut self, value: f32) {
+        self.sum += value as f64;
+        self.min = self.min.min(value);
+        self.max = self.max.max(value);
+        let level = value as usize;
+        let whole = level as f32 == value && level < GRAY_LEVELS;
+        match &mut self.counts {
+            Some(counts) if whole => counts[level] += 1,
+            Some(_) => {
+                // Not a gray value after all: back to the list (exact - each
+                // count stands for its level's value).
+                self.values = self.listed();
+                self.counts = None;
+                self.values.push(value);
+            }
+            None => {
+                self.values.push(value);
+                if self.values.len() >= LIST_UP_TO
+                    && self.values.iter().all(|v| {
+                        let level = *v as usize;
+                        level as f32 == *v && level < GRAY_LEVELS
+                    })
+                {
+                    let mut counts = vec![0u32; GRAY_LEVELS].into_boxed_slice();
+                    for v in self.values.drain(..) {
+                        counts[v as usize] += 1;
+                    }
+                    self.values = Vec::new();
+                    self.counts = Some(counts);
+                }
+            }
+        }
+    }
+
+    /// Every value as a list (the counted ones expanded).
+    fn listed(&self) -> Vec<f32> {
+        match &self.counts {
+            Some(counts) => counts
+                .iter()
+                .enumerate()
+                .flat_map(|(level, c)| std::iter::repeat_n(level as f32, *c as usize))
+                .collect(),
+            None => self.values.clone(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match &self.counts {
+            Some(counts) => counts.iter().map(|c| *c as usize).sum(),
+            None => self.values.len(),
+        }
+    }
 }
 
 /// Sum, min, max and the covered pixels' values per channel, added up over
@@ -391,12 +481,10 @@ impl IntensityAccumulator {
         let [x_min, y_min, x_max, y_max] = bbox.map(|v| v as usize);
         let width = x_max - x_min + 1;
         for (k, tile) in tiles.iter().enumerate() {
-            let entry = self.channels.entry(tile.channel).or_insert(ChannelSums {
-                sum: 0.0,
-                min: f32::MAX,
-                max: f32::MIN,
-                values: Vec::new(),
-            });
+            let entry = self
+                .channels
+                .entry(tile.channel)
+                .or_insert_with(ChannelSums::new);
             // The part of the mask's box this region covers.
             let t = tile.tile;
             let (x0, x1) = (x_min.max(t.offset_x), (x_max + 1).min(t.offset_x + t.width));
@@ -425,10 +513,7 @@ impl IntensityAccumulator {
                     }
                     let value =
                         sample_channel_pixel(tile.is_rgb, tile.samples, tile_row + x - t.offset_x);
-                    entry.sum += value as f64;
-                    entry.min = entry.min.min(value);
-                    entry.max = entry.max.max(value);
-                    entry.values.push(value);
+                    entry.push(value);
                 }
             }
         }
@@ -440,7 +525,7 @@ impl IntensityAccumulator {
         self.channels
             .into_iter()
             .map(|(channel, mut c)| {
-                let n = c.values.len();
+                let n = c.len();
                 let has_data = n > 0;
                 let avg = c.sum / n.max(1) as f64;
                 let mut intensity = Intensity {
@@ -450,7 +535,15 @@ impl IntensityAccumulator {
                     avg_intensity: avg,
                     ..Default::default()
                 };
-                intensity.set_spread(&mut c.values);
+                match &c.counts {
+                    Some(counts) => intensity.set_spread_to(Some(Spread::from_counts(
+                        counts,
+                        |level| level as f64,
+                        n,
+                        avg,
+                    ))),
+                    None => intensity.set_spread(&mut c.values),
+                }
                 (channel, intensity)
             })
             .collect()
@@ -795,5 +888,76 @@ pub(crate) mod tests {
                 e.as_nanos() as f64 / n as f64
             );
         }
+    }
+
+    /// A strip of `values` (one row) measured through the accumulator.
+    fn strip_intensity(values: &[f32]) -> Intensity {
+        let n = values.len();
+        let mut acc = IntensityAccumulator::default();
+        acc.add(
+            &BitVec::<u64, Lsb0>::repeat(true, n),
+            [0, 0, n as u32 - 1, 0],
+            &[tile(0, 0, 0, n, 1, values)],
+        );
+        acc.finish().shift_remove(&0).unwrap()
+    }
+
+    /// Past `LIST_UP_TO` gray values are counted, not listed - the same
+    /// spread as from the list (the std up to the order of the sum).
+    #[test]
+    fn counted_gray_values_give_the_same_spread_as_listed_ones() {
+        let mut seed = 7u64;
+        let values: Vec<f32> = (0..LIST_UP_TO * 3 + 17)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((seed >> 33) % 5000 + 300) as f32
+            })
+            .collect();
+        let counted = strip_intensity(&values);
+        let mean = values.iter().map(|v| *v as f64).sum::<f64>() / values.len() as f64;
+        let listed = Spread::of(&mut values.clone(), mean).unwrap();
+        assert_eq!(counted.median_intensity, listed.median);
+        assert_eq!(counted.lower_quartile_intensity, listed.lower_quartile);
+        assert_eq!(counted.upper_quartile_intensity, listed.upper_quartile);
+        assert_eq!(counted.mad_intensity, listed.mad);
+        assert!((counted.std_intensity - listed.std).abs() <= 1e-12 * listed.std);
+        assert_eq!(counted.avg_intensity, mean);
+    }
+
+    /// A value that isn't a gray value after counting began: back to the
+    /// list, nothing lost.
+    #[test]
+    fn a_fraction_after_counting_began_goes_back_to_the_list() {
+        let mut values: Vec<f32> = (0..LIST_UP_TO + 10).map(|i| (i % 300) as f32).collect();
+        values.push(12.5);
+        values.extend((0..100).map(|i| i as f32));
+        let got = strip_intensity(&values);
+        let mean = values.iter().map(|v| *v as f64).sum::<f64>() / values.len() as f64;
+        let listed = Spread::of(&mut values.clone(), mean).unwrap();
+        assert_eq!(got.median_intensity, listed.median);
+        assert_eq!(got.lower_quartile_intensity, listed.lower_quartile);
+        assert_eq!(got.mad_intensity, listed.mad);
+    }
+
+    /// Raw 16-bit gray values (not scaled to 0..1) take the histogram path
+    /// too - and give the numbers sorting gives.
+    #[test]
+    fn the_histogram_works_on_raw_gray_values() {
+        let mut values: Vec<f32> = (0..20_000)
+            .map(|i| (1000 + (i * 7919) % 3000) as f32)
+            .collect();
+        let mean = values.iter().map(|v| *v as f64).sum::<f64>() / values.len() as f64;
+        let histogram = Spread::from_histogram(&values, mean).expect("raw gray values: histogram");
+        values.sort_unstable_by(f32::total_cmp);
+        let n = values.len();
+        let median = quantile(n, 0.5, |i| values[i] as f64);
+        assert_eq!(histogram.median, median);
+        assert_eq!(
+            histogram.lower_quartile,
+            quantile(n, 0.25, |i| values[i] as f64)
+        );
+        assert_eq!(histogram.mad, median_distance(&values, median));
     }
 }

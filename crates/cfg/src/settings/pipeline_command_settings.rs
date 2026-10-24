@@ -196,7 +196,7 @@ pub enum ObjectColocObjectsColocMultiplicitySettings {
     ManyToMany,
     /// Only the partner with the largest overlap, per class - e.g. a small
     /// object on the border of two larger ones picks the larger overlap;
-    /// ties go to the lower `ObjectId`.
+    /// ties go to the one further up (then further left).
     #[serde(alias = "one-to-one", alias = "oneToOne", alias = "one_to_one")]
     OneToOne,
     /// Only objects of these classes may have more than one partner; every
