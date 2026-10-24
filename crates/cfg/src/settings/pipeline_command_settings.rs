@@ -1124,13 +1124,13 @@ pub struct GaussianBlurSettings {
     /// The size of the blur matrix.
     ///
     /// Must be an odd number (e.g., 3, 5, 7).
-    #[schemars(range(min = 3, max = 27))]
+    #[schemars(range(min = 3, max = 49))]
     pub kernel_size: usize,
     /// The standard deviation of the Gaussian kernel.
     ///
     /// Higher values create a more significant blur effect.
     /// $$N \approx 6\sigma + 1$$
-    #[schemars(range(min = 0.1, max = 5))]
+    #[schemars(range(min = 0.1, max = 8))]
     pub sigma: f32,
 }
 

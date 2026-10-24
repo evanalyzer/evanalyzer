@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 /// in `algos_from_config.rs`, so this stays in sync automatically if a
 /// filter's parameters ever change.
 ///
-/// IMPORTANT: `GaussianBlurSettings::sigma` is clamped to [0.1, 5.0] by its
-/// `From` conversion (matches the command's own `#[cmdsmeta]` bounds) — any
-/// step using `GaussianBlur` inherits that ceiling. ilastik's standard scale
-/// range goes up to sigma=10; decide deliberately if you need to go higher.
+/// IMPORTANT: `GaussianBlurSettings::sigma` is clamped to [0.1, 8.0] by its
+/// `From` conversion (matches the command's own `#[cmdsmeta]` bounds; the
+/// training panel's largest size, 16 px, is sigma 8) — any step using
+/// `GaussianBlur` inherits that ceiling.
 ///
 /// SERIALIZATION-CRITICAL: this type is stored inside every saved pixel
 /// classifier model. Once any model has been saved, existing variants must
@@ -49,14 +49,24 @@ pub enum PreprocessingSteps {
 ///
 /// SERIALIZATION-CRITICAL — see `PreprocessingSteps` doc comment above; the
 /// same never-rename/never-remove rule applies to this type's own fields.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct AiLearningPixelFeatureSettings {
     pub channels: Vec<Vec<PreprocessingSteps>>,
+    /// The image channels every entry of `channels` is computed on, each
+    /// in turn (features: image channel 0's entries, then image channel
+    /// 1's, ...). Empty: the image the pipeline step gets (e.g. after
+    /// preprocessing steps) - one image, as before channels could be chosen.
+    #[serde(default)]
+    pub image_channels: Vec<i32>,
+    /// The names `image_channels` had when the model was trained (same
+    /// order) - for information; channels are found by their number.
+    #[serde(default)]
+    pub image_channel_names: Vec<String>,
 }
 
 impl AiLearningPixelFeatureSettings {
     /// Convenience: same filter at several scales, e.g. gaussian_scales(&[1.0, 2.0, 4.0], 5).
-    /// Values outside [0.1, 5.0] will be silently clamped by GaussianBlur's own
+    /// Values outside [0.1, 8.0] will be silently clamped by GaussianBlur's own
     /// `From<GaussianBlurSettings>` conversion — see the `PreprocessingSteps` doc comment.
     // Unused from the build script's own compiled copy of this file (it only
     // needs the type for `schema_for!`, never calls this) - same reason
@@ -188,7 +198,9 @@ mod tests {
                         crate::settings::pipeline_command_settings::FiltersHessianHessianModeSettings::EigenvaluesX,
                 })],
             ],
-        };
+ image_channels: Vec::new(),
+ image_channel_names: Vec::new(),
+ };
 
         let json = serde_json::to_string(&settings)
             .expect("AiLearningPixelFeatureSettings must serialize");
@@ -206,7 +218,11 @@ mod tests {
 
     #[test]
     fn an_empty_channel_list_round_trips_as_the_raw_recipe() {
-        let settings = AiLearningPixelFeatureSettings { channels: vec![] };
+        let settings = AiLearningPixelFeatureSettings {
+            channels: vec![],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
+        };
         let json = serde_json::to_string(&settings).unwrap();
         let round_tripped: AiLearningPixelFeatureSettings = serde_json::from_str(&json).unwrap();
         assert!(round_tripped.channels.is_empty());

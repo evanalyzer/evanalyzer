@@ -727,7 +727,7 @@ impl From<GaussianBlurSettings> for GaussianBlur {
     fn from(_s: GaussianBlurSettings) -> Self {
         GaussianBlur {
             kernel_size: _s.kernel_size,
-            sigma: _s.sigma.clamp(0.1, 5.0),
+            sigma: _s.sigma.clamp(0.1, 8.0),
         }
     }
 }

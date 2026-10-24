@@ -26,14 +26,14 @@ pub struct GaussianBlur {
     /// The size of the blur matrix.
     ///
     /// Must be an odd number (e.g., 3, 5, 7).
-    #[cmdsmeta(default = 3, min = 3, max = 27, summary = true, step = 2)]
+    #[cmdsmeta(default = 3, min = 3, max = 49, summary = true, step = 2)]
     pub kernel_size: usize,
 
     /// The standard deviation of the Gaussian kernel.
     ///
     /// Higher values create a more significant blur effect.
     /// $$N \approx 6\sigma + 1$$
-    #[cmdsmeta(default = 0.34, min = 0.1, max = 5, summary = true, step = 0.1, visibility = Advanced)]
+    #[cmdsmeta(default = 0.34, min = 0.1, max = 8, summary = true, step = 0.1, visibility = Advanced)]
     pub sigma: f32,
 }
 

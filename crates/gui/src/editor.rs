@@ -17,6 +17,7 @@ use crate::{
 use std::sync::Arc;
 
 pub mod ai_learning_controller;
+pub(crate) mod ai_learning_features;
 pub mod annotations_controller;
 pub mod classification_controller;
 pub mod command_palette_controller;

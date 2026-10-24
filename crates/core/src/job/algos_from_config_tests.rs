@@ -631,7 +631,7 @@ fn gaussian_blur_settings_convert_kernel_size_and_clamp_sigma() {
     };
     let result = GaussianBlur::from(settings);
     assert_eq!(result.kernel_size, 5);
-    assert_eq!(result.sigma, 5.0);
+    assert_eq!(result.sigma, 8.0);
 }
 
 #[test]

@@ -161,6 +161,23 @@
               "$ref": "#/$defs/PreprocessingSteps"
             }
           }
+        },
+        "image_channel_names": {
+          "description": "The names `image_channels` had when the model was trained (same\norder) - for information; channels are found by their number.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "image_channels": {
+          "description": "The image channels every entry of `channels` is computed on, each\nin turn (features: image channel 0's entries, then image channel\n1's, ...). Empty: the image the pipeline step gets (e.g. after\npreprocessing steps) - one image, as before channels could be chosen.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
         }
       },
       "required": [
@@ -287,7 +304,7 @@
           "type": "integer",
           "format": "uint",
           "default": 3,
-          "maximum": 27,
+          "maximum": 49,
           "minimum": 3
         },
         "sigma": {
@@ -295,7 +312,7 @@
           "type": "number",
           "format": "float",
           "default": 0.3400000035762787,
-          "maximum": 5,
+          "maximum": 8,
           "minimum": 0.1
         }
       }
@@ -783,7 +800,7 @@
       ]
     },
     "PreprocessingSteps": {
-      "description": "A single preprocessing step within one feature channel's chain (an inner\nentry of `FeatureSpec::channels`). Each step reads the previous step's\noutput in the same context (scratch-pad/swap chaining, same as any\nmulti-step Command sequence), so e.g. Laplacian-of-Gaussian is simply\n`vec![GaussianBlur(...), Laplacian(...)]` — pre-smoothing any filter is just\nan earlier step, not a bespoke field.\n\nWraps the already-generated `...Settings` types instead of re-declaring\nparallel fields/enums: they're already Serialize/Deserialize/JsonSchema,\nalready narrow (pure algorithm parameters, no pipeline-orchestration\nbaggage), and their `From<Settings> for Command` conversions already exist\nin `algos_from_config.rs`, so this stays in sync automatically if a\nfilter's parameters ever change.\n\nIMPORTANT: `GaussianBlurSettings::sigma` is clamped to [0.1, 5.0] by its\n`From` conversion (matches the command's own `#[cmdsmeta]` bounds) — any\nstep using `GaussianBlur` inherits that ceiling. ilastik's standard scale\nrange goes up to sigma=10; decide deliberately if you need to go higher.\n\nSERIALIZATION-CRITICAL: this type is stored inside every saved pixel\nclassifier model. Once any model has been saved, existing variants must\nnever be renamed, removed, or have their meaning changed — treat this the\nsame as a database migration, not a normal refactor. Adding a new variant\nis safe; changing or deleting an existing one silently breaks every model\nalready saved with it.",
+      "description": "A single preprocessing step within one feature channel's chain (an inner\nentry of `FeatureSpec::channels`). Each step reads the previous step's\noutput in the same context (scratch-pad/swap chaining, same as any\nmulti-step Command sequence), so e.g. Laplacian-of-Gaussian is simply\n`vec![GaussianBlur(...), Laplacian(...)]` — pre-smoothing any filter is just\nan earlier step, not a bespoke field.\n\nWraps the already-generated `...Settings` types instead of re-declaring\nparallel fields/enums: they're already Serialize/Deserialize/JsonSchema,\nalready narrow (pure algorithm parameters, no pipeline-orchestration\nbaggage), and their `From<Settings> for Command` conversions already exist\nin `algos_from_config.rs`, so this stays in sync automatically if a\nfilter's parameters ever change.\n\nIMPORTANT: `GaussianBlurSettings::sigma` is clamped to [0.1, 8.0] by its\n`From` conversion (matches the command's own `#[cmdsmeta]` bounds; the\ntraining panel's largest size, 16 px, is sigma 8) — any step using\n`GaussianBlur` inherits that ceiling.\n\nSERIALIZATION-CRITICAL: this type is stored inside every saved pixel\nclassifier model. Once any model has been saved, existing variants must\nnever be renamed, removed, or have their meaning changed — treat this the\nsame as a database migration, not a normal refactor. Adding a new variant\nis safe; changing or deleting an existing one silently breaks every model\nalready saved with it.",
       "oneOf": [
         {
           "type": "object",

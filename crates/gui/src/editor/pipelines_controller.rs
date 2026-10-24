@@ -7355,7 +7355,9 @@ mod tests {
             AiLearningClassifierSettings::Pixel {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
-                },
+ image_channels: Vec::new(),
+ image_channel_names: Vec::new(),
+ },
                 input_color: Default::default(),
                 class_labels: vec![
                     PixelClassLabel {
@@ -7392,7 +7394,9 @@ mod tests {
             AiLearningClassifierSettings::Pixel {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
-                },
+ image_channels: Vec::new(),
+ image_channel_names: Vec::new(),
+ },
                 input_color: PixelInputColor::Rgb,
                 class_labels: vec![],
             },
@@ -7433,7 +7437,9 @@ mod tests {
             AiLearningClassifierSettings::Pixel {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
-                },
+ image_channels: Vec::new(),
+ image_channel_names: Vec::new(),
+ },
                 input_color: Default::default(),
                 class_labels: vec![],
             },
@@ -7459,7 +7465,9 @@ mod tests {
             AiLearningClassifierSettings::Pixel {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
-                },
+ image_channels: Vec::new(),
+ image_channel_names: Vec::new(),
+ },
                 input_color: Default::default(),
                 class_labels: vec![],
             },

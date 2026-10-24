@@ -102,31 +102,52 @@ pub fn compute_pixel_features(
     template: &PipelineContext,
     spec: &AiLearningPixelFeatureSettings,
 ) -> Result<FeatureBank, InternalErrors> {
+    compute_pixel_features_on(template, spec, std::slice::from_ref(&template.image))
+}
+
+/// [`compute_pixel_features`] on several images of the same tile - the
+/// image channels of `spec.image_channels`, in that order: every recipe
+/// entry on the first image, then every entry on the second, ... `template`
+/// supplies the image meta and output path.
+pub fn compute_pixel_features_on(
+    template: &PipelineContext,
+    spec: &AiLearningPixelFeatureSettings,
+    images: &[Arc<ImageContainer>],
+) -> Result<FeatureBank, InternalErrors> {
     let size = template.image.size();
     let mut channels = Vec::new();
 
-    match template.image.as_ref() {
-        ImageContainer::F32Gray(_) => {
-            for steps in &spec.channels {
-                channels.push(compute_channel(template, steps)?);
-            }
+    for image in images {
+        if image.size() != size {
+            return Err(InternalErrors::FormatMismatch {
+                expected: format!("{}x{} image channel", size.width, size.height),
+                found: format!("{}x{}", image.size().width, image.size().height),
+            });
         }
-        ImageContainer::F32Rgb(rgb) => {
-            let planes = split_rgb(rgb)?
-                .into_iter()
-                .map(|plane| gray_ctx_from(template, plane))
-                .collect::<Result<Vec<_>, _>>()?;
-            for steps in &spec.channels {
-                for plane in &planes {
-                    channels.push(compute_channel(plane, steps)?);
+        match image.as_ref() {
+            ImageContainer::F32Gray(_) => {
+                let ctx = gray_ctx_from(template, image.clone())?;
+                for steps in &spec.channels {
+                    channels.push(compute_channel(&ctx, steps)?);
                 }
             }
-        }
-        ImageContainer::U32(_) => {
-            return Err(InternalErrors::FormatMismatch {
-                expected: "F32Gray or F32Rgb image for pixel features".into(),
-                found: format!("{:?}", template.image),
-            });
+            ImageContainer::F32Rgb(rgb) => {
+                let planes = split_rgb(rgb)?
+                    .into_iter()
+                    .map(|plane| gray_ctx_from(template, plane))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for steps in &spec.channels {
+                    for plane in &planes {
+                        channels.push(compute_channel(plane, steps)?);
+                    }
+                }
+            }
+            ImageContainer::U32(_) => {
+                return Err(InternalErrors::FormatMismatch {
+                    expected: "F32Gray or F32Rgb image for pixel features".into(),
+                    found: format!("{:?}", image),
+                });
+            }
         }
     }
 
@@ -229,11 +250,10 @@ fn compute_channel(
 pub struct PixelTrainingJob {
     pub settings: AiLearningSettings,
     pub images: Vec<TrainingImage>,
-    /// Which image channel this classifier trains on - pixel-classifier
-    /// feature computation operates on a single channel (see
-    /// `compute_pixel_features`'s doc comment); multi-channel images are the
-    /// caller's responsibility to split beforehand. A colour image is read
-    /// as one RGB channel (channel 0) and split into R, G and B by
+    /// Which image channel this classifier trains on when the recipe names
+    /// none (`AiLearningPixelFeatureSettings::image_channels` empty: a model
+    /// for the image a pipeline step gets). A colour image is read as one
+    /// RGB channel (channel 0) and split into R, G and B by
     /// `compute_pixel_features` itself.
     pub channel: i32,
     /// Which time frame to read, alongside `channel`. No multi-t-stack
@@ -270,6 +290,13 @@ impl PixelTrainingJob {
         };
 
         let trained_input_color = self.training_input_color(class_labels)?;
+        // The image channels the features are computed on: the recipe's,
+        // else `channel` (a model for the image a pipeline step gets).
+        let wanted_channels: Vec<i32> = if feature_spec.image_channels.is_empty() {
+            vec![self.channel]
+        } else {
+            feature_spec.image_channels.clone()
+        };
 
         let _ = progress.send(TrainingProgressEvent::Started {
             total: self.images.len(),
@@ -361,18 +388,25 @@ impl PixelTrainingJob {
                         z_projection.clone(),
                         &Some(z..=z),
                         self.t_stack,
-                        Some(&vec![self.channel]),
+                        Some(&wanted_channels),
                         tile,
                     )?;
 
-                    let Some(channel_image) = loaded_channels
-                        .into_iter()
-                        .find(|c| c.c_stack == self.channel)
+                    // In the recipe's order; an image missing one is skipped.
+                    let Some(images) = wanted_channels
+                        .iter()
+                        .map(|c| {
+                            loaded_channels
+                                .iter()
+                                .find(|loaded| loaded.c_stack == *c)
+                                .map(|loaded| loaded.image.clone())
+                        })
+                        .collect::<Option<Vec<_>>>()
                     else {
                         continue;
                     };
 
-                    let loaded_size = channel_image.image.size();
+                    let loaded_size = images[0].size();
                     let tile_image_meta = PipelineImageMeta {
                         image_tile_info: ImageTile {
                             width: loaded_size.width,
@@ -389,10 +423,10 @@ impl PixelTrainingJob {
                     let ctx = PipelineContext::new_from_image(
                         PathBuf::new(),
                         tile_image_meta,
-                        channel_image.image,
+                        images[0].clone(),
                     )?;
 
-                    let bank = compute_pixel_features(&ctx, feature_spec)?;
+                    let bank = compute_pixel_features_on(&ctx, feature_spec, &images)?;
 
                     for (object, label) in &labeled_objects {
                         for (x, y) in masked_pixels_in_tile(object, tile) {
@@ -559,7 +593,9 @@ mod tests {
     fn compute_pixel_features_an_empty_step_chain_is_the_raw_pixel_value() {
         let ctx = gray_context(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
         let spec = AiLearningPixelFeatureSettings {
-            channels: vec![vec![]], // one raw channel, no preprocessing
+            channels: vec![vec![]], // one raw channel, no preprocessing,
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -571,11 +607,44 @@ mod tests {
         assert_eq!(bank.feature_vector_at(1, 1), vec![4.0]);
     }
 
+    /// Several image channels: every recipe entry on the first image, then
+    /// every entry on the second; an image of another size is refused.
+    #[test]
+    fn compute_pixel_features_on_several_images_is_image_major() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::GaussianBlurSettings;
+        let ctx = gray_context(2, 1, vec![1.0, 2.0]);
+        let second = gray_context(2, 1, vec![7.0, 8.0]).image.clone();
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![
+                vec![],
+                vec![PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
+                    kernel_size: 3,
+                    sigma: 1.0,
+                })],
+            ],
+            image_channels: vec![0, 1],
+            image_channel_names: Vec::new(),
+        };
+        let bank = compute_pixel_features_on(&ctx, &spec, &[ctx.image.clone(), second]).unwrap();
+        assert_eq!(bank.n_features(), 4);
+        let v = bank.feature_vector_at(0, 0);
+        assert_eq!(
+            (v[0], v[2]),
+            (1.0, 7.0),
+            "raw value of each image first in its block"
+        );
+
+        let other_size = gray_context(3, 1, vec![0.0; 3]).image.clone();
+        assert!(compute_pixel_features_on(&ctx, &spec, &[ctx.image.clone(), other_size]).is_err());
+    }
+
     #[test]
     fn compute_pixel_features_produces_one_channel_per_spec_entry() {
         let ctx = gray_context(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
         let spec = AiLearningPixelFeatureSettings {
-            channels: vec![vec![], vec![]], // two raw channels
+            channels: vec![vec![], vec![]], // two raw channels,
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -597,6 +666,8 @@ mod tests {
             channels: vec![vec![PreprocessingSteps::EdgeDetectionSobel(
                 EdgeDetectionSobelSettings { kernel_size: 3 },
             )]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -632,9 +703,13 @@ mod tests {
 
         let once = AiLearningPixelFeatureSettings {
             channels: vec![vec![step()]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
         let twice = AiLearningPixelFeatureSettings {
             channels: vec![vec![step(), step()]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank_once = compute_pixel_features(&gray_context(4, 4, values.clone()), &once).unwrap();
@@ -662,6 +737,8 @@ mod tests {
             channels: vec![vec![PreprocessingSteps::Laplacian(LaplacianSettings {
                 kernel_size: 3,
             })]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -683,6 +760,8 @@ mod tests {
                     sigma: 1.0,
                 },
             )]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         // Must run without erroring - proves the StructureTensor match arm
@@ -702,6 +781,8 @@ mod tests {
             channels: vec![vec![PreprocessingSteps::Hessian(HessianSettings {
                 mode: FiltersHessianHessianModeSettings::Determinant,
             })]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -720,6 +801,8 @@ mod tests {
                 radius: 1.0,
                 filter_type: FiltersRankFilterRankFilterTypeSettings::Median,
             })]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -744,6 +827,8 @@ mod tests {
                     EdgeDetectionSobelSettings { kernel_size: 3 },
                 )],
             ],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -762,6 +847,8 @@ mod tests {
         let ctx = rgb_context(2, 1, vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
         let spec = AiLearningPixelFeatureSettings {
             channels: vec![vec![]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let bank = compute_pixel_features(&ctx, &spec).unwrap();
@@ -792,6 +879,8 @@ mod tests {
             channels: vec![vec![PreprocessingSteps::Hessian(HessianSettings {
                 mode: FiltersHessianHessianModeSettings::Determinant,
             })]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
         };
 
         let rgb_bank = compute_pixel_features(&rgb_context(w, h, interleaved), &spec).unwrap();
@@ -843,7 +932,11 @@ mod tests {
                 meta: MetaData::default(),
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Pixel {
-                    feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+                    feature_spec: AiLearningPixelFeatureSettings {
+                        channels: vec![],
+                        image_channels: Vec::new(),
+                        image_channel_names: Vec::new(),
+                    },
                     input_color: Default::default(),
                     class_labels: vec![PixelClassLabel {
                         class: SegmentationClass(1),
@@ -1017,7 +1110,9 @@ mod tests {
         let mut job = empty_pixel_job();
         job.settings.classifier = AiLearningClassifierSettings::Pixel {
             feature_spec: AiLearningPixelFeatureSettings {
-                channels: vec![vec![]], // raw pixel value
+                channels: vec![vec![]], // raw pixel value,
+                image_channels: Vec::new(),
+                image_channel_names: Vec::new(),
             },
             input_color: Default::default(),
             class_labels: vec![
@@ -1101,6 +1196,8 @@ mod tests {
         job.settings.classifier = AiLearningClassifierSettings::Pixel {
             feature_spec: AiLearningPixelFeatureSettings {
                 channels: vec![vec![]],
+                image_channels: Vec::new(),
+                image_channel_names: Vec::new(),
             },
             input_color: Default::default(),
             class_labels: vec![

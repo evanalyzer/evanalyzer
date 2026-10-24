@@ -1,8 +1,12 @@
 use crate::UiState;
+use crate::editor::ai_learning_features::{
+    BRIGHTNESS_STATS, ObjectFeatureTable, PIXEL_FEATURES, PixelFeatureTable, Preset, SHAPE_METRICS,
+    size_label,
+};
 use crate::{
-    AiLearningState, AiTrainingSettingsSlint, AppWindow, ChannelState, ClassSelectionRowSlint,
-    DialogType, FeatureRowSlint, GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint,
-    TrainingObjectRowSlint,
+    AiLearningState, AiTrainingSettingsSlint, AppWindow, BrightnessRowSlint, ChannelChipSlint,
+    ChannelState, ClassSelectionRowSlint, DialogType, FeatureGridRowSlint, GlobalAppState,
+    ToggleRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint,
 };
 use evanalyzer_app::ai_learning::CancelHandle;
 use evanalyzer_app::ai_learning::PixelTrainingParams;
@@ -14,9 +18,7 @@ use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
     AiLearningObjectFeatureSettings, ObjectMetric,
 };
-use evanalyzer_cfg::settings::ai_learning_pixel_settings::{
-    AiLearningPixelFeatureSettings, PreprocessingSteps,
-};
+use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings, KNNAlgorithmName,
     KNNDistanceMetric, KNNWeightFunction, KnnSettings, MlpActivation, MlpSettings,
@@ -25,51 +27,27 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
-use evanalyzer_cfg::settings::pipeline_command_settings::{
-    EdgeDetectionSobelSettings, FiltersHessianHessianModeSettings,
-    FiltersRankFilterRankFilterTypeSettings, FiltersStructureTensorTensorModeSettings,
-    GaussianBlurSettings, HessianSettings, LaplacianSettings, RankFilterSettings,
-    StructureTensorSettings,
-};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use log::{info, warn};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Fixed candidate list of object-classifier metrics (see `object.rs`'s
-/// measurement methods). `object_class` (the training label itself) and
-/// centroid/position are deliberately not offered here - see the dialog's
-/// own note about label leakage / location-based overfitting.
-const OBJECT_METRICS: &[(&str, i32)] = &[
-    ("Area", 0),
-    ("Perimeter", 1),
-    ("Circularity", 2),
-    ("Solidity", 3),
-    ("Aspect Ratio", 4),
-    ("Roundness", 5),
-    ("Compactness", 6),
-    ("Feret Diameter", 7),
-    ("Min Feret Diameter", 8),
-    ("Ellipse Major Axis", 9),
-    ("Ellipse Minor Axis", 10),
-    ("Ellipse Angle", 11),
-    ("Eccentricity", 12),
-    ("Touches Edge", 13),
-];
+/// A class with fewer examples than this gets a hint (it still trains).
+const FEW_EXAMPLES: i32 = 5;
 
-const INTENSITY_METRIC_BASE: i32 = 100;
-const INTENSITY_STATS: &[(&str, i32)] = &[
-    ("Sum Intensity", 0),
-    ("Min Intensity", 1),
-    ("Max Intensity", 2),
-    ("Avg Intensity", 3),
-    ("Std Dev Intensity", 4),
-    ("Median Intensity", 5),
-    ("Lower Quartile Intensity", 6),
-    ("Upper Quartile Intensity", 7),
-    ("MAD Intensity", 8),
-];
+/// The feature tables the panel shows, kept here (Slint gets copies).
+struct Features {
+    pixel: PixelFeatureTable,
+    /// (channel name, read by the pixel classifier).
+    channels: Vec<(String, bool)>,
+    object: ObjectFeatureTable,
+    /// The object preset chosen and not edited since: applied again when
+    /// the channels change (its brightness columns depend on them), and
+    /// what the panel shows as chosen - without channels "Recommended"
+    /// and "Shape only" are the same table.
+    object_preset: Option<Preset>,
+}
 
 pub struct AiLearningController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -78,6 +56,7 @@ pub struct AiLearningController {
     /// spawning the background thread in `train`, read by the Cancel
     /// button's handler. Mirrors `PipelinesController::pipeline_cancel_flag`.
     training_cancel_flag: std::sync::Mutex<Option<CancelHandle>>,
+    features: std::sync::Mutex<Features>,
 }
 
 impl AiLearningController {
@@ -86,6 +65,12 @@ impl AiLearningController {
             ui,
             app_state,
             training_cancel_flag: std::sync::Mutex::new(None),
+            features: std::sync::Mutex::new(Features {
+                pixel: PixelFeatureTable::preset(Preset::Recommended),
+                channels: Vec::new(),
+                object: ObjectFeatureTable::preset(Preset::Recommended, 0),
+                object_preset: Some(Preset::Recommended),
+            }),
         }
     }
 
@@ -130,20 +115,128 @@ impl AiLearningController {
 
         let manager = self.clone();
         ui.global::<AiLearningState>()
-            .on_add_feature_row_clicked(move || {
-                manager.add_feature_row(default_feature_row());
+            .on_toggle_pixel_channel(move |i| {
+                manager.edit_features(|f| {
+                    if let Some(c) = f.channels.get_mut(i as usize) {
+                        c.1 = !c.1;
+                    }
+                });
             });
-
         let manager = self.clone();
         ui.global::<AiLearningState>()
-            .on_remove_feature_row_clicked(move |index| {
-                manager.remove_feature_row(index);
+            .on_toggle_feature_cell(move |row, col| {
+                manager.edit_features(|f| {
+                    if let Some(r) = f.pixel.rows.get_mut(row as usize) {
+                        if col < 0 {
+                            r.raw = !r.raw;
+                        } else if let Some(cell) = r.cells.get_mut(col as usize) {
+                            *cell = !*cell;
+                        }
+                    }
+                });
             });
-
         let manager = self.clone();
         ui.global::<AiLearningState>()
-            .on_add_gaussian_scales_clicked(move |csv| {
-                manager.add_gaussian_scales(&csv);
+            .on_set_feature_option(move |row, option| {
+                manager.edit_features(|f| {
+                    if let Some(r) = f.pixel.rows.get_mut(row as usize) {
+                        r.option = option.max(0) as usize;
+                    }
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_apply_pixel_preset(move |i| {
+                if let Some(preset) = preset_of(i) {
+                    manager.edit_features(|f| f.pixel = PixelFeatureTable::preset(preset));
+                }
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_remove_feature_size(move |col| {
+                manager.edit_features(|f| {
+                    f.pixel.remove_size(col.max(0) as usize);
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_add_feature_size(move |text| {
+                let size = text.trim().replace(',', ".").parse::<f32>();
+                manager.edit_features(|f| {
+                    if let Ok(size) = size {
+                        f.pixel.add_size(size);
+                    }
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_toggle_shape_metric(move |i| {
+                manager.edit_features(|f| {
+                    f.object_preset = None;
+                    if let Some(on) = f.object.shape.get_mut(i as usize) {
+                        *on = !*on;
+                    }
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_toggle_brightness_cell(move |row, col| {
+                manager.edit_features(|f| {
+                    f.object_preset = None;
+                    if let Some(on) = f
+                        .object
+                        .brightness
+                        .get_mut(row as usize)
+                        .and_then(|r| r.get_mut(col as usize))
+                    {
+                        *on = !*on;
+                    }
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_toggle_brightness_row(move |row| {
+                manager.edit_features(|f| {
+                    f.object_preset = None;
+                    if let Some(r) = f.object.brightness.get_mut(row as usize) {
+                        let all = r.iter().all(|on| *on);
+                        r.fill(!all);
+                    }
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_toggle_brightness_column(move |col| {
+                manager.edit_features(|f| {
+                    f.object_preset = None;
+                    let col = col as usize;
+                    let all = f
+                        .object
+                        .brightness
+                        .iter()
+                        .all(|r| r.get(col) == Some(&true));
+                    for r in &mut f.object.brightness {
+                        if let Some(on) = r.get_mut(col) {
+                            *on = !all;
+                        }
+                    }
+                });
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_apply_object_preset(move |i| {
+                if let Some(preset) = preset_of(i) {
+                    manager.edit_features(|f| {
+                        let channels = f.channels.len();
+                        f.object = ObjectFeatureTable::preset(preset, channels);
+                        f.object_preset = Some(preset);
+                    });
+                }
+            });
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_class_selection_changed(move || {
+                manager.sync_readiness_to_slint();
             });
 
         let manager = self.clone();
@@ -180,65 +273,171 @@ impl AiLearningController {
             });
 
         let manager = self.clone();
-        ui.global::<AiLearningState>().on_train_clicked(
-            move |settings,
-                  feature_rows,
-                  object_metrics,
-                  training_images,
-                  training_objects,
-                  class_selection| {
-                manager.train(
-                    settings,
-                    feature_rows,
-                    object_metrics,
-                    training_images,
-                    training_objects,
-                    class_selection,
-                );
-            },
-        );
-    }
-
-    // -- Feature row editing (pixel classifier) --------------------------
-
-    fn add_feature_row(self: &Arc<Self>, row: FeatureRowSlint) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
-        let state = ui.global::<AiLearningState>();
-        let mut rows: Vec<FeatureRowSlint> = state.get_feature_rows().iter().collect();
-        rows.push(row);
-        state.set_feature_rows(ModelRc::new(VecModel::from(rows)));
-    }
-
-    fn remove_feature_row(self: &Arc<Self>, index: i32) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
-        let state = ui.global::<AiLearningState>();
-        let mut rows: Vec<FeatureRowSlint> = state.get_feature_rows().iter().collect();
-        if index >= 0 && (index as usize) < rows.len() {
-            rows.remove(index as usize);
-        }
-        state.set_feature_rows(ModelRc::new(VecModel::from(rows)));
-    }
-
-    fn add_gaussian_scales(self: &Arc<Self>, csv: &str) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
-        let state = ui.global::<AiLearningState>();
-        let mut rows: Vec<FeatureRowSlint> = state.get_feature_rows().iter().collect();
-        for part in csv.split(',') {
-            let Ok(sigma) = part.trim().parse::<f32>() else {
-                continue;
-            };
-            rows.push(FeatureRowSlint {
-                sigma,
-                ..default_feature_row()
+        ui.global::<AiLearningState>()
+            .on_train_clicked(move |settings, class_selection| {
+                manager.train(settings, class_selection);
             });
+    }
+
+    // -- Features ----------------------------------------------------------
+
+    /// Changes the feature tables and shows them again.
+    fn edit_features(self: &Arc<Self>, edit: impl FnOnce(&mut Features)) {
+        edit(&mut self.features.lock().expect("Poisoned"));
+        self.push_features_to_slint();
+    }
+
+    /// The feature tables as Slint models, with the presets they match and
+    /// the feature count.
+    fn push_features_to_slint(self: &Arc<Self>) {
+        // Plain copies over to the UI thread (Slint models aren't `Send`).
+        let (pixel, channels, object, object_preset) = {
+            let f = self.features.lock().expect("Poisoned");
+            let object_preset = f
+                .object_preset
+                .or_else(|| f.object.matches(f.channels.len()));
+            (
+                f.pixel.clone(),
+                f.channels.clone(),
+                f.object.clone(),
+                object_preset,
+            )
+        };
+        let ui_weak = self.ui.clone();
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<AiLearningState>();
+            // The chips get the channels' colors.
+            let colors: Vec<slint::Color> = ui
+                .global::<ChannelState>()
+                .get_channels()
+                .iter()
+                .map(|c| c.color)
+                .collect();
+            let chips: Vec<ChannelChipSlint> = channels
+                .iter()
+                .enumerate()
+                .map(|(i, (name, on))| ChannelChipSlint {
+                    name: name.clone().into(),
+                    color: colors.get(i).copied().unwrap_or_default(),
+                    selected: *on,
+                })
+                .collect();
+            let grid: Vec<FeatureGridRowSlint> = pixel
+                .rows
+                .iter()
+                .zip(PIXEL_FEATURES.iter())
+                .map(
+                    |(row, (label, hint, has_raw, options))| FeatureGridRowSlint {
+                        label: (*label).into(),
+                        hint: (*hint).into(),
+                        has_raw: *has_raw,
+                        raw: row.raw,
+                        cells: ModelRc::new(VecModel::from(row.cells.clone())),
+                        options: ModelRc::new(VecModel::from(
+                            options
+                                .iter()
+                                .map(|o| slint::SharedString::from(*o))
+                                .collect::<Vec<_>>(),
+                        )),
+                        option: row.option as i32,
+                    },
+                )
+                .collect();
+            let sizes: Vec<slint::SharedString> =
+                pixel.sizes.iter().map(|s| size_label(*s).into()).collect();
+            let shape: Vec<ToggleRowSlint> = SHAPE_METRICS
+                .iter()
+                .zip(&object.shape)
+                .map(|((label, _), on)| ToggleRowSlint {
+                    label: (*label).into(),
+                    selected: *on,
+                })
+                .collect();
+            let brightness: Vec<BrightnessRowSlint> = BRIGHTNESS_STATS
+                .iter()
+                .zip(&object.brightness)
+                .map(|((label, hint, _), cells)| BrightnessRowSlint {
+                    label: (*label).into(),
+                    hint: (*hint).into(),
+                    cells: ModelRc::new(VecModel::from(cells.clone())),
+                })
+                .collect();
+            let selected = channels.iter().filter(|c| c.1).count();
+            let per_channel = pixel.count();
+            let count = if state.get_settings().mode == 0 {
+                format!("{per_channel} × {selected} ch = {}", per_channel * selected)
+            } else {
+                object.count().to_string()
+            };
+            state.set_pixel_channels(ModelRc::new(VecModel::from(chips)));
+            state.set_feature_sizes(ModelRc::new(VecModel::from(sizes)));
+            state.set_feature_grid(ModelRc::new(VecModel::from(grid)));
+            state.set_pixel_preset(preset_index(pixel.matches()));
+            state.set_shape_metrics(ModelRc::new(VecModel::from(shape)));
+            state.set_brightness_rows(ModelRc::new(VecModel::from(brightness)));
+            state.set_object_preset(preset_index(object_preset));
+            state.set_feature_count(count.into());
+            let legend: Vec<String> = channels
+                .iter()
+                .enumerate()
+                .map(|(i, (name, _))| format!("{i} {name}"))
+                .collect();
+            state.set_channel_legend(legend.join(" · ").into());
+        }) {
+            warn!("Failed to sync AI classifier features to Slint: {}", e);
         }
-        state.set_feature_rows(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// The image's channels into the feature tables; `keep`: the channels
+    /// the pixel classifier reads stay (by name), else the channel shown.
+    fn sync_features_to_slint(self: &Arc<Self>, keep: bool) {
+        let ui_weak = self.ui.clone();
+        let manager = self.clone();
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let channel_state = ui.global::<ChannelState>();
+            let names: Vec<String> = channel_state
+                .get_channels()
+                .iter()
+                .map(|c| c.name.to_string())
+                .collect();
+            let shown = channel_state.get_selected_channel_index().max(0) as usize;
+            {
+                let mut f = manager.features.lock().expect("Poisoned");
+                let before = std::mem::take(&mut f.channels);
+                f.channels = names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        let on = if keep && !before.is_empty() {
+                            before.iter().any(|(n, on)| n == name && *on)
+                        } else {
+                            i == shown.min(names.len().saturating_sub(1))
+                        };
+                        (name.clone(), on)
+                    })
+                    .collect();
+                // None of the channels chosen before is there (another
+                // image, renamed): the one shown.
+                if !f.channels.iter().any(|c| c.1)
+                    && let Some(c) = f.channels.get_mut(shown.min(names.len().saturating_sub(1)))
+                {
+                    c.1 = true;
+                }
+                f.object = match f.object_preset {
+                    Some(preset) => ObjectFeatureTable::preset(preset, names.len()),
+                    None => f.object.with_channels(names.len()),
+                };
+            }
+            manager.push_features_to_slint();
+        }) {
+            warn!("Failed to sync AI classifier channels to Slint: {}", e);
+        }
     }
 
     // -- Training data source / labeling -----------------------------------
@@ -389,12 +588,21 @@ impl AiLearningController {
         match &loaded.classifier {
             AiLearningClassifierSettings::Pixel { feature_spec, .. } => {
                 settings.mode = 0;
-                let rows: Vec<FeatureRowSlint> = feature_spec
-                    .channels
-                    .iter()
-                    .map(|steps| preprocessing_steps_to_feature_row(steps))
-                    .collect();
-                state.set_feature_rows(ModelRc::new(VecModel::from(rows)));
+                let table = PixelFeatureTable::from_recipe(&feature_spec.channels);
+                let mut f = self.features.lock().expect("Poisoned");
+                if let Some(table) = table {
+                    f.pixel = table;
+                } else {
+                    warn!(
+                        "'{}': features not from this panel - kept the table",
+                        path.display()
+                    );
+                }
+                if !feature_spec.image_channels.is_empty() {
+                    for (i, channel) in f.channels.iter_mut().enumerate() {
+                        channel.1 = feature_spec.image_channels.contains(&(i as i32));
+                    }
+                }
             }
             AiLearningClassifierSettings::Object {
                 feature_spec,
@@ -402,14 +610,12 @@ impl AiLearningController {
             } => {
                 settings.mode = 1;
 
-                let mut metric_rows: Vec<ObjectMetricRowSlint> =
-                    state.get_object_metrics().iter().collect();
-                for row in &mut metric_rows {
-                    row.selected = feature_spec
-                        .metrics
-                        .contains(&object_metric_row_to_metric(row));
+                {
+                    let mut f = self.features.lock().expect("Poisoned");
+                    let channels = f.channels.len();
+                    f.object = ObjectFeatureTable::from_metrics(&feature_spec.metrics, channels);
+                    f.object_preset = None;
                 }
-                state.set_object_metrics(ModelRc::new(VecModel::from(metric_rows)));
 
                 let project = self.app_state.get_project();
                 let classes = project.classification.classes().clone();
@@ -426,6 +632,7 @@ impl AiLearningController {
         }
 
         state.set_settings(settings);
+        self.push_features_to_slint();
         self.set_training_status(
             &format!("Loaded settings from '{}'.", path.display()),
             false,
@@ -444,10 +651,6 @@ impl AiLearningController {
     fn train(
         self: &Arc<Self>,
         settings: AiTrainingSettingsSlint,
-        feature_rows: ModelRc<FeatureRowSlint>,
-        object_metrics: ModelRc<ObjectMetricRowSlint>,
-        _training_images: ModelRc<TrainingImageRowSlint>,
-        _training_objects: ModelRc<TrainingObjectRowSlint>,
         class_selection: ModelRc<ClassSelectionRowSlint>,
     ) {
         let model_name = settings.model_name.trim().to_string();
@@ -482,10 +685,38 @@ impl AiLearningController {
             })
             .collect();
 
+        let (recipe, image_channels, image_channel_names, metrics) = {
+            let f = self.features.lock().expect("Poisoned");
+            let (image_channels, image_channel_names): (Vec<i32>, Vec<String>) = f
+                .channels
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.1)
+                .map(|(i, c)| (i as i32, c.0.clone()))
+                .unzip();
+            (
+                f.pixel.to_recipe(),
+                image_channels,
+                image_channel_names,
+                f.object.to_metrics(),
+            )
+        };
+        if settings.mode == 0 && (recipe.is_empty() || image_channels.is_empty()) {
+            self.set_training_status("Tick at least one feature and one channel.", true);
+            return;
+        }
+        if settings.mode == 1 && metrics.is_empty() {
+            self.set_training_status("Tick at least one feature.", true);
+            return;
+        }
         let ai_settings = build_ai_learning_settings(
             &settings,
-            &feature_rows.iter().collect::<Vec<_>>(),
-            &object_metrics.iter().collect::<Vec<_>>(),
+            AiLearningPixelFeatureSettings {
+                channels: recipe,
+                image_channels: image_channels.clone(),
+                image_channel_names,
+            },
+            metrics,
             &selected_classes,
             &project_settings,
         );
@@ -501,7 +732,8 @@ impl AiLearningController {
             .map(|z| z.z_projection.clone())
             .unwrap_or_default();
         let pixel_params = PixelTrainingParams {
-            channel: settings.pixel_channel,
+            // Not read: the features name their channels.
+            channel: image_channels.first().copied().unwrap_or(0),
             z_stack_handling,
             ..Default::default()
         };
@@ -646,7 +878,7 @@ impl AiLearningController {
     fn sync_all_to_slint(self: &Arc<Self>, keep: bool) {
         self.sync_class_names_to_slint();
         self.sync_channel_names_to_slint();
-        self.sync_object_metrics_to_slint(keep);
+        self.sync_features_to_slint(keep);
         self.sync_training_images_to_slint(keep);
         self.sync_training_objects_to_slint();
         self.sync_class_selection_to_slint(keep);
@@ -691,7 +923,10 @@ impl AiLearningController {
             // Hand-drawn objects per class, and the images that have any.
             let mut counts: std::collections::HashMap<_, i32> = std::collections::HashMap::new();
             let mut annotated_images = 0;
-            for image in project.images.list.values() {
+            let mut examples = 0;
+            let mut current_annotated = false;
+            let current = project.get_current_rel_image_path_cloned();
+            for (path, image) in &project.images.list {
                 let mut any = false;
                 for series in image.series.values() {
                     for object in &series.objects {
@@ -699,10 +934,13 @@ impl AiLearningController {
                             *counts.entry(*class).or_default() += 1;
                             any = true;
                         }
+                        examples += i32::from(!object.object_class.is_empty());
                     }
                 }
                 annotated_images += i32::from(any);
+                current_annotated |= any && current.as_ref() == Some(path);
             }
+            let summary = examples_summary(annotated_images, current_annotated, examples);
             // Ticked by the user, by class name (kept on a refresh).
             let ticked: Option<std::collections::HashSet<slint::SharedString>> = keep.then(|| {
                 ui.global::<AiLearningState>()
@@ -730,13 +968,37 @@ impl AiLearningController {
                 .collect();
             drop(project);
             let state = ui.global::<AiLearningState>();
+            let (text, tone) = readiness(&rows, annotated_images);
             state.set_class_selection(ModelRc::new(VecModel::from(rows)));
             state.set_annotated_image_count(annotated_images);
+            state.set_examples_summary(summary.into());
+            state.set_readiness_text(text.into());
+            state.set_readiness_tone(tone);
         }) {
             warn!(
                 "Failed to sync AI classifier class selection to Slint: {}",
                 e
             );
+        }
+    }
+
+    /// The footer's hint again (a class ticked or unticked).
+    fn sync_readiness_to_slint(self: &Arc<Self>) {
+        let ui_weak = self.ui.clone();
+        let manager = self.clone();
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<AiLearningState>();
+            let rows: Vec<ClassSelectionRowSlint> = state.get_class_selection().iter().collect();
+            let (text, tone) = readiness(&rows, state.get_annotated_image_count());
+            state.set_readiness_text(text.into());
+            state.set_readiness_tone(tone);
+            // Pixel or object classifier: the feature count says which.
+            manager.push_features_to_slint();
+        }) {
+            warn!("Failed to sync AI classifier readiness to Slint: {}", e);
         }
     }
 
@@ -760,57 +1022,6 @@ impl AiLearningController {
                 .set_channel_names(ModelRc::new(VecModel::from(names)));
         }) {
             warn!("Failed to sync AI classifier channel names to Slint: {}", e);
-        }
-    }
-
-    pub fn sync_object_metrics_to_slint(self: &Arc<Self>, keep: bool) {
-        let ui_weak = self.ui.clone();
-        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
-            let Some(ui) = ui_weak.upgrade() else {
-                return;
-            };
-
-            let mut rows: Vec<ObjectMetricRowSlint> = OBJECT_METRICS
-                .iter()
-                .map(|(label, id)| ObjectMetricRowSlint {
-                    label: (*label).into(),
-                    metric_id: *id,
-                    channel_index: -1,
-                    selected: false,
-                })
-                .collect();
-
-            let channels = ui.global::<ChannelState>().get_channels();
-            for (ch_idx, ch) in channels.iter().enumerate() {
-                for (stat_name, stat_offset) in INTENSITY_STATS {
-                    rows.push(ObjectMetricRowSlint {
-                        label: format!("{} - {}", ch.name, stat_name).into(),
-                        metric_id: INTENSITY_METRIC_BASE + stat_offset,
-                        channel_index: ch_idx as i32,
-                        selected: false,
-                    });
-                }
-            }
-            if keep {
-                let ticked: std::collections::HashSet<(i32, i32)> = ui
-                    .global::<AiLearningState>()
-                    .get_object_metrics()
-                    .iter()
-                    .filter(|row| row.selected)
-                    .map(|row| (row.metric_id, row.channel_index))
-                    .collect();
-                for row in &mut rows {
-                    row.selected = ticked.contains(&(row.metric_id, row.channel_index));
-                }
-            }
-
-            ui.global::<AiLearningState>()
-                .set_object_metrics(ModelRc::new(VecModel::from(rows)));
-        }) {
-            warn!(
-                "Failed to sync AI classifier object metrics to Slint: {}",
-                e
-            );
         }
     }
 
@@ -930,19 +1141,73 @@ impl AiLearningController {
     }
 }
 
-fn default_feature_row() -> FeatureRowSlint {
-    FeatureRowSlint {
-        filter_type: 1, // Gaussian Blur
-        sigma: 1.0,
-        kernel_size: 3,
-        structure_tensor_mode: 0,
-        hessian_mode: 0,
-        rank_stat: 0,
-        rank_radius: 2.0,
-        rank_threshold: 50.0,
-        pre_blur_enabled: false,
-        pre_blur_sigma: 1.0,
+/// The panel's preset index (0 simple, 1 recommended, 2 all) as a preset.
+fn preset_of(index: i32) -> Option<Preset> {
+    match index {
+        0 => Some(Preset::Simple),
+        1 => Some(Preset::Recommended),
+        2 => Some(Preset::All),
+        _ => None,
     }
+}
+
+/// A preset as the panel's index; -1: none (edited by hand).
+fn preset_index(preset: Option<Preset>) -> i32 {
+    match preset {
+        Some(Preset::Simple) => 0,
+        Some(Preset::Recommended) => 1,
+        Some(Preset::All) => 2,
+        None => -1,
+    }
+}
+
+/// "This image + 2 more · 94": where the examples come from.
+fn examples_summary(images: i32, current: bool, examples: i32) -> String {
+    match (images, current) {
+        (0, _) => "none yet".into(),
+        (1, true) => format!("This image · {examples}"),
+        (n, true) => format!("This image + {} more · {examples}", n - 1),
+        (n, false) => format!("{n} image{} · {examples}", if n == 1 { "" } else { "s" }),
+    }
+}
+
+/// The footer's hint for the ticked classes: (text, tone - 0 can't train
+/// yet, 1 trains but weak, 2 ready).
+fn readiness(rows: &[ClassSelectionRowSlint], images: i32) -> (String, i32) {
+    let ticked: Vec<&ClassSelectionRowSlint> = rows.iter().filter(|r| r.selected).collect();
+    let with_examples = ticked.iter().filter(|r| r.count > 0).count();
+    if with_examples < 2 {
+        return (
+            "Not yet: draw examples of at least 2 classes (and tick them).".into(),
+            0,
+        );
+    }
+    if let Some(empty) = ticked.iter().find(|r| r.count == 0) {
+        return (
+            format!("{} has no examples - draw some or untick it.", empty.name),
+            1,
+        );
+    }
+    if let Some(few) = ticked.iter().find(|r| r.count < FEW_EXAMPLES) {
+        return (
+            format!(
+                "{} has {} example{} - it trains, but draw ~{FEW_EXAMPLES} or more for a steadier model.",
+                few.name,
+                few.count,
+                if few.count == 1 { "" } else { "s" }
+            ),
+            1,
+        );
+    }
+    let examples: i32 = ticked.iter().map(|r| r.count).sum();
+    (
+        format!(
+            "Ready: {} classes, {examples} examples from {images} image{}.",
+            ticked.len(),
+            if images == 1 { "" } else { "s" }
+        ),
+        2,
+    )
 }
 
 fn push_object_rows(
@@ -975,8 +1240,8 @@ fn push_object_rows(
 /// is what originally assigned these ids).
 fn build_ai_learning_settings(
     settings: &AiTrainingSettingsSlint,
-    feature_rows: &[FeatureRowSlint],
-    object_metrics: &[ObjectMetricRowSlint],
+    pixel_features: AiLearningPixelFeatureSettings,
+    object_metrics: Vec<ObjectMetric>,
     selected_classes: &std::collections::HashSet<ObjectClass>,
     project: &ProjectSettings,
 ) -> AiLearningSettings {
@@ -1036,12 +1301,7 @@ fn build_ai_learning_settings(
 
     let classifier = if settings.mode == 0 {
         AiLearningClassifierSettings::Pixel {
-            feature_spec: AiLearningPixelFeatureSettings {
-                channels: feature_rows
-                    .iter()
-                    .map(feature_row_to_preprocessing_steps)
-                    .collect(),
-            },
+            feature_spec: pixel_features,
             input_color: Default::default(),
             class_labels: evanalyzer_app::ai_learning::pixel_class_labels_from_project(
                 project,
@@ -1051,11 +1311,7 @@ fn build_ai_learning_settings(
     } else {
         AiLearningClassifierSettings::Object {
             feature_spec: AiLearningObjectFeatureSettings {
-                metrics: object_metrics
-                    .iter()
-                    .filter(|m| m.selected)
-                    .map(object_metric_row_to_metric)
-                    .collect(),
+                metrics: object_metrics,
             },
             class_labels: evanalyzer_app::ai_learning::object_class_labels_from_project(
                 project,
@@ -1080,181 +1336,6 @@ fn parse_hidden_layers(csv: &str) -> Vec<usize> {
         .filter_map(|part| part.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
         .collect()
-}
-
-/// Converts one feature row into its preprocessing chain. `filter_type == 0`
-/// (Raw) yields an empty chain - see `AiLearningPixelFeatureSettings`'s doc
-/// comment for why that means "unmodified pixel value."
-///
-/// Laplacian/Hessian-of-Gaussian pre-blur reuses `row.kernel_size` for the
-/// blur step too - the dialog has no separate pre-blur kernel-size field.
-fn feature_row_to_preprocessing_steps(row: &FeatureRowSlint) -> Vec<PreprocessingSteps> {
-    let pre_blur = |steps: &mut Vec<PreprocessingSteps>| {
-        if row.pre_blur_enabled {
-            steps.push(PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
-                kernel_size: row.kernel_size.max(3) as usize,
-                sigma: row.pre_blur_sigma,
-            }));
-        }
-    };
-
-    match row.filter_type {
-        1 => vec![PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
-            kernel_size: row.kernel_size.max(3) as usize,
-            sigma: row.sigma,
-        })],
-        2 => vec![PreprocessingSteps::EdgeDetectionSobel(
-            EdgeDetectionSobelSettings {
-                kernel_size: row.kernel_size.max(3) as usize,
-            },
-        )],
-        3 => {
-            let mut steps = Vec::new();
-            pre_blur(&mut steps);
-            steps.push(PreprocessingSteps::Laplacian(LaplacianSettings {
-                kernel_size: row.kernel_size.max(3) as usize,
-            }));
-            steps
-        }
-        4 => vec![PreprocessingSteps::StructureTensor(
-            StructureTensorSettings {
-                mode: match row.structure_tensor_mode {
-                    1 => FiltersStructureTensorTensorModeSettings::EigenvaluesY,
-                    2 => FiltersStructureTensorTensorModeSettings::Coherence,
-                    _ => FiltersStructureTensorTensorModeSettings::EigenvaluesX,
-                },
-                kernel_size: row.kernel_size.max(3) as usize,
-                sigma: row.sigma,
-            },
-        )],
-        5 => {
-            let mut steps = Vec::new();
-            pre_blur(&mut steps);
-            steps.push(PreprocessingSteps::Hessian(HessianSettings {
-                mode: match row.hessian_mode {
-                    1 => FiltersHessianHessianModeSettings::EigenvaluesX,
-                    2 => FiltersHessianHessianModeSettings::EigenvaluesY,
-                    _ => FiltersHessianHessianModeSettings::Determinant,
-                },
-            }));
-            steps
-        }
-        6 => vec![PreprocessingSteps::RankFilter(RankFilterSettings {
-            radius: row.rank_radius as f64,
-            filter_type: match row.rank_stat {
-                1 => FiltersRankFilterRankFilterTypeSettings::Median,
-                2 => FiltersRankFilterRankFilterTypeSettings::Min,
-                3 => FiltersRankFilterRankFilterTypeSettings::Max,
-                4 => FiltersRankFilterRankFilterTypeSettings::Outliers(row.rank_threshold),
-                _ => FiltersRankFilterRankFilterTypeSettings::Mean,
-            },
-        })],
-        _ => Vec::new(), // 0 = Raw, and any unrecognized index
-    }
-}
-
-fn hessian_mode_to_row(mode: &FiltersHessianHessianModeSettings) -> i32 {
-    match mode {
-        FiltersHessianHessianModeSettings::EigenvaluesX => 1,
-        FiltersHessianHessianModeSettings::EigenvaluesY => 2,
-        FiltersHessianHessianModeSettings::Determinant => 0,
-    }
-}
-
-/// The inverse of [`feature_row_to_preprocessing_steps`], used to repopulate
-/// the dialog's feature-row editor from a loaded model's `feature_spec` (see
-/// `browse_existing_model`). Any chain shape that dialog itself would never
-/// produce (e.g. a model saved outside this GUI) falls back to Raw rather
-/// than guessing at intent.
-fn preprocessing_steps_to_feature_row(steps: &[PreprocessingSteps]) -> FeatureRowSlint {
-    match steps {
-        [] => FeatureRowSlint {
-            filter_type: 0,
-            ..default_feature_row()
-        },
-        [PreprocessingSteps::GaussianBlur(s)] => FeatureRowSlint {
-            filter_type: 1,
-            kernel_size: s.kernel_size as i32,
-            sigma: s.sigma,
-            ..default_feature_row()
-        },
-        [PreprocessingSteps::EdgeDetectionSobel(s)] => FeatureRowSlint {
-            filter_type: 2,
-            kernel_size: s.kernel_size as i32,
-            ..default_feature_row()
-        },
-        [PreprocessingSteps::Laplacian(s)] => FeatureRowSlint {
-            filter_type: 3,
-            kernel_size: s.kernel_size as i32,
-            pre_blur_enabled: false,
-            ..default_feature_row()
-        },
-        [
-            PreprocessingSteps::GaussianBlur(blur),
-            PreprocessingSteps::Laplacian(s),
-        ] => FeatureRowSlint {
-            filter_type: 3,
-            kernel_size: s.kernel_size as i32,
-            pre_blur_enabled: true,
-            pre_blur_sigma: blur.sigma,
-            ..default_feature_row()
-        },
-        [PreprocessingSteps::StructureTensor(s)] => FeatureRowSlint {
-            filter_type: 4,
-            kernel_size: s.kernel_size as i32,
-            sigma: s.sigma,
-            structure_tensor_mode: match s.mode {
-                FiltersStructureTensorTensorModeSettings::EigenvaluesY => 1,
-                FiltersStructureTensorTensorModeSettings::Coherence => 2,
-                FiltersStructureTensorTensorModeSettings::EigenvaluesX => 0,
-            },
-            ..default_feature_row()
-        },
-        [PreprocessingSteps::Hessian(s)] => FeatureRowSlint {
-            filter_type: 5,
-            pre_blur_enabled: false,
-            hessian_mode: hessian_mode_to_row(&s.mode),
-            ..default_feature_row()
-        },
-        [
-            PreprocessingSteps::GaussianBlur(blur),
-            PreprocessingSteps::Hessian(s),
-        ] => FeatureRowSlint {
-            filter_type: 5,
-            pre_blur_enabled: true,
-            pre_blur_sigma: blur.sigma,
-            hessian_mode: hessian_mode_to_row(&s.mode),
-            ..default_feature_row()
-        },
-        [PreprocessingSteps::RankFilter(s)] => {
-            let (rank_stat, rank_threshold) = match &s.filter_type {
-                FiltersRankFilterRankFilterTypeSettings::Median => {
-                    (1, default_feature_row().rank_threshold)
-                }
-                FiltersRankFilterRankFilterTypeSettings::Min => {
-                    (2, default_feature_row().rank_threshold)
-                }
-                FiltersRankFilterRankFilterTypeSettings::Max => {
-                    (3, default_feature_row().rank_threshold)
-                }
-                FiltersRankFilterRankFilterTypeSettings::Outliers(t) => (4, *t),
-                FiltersRankFilterRankFilterTypeSettings::Mean => {
-                    (0, default_feature_row().rank_threshold)
-                }
-            };
-            FeatureRowSlint {
-                filter_type: 6,
-                rank_radius: s.radius as f32,
-                rank_stat,
-                rank_threshold,
-                ..default_feature_row()
-            }
-        }
-        _ => FeatureRowSlint {
-            filter_type: 0,
-            ..default_feature_row()
-        },
-    }
 }
 
 /// Copies a loaded model's backend hyperparameters onto the dialog's
@@ -1326,41 +1407,6 @@ fn apply_loaded_backend_settings(
             settings.mlp_seed = s.seed as i32;
             settings.mlp_epsilon = s.epsilon as f32;
         }
-    }
-}
-
-/// `row.metric_id` encoding mirrors `OBJECT_METRICS`/`INTENSITY_METRIC_BASE`/
-/// `INTENSITY_STATS` above.
-fn object_metric_row_to_metric(row: &ObjectMetricRowSlint) -> ObjectMetric {
-    if row.metric_id >= INTENSITY_METRIC_BASE {
-        let channel = row.channel_index;
-        return match row.metric_id - INTENSITY_METRIC_BASE {
-            1 => ObjectMetric::IntensityMin(channel),
-            2 => ObjectMetric::IntensityMax(channel),
-            3 => ObjectMetric::IntensityAvg(channel),
-            4 => ObjectMetric::IntensityStd(channel),
-            5 => ObjectMetric::IntensityMedian(channel),
-            6 => ObjectMetric::IntensityLowerQuartile(channel),
-            7 => ObjectMetric::IntensityUpperQuartile(channel),
-            8 => ObjectMetric::IntensityMad(channel),
-            _ => ObjectMetric::IntensitySum(channel),
-        };
-    }
-    match row.metric_id {
-        1 => ObjectMetric::Perimeter,
-        2 => ObjectMetric::Circularity,
-        3 => ObjectMetric::Solidity,
-        4 => ObjectMetric::AspectRatio,
-        5 => ObjectMetric::Roundness,
-        6 => ObjectMetric::Compactness,
-        7 => ObjectMetric::FeretDiameter,
-        8 => ObjectMetric::MinFeretDiameter,
-        9 => ObjectMetric::EllipseMajor,
-        10 => ObjectMetric::EllipseMinor,
-        11 => ObjectMetric::EllipseAngle,
-        12 => ObjectMetric::Eccentricity,
-        13 => ObjectMetric::TouchesEdge,
-        _ => ObjectMetric::Area,
     }
 }
 
@@ -1513,220 +1559,6 @@ mod tests {
 
     // -- feature_row_to_preprocessing_steps / preprocessing_steps_to_feature_row --
 
-    fn row(filter_type: i32) -> FeatureRowSlint {
-        FeatureRowSlint {
-            filter_type,
-            ..default_feature_row()
-        }
-    }
-
-    #[test]
-    fn raw_row_round_trips_through_an_empty_step_chain() {
-        let steps = feature_row_to_preprocessing_steps(&row(0));
-        assert!(steps.is_empty());
-        assert_eq!(preprocessing_steps_to_feature_row(&steps).filter_type, 0);
-    }
-
-    #[test]
-    fn gaussian_blur_row_round_trips_kernel_size_and_sigma() {
-        let mut r = row(1);
-        r.kernel_size = 7;
-        r.sigma = 2.5;
-
-        let steps = feature_row_to_preprocessing_steps(&r);
-        assert!(matches!(
-            steps.as_slice(),
-            [PreprocessingSteps::GaussianBlur(_)]
-        ));
-
-        let back = preprocessing_steps_to_feature_row(&steps);
-        assert_eq!(back.filter_type, 1);
-        assert_eq!(back.kernel_size, 7);
-        assert_eq!(back.sigma, 2.5);
-    }
-
-    #[test]
-    fn sobel_row_round_trips_kernel_size() {
-        let mut r = row(2);
-        r.kernel_size = 5;
-
-        let steps = feature_row_to_preprocessing_steps(&r);
-        let back = preprocessing_steps_to_feature_row(&steps);
-        assert_eq!(back.filter_type, 2);
-        assert_eq!(back.kernel_size, 5);
-    }
-
-    #[test]
-    fn laplacian_without_pre_blur_round_trips_as_a_single_step() {
-        let mut r = row(3);
-        r.kernel_size = 5;
-        r.pre_blur_enabled = false;
-
-        let steps = feature_row_to_preprocessing_steps(&r);
-        assert!(matches!(
-            steps.as_slice(),
-            [PreprocessingSteps::Laplacian(_)]
-        ));
-
-        let back = preprocessing_steps_to_feature_row(&steps);
-        assert_eq!(back.filter_type, 3);
-        assert_eq!(back.kernel_size, 5);
-        assert!(!back.pre_blur_enabled);
-    }
-
-    #[test]
-    fn laplacian_of_gaussian_round_trips_both_steps() {
-        let mut r = row(3);
-        r.kernel_size = 5;
-        r.pre_blur_enabled = true;
-        r.pre_blur_sigma = 1.5;
-
-        let steps = feature_row_to_preprocessing_steps(&r);
-        assert!(matches!(
-            steps.as_slice(),
-            [
-                PreprocessingSteps::GaussianBlur(_),
-                PreprocessingSteps::Laplacian(_)
-            ]
-        ));
-
-        let back = preprocessing_steps_to_feature_row(&steps);
-        assert_eq!(back.filter_type, 3);
-        assert_eq!(back.kernel_size, 5);
-        assert!(back.pre_blur_enabled);
-        assert_eq!(back.pre_blur_sigma, 1.5);
-    }
-
-    #[test]
-    fn structure_tensor_row_round_trips_mode_kernel_and_sigma() {
-        for mode in [0, 1, 2] {
-            let mut r = row(4);
-            r.kernel_size = 9;
-            r.sigma = 3.0;
-            r.structure_tensor_mode = mode;
-
-            let steps = feature_row_to_preprocessing_steps(&r);
-            let back = preprocessing_steps_to_feature_row(&steps);
-            assert_eq!(back.filter_type, 4, "mode {mode}");
-            assert_eq!(back.kernel_size, 9, "mode {mode}");
-            assert_eq!(back.sigma, 3.0, "mode {mode}");
-            assert_eq!(back.structure_tensor_mode, mode, "mode {mode}");
-        }
-    }
-
-    #[test]
-    fn hessian_without_pre_blur_round_trips_mode() {
-        for mode in [0, 1, 2] {
-            let mut r = row(5);
-            r.hessian_mode = mode;
-            r.pre_blur_enabled = false;
-
-            let steps = feature_row_to_preprocessing_steps(&r);
-            assert!(matches!(steps.as_slice(), [PreprocessingSteps::Hessian(_)]));
-
-            let back = preprocessing_steps_to_feature_row(&steps);
-            assert_eq!(back.filter_type, 5, "mode {mode}");
-            assert_eq!(back.hessian_mode, mode, "mode {mode}");
-            assert!(!back.pre_blur_enabled, "mode {mode}");
-        }
-    }
-
-    #[test]
-    fn hessian_of_gaussian_round_trips_mode_and_pre_blur_sigma() {
-        let mut r = row(5);
-        r.hessian_mode = 2;
-        r.pre_blur_enabled = true;
-        r.pre_blur_sigma = 0.8;
-        r.kernel_size = 5; // used for the pre-blur step, not Hessian itself
-
-        let steps = feature_row_to_preprocessing_steps(&r);
-        assert!(matches!(
-            steps.as_slice(),
-            [
-                PreprocessingSteps::GaussianBlur(_),
-                PreprocessingSteps::Hessian(_)
-            ]
-        ));
-
-        let back = preprocessing_steps_to_feature_row(&steps);
-        assert_eq!(back.filter_type, 5);
-        assert_eq!(back.hessian_mode, 2);
-        assert!(back.pre_blur_enabled);
-        assert_eq!(back.pre_blur_sigma, 0.8);
-    }
-
-    #[test]
-    fn rank_filter_round_trips_every_stat_including_outliers_threshold() {
-        for (stat, threshold) in [(0, 50.0), (1, 50.0), (2, 50.0), (3, 50.0), (4, 12.5)] {
-            let mut r = row(6);
-            r.rank_radius = 3.0;
-            r.rank_stat = stat;
-            r.rank_threshold = threshold;
-
-            let steps = feature_row_to_preprocessing_steps(&r);
-            assert!(matches!(
-                steps.as_slice(),
-                [PreprocessingSteps::RankFilter(_)]
-            ));
-
-            let back = preprocessing_steps_to_feature_row(&steps);
-            assert_eq!(back.filter_type, 6, "stat {stat}");
-            assert_eq!(back.rank_radius, 3.0, "stat {stat}");
-            assert_eq!(back.rank_stat, stat, "stat {stat}");
-            if stat == 4 {
-                assert_eq!(back.rank_threshold, threshold, "stat {stat}");
-            }
-        }
-    }
-
-    #[test]
-    fn preprocessing_steps_to_feature_row_falls_back_to_raw_for_an_unrecognized_shape() {
-        // Two Sobel steps in a row is not a shape this dialog would ever
-        // produce - must degrade to Raw rather than panicking or guessing.
-        let steps = vec![
-            PreprocessingSteps::EdgeDetectionSobel(EdgeDetectionSobelSettings { kernel_size: 3 }),
-            PreprocessingSteps::EdgeDetectionSobel(EdgeDetectionSobelSettings { kernel_size: 3 }),
-        ];
-        assert_eq!(preprocessing_steps_to_feature_row(&steps).filter_type, 0);
-    }
-
-    // -- object_metric_row_to_metric ----------------------------------------
-
-    fn metric_row(metric_id: i32, channel_index: i32) -> ObjectMetricRowSlint {
-        ObjectMetricRowSlint {
-            label: "".into(),
-            metric_id,
-            channel_index,
-            selected: false,
-        }
-    }
-
-    #[test]
-    fn object_metric_row_to_metric_maps_non_intensity_ids() {
-        assert_eq!(
-            object_metric_row_to_metric(&metric_row(0, -1)),
-            ObjectMetric::Area
-        );
-        assert_eq!(
-            object_metric_row_to_metric(&metric_row(12, -1)),
-            ObjectMetric::Eccentricity
-        );
-    }
-
-    #[test]
-    fn object_metric_row_to_metric_maps_intensity_ids_with_their_channel() {
-        assert_eq!(
-            object_metric_row_to_metric(&metric_row(INTENSITY_METRIC_BASE + 1, 2)),
-            ObjectMetric::IntensityMin(2)
-        );
-        assert_eq!(
-            object_metric_row_to_metric(&metric_row(INTENSITY_METRIC_BASE, 0)),
-            ObjectMetric::IntensitySum(0)
-        );
-    }
-
-    // -- apply_loaded_backend_settings --------------------------------------
-
     fn default_settings() -> AiTrainingSettingsSlint {
         AiTrainingSettingsSlint::default()
     }
@@ -1862,8 +1694,8 @@ mod tests {
             };
             let ai_settings = build_ai_learning_settings(
                 &settings,
-                &[],
-                &[],
+                Default::default(),
+                Vec::new(),
                 &std::collections::HashSet::new(),
                 &ProjectSettings::default(),
             );
@@ -1923,87 +1755,6 @@ mod tests {
         app_state: Arc<UiState>,
     ) -> Arc<AiLearningController> {
         Arc::new(AiLearningController::new(ui, app_state))
-    }
-
-    #[test]
-    fn attach_callbacks_add_feature_row_appends_a_default_row() {
-        let ui = test_ui_window();
-        let controller =
-            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
-        controller.attach_callbacks();
-
-        ui.global::<AiLearningState>()
-            .invoke_add_feature_row_clicked();
-
-        let rows: Vec<FeatureRowSlint> = ui
-            .global::<AiLearningState>()
-            .get_feature_rows()
-            .iter()
-            .collect();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].filter_type, 1); // Gaussian Blur, per default_feature_row
-    }
-
-    #[test]
-    fn attach_callbacks_remove_feature_row_drops_the_given_index() {
-        let ui = test_ui_window();
-        let controller =
-            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
-        controller.attach_callbacks();
-        let state = ui.global::<AiLearningState>();
-        state.set_feature_rows(ModelRc::new(VecModel::from(vec![
-            FeatureRowSlint {
-                filter_type: 0,
-                ..default_feature_row()
-            },
-            FeatureRowSlint {
-                filter_type: 2,
-                ..default_feature_row()
-            },
-        ])));
-
-        state.invoke_remove_feature_row_clicked(0);
-
-        let rows: Vec<FeatureRowSlint> = state.get_feature_rows().iter().collect();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].filter_type, 2);
-    }
-
-    #[test]
-    fn attach_callbacks_remove_feature_row_out_of_range_is_a_no_op() {
-        let ui = test_ui_window();
-        let controller =
-            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
-        controller.attach_callbacks();
-        let state = ui.global::<AiLearningState>();
-        state.set_feature_rows(ModelRc::new(VecModel::from(vec![default_feature_row()])));
-
-        state.invoke_remove_feature_row_clicked(99);
-
-        assert_eq!(state.get_feature_rows().iter().count(), 1);
-    }
-
-    #[test]
-    fn attach_callbacks_add_gaussian_scales_parses_a_csv_list_and_skips_unparsable_entries() {
-        let ui = test_ui_window();
-        let controller =
-            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
-        controller.attach_callbacks();
-
-        ui.global::<AiLearningState>()
-            .invoke_add_gaussian_scales_clicked("1, x, 2.5, , 4".into());
-
-        let rows: Vec<FeatureRowSlint> = ui
-            .global::<AiLearningState>()
-            .get_feature_rows()
-            .iter()
-            .collect();
-        let sigmas: Vec<f32> = rows.iter().map(|r| r.sigma).collect();
-        assert_eq!(sigmas, vec![1.0, 2.5, 4.0]);
-        assert!(
-            rows.iter().all(|r| r.filter_type == 1),
-            "each scale is a GaussianBlur row"
-        );
     }
 
     #[test]
@@ -2328,14 +2079,7 @@ mod tests {
 
         fn train(&self) {
             let s = self.state();
-            s.invoke_train_clicked(
-                s.get_settings(),
-                s.get_feature_rows(),
-                s.get_object_metrics(),
-                s.get_training_images(),
-                s.get_training_objects(),
-                s.get_class_selection(),
-            );
+            s.invoke_train_clicked(s.get_settings(), s.get_class_selection());
             drain_ui_queue();
         }
     }
@@ -2351,10 +2095,19 @@ mod tests {
         let names: Vec<String> = s.get_class_names().iter().map(|n| n.to_string()).collect();
         assert!(names.contains(&"Cell".to_string()) && names.contains(&"Nucleus".to_string()));
         assert_eq!(s.get_channel_names().row_count(), 1);
-        assert_eq!(
-            s.get_object_metrics().row_count(),
-            OBJECT_METRICS.len() + INTENSITY_STATS.len(),
-            "fixed metrics + one intensity block for the one channel"
+        // The feature tables: the one channel, read by the pixel classifier;
+        // the brightness table has a column for it.
+        let chips: Vec<ChannelChipSlint> = s.get_pixel_channels().iter().collect();
+        assert_eq!(chips.len(), 1);
+        assert!(chips[0].selected);
+        assert_eq!(s.get_feature_grid().row_count(), PIXEL_FEATURES.len());
+        assert_eq!(s.get_pixel_preset(), 1, "recommended");
+        assert_eq!(s.get_feature_count(), "10 × 1 ch = 10");
+        assert_eq!(s.get_shape_metrics().row_count(), SHAPE_METRICS.len());
+        assert!(
+            s.get_brightness_rows()
+                .iter()
+                .all(|r| r.cells.row_count() == 1)
         );
         // The current image is not offered as "another" image.
         let images: Vec<TrainingImageRowSlint> = s.get_training_images().iter().collect();
@@ -2433,10 +2186,11 @@ mod tests {
         assert_eq!(selected, ["Cell"], "the user's ticks stay");
     }
 
-    /// Opened before the image's channels were known: the intensity metrics
-    /// appear once they are - and metrics the user ticked stay ticked.
+    /// Opened before the image's channels were known: the channels and the
+    /// brightness columns appear once they are - and what the user ticked
+    /// stays.
     #[test]
-    fn intensity_metrics_appear_when_the_channels_arrive() {
+    fn channels_arriving_while_open_fill_the_feature_tables() {
         let ui = test_ui_window();
         let ui_state = ui_state_with_window(&ui, labeled_project());
         let controller = make_controller_with_ui(ui.as_weak(), ui_state.clone());
@@ -2444,34 +2198,180 @@ mod tests {
         let s = ui.global::<AiLearningState>();
         s.invoke_open_requested();
         drain_ui_queue();
-        assert_eq!(s.get_object_metrics().row_count(), OBJECT_METRICS.len());
-        // The user ticks the first metric.
-        let mut first = s.get_object_metrics().row_data(0).unwrap();
-        first.selected = true;
-        s.get_object_metrics().set_row_data(0, first.clone());
+        assert_eq!(s.get_pixel_channels().row_count(), 0);
+        assert!(
+            s.get_brightness_rows()
+                .iter()
+                .all(|r| r.cells.row_count() == 0)
+        );
 
+        let channel = |name: &str, idx: i32| crate::ChannelInfo {
+            name: name.into(),
+            active: true,
+            idx,
+            color: slint::Color::from_rgb_u8(0, 0, 255),
+            emission_wave_length: 461.0,
+            wavelength_overridden: false,
+        };
         ui.global::<ChannelState>()
-            .set_channels(ModelRc::new(VecModel::from(vec![crate::ChannelInfo {
-                name: "DAPI".into(),
-                active: true,
-                idx: 0,
-                color: slint::Color::from_rgb_u8(0, 0, 255),
-                emission_wave_length: 461.0,
-                wavelength_overridden: false,
-            }])));
+            .set_channels(ModelRc::new(VecModel::from(vec![channel("DAPI", 0)])));
         s.invoke_project_changed();
         drain_ui_queue();
-
-        let metrics = s.get_object_metrics();
-        assert_eq!(
-            metrics.row_count(),
-            OBJECT_METRICS.len() + INTENSITY_STATS.len()
-        );
+        assert_eq!(s.get_pixel_channels().row_count(), 1);
+        // The user ticks Sum for DAPI.
+        s.invoke_toggle_brightness_cell(6, 0);
+        drain_ui_queue();
         assert!(
-            metrics.row_data(0).unwrap().selected,
-            "the user's tick stays"
+            s.get_brightness_rows()
+                .row_data(6)
+                .unwrap()
+                .cells
+                .row_data(0)
+                .unwrap()
         );
-        assert!(metrics.iter().any(|r| r.label.starts_with("DAPI")));
+
+        ui.global::<ChannelState>()
+            .set_channels(ModelRc::new(VecModel::from(vec![
+                channel("DAPI", 0),
+                channel("FITC", 1),
+            ])));
+        s.invoke_project_changed();
+        drain_ui_queue();
+        let chips: Vec<ChannelChipSlint> = s.get_pixel_channels().iter().collect();
+        assert_eq!(chips.len(), 2);
+        assert!(
+            chips[0].selected && !chips[1].selected,
+            "the user's channel stays"
+        );
+        let sum: Vec<bool> = s
+            .get_brightness_rows()
+            .row_data(6)
+            .unwrap()
+            .cells
+            .iter()
+            .collect();
+        assert_eq!(
+            sum,
+            [true, true],
+            "a new channel gets the first channel's ticks"
+        );
+    }
+
+    /// Clicks in the pixel table change the features; a preset puts them
+    /// back; the count follows the channels.
+    #[test]
+    fn the_pixel_table_follows_clicks_presets_and_channels() {
+        let d = opened(labeled_project());
+        let s = d.state();
+        s.invoke_toggle_feature_cell(2, 0); // Gaussian gradient · 1 px off
+        drain_ui_queue();
+        assert_eq!(s.get_feature_count(), "9 × 1 ch = 9");
+        assert_eq!(s.get_pixel_preset(), -1, "edited: no preset");
+        s.invoke_set_feature_option(6, 2); // Rank filter: min
+        s.invoke_add_feature_size("3".into());
+        drain_ui_queue();
+        assert_eq!(s.get_feature_sizes().row_count(), 6);
+        assert_eq!(s.get_feature_grid().row_data(6).unwrap().option, 2);
+        s.invoke_apply_pixel_preset(2);
+        drain_ui_queue();
+        assert_eq!(s.get_pixel_preset(), 2);
+        assert_eq!(s.get_feature_count(), "31 × 1 ch = 31");
+        s.invoke_toggle_pixel_channel(0);
+        drain_ui_queue();
+        assert_eq!(s.get_feature_count(), "31 × 0 ch = 0");
+    }
+
+    /// The object presets: "Recommended" ticks mean, median and std dev for
+    /// every channel and is shown as chosen.
+    #[test]
+    fn the_object_presets_tick_their_features() {
+        let d = opened(labeled_project());
+        let s = d.state();
+        let mut settings = s.get_settings();
+        settings.mode = 1;
+        s.set_settings(settings);
+        s.invoke_class_selection_changed();
+        drain_ui_queue();
+        // Opening: Recommended, with the channel that arrived after it.
+        assert_eq!(s.get_object_preset(), 1);
+        assert_eq!(s.get_feature_count(), "10");
+        s.invoke_apply_object_preset(0);
+        drain_ui_queue();
+        assert_eq!(s.get_object_preset(), 0);
+        s.invoke_apply_object_preset(1);
+        drain_ui_queue();
+        assert_eq!(s.get_object_preset(), 1);
+        let mean: Vec<bool> = s
+            .get_brightness_rows()
+            .row_data(0)
+            .unwrap()
+            .cells
+            .iter()
+            .collect();
+        assert_eq!(mean, [true]);
+        assert_eq!(s.get_feature_count(), "10");
+    }
+
+    /// The channels get other names (another image): none of the chosen
+    /// ones is there any more - the channel shown is read, never none.
+    #[test]
+    fn renamed_channels_still_leave_one_to_read() {
+        let d = opened(labeled_project());
+        let s = d.state();
+        let channel = |name: &str, idx: i32| crate::ChannelInfo {
+            name: name.into(),
+            active: true,
+            idx,
+            color: slint::Color::from_rgb_u8(0, 0, 255),
+            emission_wave_length: 461.0,
+            wavelength_overridden: false,
+        };
+        d.ui.global::<ChannelState>()
+            .set_channels(ModelRc::new(VecModel::from(vec![
+                channel("Channel 0", 0),
+                channel("Channel 1", 1),
+            ])));
+        s.invoke_project_changed();
+        drain_ui_queue();
+        let chips: Vec<ChannelChipSlint> = s.get_pixel_channels().iter().collect();
+        assert_eq!(chips.iter().filter(|c| c.selected).count(), 1, "{chips:?}");
+        assert_eq!(s.get_feature_count(), "10 × 1 ch = 10");
+    }
+
+    #[test]
+    fn the_footer_says_whether_it_can_train() {
+        let row = |name: &str, count: i32, selected: bool| ClassSelectionRowSlint {
+            class_index: 0,
+            name: name.into(),
+            selected,
+            color: Default::default(),
+            count,
+        };
+        assert_eq!(readiness(&[row("Cell", 9, true)], 1).1, 0, "one class");
+        assert_eq!(
+            readiness(&[row("Cell", 9, true), row("Spot", 9, false)], 1).1,
+            0,
+            "the other unticked"
+        );
+        let (text, tone) = readiness(&[row("Cell", 9, true), row("Spot", 3, true)], 2);
+        assert_eq!(tone, 1);
+        assert!(text.starts_with("Spot has 3 examples"), "{text}");
+        let (text, tone) = readiness(
+            &[
+                row("Cell", 9, true),
+                row("Spot", 0, true),
+                row("Bg", 4, true),
+            ],
+            2,
+        );
+        assert_eq!(tone, 1);
+        assert!(text.starts_with("Spot has no examples"), "{text}");
+        let (text, tone) = readiness(&[row("Cell", 9, true), row("Spot", 6, true)], 2);
+        assert_eq!(tone, 2);
+        assert_eq!(text, "Ready: 2 classes, 15 examples from 2 images.");
+        assert_eq!(examples_summary(0, false, 0), "none yet");
+        assert_eq!(examples_summary(3, true, 94), "This image + 2 more · 94");
+        assert_eq!(examples_summary(1, false, 4), "1 image · 4");
     }
 
     /// While the dialog is closed, changes don't touch its lists.
@@ -2529,15 +2429,15 @@ mod tests {
         settings.algorithm = 0;
         settings.rf_n_trees = 5;
         s.set_settings(settings);
-        let metrics: Vec<ObjectMetricRowSlint> = s
-            .get_object_metrics()
+        // Area only.
+        let mut f = d.controller.features.lock().unwrap();
+        f.object.shape = SHAPE_METRICS
             .iter()
-            .map(|mut m| {
-                m.selected = m.metric_id == 0; // Area
-                m
-            })
+            .map(|(name, _)| *name == "Area")
             .collect();
-        s.set_object_metrics(ModelRc::new(VecModel::from(metrics)));
+        for row in &mut f.object.brightness {
+            row.fill(false);
+        }
     }
 
     #[test]
@@ -2563,15 +2463,8 @@ mod tests {
         settings.mode = 0;
         settings.model_name = "".into();
         s.set_settings(settings);
-        let cleared: Vec<ObjectMetricRowSlint> = s
-            .get_object_metrics()
-            .iter()
-            .map(|mut m| {
-                m.selected = false;
-                m
-            })
-            .collect();
-        s.set_object_metrics(ModelRc::new(VecModel::from(cleared)));
+        s.invoke_apply_object_preset(2); // everything ticked
+        drain_ui_queue();
         s.invoke_browse_existing_model_clicked();
         choose_file(&d.ui, &model);
         let settings = s.get_settings();
@@ -2579,12 +2472,16 @@ mod tests {
         assert_eq!(settings.model_name, "cells", "falls back to the file name");
         assert_eq!(settings.loaded_model_path, model.to_string_lossy().as_ref());
         assert!(s.get_training_status().starts_with("Loaded settings"));
-        let area = s
-            .get_object_metrics()
-            .iter()
-            .find(|m| m.metric_id == 0)
-            .unwrap();
-        assert!(area.selected);
+        drain_ui_queue();
+        // Back to what the model has: Area only.
+        let shape: Vec<ToggleRowSlint> = s.get_shape_metrics().iter().collect();
+        assert!(shape[0].selected, "Area");
+        assert!(shape[1..].iter().all(|m| !m.selected));
+        assert!(
+            s.get_brightness_rows()
+                .iter()
+                .all(|r| r.cells.iter().all(|on| !on))
+        );
     }
 
     #[test]
@@ -2648,7 +2545,13 @@ mod tests {
         s.rf_criterion = 1;
         s.rf_max_depth = 0;
         s.rf_max_features = 3;
-        let built = build_ai_learning_settings(&s, &[], &[], &Default::default(), &project);
+        let built = build_ai_learning_settings(
+            &s,
+            Default::default(),
+            Vec::new(),
+            &Default::default(),
+            &project,
+        );
         let AiLearningBackendSettings::RandomForest(rf) = built.backend else {
             panic!("forest");
         };
@@ -2665,8 +2568,13 @@ mod tests {
         ] {
             s.mlp_activation = index;
             s.mlp_epsilon = 0.0;
-            let built =
-                build_ai_learning_settings(&s, &[row(1)], &[], &Default::default(), &project);
+            let built = build_ai_learning_settings(
+                &s,
+                Default::default(),
+                Vec::new(),
+                &Default::default(),
+                &project,
+            );
             let AiLearningBackendSettings::Mlp(mlp) = built.backend else {
                 panic!("mlp");
             };

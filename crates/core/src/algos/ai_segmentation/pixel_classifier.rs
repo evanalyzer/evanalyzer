@@ -10,12 +10,15 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     ai_learning::model::load_from_file,
-    ai_learning::training::pixel::compute_pixel_features,
+    ai_learning::training::pixel::{compute_pixel_features, compute_pixel_features_on},
     algos::{
         ExecutionScope, ImageAlgorithm, ai_segmentation::classifier_cache::load_cached_classifier,
     },
     image::ImageContainer,
-    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
+    pipeline::{
+        pipeline_cache::{CacheAddress, GlobalPipelineCache},
+        pipeline_context::PipelineContext,
+    },
 };
 
 /// Maps one class the model was trained to predict to a class ID meaningful
@@ -58,7 +61,7 @@ impl ImageAlgorithm for PixelClassifier {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut GlobalPipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let saved = load_cached_classifier(&self.model_path, || load_from_file(&self.model_path))?;
 
@@ -73,12 +76,37 @@ impl ImageAlgorithm for PixelClassifier {
                 self.model_path.display()
             )));
         };
-        check_input_color(*input_color, ctx.image.as_ref(), &self.model_path)?;
 
         // Immutable borrow of `ctx` to compute features and run inference -
         // `bank`/`predicted` own their data, so this ends before the mutable
         // borrow below (writing the segmentation map) starts.
-        let bank = compute_pixel_features(ctx, feature_spec)?;
+        // The image channels the model was trained on, from this tile's
+        // channel images - or, when it names none, the image the step gets.
+        let bank = if feature_spec.image_channels.is_empty() {
+            check_input_color(*input_color, ctx.image.as_ref(), &self.model_path)?;
+            compute_pixel_features(ctx, feature_spec)?
+        } else {
+            let tile = ctx.image_meta.image_tile_info.clone();
+            let images = feature_spec
+                .image_channels
+                .iter()
+                .map(|channel| {
+                    cache
+                        .image_cache
+                        .get(&CacheAddress::Channel((*channel, tile.clone())))
+                        .ok_or_else(|| {
+                            InternalErrors::InvalidArgument(format!(
+                                "'{}' needs image channel {channel}, which this image doesn't have",
+                                self.model_path.display()
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for image in &images {
+                check_input_color(*input_color, image.as_ref(), &self.model_path)?;
+            }
+            compute_pixel_features_on(ctx, feature_spec, &images)?
+        };
         let size = ctx.image.size();
         let (width, height) = (size.width, size.height);
 
@@ -229,6 +257,8 @@ mod tests {
                     // single-feature training rows above.
                     feature_spec: AiLearningPixelFeatureSettings {
                         channels: vec![vec![]],
+                        image_channels: Vec::new(),
+                        image_channel_names: Vec::new(),
                     },
                     input_color: PixelInputColor::Gray,
                     class_labels,
@@ -327,6 +357,46 @@ mod tests {
 
         let seg = ctx.get_segmentation_map().unwrap();
         assert_eq!(seg.as_slice(), &[0u32, 42u32]);
+    }
+
+    /// A model trained on image channel 1 reads channel 1 of the tile from
+    /// the cache - not the image the step gets (here channel 0, the
+    /// opposite values) - and names a channel the image lacks.
+    #[test]
+    fn a_model_for_an_image_channel_reads_that_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.evamodel");
+        let mut saved = saved_pixel_classifier(labels());
+        if let AiLearningClassifierSettings::Pixel { feature_spec, .. } =
+            &mut saved.settings.classifier
+        {
+            feature_spec.image_channels = vec![1];
+        }
+        save_to_file(&saved, &path).unwrap();
+        let cmd = PixelClassifier {
+            model_path: path,
+            segmentation_mapping: vec![SegmentationMapping {
+                model_class: SegmentationClass(6),
+                segmentation_class: SegmentationClass(42),
+            }],
+        };
+
+        let mut ctx = gray_ctx(2, 1, vec![10.05, 0.05]);
+        let tile = ctx.image_meta.image_tile_info.clone();
+        let mut cache = GlobalPipelineCache::default();
+        let channel_1 = gray_ctx(2, 1, vec![0.05, 10.05]).image.clone();
+        cache.add_to_channel_cache(channel_1, 1, tile);
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+        assert_eq!(
+            ctx.get_segmentation_map().unwrap().as_slice(),
+            &[0u32, 42u32]
+        );
+
+        let mut ctx = gray_ctx(2, 1, vec![0.0, 0.0]);
+        let err = cmd
+            .execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("image channel 1"), "{err}");
     }
 
     #[test]

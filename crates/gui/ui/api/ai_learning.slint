@@ -2,39 +2,40 @@
 // sets, the callbacks it answers.
 
 
-// One feature channel for pixel-classifier training. `filter_type` selects
-// which fields are meaningful (see the ComboBox model below for the index
-// mapping) - mirrors `evanalyzer_core::ai_learning::pixel_settings::PreprocessingSteps`.
-export struct FeatureRowSlint {
-    // 0=Raw, 1=Gaussian Blur, 2=Sobel, 3=Laplacian, 4=Structure Tensor, 5=Hessian, 6=Rank Filter
-    filter_type: int,
-    sigma: float,
-    kernel_size: int,
-    // 0=Eigenvalue X, 1=Eigenvalue Y, 2=Coherence (Structure Tensor only)
-    structure_tensor_mode: int,
-    // 0=Determinant, 1=Eigenvalue X, 2=Eigenvalue Y (Hessian only)
-    hessian_mode: int,
-    // 0=Mean, 1=Median, 2=Min, 3=Max, 4=Outliers (Rank Filter only)
-    rank_stat: int,
-    rank_radius: float,
-    // Deviation-from-median threshold used when rank_stat == 4 (Outliers).
-    rank_threshold: float,
-    // Prepends a Gaussian-blur step before this filter (Laplacian-/Hessian-of-Gaussian),
-    // since Laplacian/Hessian themselves have no sigma of their own.
-    pre_blur_enabled: bool,
-    pre_blur_sigma: float,
+// An image channel the pixel classifier may read (a chip above the
+// feature table).
+export struct ChannelChipSlint {
+    name: string,
+    color: color,
+    selected: bool,
 }
 
-// One selectable object metric (object-classifier training). Metrics that
-// would leak the label (object_class) or teach position instead of shape
-// (centroid) are intentionally not offered here at all.
-export struct ObjectMetricRowSlint {
+// A row of the pixel feature table: what it sees × the size columns
+// (`AiLearningState.feature_sizes`). Built and changed by Rust - every
+// click goes through a callback.
+export struct FeatureGridRowSlint {
     label: string,
-    // See the metric_id mapping maintained on the Rust side.
-    metric_id: int,
-    // Channel index for per-channel intensity metrics, -1 otherwise.
-    channel_index: int,
+    hint: string,
+    // Brightness only: an "as is" column (the raw pixel value).
+    has_raw: bool,
+    raw: bool,
+    cells: [bool],
+    // The row's choices (e.g. "median", "mean"); empty: none.
+    options: [string],
+    option: int,
+}
+
+// A checkbox in a list (shape metrics).
+export struct ToggleRowSlint {
+    label: string,
     selected: bool,
+}
+
+// A row of the brightness table: a statistic × the channels.
+export struct BrightnessRowSlint {
+    label: string,
+    hint: string,
+    cells: [bool],
 }
 
 export struct TrainingImageRowSlint {
@@ -87,13 +88,6 @@ export struct AiTrainingSettingsSlint {
     // Non-empty once an existing model has been loaded for retraining.
     loaded_model_path: string,
 
-    // Which image channel to read features from (pixel classifier only) -
-    // an index into `AiLearningState.channel_names`. Z-stack handling is not
-    // configured here - training reuses the project's own global z-stack
-    // setting (`GlobalImageSettings.z_stack`, the same one the viewport's
-    // channel controls set) rather than a separate picker.
-    pixel_channel: int,
-
     // -- Random Forest --
     rf_n_trees: int,
     rf_max_depth: int, // 0 = unlimited
@@ -136,7 +130,6 @@ export global AiLearningState {
         algorithm: 0,
         model_name: "",
         loaded_model_path: "",
-        pixel_channel: 0,
         // 50 trees capped at depth 20: enough for good pixel/object-classifier
         // accuracy without the runtime blowing up at inference time - a deep,
         // unbounded forest classifies fast to train (a handful of thousand
@@ -175,8 +168,32 @@ export global AiLearningState {
         use_other_images: false,
     };
 
-    in-out property <[FeatureRowSlint]> feature_rows: [];
-    in-out property <[ObjectMetricRowSlint]> object_metrics: [];
+    // -- Features (built by Rust; changed through the callbacks below) --
+    // The image channels the pixel classifier reads (several: features of
+    // each). Z-stack handling isn't set here - training uses the project's.
+    in property <[ChannelChipSlint]> pixel_channels: [];
+    // The size columns, as headers ("1", "2", ...).
+    in property <[string]> feature_sizes: [];
+    in property <[FeatureGridRowSlint]> feature_grid: [];
+    // 0 Simple, 1 Recommended, 2 All, -1 none (edited by hand).
+    in property <int> pixel_preset: 1;
+    in property <[ToggleRowSlint]> shape_metrics: [];
+    in property <[BrightnessRowSlint]> brightness_rows: [];
+    // 0 Shape only, 1 Recommended, 2 All, -1 none.
+    in property <int> object_preset: 1;
+    // "10 × 2 ch = 20", "16" - the features the model gets.
+    in property <string> feature_count: "";
+    // "0 DAPI · 1 FITC · ..." - under the brightness table when its
+    // columns are too narrow for the names (they show the numbers then).
+    in property <string> channel_legend: "";
+
+    // -- What the panel tells about the examples (Rust) --
+    // "This image + 2 more · 94"
+    in property <string> examples_summary: "";
+    // The footer's hint: 0 not yet (Train off), 1 trains but weak, 2 ready.
+    in property <string> readiness_text: "";
+    in property <int> readiness_tone: 0;
+
     in-out property <[TrainingImageRowSlint]> training_images: [];
     in-out property <[TrainingObjectRowSlint]> training_objects: [];
     // Which project classes to train on - see `ClassSelectionRowSlint`'s doc
@@ -187,8 +204,7 @@ export global AiLearningState {
     // Project's ObjectClass names, used as the label picker's options for
     // each training object row.
     in property <[string]> class_names: [];
-    // Project's image channel names, used as the pixel-classifier channel
-    // picker's options - index matches `settings.pixel_channel`.
+    // Project's image channel names (the brightness table's columns).
     in property <[string]> channel_names: [];
 
     // Set by Rust for pre-flight check failures (e.g. no model name, no
@@ -225,15 +241,26 @@ export global AiLearningState {
     // pipeline-run dialog's Cancel button uses.
     callback cancel_training_clicked();
     callback browse_existing_model_clicked();
-    callback add_feature_row_clicked();
-    callback remove_feature_row_clicked(int);
-    callback add_gaussian_scales_clicked(string); // comma-separated sigmas
+    callback toggle_pixel_channel(int);
+    callback toggle_feature_cell(int, int); // (row, size column; -1: as is)
+    callback set_feature_option(int, int); // (row, option)
+    callback apply_pixel_preset(int);
+    callback add_feature_size(string);
+    callback remove_feature_size(int); // size column
+    callback toggle_shape_metric(int);
+    callback toggle_brightness_cell(int, int); // (statistic, channel)
+    callback toggle_brightness_row(int);
+    callback toggle_brightness_column(int);
+    callback apply_object_preset(int);
+    // A class ticked or unticked: the readiness hint follows.
+    callback class_selection_changed();
     callback toggle_image_selected(int);
     callback assign_object_class(int, int); // (training_objects index, class_names index)
     callback toggle_object_excluded(int); // training_objects index
-    callback train_clicked(AiTrainingSettingsSlint, [FeatureRowSlint], [ObjectMetricRowSlint], [TrainingImageRowSlint], [TrainingObjectRowSlint], [ClassSelectionRowSlint]);
+    // The features come from the tables above (Rust has them).
+    callback train_clicked(AiTrainingSettingsSlint, [ClassSelectionRowSlint]);
 
     public function trigger_train() {
-        train_clicked(root.settings, root.feature_rows, root.object_metrics, root.training_images, root.training_objects, root.class_selection);
+        train_clicked(root.settings, root.class_selection);
     }
 }

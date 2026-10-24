@@ -939,7 +939,7 @@
           "type": "integer",
           "format": "uint",
           "default": 3,
-          "maximum": 27,
+          "maximum": 49,
           "minimum": 3
         },
         "sigma": {
@@ -947,7 +947,7 @@
           "type": "number",
           "format": "float",
           "default": 0.3400000035762787,
-          "maximum": 5,
+          "maximum": 8,
           "minimum": 0.1
         }
       }

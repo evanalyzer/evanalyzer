@@ -454,7 +454,11 @@ mod tests {
     fn run_errors_for_a_pixel_classifier_configuration() {
         let mut job = object_job(vec![]);
         job.settings.classifier = AiLearningClassifierSettings::Pixel {
-            feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+            feature_spec: AiLearningPixelFeatureSettings {
+                channels: vec![],
+                image_channels: Vec::new(),
+                image_channel_names: Vec::new(),
+            },
             input_color: Default::default(),
             class_labels: vec![PixelClassLabel {
                 class: evanalyzer_cfg::core_types::SegmentationClass(1),
