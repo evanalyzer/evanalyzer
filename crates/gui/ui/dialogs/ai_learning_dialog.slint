@@ -1121,6 +1121,18 @@ export component AiLearningDialog inherits InkDialog {
                     wrap: word-wrap;
                     horizontal-alignment: left;
                 }
+                if AiLearningState.can_add_to_pipeline && !AiLearningState.training_in_progress: HorizontalLayout {
+                    alignment: start;
+                    InkButton {
+                        small: true;
+                        kind: InkButtonKind.primary;
+                        icon: InkIcons.add;
+                        text: "Add to pipeline";
+                        clicked => {
+                            AiLearningState.add_to_pipeline_clicked();
+                        }
+                    }
+                }
             }
         }
 

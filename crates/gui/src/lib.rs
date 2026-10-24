@@ -95,6 +95,11 @@ pub struct UiState {
     results_views_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
+    /// Called once a trained model is saved - see `model_saved`.
+    model_saved_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
+    /// Called with its id once a pipeline was added from outside the
+    /// pipelines panel (the AI training panel) - see `pipeline_added`.
+    pipeline_added_listeners: Mutex<Vec<Box<dyn Fn(u32) + Send + Sync>>>,
     plane_listeners: Mutex<Vec<Box<dyn Fn(Option<u32>, u32) + Send + Sync>>>,
 }
 
@@ -125,6 +130,8 @@ impl UiState {
             image_states_listener: Mutex::new(None),
             results_views_listener: Mutex::new(None),
             image_opened_listeners: Mutex::new(Vec::new()),
+            model_saved_listeners: Mutex::new(Vec::new()),
+            pipeline_added_listeners: Mutex::new(Vec::new()),
             plane_listeners: Mutex::new(Vec::new()),
         }
     }
@@ -210,6 +217,44 @@ impl UiState {
     }
 
     /// Calls `f` (too) when another image (or series) is shown.
+    /// Calls `f` (too) when a trained model has been saved - steps applying
+    /// it (a retrained one: the same file) give other results now.
+    pub fn on_model_saved(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.model_saved_listeners
+            .lock()
+            .expect("Poisoned")
+            .push(Box::new(f));
+    }
+
+    /// Calls `f(id)` (too) when a pipeline was added to the project from
+    /// outside the pipelines panel.
+    pub fn on_pipeline_added(&self, f: impl Fn(u32) + Send + Sync + 'static) {
+        self.pipeline_added_listeners
+            .lock()
+            .expect("Poisoned")
+            .push(Box::new(f));
+    }
+
+    /// Pipeline `id` was added to the project: the `on_pipeline_added`
+    /// listeners run (the pipelines panel shows and selects it).
+    pub fn pipeline_added(&self, id: u32) {
+        for listener in self
+            .pipeline_added_listeners
+            .lock()
+            .expect("Poisoned")
+            .iter()
+        {
+            listener(id);
+        }
+    }
+
+    /// A trained model has been saved: the `on_model_saved` listeners run.
+    pub fn model_saved(&self) {
+        for listener in self.model_saved_listeners.lock().expect("Poisoned").iter() {
+            listener();
+        }
+    }
+
     pub fn on_image_opened(&self, f: impl Fn() + Send + Sync + 'static) {
         self.image_opened_listeners
             .lock()

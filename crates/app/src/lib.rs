@@ -196,7 +196,9 @@ pub mod ai_learning {
     pub use crate::api::TrainingItems;
     pub use crate::api::TrainingRequest;
     pub use crate::workspace::ai_learning::load_classifier_settings;
+    pub use crate::workspace::ai_learning::model_is_used;
     pub use crate::workspace::ai_learning::object_class_labels_from_project;
+    pub use crate::workspace::ai_learning::pipeline_for_model;
     pub use crate::workspace::ai_learning::pixel_class_labels_from_project;
     pub use crate::workspace::ai_learning::save_trained_model;
     pub use crate::workspace::ai_learning::used_object_classes;

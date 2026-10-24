@@ -224,6 +224,9 @@ export global AiLearningState {
     // in-progress color (see `training_status_is_error`'s sibling coloring
     // below). Reset by Rust on every terminal outcome, not just success.
     in-out property <bool> training_in_progress: false;
+    // The model just trained isn't applied by any step yet: the result
+    // offers "Add to pipeline".
+    in property <bool> can_add_to_pipeline: false;
 
     // Fired by the toolbar button, before the dialog is shown, so Rust can
     // refresh class_names/object_metrics/training_images/training_objects
@@ -241,6 +244,7 @@ export global AiLearningState {
     // pipeline-run dialog's Cancel button uses.
     callback cancel_training_clicked();
     callback browse_existing_model_clicked();
+    callback add_to_pipeline_clicked();
     callback toggle_pixel_channel(int);
     callback toggle_feature_cell(int, int); // (row, size column; -1: as is)
     callback set_feature_option(int, int); // (row, option)

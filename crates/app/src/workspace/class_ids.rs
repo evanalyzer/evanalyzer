@@ -202,7 +202,7 @@ pub fn change_class_id(
 }
 
 /// Every command of the project's pipelines and modules.
-fn all_commands(project: &ProjectSettings) -> impl Iterator<Item = &PipelineCommand> {
+pub(crate) fn all_commands(project: &ProjectSettings) -> impl Iterator<Item = &PipelineCommand> {
     project
         .pipelines
         .iter()

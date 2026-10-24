@@ -57,6 +57,9 @@ pub struct AiLearningController {
     /// button's handler. Mirrors `PipelinesController::pipeline_cancel_flag`.
     training_cancel_flag: std::sync::Mutex<Option<CancelHandle>>,
     features: std::sync::Mutex<Features>,
+    /// The model last trained and saved, with what it learned - for "Add to
+    /// pipeline".
+    last_model: std::sync::Mutex<Option<(PathBuf, AiLearningClassifierSettings)>>,
 }
 
 impl AiLearningController {
@@ -65,6 +68,7 @@ impl AiLearningController {
             ui,
             app_state,
             training_cancel_flag: std::sync::Mutex::new(None),
+            last_model: std::sync::Mutex::new(None),
             features: std::sync::Mutex::new(Features {
                 pixel: PixelFeatureTable::preset(Preset::Recommended),
                 channels: Vec::new(),
@@ -256,6 +260,12 @@ impl AiLearningController {
         ui.global::<AiLearningState>()
             .on_toggle_object_excluded(move |row_index| {
                 manager.toggle_object_excluded(row_index);
+            });
+
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_add_to_pipeline_clicked(move || {
+                manager.add_to_pipeline();
             });
 
         let manager = self.clone();
@@ -738,6 +748,7 @@ impl AiLearningController {
             ..Default::default()
         };
 
+        let classifier_settings = ai_settings.classifier.clone();
         let training = match self.app_state.backend().start_training(TrainingRequest {
             project: project_settings,
             settings: ai_settings,
@@ -758,6 +769,7 @@ impl AiLearningController {
         // The dialog is never closed here (or on completion below) so the
         // user can watch it finish and immediately retrain if they want to.
         info!("Starting classifier training ('{model_name}')");
+        self.set_can_add_to_pipeline(false);
         self.set_training_status("Training started...", false);
         self.set_training_in_progress(true);
         *self.training_cancel_flag.lock().unwrap() = Some(training.cancel_handle());
@@ -795,9 +807,22 @@ impl AiLearningController {
                     ) {
                         Ok(path) => {
                             info!("Classifier training completed: {}", path.display());
+                            manager.app_state.model_saved();
+                            let used = evanalyzer_app::ai_learning::model_is_used(
+                                &manager.app_state.get_project().settings,
+                                &path,
+                            );
+                            *manager.last_model.lock().expect("Poisoned") =
+                                Some((path.clone(), classifier_settings.clone()));
+                            manager.set_can_add_to_pipeline(!used);
+                            let preview = if used {
+                                " The preview shows it with auto preview on."
+                            } else {
+                                " No pipeline uses it yet - \"Add to pipeline\" adds one that does."
+                            };
                             (
                                 format!(
-                                    "Training complete. {stats_line} Model saved to {}",
+                                    "Training complete. {stats_line} Model saved to {}.{preview}",
                                     path.display()
                                 ),
                                 false,
@@ -839,6 +864,48 @@ impl AiLearningController {
     /// including when training finishes, so the user can see the result and
     /// retrain immediately. Callable from any thread (used from both the
     /// synchronous pre-flight checks and the background training thread).
+    /// Adds a pipeline applying the model last trained (see
+    /// `pipeline_for_model`) - one undo step; the pipelines panel shows and
+    /// selects it, the auto preview runs it.
+    fn add_to_pipeline(self: &Arc<Self>) {
+        let Some((model, classifier)) = self.last_model.lock().expect("Poisoned").clone() else {
+            return;
+        };
+        self.app_state.begin_undo_step();
+        let (id, name) = {
+            let mut project = self.app_state.get_project_write();
+            let id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
+            let pipeline = evanalyzer_app::ai_learning::pipeline_for_model(
+                &model,
+                &classifier,
+                evanalyzer_cfg::core_types::PipelineId(id),
+            );
+            let name = pipeline.name.clone();
+            project.add_pipeline(pipeline);
+            (id, name)
+        };
+        self.app_state.mark_dirty();
+        self.app_state.pipeline_added(id);
+        self.set_can_add_to_pipeline(false);
+        self.set_training_status(
+            &format!(
+                "Added the pipeline '{name}' - the preview shows its result with auto preview on."
+            ),
+            false,
+        );
+    }
+
+    fn set_can_add_to_pipeline(self: &Arc<Self>, can: bool) {
+        let ui_weak = self.ui.clone();
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<AiLearningState>().set_can_add_to_pipeline(can);
+            }
+        }) {
+            warn!("Failed to update can_add_to_pipeline: {e}");
+        }
+    }
+
     fn set_training_status(self: &Arc<Self>, message: &str, is_error: bool) {
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
@@ -2450,6 +2517,10 @@ mod tests {
         let status = s.get_training_status().to_string();
         assert!(status.starts_with("Training complete."), "{status}");
         assert!(status.contains("tree(s)"), "{status}");
+        assert!(
+            status.contains("No pipeline uses it yet"),
+            "no step uses it yet: {status}"
+        );
         assert!(!s.get_training_status_is_error());
         assert!(!s.get_training_in_progress());
         let model = dir.path().join("models").join(format!(
@@ -2481,6 +2552,47 @@ mod tests {
             s.get_brightness_rows()
                 .iter()
                 .all(|r| r.cells.iter().all(|on| !on))
+        );
+    }
+
+    /// After training, a model no step applies yet: "Add to pipeline" adds
+    /// a pipeline with an AI object classifier step on that model - one
+    /// undo step - and the offer goes away.
+    #[test]
+    fn add_to_pipeline_adds_a_pipeline_applying_the_trained_model() {
+        let d = opened(labeled_project());
+        let dir = tempfile::tempdir().unwrap();
+        set_up_object_training(&d, dir.path());
+        d.train();
+        let s = d.state();
+        drain_ui_queue();
+        assert!(s.get_can_add_to_pipeline(), "{}", s.get_training_status());
+        let before = d.ui_state.get_project().settings.pipelines.len();
+
+        s.invoke_add_to_pipeline_clicked();
+        drain_ui_queue();
+        let project = d.ui_state.get_project();
+        let pipelines = &project.settings.pipelines;
+        assert_eq!(pipelines.len(), before + 1);
+        let added = pipelines.last().unwrap();
+        assert_eq!(added.name, "AI · cells");
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        let Some(PipelineCommand::AiObjectClassifier(step)) = added.steps[0].command() else {
+            panic!("an object classifier step")
+        };
+        assert!(step.model_path.ends_with(format!(
+            "cells.{}",
+            evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS
+        )));
+        assert!(evanalyzer_app::ai_learning::model_is_used(
+            &project.settings,
+            &step.model_path
+        ));
+        drop(project);
+        assert!(!s.get_can_add_to_pipeline());
+        assert!(
+            s.get_training_status()
+                .starts_with("Added the pipeline 'AI · cells'")
         );
     }
 

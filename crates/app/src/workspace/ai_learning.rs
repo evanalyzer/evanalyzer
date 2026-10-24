@@ -104,6 +104,112 @@ pub fn object_class_labels_from_project(
 /// Where a trained model named `model_name` is saved for the project rooted
 /// at `project_dir` - mirrors `generate_analyze_job_from_project_settings`'s
 /// `<project_dir>/results/...` convention.
+/// Whether a step of the project (pipelines and modules) applies the model
+/// file `model` - an AI pixel or object classifier step whose model has the
+/// same file name (steps may hold it relative or absolute).
+pub fn model_is_used(project: &ProjectSettings, model: &Path) -> bool {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    let Some(name) = model.file_name() else {
+        return false;
+    };
+    crate::workspace::class_ids::all_commands(project).any(|command| {
+        let path = match command {
+            PipelineCommand::PixelClassifier(s) => &s.model_path,
+            PipelineCommand::AiObjectClassifier(s) => &s.model_path,
+            _ => return false,
+        };
+        path.file_name() == Some(name)
+    })
+}
+
+/// A new pipeline applying the trained model at `model` - for the training
+/// panel's "Add to pipeline". Pixel classifier: the model, then connected
+/// components and extract objects, so the classes come out as objects (each
+/// trained class mapped to the project class it was trained from - the
+/// object then has that class's color). Object classifier: the model alone,
+/// on the objects the pipelines before it found (no image of its own; it
+/// goes last), adding the predicted class. Background is not mapped (stays
+/// background / leaves the object as it is). `id`: a free pipeline id.
+pub fn pipeline_for_model(
+    model: &Path,
+    classifier: &evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings,
+    id: evanalyzer_cfg::core_types::PipelineId,
+) -> evanalyzer_cfg::settings::pipeline_settings::PipelineSettings {
+    use evanalyzer_cfg::core_types::ImageAddress;
+    use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    use evanalyzer_cfg::settings::pipeline_command_settings::{
+        AiObjectClassifierSettings, ClassificationMappingSettings, ExtractObjectsSettings,
+        PixelClassifierSettings, SegmentationMappingSettings,
+    };
+    use evanalyzer_cfg::settings::pipeline_settings::{
+        PipelineSettings, PipelineStepSettings, StepContent,
+    };
+    let step = |command| PipelineStepSettings {
+        id: Default::default(),
+        enabled: true,
+        content: StepContent::Command(command),
+    };
+    let name = format!(
+        "AI · {}",
+        model
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+    );
+    let (image_source, steps) = match classifier {
+        AiLearningClassifierSettings::Pixel {
+            feature_spec,
+            class_labels,
+            ..
+        } => (
+            ImageAddress::Channel(feature_spec.image_channels.first().copied().unwrap_or(0)),
+            vec![
+                step(PipelineCommand::PixelClassifier(PixelClassifierSettings {
+                    model_path: model.to_path_buf(),
+                    segmentation_mapping: class_labels
+                        .iter()
+                        .filter(|l| l.class != SegmentationClass::BACKGROUND)
+                        .map(|l| SegmentationMappingSettings {
+                            model_class: l.class,
+                            segmentation_class: l.class,
+                        })
+                        .collect(),
+                })),
+                step(PipelineCommand::ConnectedComponents(Default::default())),
+                step(PipelineCommand::ExtractObjects(
+                    ExtractObjectsSettings::default(),
+                )),
+            ],
+        ),
+        AiLearningClassifierSettings::Object { class_labels, .. } => (
+            ImageAddress::None,
+            vec![step(PipelineCommand::AiObjectClassifier(
+                AiObjectClassifierSettings {
+                    model_path: model.to_path_buf(),
+                    segmentation_mapping: class_labels
+                        .iter()
+                        .filter(|l| l.class != ObjectClass::BACKGROUND)
+                        .map(|l| ClassificationMappingSettings {
+                            object_class: l.class,
+                            output_class: l.class,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            ))],
+        ),
+    };
+    PipelineSettings {
+        id,
+        name,
+        description: Some("Added by the AI training panel.".into()),
+        image_source,
+        enabled: true,
+        steps,
+    }
+}
+
 pub fn model_output_path(project_dir: &Path, model_name: &str) -> PathBuf {
     project_dir
         .join("models")
@@ -154,6 +260,127 @@ pub fn load_classifier_settings(
 
 #[cfg(test)]
 mod tests {
+
+    /// "Add to pipeline": a pixel model becomes classifier → connected
+    /// components → extract objects on its first channel, its classes
+    /// (not background) mapped to themselves; an object model a classifier
+    /// step without an image of its own.
+    #[test]
+    fn a_model_becomes_a_pipeline_applying_it() {
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
+        use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
+        use evanalyzer_cfg::settings::ai_learning_settings::{
+            AiLearningClassifierSettings, ObjectClassLabel, PixelClassLabel,
+        };
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        let model = Path::new("/data/study/models/nuclei.evamodel");
+        let pixel = AiLearningClassifierSettings::Pixel {
+            feature_spec: AiLearningPixelFeatureSettings {
+                channels: vec![vec![]],
+                image_channels: vec![2, 3],
+                image_channel_names: vec![],
+            },
+            input_color: Default::default(),
+            class_labels: vec![
+                PixelClassLabel {
+                    class: SegmentationClass::BACKGROUND,
+                    name: "Background".into(),
+                },
+                PixelClassLabel {
+                    class: SegmentationClass(4),
+                    name: "Nucleus".into(),
+                },
+            ],
+        };
+        let p = pipeline_for_model(model, &pixel, PipelineId(7));
+        assert_eq!(p.id, PipelineId(7));
+        assert_eq!(p.name, "AI · nuclei");
+        assert!(matches!(p.image_source, ImageAddress::Channel(2)));
+        let commands: Vec<&PipelineCommand> = p.steps.iter().filter_map(|s| s.command()).collect();
+        assert_eq!(commands.len(), 3);
+        let PipelineCommand::PixelClassifier(c) = commands[0] else {
+            panic!("classifier first")
+        };
+        assert_eq!(c.model_path, model);
+        assert_eq!(c.segmentation_mapping.len(), 1, "background not mapped");
+        assert_eq!(c.segmentation_mapping[0].model_class, SegmentationClass(4));
+        assert_eq!(
+            c.segmentation_mapping[0].segmentation_class,
+            SegmentationClass(4)
+        );
+        assert!(matches!(
+            commands[1],
+            PipelineCommand::ConnectedComponents(_)
+        ));
+        assert!(matches!(commands[2], PipelineCommand::ExtractObjects(_)));
+
+        let object = AiLearningClassifierSettings::Object {
+            feature_spec:
+                evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings {
+                    metrics: vec![],
+                },
+            class_labels: vec![
+                ObjectClassLabel {
+                    class: ObjectClass::BACKGROUND,
+                    name: "Background".into(),
+                },
+                ObjectClassLabel {
+                    class: ObjectClass::Global(5),
+                    name: "Apoptotic".into(),
+                },
+            ],
+        };
+        let p = pipeline_for_model(model, &object, PipelineId(8));
+        assert!(matches!(p.image_source, ImageAddress::None));
+        let [step] = p.steps.as_slice() else {
+            panic!("one step")
+        };
+        let Some(PipelineCommand::AiObjectClassifier(c)) = step.command() else {
+            panic!("object classifier")
+        };
+        assert_eq!(c.segmentation_mapping.len(), 1);
+        assert_eq!(
+            c.segmentation_mapping[0].output_class,
+            ObjectClass::Global(5)
+        );
+    }
+
+    /// A step applies a model when its model file has the same name, also
+    /// held relative or under another folder; inside a module too.
+    #[test]
+    fn a_model_is_used_by_a_classifier_step_with_its_file() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let model = Path::new("/data/study/models/nuclei.evamodel");
+        let mut project = ProjectSettings::default();
+        assert!(!model_is_used(&project, model));
+        project.pipelines.push(PipelineSettings {
+            steps: vec![PipelineStepSettings {
+                id: Default::default(),
+                enabled: true,
+                content: StepContent::Command(PipelineCommand::PixelClassifier(
+                    PixelClassifierSettings {
+                        model_path: PathBuf::from("models/nuclei.evamodel"),
+                        ..Default::default()
+                    },
+                )),
+            }],
+            id: evanalyzer_cfg::core_types::PipelineId(1),
+            name: "Nuclei".into(),
+            description: None,
+            image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(0),
+            enabled: true,
+        });
+        assert!(model_is_used(&project, model));
+        assert!(!model_is_used(
+            &project,
+            Path::new("/data/study/models/spots.evamodel")
+        ));
+    }
+
     use crate::backend::LocalFileSystem;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 

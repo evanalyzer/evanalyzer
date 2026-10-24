@@ -8848,17 +8848,18 @@ mod tests {
             .rows
             .iter()
             .map(|row| {
-                let CellValue::Integer(area) = row[0].value else { panic!("area") };
-                let CellValue::String(id) = &row[1].value else { panic!("an id") };
+                let CellValue::Integer(area) = row[0].value else {
+                    panic!("area")
+                };
+                let CellValue::String(id) = &row[1].value else {
+                    panic!("an id")
+                };
                 (area, id.clone())
             })
             .collect();
         let mut named = named;
         named.sort();
-        assert_eq!(
-            named,
-            [(10, b.clone()), (20, a.clone()), (30, b.clone())]
-        );
+        assert_eq!(named, [(10, b.clone()), (20, a.clone()), (30, b.clone())]);
         // Clicked: the object A's value names - B.
         let opened = list(
             vec![Column::AreaSizePx],

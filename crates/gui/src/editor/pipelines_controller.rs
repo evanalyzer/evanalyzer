@@ -206,6 +206,39 @@ impl PipelinesController {
             .ok();
         });
 
+        // A pipeline added elsewhere (the AI training panel's "Add to
+        // pipeline"): shown, selected, previewed.
+        let weak = Arc::downgrade(self);
+        self.app_state.on_pipeline_added(move |id| {
+            let weak = weak.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(manager) = weak.upgrade() {
+                    manager.pipeline_settings_changed();
+                    manager.sync_pipelines_to_slint();
+                    manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(id), true);
+                    if let Some(ui) = manager.ui.upgrade() {
+                        ui.global::<PipelinesPanelState>()
+                            .set_active_pipeline_id(id as i32);
+                    }
+                }
+            })
+            .ok();
+        });
+
+        // A model trained and saved (retrained: the same file, which the
+        // steps reload): with auto preview on, the preview shows its result.
+        let weak = Arc::downgrade(self);
+        self.app_state.on_model_saved(move || {
+            let weak = weak.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(manager) = weak.upgrade() {
+                    manager.whole_image_preview_outdated(true);
+                    manager.schedule_auto_preview();
+                }
+            })
+            .ok();
+        });
+
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             // The remembered "Always show advanced settings"
@@ -11591,6 +11624,68 @@ mod tests {
 
         *controller.auto_preview_enabled.lock().unwrap() = true;
         controller.analysis_ended(&ui);
+        assert!(dispatched().expect("previewed").preview);
+    }
+
+    /// A pipeline added elsewhere (the AI training panel) is listed and
+    /// selected.
+    #[test]
+    fn a_pipeline_added_elsewhere_is_shown_and_selected() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        let id = {
+            let mut project = ui_state.get_project_write();
+            let id = project
+                .settings
+                .pipelines
+                .iter()
+                .map(|p| p.id.0)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            project.add_pipeline(PipelineSettings {
+                id: PipelineId(id),
+                name: "AI · nuclei".into(),
+                image_source: ImageAddress::Channel(0),
+                enabled: true,
+                steps: vec![],
+                description: None,
+            });
+            id
+        };
+        ui_state.pipeline_added(id);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(panel.get_active_pipeline_id(), id as i32);
+    }
+
+    /// A model trained and saved (a retrained one: the same file): with
+    /// auto preview on, the preview runs again - after the debounce.
+    #[test]
+    fn a_saved_model_previews_again_with_auto_preview_on() {
+        let (_ui, ui_state, controller) = selected(vec![]);
+        {
+            let mut project = ui_state.get_project_write();
+            let mut with_image = crate::editor::test_support::project_with_one_image();
+            with_image.tmp_settings.current_project = Some(PathBuf::from("/data/project.evaproj"));
+            with_image.settings.pipelines = project.settings.pipelines.clone();
+            *project = with_image;
+        }
+        let dispatched = || controller.task_request.0.lock().unwrap().take();
+        let wait = || {
+            drain_ui_queue();
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(
+                PREVIEW_DEBOUNCE_MS + 50,
+            ));
+        };
+
+        *controller.auto_preview_enabled.lock().unwrap() = false;
+        ui_state.model_saved();
+        wait();
+        assert!(dispatched().is_none(), "auto preview off: none");
+
+        *controller.auto_preview_enabled.lock().unwrap() = true;
+        ui_state.model_saved();
+        wait();
         assert!(dispatched().expect("previewed").preview);
     }
 
