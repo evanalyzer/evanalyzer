@@ -99,12 +99,7 @@ impl AiLearningController {
         // stale data from a previous open.
         let manager = self.clone();
         ui.global::<AiLearningState>().on_open_requested(move || {
-            manager.sync_class_names_to_slint();
-            manager.sync_channel_names_to_slint();
-            manager.sync_object_metrics_to_slint();
-            manager.sync_training_images_to_slint();
-            manager.sync_training_objects_to_slint();
-            manager.sync_class_selection_to_slint();
+            manager.sync_all_to_slint(false);
             if let Some(ui) = manager.ui.upgrade() {
                 let state = ui.global::<AiLearningState>();
                 // Don't blank a still-live progress banner: the background
@@ -117,6 +112,19 @@ impl AiLearningController {
                 }
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::AiLearning);
+            }
+        });
+
+        // Objects, classes or channels changed while the dialog is open (an
+        // object drawn, a class assigned, the image's channels loaded): its
+        // lists follow, the user's ticks stay.
+        let manager = self.clone();
+        ui.global::<AiLearningState>().on_project_changed(move || {
+            let open = manager.ui.upgrade().is_some_and(|ui| {
+                ui.global::<GlobalAppState>().get_active_dialog() == DialogType::AiLearning
+            });
+            if open {
+                manager.sync_all_to_slint(true);
             }
         });
 
@@ -632,6 +640,18 @@ impl AiLearningController {
 
     // -- Sync project state -> Slint -----------------------------------------
 
+    /// Every list of the dialog from the current project; `keep`: the rows
+    /// the user ticked stay ticked (a refresh while open), else the
+    /// defaults (opening it).
+    fn sync_all_to_slint(self: &Arc<Self>, keep: bool) {
+        self.sync_class_names_to_slint();
+        self.sync_channel_names_to_slint();
+        self.sync_object_metrics_to_slint(keep);
+        self.sync_training_images_to_slint(keep);
+        self.sync_training_objects_to_slint();
+        self.sync_class_selection_to_slint(keep);
+    }
+
     pub fn sync_class_names_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
@@ -659,7 +679,7 @@ impl AiLearningController {
     /// pre-checked for classes that already have at least one labeled object
     /// (a convenient starting point, not a restriction: the user can
     /// check/uncheck freely either way).
-    pub fn sync_class_selection_to_slint(self: &Arc<Self>) {
+    pub fn sync_class_selection_to_slint(self: &Arc<Self>, keep: bool) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -683,6 +703,15 @@ impl AiLearningController {
                 }
                 annotated_images += i32::from(any);
             }
+            // Ticked by the user, by class name (kept on a refresh).
+            let ticked: Option<std::collections::HashSet<slint::SharedString>> = keep.then(|| {
+                ui.global::<AiLearningState>()
+                    .get_class_selection()
+                    .iter()
+                    .filter(|row| row.selected)
+                    .map(|row| row.name)
+                    .collect()
+            });
             let rows: Vec<ClassSelectionRowSlint> = project
                 .classification
                 .classes()
@@ -691,7 +720,10 @@ impl AiLearningController {
                 .map(|(i, c)| ClassSelectionRowSlint {
                     class_index: i as i32,
                     name: c.name.clone().into(),
-                    selected: used.contains(&c.global()),
+                    selected: match &ticked {
+                        Some(ticked) => ticked.contains(c.name.as_str()),
+                        None => used.contains(&c.global()),
+                    },
                     color: slint::Color::from_argb_encoded(c.color | 0xff00_0000),
                     count: counts.get(&c.global()).copied().unwrap_or(0),
                 })
@@ -731,7 +763,7 @@ impl AiLearningController {
         }
     }
 
-    pub fn sync_object_metrics_to_slint(self: &Arc<Self>) {
+    pub fn sync_object_metrics_to_slint(self: &Arc<Self>, keep: bool) {
         let ui_weak = self.ui.clone();
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -759,6 +791,18 @@ impl AiLearningController {
                     });
                 }
             }
+            if keep {
+                let ticked: std::collections::HashSet<(i32, i32)> = ui
+                    .global::<AiLearningState>()
+                    .get_object_metrics()
+                    .iter()
+                    .filter(|row| row.selected)
+                    .map(|row| (row.metric_id, row.channel_index))
+                    .collect();
+                for row in &mut rows {
+                    row.selected = ticked.contains(&(row.metric_id, row.channel_index));
+                }
+            }
 
             ui.global::<AiLearningState>()
                 .set_object_metrics(ModelRc::new(VecModel::from(rows)));
@@ -770,7 +814,7 @@ impl AiLearningController {
         }
     }
 
-    pub fn sync_training_images_to_slint(self: &Arc<Self>) {
+    pub fn sync_training_images_to_slint(self: &Arc<Self>, keep: bool) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -784,6 +828,16 @@ impl AiLearningController {
             // so comparing against it directly here would never match,
             // letting the current image sneak into "other images" too.
             let current_path = project.get_current_rel_image_path_cloned();
+            let ticked: std::collections::HashSet<slint::SharedString> = if keep {
+                ui.global::<AiLearningState>()
+                    .get_training_images()
+                    .iter()
+                    .filter(|row| row.selected)
+                    .map(|row| row.path)
+                    .collect()
+            } else {
+                Default::default()
+            };
 
             let rows: Vec<TrainingImageRowSlint> = project
                 .images
@@ -808,7 +862,7 @@ impl AiLearningController {
                             .unwrap_or_default()
                             .into(),
                         path: path.to_string_lossy().to_string().into(),
-                        selected: false,
+                        selected: ticked.contains(path.to_string_lossy().as_ref()),
                         annotated_object_count: annotated as i32,
                     }
                 })
@@ -2326,6 +2380,114 @@ mod tests {
         drain_ui_queue();
         assert_eq!(d.state().get_training_objects().row_count(), 7);
         d.state().invoke_toggle_image_selected(0);
+        drain_ui_queue();
+        assert_eq!(d.state().get_training_objects().row_count(), 6);
+    }
+
+    /// An object drawn while the dialog is open: the training objects and
+    /// the class counts follow at once (the user's class ticks stay).
+    #[test]
+    fn an_object_drawn_while_open_shows_up_in_the_dialog() {
+        let d = opened(labeled_project());
+        let s = d.state();
+        assert_eq!(s.get_training_objects().row_count(), 6);
+        // The user unticks "Nucleus" (only "Cell" left).
+        let rows: Vec<ClassSelectionRowSlint> = s
+            .get_class_selection()
+            .iter()
+            .map(|mut r| {
+                r.selected = r.name == "Cell";
+                r
+            })
+            .collect();
+        s.set_class_selection(ModelRc::new(VecModel::from(rows)));
+        let count = |s: &AiLearningState<'_>, name: &str| {
+            s.get_class_selection()
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .count
+        };
+        let cells = count(&s, "Cell");
+
+        d.ui_state
+            .get_project_write()
+            .add_object(&ObjectMetricSettings {
+                id: ObjectId(100),
+                area: 12,
+                object_class: [CELL].into(),
+                ..Default::default()
+            });
+        // What every object edit does: the class counts are refreshed.
+        s.invoke_project_changed();
+        drain_ui_queue();
+
+        assert_eq!(s.get_training_objects().row_count(), 7);
+        assert_eq!(count(&s, "Cell"), cells + 1);
+        let selected: Vec<String> = s
+            .get_class_selection()
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.name.to_string())
+            .collect();
+        assert_eq!(selected, ["Cell"], "the user's ticks stay");
+    }
+
+    /// Opened before the image's channels were known: the intensity metrics
+    /// appear once they are - and metrics the user ticked stay ticked.
+    #[test]
+    fn intensity_metrics_appear_when_the_channels_arrive() {
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, labeled_project());
+        let controller = make_controller_with_ui(ui.as_weak(), ui_state.clone());
+        controller.attach_callbacks();
+        let s = ui.global::<AiLearningState>();
+        s.invoke_open_requested();
+        drain_ui_queue();
+        assert_eq!(s.get_object_metrics().row_count(), OBJECT_METRICS.len());
+        // The user ticks the first metric.
+        let mut first = s.get_object_metrics().row_data(0).unwrap();
+        first.selected = true;
+        s.get_object_metrics().set_row_data(0, first.clone());
+
+        ui.global::<ChannelState>()
+            .set_channels(ModelRc::new(VecModel::from(vec![crate::ChannelInfo {
+                name: "DAPI".into(),
+                active: true,
+                idx: 0,
+                color: slint::Color::from_rgb_u8(0, 0, 255),
+                emission_wave_length: 461.0,
+                wavelength_overridden: false,
+            }])));
+        s.invoke_project_changed();
+        drain_ui_queue();
+
+        let metrics = s.get_object_metrics();
+        assert_eq!(
+            metrics.row_count(),
+            OBJECT_METRICS.len() + INTENSITY_STATS.len()
+        );
+        assert!(
+            metrics.row_data(0).unwrap().selected,
+            "the user's tick stays"
+        );
+        assert!(metrics.iter().any(|r| r.label.starts_with("DAPI")));
+    }
+
+    /// While the dialog is closed, changes don't touch its lists.
+    #[test]
+    fn a_closed_dialog_is_not_refreshed() {
+        let d = opened(labeled_project());
+        d.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::None);
+        d.ui_state
+            .get_project_write()
+            .add_object(&ObjectMetricSettings {
+                id: ObjectId(100),
+                object_class: [CELL].into(),
+                ..Default::default()
+            });
+        d.state().invoke_project_changed();
         drain_ui_queue();
         assert_eq!(d.state().get_training_objects().row_count(), 6);
     }

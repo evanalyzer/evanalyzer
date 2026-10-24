@@ -214,6 +214,10 @@ export global AiLearningState {
     // from the current project rather than showing stale data from the
     // last time the dialog was open.
     callback open_requested();
+    // Fired by Rust whenever objects, classes or the image's channels change
+    // (drawing, class edits, another image, ...): while the dialog is open it
+    // refreshes its lists, keeping what the user ticked.
+    callback project_changed();
     callback cancel_clicked();
     // Distinct from `cancel_clicked` (fired by the Close button, which just
     // hides the dialog) - this asks Rust to actually stop the in-flight

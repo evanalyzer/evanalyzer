@@ -309,6 +309,8 @@ impl ImageMetaController {
                     meta.set_series_list(slint::ModelRc::default());
                     ui.global::<ChannelState>()
                         .set_channels(slint::ModelRc::default());
+                    ui.global::<crate::AiLearningState>()
+                        .invoke_project_changed();
                 }
             })
             .ok();
@@ -475,6 +477,9 @@ impl ImageMetaController {
 
             ch_state.set_active_count(channels.iter().filter(|c| c.active).count() as i32);
             ch_state.set_channels(std::rc::Rc::new(slint::VecModel::from(channels)).into());
+            // An open AI training dialog gets the channels' intensity metrics.
+            ui.global::<crate::AiLearningState>()
+                .invoke_project_changed();
             ch_state.set_grayscale(grayscale);
 
             // --- Image meta ---

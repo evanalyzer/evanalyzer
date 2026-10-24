@@ -343,6 +343,10 @@ impl ClassificationController {
                 class_state.set_classes_list(model_rc);
                 class_state.set_total_visible_objects(total_visible);
                 class_state.set_hide_unclassified_objects(hide_unclassified);
+                // Objects or classes changed: an open AI training dialog
+                // follows (its training objects and class counts).
+                ui.global::<crate::AiLearningState>()
+                    .invoke_project_changed();
             }
         }) {
             warn!("Failed to sync classification to Slint: {}", e);
