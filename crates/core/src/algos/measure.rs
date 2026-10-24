@@ -1,5 +1,8 @@
 pub mod area_occupied;
+pub mod colocalization;
+pub mod distance_to_parent;
 pub mod exclude_image;
 pub mod image_intensity;
 pub mod image_quality;
-pub mod pearson_correlation_coefficient;
+pub mod object_neighbors;
+pub mod object_shape;

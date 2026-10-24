@@ -58,7 +58,7 @@ pub(crate) fn rows(planes: &[PipelineMeasurements]) -> Vec<MeasurementRow> {
                 MeasurementValues::Objects(values) => {
                     let mut numbers: Vec<f64> = values
                         .iter()
-                        .map(|(_, v)| *v)
+                        .map(|v| v.value)
                         .filter(|v| v.is_finite())
                         .collect();
                     match median(&mut numbers) {
@@ -134,6 +134,7 @@ mod tests {
                 },
                 range: None,
                 aggregatable: true,
+                related_objects: false,
             },
             values,
         }
@@ -161,9 +162,9 @@ mod tests {
                     "pearson_02",
                     "Pearson per cell",
                     MeasurementValues::Objects(vec![
-                        (ObjectId(1), 0.1),
-                        (ObjectId(2), 0.9),
-                        (ObjectId(3), 0.4),
+                        (ObjectId(1), 0.1).into(),
+                        (ObjectId(2), 0.9).into(),
+                        (ObjectId(3), 0.4).into(),
                     ]),
                 ),
                 measurement(

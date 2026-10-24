@@ -181,7 +181,8 @@ impl ImageAlgorithm for ExtractObjects {
 
         // Per-(object, channel) intensity accumulators, indexed `id * n_ch + ci`.
         // Only sum / min / max are kept; mean (avg) is derived as sum / area in pass 2.
-        // No per-pixel value storage — that (for median/stddev) was the bottleneck.
+        // No per-pixel value storage here - pass 2 collects one object's values at a
+        // time for its spread (median, quartiles, ...), in buffers reused across objects.
         let mut i_sum = vec![0f64; n_obj * n_ch];
         let mut i_min = vec![f64::MAX; n_obj * n_ch];
         let mut i_max = vec![f64::MIN; n_obj * n_ch];
@@ -240,6 +241,8 @@ impl ImageAlgorithm for ExtractObjects {
         // --- Pass 2: assemble each object (mask, intensities, geometry) ---
         // Kept single-threaded on purpose: the pipeline parallelizes across images (one
         // core per image), so adding threads here would oversubscribe the CPU.
+        // One object's pixel values per channel, for its intensity distribution.
+        let mut values: Vec<Vec<f32>> = vec![Vec::new(); n_ch];
         cache
             .object_cache
             .extend((1..=max_id).filter(|&id| area[id] != 0).map(|id| {
@@ -247,36 +250,46 @@ impl ImageAlgorithm for ExtractObjects {
                 let rw = (bb[2] - bb[0] + 1) as usize;
                 let rh = (bb[3] - bb[1] + 1) as usize;
 
-                // Build the bbox-relative bitmask by re-scanning only the bbox window.
+                // Build the bbox-relative bitmask by re-scanning only the bbox window,
+                // collecting the object's pixel values on the way.
                 let mut mask = BitVec::<u64, Lsb0>::repeat(false, rw * rh);
+                for channel in values.iter_mut() {
+                    channel.clear();
+                }
                 for ry in 0..rh {
                     for rx in 0..rw {
                         // Convert bbox-local coords to tile-local for slice indexing.
                         let tile_x = rx + bb[0] as usize - tile_offset.x;
                         let tile_y = ry + bb[1] as usize - tile_offset.y;
-                        if instance_map_slice[tile_y * w + tile_x] == id as u32 {
+                        let sample = tile_y * w + tile_x;
+                        if instance_map_slice[sample] == id as u32 {
                             mask.set(ry * rw + rx, true);
+                            for ((is_rgb, slice), channel) in
+                                channel_slices.iter().zip(values.iter_mut())
+                            {
+                                channel.push(sample_channel_pixel(*is_rgb, slice, sample));
+                            }
                         }
                     }
                 }
 
-                // Per-channel intensity stats from the SoA accumulators. Mean is sum / area
-                // (every pixel contributes one sample per channel); no per-pixel storage.
+                // Per-channel intensity stats from the SoA accumulators (mean = sum / area,
+                // every pixel contributes one sample per channel), the spread from the
+                // values collected above.
                 let base = id * n_ch;
                 let n = area[id] as f64;
                 let mut intensities = IndexMap::with_capacity(n_ch);
                 for (ci, &ch_idx) in channel_ids.iter().enumerate() {
                     let k = base + ci;
-                    intensities.insert(
-                        ch_idx,
-                        Intensity {
-                            sum_intensity: i_sum[k],
-                            min_intensity: i_min[k],
-                            max_intensity: i_max[k],
-                            avg_intensity: (i_sum[k] / n),
-                            pixel_values: Vec::new(),
-                        },
-                    );
+                    let mut intensity = Intensity {
+                        sum_intensity: i_sum[k],
+                        min_intensity: i_min[k],
+                        max_intensity: i_max[k],
+                        avg_intensity: i_sum[k] / n,
+                        ..Default::default()
+                    };
+                    intensity.set_spread(&mut values[ci]);
+                    intensities.insert(ch_idx, intensity);
                 }
 
                 // The object class, so Classify Objects isn't mandatory - local
@@ -462,6 +475,48 @@ mod tests {
         assert!(object1.mask_data[1]);
         assert!(object1.mask_data[2]);
         assert!(object1.mask_data[3]);
+    }
+
+    /// Each extracted object's intensities are CellProfiler's (fixture from
+    /// `tests/object_intensity_cellprofiler.py`).
+    #[test]
+    fn extracted_intensities_are_cellprofilers() {
+        use crate::object::intensities::tests::{assert_as_cellprofiler, cellprofiler_cases};
+        let mut compared = 0;
+        for case in cellprofiler_cases() {
+            let size = ImageSize {
+                width: case.width,
+                height: case.height,
+            };
+            let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+            let mut cache = GlobalPipelineCache::default();
+            ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::from_size_slice(size, &case.image).unwrap(),
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            }));
+            let semantic: Vec<u32> = case.labels.iter().map(|&l| u32::from(l > 0)).collect();
+            ctx.segmentation_map = Some(Image::<u32, 1>::from_size_slice(size, &semantic).unwrap());
+            ctx.instance_map = Some(Image::<u32, 1>::from_size_slice(size, &case.labels).unwrap());
+            cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
+            ExtractObjects {
+                max_objects_before_fail: 100_000,
+                class_mapping: vec![],
+            }
+            .execute(&mut ctx, &mut cache)
+            .unwrap();
+            for object in cache.object_cache.values() {
+                // The label at the object's first pixel.
+                let first = object.mask_data.first_one().unwrap();
+                let width = (object.bbox[2] - object.bbox[0] + 1) as usize;
+                let x = object.bbox[0] as usize + first % width;
+                let y = object.bbox[1] as usize + first / width;
+                let label = case.labels[y * case.width + x] as usize;
+                assert_as_cellprofiler(&object.intensities[&0], &case, label);
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 57);
     }
 
     #[test]

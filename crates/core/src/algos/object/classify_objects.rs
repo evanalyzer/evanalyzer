@@ -15,10 +15,10 @@
 
 use crate::{
     ImageChannel,
+    algos::libs::spatial_grid::BboxGrid,
     algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
     object::Object,
-    utils::spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors,

@@ -65,11 +65,15 @@ const CREATE_TABLES: &str = "
         touches_edge BOOLEAN,
         pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
         image_bit_depth UTINYINT,
-        intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
-        intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
-        intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
-        intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
-        coloc_partner_ids MAP(INTEGER, UUID[])
+        intensity_sum_gray DOUBLE[],
+        intensity_mean_gray DOUBLE[],
+        intensity_min_gray DOUBLE[],
+        intensity_max_gray DOUBLE[],
+        intensity_std_gray DOUBLE[], intensity_median_gray DOUBLE[],
+        intensity_lower_quartile_gray DOUBLE[], intensity_upper_quartile_gray DOUBLE[],
+        intensity_mad_gray DOUBLE[],
+        coloc_partner_ids MAP(INTEGER, UUID[]),
+            measurement_values DOUBLE[]
     );
     CREATE TABLE images (
         image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,

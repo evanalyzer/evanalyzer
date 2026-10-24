@@ -48,6 +48,19 @@ impl CitationMetadata {
         pages: Some("671-675"),
     };
 
+    /// The exact Euclidean feature transform (nearest pixel) - for commands
+    /// that grow objects or dilate with it.
+    pub const MAURER_2003: CitationMetadata = CitationMetadata {
+        cite_key: "maurer2003linear",
+        title: "A linear time algorithm for computing exact Euclidean distance transforms of binary images in arbitrary dimensions",
+        authors: &["Calvin R. Maurer", "Rensheng Qi", "Vijay Raghavan"],
+        year: 2003,
+        container: Some("IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+        doi: Some("10.1109/TPAMI.2003.1177156"),
+        url: Some("https://doi.org/10.1109/TPAMI.2003.1177156"),
+        pages: Some("265-270"),
+    };
+
     /// CellProfiler - for commands following CellProfiler's methods.
     pub const CELLPROFILER: CitationMetadata = CitationMetadata {
         cite_key: "mcquin2018cellprofiler",

@@ -91,6 +91,19 @@ pub enum TransformFunction {
         unit: SizeUnits,
     },
 
+    /// Grows the objects outward by `margin` without growing into each other: every
+    /// background pixel within `margin` of an object goes to the nearest object (as
+    /// CellProfiler's ExpandOrShrinkObjects "Expand objects by a specified number of
+    /// pixels"). With a large margin the objects grow until they touch.
+    ExpandWithoutOverlap {
+        /// How far the objects grow at most
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
+        margin: f32,
+        /// Unit `margin` is expressed in
+        #[cmdsmeta(default = SizeUnits::NanoMeter)]
+        unit: SizeUnits,
+    },
+
     /// Shrinks the object inward by `margin`, following its actual contour (standard flat
     /// erosion with a disk structuring element).
     Shrink {
@@ -153,11 +166,35 @@ impl ImageAlgorithm for TransformObjects {
 
         let mut new_objects: Vec<Object> = Vec::new();
 
+        // Expanding without overlap decides every object's new pixels together.
+        let mut grown = match &self.function {
+            TransformFunction::ExpandWithoutOverlap { margin, unit } => {
+                let pixel_size_nm = (px_sizes.px_size_x + px_sizes.px_size_y) / 2.0;
+                // Not `to_pixel`: a fractional distance counts (2.5 px reaches
+                // the diagonal neighbours 2 px over and 1 px up).
+                let margin = match unit {
+                    SizeUnits::Pixels => *margin as f64,
+                    SizeUnits::NanoMeter => (*margin / pixel_size_nm) as f64,
+                };
+                let (ids, objects): (Vec<ObjectId>, Vec<&Object>) = target_ids
+                    .iter()
+                    .filter_map(|id| cache.object_cache.get(id).map(|o| (id.clone(), o)))
+                    .unzip();
+                ids.into_iter()
+                    .zip(expand_without_overlap(&objects, margin, image_size))
+                    .collect()
+            }
+            _ => std::collections::HashMap::new(),
+        };
+
         for id in target_ids {
             let Some(object) = cache.object_cache.get(&id) else {
                 continue;
             };
-            let geometry = self.transform_geometry(object, image_size, &px_sizes);
+            let geometry = match grown.remove(&id) {
+                Some(geometry) => geometry,
+                None => self.transform_geometry(object, image_size, &px_sizes),
+            };
             let (segmentation_class, plane) = (object.segmentation_class, object.plane.clone());
 
             // Build the transformed shape as its own (not-yet-inserted) object so
@@ -207,7 +244,15 @@ impl ImageAlgorithm for TransformObjects {
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::DANMAYR]
+        match self.function {
+            // As CellProfiler's ExpandOrShrinkObjects, with the feature transform.
+            TransformFunction::ExpandWithoutOverlap { .. } => vec![
+                &CitationMetadata::DANMAYR,
+                &CitationMetadata::CELLPROFILER,
+                &CitationMetadata::MAURER_2003,
+            ],
+            _ => vec![&CitationMetadata::DANMAYR],
+        }
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -260,8 +305,173 @@ impl TransformObjects {
                 let margin = unit.to_pixel(*margin, pixel_size_nm) as f32;
                 object.eroded_geometry(margin, image_size)
             }
+            // Decided for all objects together (`expand_without_overlap`).
+            TransformFunction::ExpandWithoutOverlap { .. } => TransformedGeometry {
+                bbox: object.bbox,
+                mask_data: object.mask_data.clone(),
+                area: object.area,
+                touches_edge: object.touches_edge,
+                sum_x: object.sum_x,
+                sum_y: object.sum_y,
+                sum_x2: object.sum_x2,
+                sum_y2: object.sum_y2,
+                sum_xy: object.sum_xy,
+            },
         }
     }
+}
+
+/// Side length of the blocks `expand_without_overlap` works in (plus the
+/// margin around each), so a whole slide never needs one raster of its size.
+const EXPAND_BLOCK: usize = 2048;
+
+/// The grown shape of each of `objects` (same order): every background
+/// pixel - covered by none of them - within `margin` pixels (Euclidean) of
+/// an object pixel goes to the object of the nearest such pixel. As
+/// CellProfiler's ExpandOrShrinkObjects (`expand` in
+/// cellprofiler/library/functions/object_processing.py: SciPy's
+/// `distance_transform_edt` with its indices, `distance <= margin`), with
+/// the same feature transform and so the same pixel where two objects are
+/// equally near. Where objects overlap, a pixel counts as the later one's.
+///
+/// Worked out in blocks of `EXPAND_BLOCK`², each with `margin` around it:
+/// the nearest object pixel of a pixel that is within `margin` of one lies
+/// in that border, so a block decides its pixels exactly as the whole image
+/// would.
+fn expand_without_overlap(
+    objects: &[&Object],
+    margin: f64,
+    image_size: ImageSize,
+) -> Vec<TransformedGeometry> {
+    expand_without_overlap_in_blocks(objects, margin, image_size, EXPAND_BLOCK)
+}
+
+/// [`expand_without_overlap`] in blocks of `block`² pixels.
+fn expand_without_overlap_in_blocks(
+    objects: &[&Object],
+    margin: f64,
+    image_size: ImageSize,
+    block: usize,
+) -> Vec<TransformedGeometry> {
+    let (width, height) = (image_size.width, image_size.height);
+    let mut added: Vec<Vec<(u32, u32)>> = vec![Vec::new(); objects.len()];
+    if margin > 0.0 && width > 0 && height > 0 && !objects.is_empty() {
+        let halo = margin.ceil() as usize;
+        for by in (0..height).step_by(block) {
+            for bx in (0..width).step_by(block) {
+                let window = [bx, by, (bx + block).min(width), (by + block).min(height)];
+                expand_block(objects, margin, halo, window, [width, height], &mut added);
+            }
+        }
+    }
+    objects
+        .iter()
+        .zip(added)
+        .map(|(object, pixels)| grown_geometry(object, &pixels, image_size))
+        .collect()
+}
+
+/// `expand_without_overlap` for the pixels of `block` (`[x0, y0, x1, y1)`):
+/// adds each background pixel within `margin` to its nearest object's
+/// `added` pixels.
+fn expand_block(
+    objects: &[&Object],
+    margin: f64,
+    halo: usize,
+    block: [usize; 4],
+    [width, height]: [usize; 2],
+    added: &mut [Vec<(u32, u32)>],
+) {
+    use crate::algos::libs::feature_transform::nearest_features;
+    let [bx0, by0, bx1, by1] = block;
+    let (wx0, wy0) = (bx0.saturating_sub(halo), by0.saturating_sub(halo));
+    let (wx1, wy1) = ((bx1 + halo).min(width), (by1 + halo).min(height));
+    let (ww, wh) = (wx1 - wx0, wy1 - wy0);
+    // The window's labels: object index + 1, 0 for the background.
+    let mut labels = vec![0u32; ww * wh];
+    let mut any = false;
+    for (index, object) in objects.iter().enumerate() {
+        let [ox0, oy0, ox1, oy1] = object.bbox.map(|v| v as usize);
+        if ox1 < wx0 || oy1 < wy0 || ox0 >= wx1 || oy0 >= wy1 {
+            continue;
+        }
+        let ow = ox1 - ox0 + 1;
+        for y in oy0.max(wy0)..=oy1.min(wy1 - 1) {
+            for x in ox0.max(wx0)..=ox1.min(wx1 - 1) {
+                if object
+                    .mask_data
+                    .get((y - oy0) * ow + (x - ox0))
+                    .is_some_and(|b| *b)
+                {
+                    labels[(y - wy0) * ww + (x - wx0)] = index as u32 + 1;
+                    any = true;
+                }
+            }
+        }
+    }
+    if !any {
+        return;
+    }
+    let ft = nearest_features(ww, wh, |x, y| labels[y * ww + x] != 0);
+    for y in by0..by1 {
+        for x in bx0..bx1 {
+            let (lx, ly) = (x - wx0, y - wy0);
+            if labels[ly * ww + lx] != 0 {
+                continue;
+            }
+            let Some((r, c)) = ft.get(ly * ww + lx) else {
+                continue;
+            };
+            let (dr, dc) = ((r - ly as i64) as f64, (c - lx as i64) as f64);
+            if (dr * dr + dc * dc).sqrt() <= margin {
+                let label = labels[r as usize * ww + c as usize];
+                added[label as usize - 1].push((x as u32, y as u32));
+            }
+        }
+    }
+}
+
+/// `object` with `added` pixels (outside it) set as well.
+fn grown_geometry(
+    object: &Object,
+    added: &[(u32, u32)],
+    image_size: ImageSize,
+) -> TransformedGeometry {
+    let [mut x0, mut y0, mut x1, mut y1] = object.bbox;
+    for &(x, y) in added {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    let w = (x1 - x0 + 1) as usize;
+    let mut mask =
+        bitvec::vec::BitVec::<u64, bitvec::order::Lsb0>::repeat(false, w * (y1 - y0 + 1) as usize);
+    let [ox0, oy0, ox1, oy1] = object.bbox;
+    let ow = (ox1 - ox0 + 1) as usize;
+    let pixels = (oy0..=oy1)
+        .flat_map(|y| (ox0..=ox1).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            object
+                .mask_data
+                .get((y - oy0) as usize * ow + (x - ox0) as usize)
+                .is_some_and(|b| *b)
+        })
+        .chain(added.iter().copied());
+    let mut geometry = TransformedGeometry::default();
+    let (max_x, max_y) = (image_size.width as u32 - 1, image_size.height as u32 - 1);
+    for (x, y) in pixels {
+        mask.set((y - y0) as usize * w + (x - x0) as usize, true);
+        let (xu, yu) = (x as u64, y as u64);
+        geometry.area += 1;
+        geometry.sum_x += xu;
+        geometry.sum_y += yu;
+        geometry.sum_x2 += xu * xu;
+        geometry.sum_y2 += yu * yu;
+        geometry.sum_xy += xu * yu;
+        geometry.touches_edge |= x == 0 || y == 0 || x == max_x || y == max_y;
+    }
+    geometry.touches_edge |= object.touches_edge;
+    geometry.bbox = [x0, y0, x1, y1];
+    geometry.mask_data = mask;
+    geometry
 }
 
 /// Overwrites `object`'s geometry fields with `geometry` and recomputes the derived metrics
@@ -783,6 +993,203 @@ mod tests {
         assert_eq!(
             intensity.sum_intensity,
             transformed.area as f64 * VALUE as f64
+        );
+    }
+
+    /// One case of `tests/expand_objects_cellprofiler.json`.
+    #[derive(serde::Deserialize)]
+    struct ExpandCase {
+        name: String,
+        width: usize,
+        height: usize,
+        distance: f64,
+        labels: Vec<u32>,
+        expanded: Vec<u32>,
+    }
+
+    /// An object per label of a label image, with the label as its id.
+    fn objects_from_labels(labels: &[u32], width: usize) -> Vec<Object> {
+        let max = labels.iter().copied().max().unwrap_or(0);
+        (1..=max)
+            .filter_map(|label| {
+                let pixels: Vec<(u32, u32)> = (0..labels.len())
+                    .filter(|&p| labels[p] == label)
+                    .map(|p| ((p % width) as u32, (p / width) as u32))
+                    .collect();
+                let x0 = pixels.iter().map(|p| p.0).min()?;
+                let y0 = pixels.iter().map(|p| p.1).min()?;
+                let x1 = pixels.iter().map(|p| p.0).max()?;
+                let y1 = pixels.iter().map(|p| p.1).max()?;
+                let w = (x1 - x0 + 1) as usize;
+                let mut mask = BitVec::<u64, Lsb0>::repeat(false, w * (y1 - y0 + 1) as usize);
+                for (x, y) in &pixels {
+                    mask.set((y - y0) as usize * w + (x - x0) as usize, true);
+                }
+                Some(Object::new(ObjectInit {
+                    id: ObjectId(label as u128),
+                    bbox: [x0, y0, x1, y1],
+                    area: pixels.len(),
+                    mask_data: mask,
+                    ..Default::default()
+                }))
+            })
+            .collect()
+    }
+
+    /// Paints `geometries` (in order) into a label image, object i as `ids[i]`.
+    fn paint(
+        geometries: &[TransformedGeometry],
+        ids: &[u32],
+        width: usize,
+        height: usize,
+    ) -> Vec<u32> {
+        let mut out = vec![0u32; width * height];
+        for (geometry, id) in geometries.iter().zip(ids) {
+            let [x0, y0, x1, y1] = geometry.bbox.map(|v| v as usize);
+            let w = x1 - x0 + 1;
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    if geometry.mask_data[(y - y0) * w + (x - x0)] {
+                        out[y * width + x] = *id;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The same pixels as CellProfiler's ExpandOrShrinkObjects (fixture from
+    /// `tests/expand_objects_cellprofiler.py`) - also when worked out in
+    /// small blocks, so the blocks' borders change nothing.
+    #[test]
+    fn expanding_without_overlap_gives_cellprofilers_pixels() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/expand_objects_cellprofiler.json"
+        );
+        let cases: Vec<ExpandCase> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(cases.len(), 12);
+        for case in &cases {
+            let objects = objects_from_labels(&case.labels, case.width);
+            let refs: Vec<&Object> = objects.iter().collect();
+            let ids: Vec<u32> = objects.iter().map(|o| o.id.0 as u32).collect();
+            let size = ImageSize {
+                width: case.width,
+                height: case.height,
+            };
+            for block in [EXPAND_BLOCK, 7] {
+                let grown = expand_without_overlap_in_blocks(&refs, case.distance, size, block);
+                let got = paint(&grown, &ids, case.width, case.height);
+                let wrong = (0..got.len())
+                    .filter(|&p| got[p] != case.expanded[p])
+                    .count();
+                assert_eq!(
+                    wrong, 0,
+                    "{} (blocks of {block}): {wrong} pixels differ",
+                    case.name
+                );
+                for (geometry, object) in grown.iter().zip(&objects) {
+                    assert_eq!(
+                        geometry.area,
+                        geometry.mask_data.count_ones(),
+                        "{}",
+                        case.name
+                    );
+                    assert!(geometry.area >= object.area);
+                }
+            }
+        }
+    }
+
+    /// Through the step: neighbours stop each other, the objects are
+    /// replaced in place and measured again.
+    #[test]
+    fn expand_without_overlap_replaces_the_objects_grown() {
+        // Two points 6 px apart on a row, grown by 4 px: they meet halfway.
+        let size = ImageSize {
+            width: 20,
+            height: 5,
+        };
+        let mut labels = vec![0u32; 100];
+        labels[2 * 20 + 7] = 1;
+        labels[2 * 20 + 13] = 2;
+        let mut cache = GlobalPipelineCache::default();
+        for mut object in objects_from_labels(&labels, 20) {
+            object.add_object_class(CLASS_IN, Scope::Global).unwrap();
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        let step = TransformObjects {
+            function: TransformFunction::ExpandWithoutOverlap {
+                margin: 4.0,
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: ObjectClass::Unset,
+        };
+        step.execute(&mut make_ctx(size), &mut cache).unwrap();
+        let a = cache.object_cache.get(&ObjectId(1)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(2)).unwrap();
+        assert!(
+            a.overlaps(b).is_none(),
+            "neighbours don't grow into each other"
+        );
+        // On the row: a takes 8..=10 (and 3..=6), b 11/12..; the pixel at
+        // 10 is 3 from a and 3 from b - SciPy's tie goes to a.
+        assert!(a.is_part_of(10, 2) && !b.is_part_of(10, 2));
+        assert!(b.is_part_of(11, 2) && !a.is_part_of(11, 2));
+        assert!(a.is_part_of(3, 2) && !a.is_part_of(2, 2));
+        assert_eq!(a.bbox[0], 3);
+    }
+
+    /// Speed and peak RAM of Expand Without Overlap: a 9 x 9 object every
+    /// 40 px on a `BENCH_SIZE`² image (default 8192: 42,025 objects), grown
+    /// by `BENCH_MARGIN` px (default 8) - release, one per process:
+    /// `cargo test --release -p evanalyzer_core --lib bench_expand_without_overlap -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_expand_without_overlap() {
+        let env = |name: &str, default: usize| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let (size, margin) = (env("BENCH_SIZE", 8192), env("BENCH_MARGIN", 8));
+        let mut objects = Vec::new();
+        let mut id = 1u128;
+        for y in (0..size.saturating_sub(9)).step_by(40) {
+            for x in (0..size.saturating_sub(9)).step_by(40) {
+                objects.push(Object::new(ObjectInit {
+                    id: ObjectId(id),
+                    bbox: [x as u32, y as u32, x as u32 + 8, y as u32 + 8],
+                    area: 81,
+                    mask_data: BitVec::<u64, Lsb0>::repeat(true, 81),
+                    ..Default::default()
+                }));
+                id += 1;
+            }
+        }
+        let refs: Vec<&Object> = objects.iter().collect();
+        let image = ImageSize {
+            width: size,
+            height: size,
+        };
+        let start = std::time::Instant::now();
+        let grown = expand_without_overlap(&refs, margin as f64, image);
+        let elapsed = start.elapsed();
+        let hwm = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("VmHWM"))
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let area: usize = grown.iter().map(|g| g.area).sum();
+        eprintln!(
+            "BENCH expand without overlap: {} objects on {size}², margin {margin}: {elapsed:?}, {area} px, {hwm}",
+            objects.len()
         );
     }
 }

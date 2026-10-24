@@ -226,6 +226,29 @@ pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
     Background,
 }
 
+/// How Costes' automatic thresholds are searched for (CellProfiler's
+/// "Method for Costes thresholding").
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeasureColocalizationCostesMethodSettings {
+    /// No Costes values.
+    #[default]
+    #[serde(alias = "off")]
+    Off,
+    /// A shrinking window of candidates - a few passes over the image, also
+    /// for 16-bit images (CellProfiler's "Faster").
+    #[serde(alias = "faster")]
+    Faster,
+    /// Candidates from the top down, skipping while far off (CellProfiler's
+    /// "Fast" - slow on 16-bit images).
+    #[serde(alias = "fast")]
+    Fast,
+    /// Every candidate from the top down (CellProfiler's "Accurate" - very
+    /// slow on 16-bit images).
+    #[serde(alias = "accurate")]
+    Accurate,
+}
+
 /// How the rules combine.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -397,6 +420,32 @@ pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
     /// within bright objects.
     #[serde(alias = "close")]
     Close,
+}
+
+/// Which objects count as neighbours (CellProfiler's "Method to determine
+/// neighbors").
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeasureObjectNeighborsNeighborMethodSettings {
+    /// Every object first grows over the background until it meets the
+    /// others; then the ones it touches.
+    #[default]
+    #[serde(
+        alias = "expand-until-adjacent",
+        alias = "expandUntilAdjacent",
+        alias = "expand_until_adjacent"
+    )]
+    ExpandUntilAdjacent,
+    /// The objects it touches (1 px apart at most).
+    #[serde(alias = "adjacent")]
+    Adjacent,
+    /// The objects within the distance.
+    #[serde(
+        alias = "within-distance",
+        alias = "withinDistance",
+        alias = "within_distance"
+    )]
+    WithinDistance,
 }
 
 /// Boolean set operation applied between an `input_class` object ("A") and the union of
@@ -847,6 +896,23 @@ pub enum ObjectTransformObjectsTransformFunctionSettings {
     #[serde(alias = "expand")]
     Expand {
         /// Margin added on every side of the mask's contour
+        #[schemars(range(min = 0, max = 65535))]
+        margin: f32,
+        /// Unit `margin` is expressed in
+        unit: SizeUnits,
+    },
+    /// Grows the objects outward by `margin` without growing into each other: every
+    /// background pixel within `margin` of an object goes to the nearest object (as
+    /// CellProfiler's ExpandOrShrinkObjects "Expand objects by a specified number of
+    /// pixels"). With a large margin the objects grow until they touch.
+    #[serde(rename_all = "camelCase")]
+    #[serde(
+        alias = "expand-without-overlap",
+        alias = "expandWithoutOverlap",
+        alias = "expand_without_overlap"
+    )]
+    ExpandWithoutOverlap {
+        /// How far the objects grow at most
         #[schemars(range(min = 0, max = 65535))]
         margin: f32,
         /// Unit `margin` is expressed in
@@ -2832,32 +2898,115 @@ pub struct ImageQualitySettings {
     pub channel: ImageChannelIdx,
 }
 
-/// Measures how two channels go together across the whole image.
+/// Measures how two channels go together, over the whole image and per
+/// object - CellProfiler's MeasureColocalization.
 ///
-/// The Pearson correlation coefficient, from -1 (one bright where the other
-/// is dark) over 0 (unrelated) to 1 (bright together). It uses every pixel
-/// of the image, the background too - a large dark background raises it.
+/// Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel
+/// A's intensity where channel B is bright too (M2 the other way round),
+/// "bright" meaning above the threshold - a percentage of the channel's
+/// maximum, or Costes' automatic threshold. The overlap coefficient, K1/K2
+/// and RWC (Manders weighted by how similar the two pixels' ranks are) use
+/// the same pixels.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct PearsonCorrelationCoefficientSettings {
+pub struct MeasureColocalizationSettings {
     /// The step's ID, unique in the project - its values' keys start with
-    /// it ("pearson_01/...").
+    /// it ("coloc_01/...").
     pub id: String,
-    /// The first channel.
+    /// The first channel (A).
     pub channel_a: ImageChannelIdx,
-    /// The second channel.
+    /// The second channel (B).
     pub channel_b: ImageChannelIdx,
+    /// A pixel counts for Manders, the overlap and RWC when it is brighter
+    /// than this percentage of its channel's maximum (in the image, or in
+    /// the object).
+    #[schemars(range(min = 0, max = 100))]
+    pub threshold_percent: f32,
+    /// Manders with Costes' automatic thresholds, and how they are found.
+    pub costes: MeasureColocalizationCostesMethodSettings,
+    /// The objects of this class get values of their own as well (unset:
+    /// the whole image only).
+    pub objects: ObjectClass,
 }
 
-impl Default for PearsonCorrelationCoefficientSettings {
+impl Default for MeasureColocalizationSettings {
     fn default() -> Self {
         Self {
             id: String::default(),
             channel_a: ImageChannelIdx::default(),
             channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0f32,
+            costes: MeasureColocalizationCostesMethodSettings::Faster,
+            objects: ObjectClass::Unset,
         }
     }
+}
+
+/// Each child's distance to its parent of a class (linked by Relate
+/// Objects): centre to centre, and from its centre to the parent's edge.
+/// A child without a parent of the class has no value.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureDistanceToParentSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("parent_distance_01/...").
+    pub id: String,
+    /// The children measured (e.g. spots).
+    pub children: ObjectClass,
+    /// The class of their parent (as linked by Relate Objects, e.g. Cell).
+    pub parent_class: ObjectClass,
+}
+
+/// For each object: its neighbours, how much of its outline touches them,
+/// and its first and second closest object.
+///
+/// The closest objects are by the distance between the centres; each
+/// distance names the object it is to. "Percent touching" is the part of
+/// the object's outline pixels within the distance (+ ½ px) of a neighbour.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureObjectNeighborsSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("neighbors_01/...").
+    pub id: String,
+    /// The objects measured.
+    pub objects: ObjectClass,
+    /// The objects that count as neighbours (unset: the measured objects
+    /// themselves).
+    pub neighbors: ObjectClass,
+    /// Which objects count as neighbours.
+    pub method: MeasureObjectNeighborsNeighborMethodSettings,
+    /// With "Within a distance": how far, in pixels.
+    #[schemars(range(min = 1, max = 1000))]
+    pub distance: u32,
+}
+
+impl Default for MeasureObjectNeighborsSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            objects: ObjectClass::default(),
+            neighbors: ObjectClass::Unset,
+            method: MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent,
+            distance: 5u32,
+        }
+    }
+}
+
+/// For each object: its convex area and solidity as CellProfiler gives them
+/// (the pixels whose centre lies in the convex hull; area / convex area),
+/// its Euler number (1 - holes, 8-connected) and its radii (the distance of
+/// its pixels to the nearest pixel outside it: maximum, mean, median).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureObjectShapeSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("shape_01/...").
+    pub id: String,
+    /// The objects measured.
+    pub objects: ObjectClass,
 }
 
 // ============ DATASET ============

@@ -49,12 +49,22 @@ pub struct MeasurementInfo {
     pub range: Option<(f64, f64)>,
     /// Can be averaged per image or well.
     pub aggregatable: bool,
+    /// Each value names the other object it is about (`ObjectValue::related`
+    /// - the nearest neighbour, the parent): the results offer that object.
+    #[serde(default)]
+    pub related_objects: bool,
 }
 
 impl MeasurementInfo {
     /// With its values' fixed range (e.g. Pearson -1..1).
     pub fn range(mut self, min: f64, max: f64) -> Self {
         self.range = Some((min, max));
+        self
+    }
+
+    /// Its values each name the other object they are about.
+    pub fn naming_objects(mut self) -> Self {
+        self.related_objects = true;
         self
     }
 }
@@ -85,8 +95,27 @@ pub struct Measurement {
 /// Per object, or per image region - which one the info's `target` says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MeasurementValues {
-    Objects(Vec<(ObjectId, f64)>),
+    Objects(Vec<ObjectValue>),
     Image(Vec<(MeasurementRegion, f64)>),
+}
+
+/// An object's value - and the other object it is about, if any (the
+/// nearest neighbour a distance is to, the parent a distance is from).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObjectValue {
+    pub object: ObjectId,
+    pub value: f64,
+    pub related: Option<ObjectId>,
+}
+
+impl From<(ObjectId, f64)> for ObjectValue {
+    fn from((object, value): (ObjectId, f64)) -> Self {
+        Self {
+            object,
+            value,
+            related: None,
+        }
+    }
 }
 
 /// Which pixels of the image an image measurement covers.

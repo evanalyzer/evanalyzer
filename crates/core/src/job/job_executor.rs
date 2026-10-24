@@ -2876,10 +2876,12 @@ mod full_run_integration_tests {
     impl PipelineResultExporter for MeasurementRecorder {
         fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
             use crate::pipeline::pipeline_measure::MeasurementValues;
+            // The Pearson value of Measure Colocalization's.
             let values = cache
                 .measurements
                 .measurements
                 .iter()
+                .filter(|m| m.info.key.ends_with("/pearson"))
                 .flat_map(|m| match &m.values {
                     MeasurementValues::Image(values) => values.iter().map(|(_, v)| *v).collect(),
                     MeasurementValues::Objects(_) => Vec::new(),
@@ -2905,10 +2907,13 @@ mod full_run_integration_tests {
                 start_image: ImageAddress::Scratchpad,
             },
         );
-        measure.add_command(Box::new(crate::algos::PearsonCorrelationCoefficient {
+        measure.add_command(Box::new(crate::algos::MeasureColocalization {
             id: "pearson_01".into(),
             channel_a: evanalyzer_cfg::core_types::ImageChannelIdx(0),
             channel_b: evanalyzer_cfg::core_types::ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes: crate::algos::CostesMethod::Off,
+            objects: ObjectClass::Unset,
         }));
         job.add_post_process_pipeline(measure);
 
@@ -4438,6 +4443,10 @@ mod tile_merge_end_to_end_tests {
             object_cache: pending.into_iter().map(|o| (o.id.clone(), o)).collect(),
             ..Default::default()
         };
+        // The tiles' channels too, as `analyze_image`'s `merge_caches` folds
+        // them in - Tile Merge measures the merged object on them.
+        whole_image_cache.image_cache.extend(cache_a.image_cache);
+        whole_image_cache.image_cache.extend(cache_b.image_cache);
         let mut tile_merge_pipeline = Pipeline::new(
             PipelineId(0),
             CorePipelineSettings {
@@ -4472,6 +4481,25 @@ mod tile_merge_end_to_end_tests {
             merged[0].intensities.get(&0).unwrap().sum_intensity,
             reference_sum,
             "merged intensity sum must match the untiled reference exactly"
+        );
+        let spread = |i: &crate::object::Intensity| {
+            [
+                i.std_intensity,
+                i.median_intensity,
+                i.lower_quartile_intensity,
+                i.upper_quartile_intensity,
+                i.mad_intensity,
+            ]
+        };
+        let (got, want) = (
+            merged[0].intensities.get(&0).unwrap(),
+            reference.intensities.get(&0).unwrap(),
+        );
+        assert!(got.has_spread());
+        assert_eq!(
+            spread(got),
+            spread(want),
+            "merged intensity spread (median, quartiles, ...) must match the untiled reference"
         );
     }
 
@@ -4652,6 +4680,8 @@ mod tile_merge_end_to_end_tests {
         // folds each tile's leftover cache into the shared whole-image one.
         whole_image_cache.object_cache.extend(cache_a.object_cache);
         whole_image_cache.object_cache.extend(cache_b.object_cache);
+        whole_image_cache.image_cache.extend(cache_a.image_cache);
+        whole_image_cache.image_cache.extend(cache_b.image_cache);
         assert_eq!(whole_image_cache.object_cache.len(), 3);
 
         let tiled_cache = run_tile_merge_and_voronoi(whole_image_cache, default_voronoi());

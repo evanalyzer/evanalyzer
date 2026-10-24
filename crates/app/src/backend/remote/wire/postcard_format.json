@@ -1,5 +1,5 @@
 {
-  "protocol_version": 29,
+  "protocol_version": 30,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -343,47 +343,97 @@
           "Eccentricity": "UNIT"
         },
         "12": {
+          "MaxFeret": "UNIT"
+        },
+        "13": {
+          "MinFeret": "UNIT"
+        },
+        "14": {
+          "MajorAxis": "UNIT"
+        },
+        "15": {
+          "MinorAxis": "UNIT"
+        },
+        "16": {
+          "EquivalentDiameter": "UNIT"
+        },
+        "17": {
+          "Extent": "UNIT"
+        },
+        "18": {
           "ColocCount": {
             "NEWTYPE": {
               "TYPENAME": "ObjectClass"
             }
           }
         },
-        "13": {
+        "19": {
           "IntensityAvg": {
             "NEWTYPE": "U32"
           }
         },
-        "14": {
+        "20": {
           "IntensitySum": {
             "NEWTYPE": "U32"
           }
         },
-        "15": {
+        "21": {
           "IntensityMin": {
             "NEWTYPE": "U32"
           }
         },
-        "16": {
+        "22": {
           "IntensityMax": {
             "NEWTYPE": "U32"
           }
         },
-        "17": {
+        "23": {
+          "IntensityStd": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "24": {
+          "IntensityMedian": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "25": {
+          "IntensityLowerQuartile": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "26": {
+          "IntensityUpperQuartile": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "27": {
+          "IntensityMad": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "28": {
           "Measurement": {
             "NEWTYPE": {
               "TYPENAME": "MeasurementColumn"
             }
           }
         },
-        "18": {
+        "29": {
+          "MeasurementObject": {
+            "NEWTYPE": {
+              "TYPENAME": "MeasurementColumn"
+            }
+          }
+        },
+        "30": {
           "Children": {
             "NEWTYPE": {
               "TYPENAME": "ChildColumn"
             }
           }
         },
-        "19": {
+        "31": {
           "Parent": {
             "NEWTYPE": {
               "TYPENAME": "ParentColumn"
@@ -963,6 +1013,24 @@
         },
         "1": {
           "PartnersOf": {
+            "TUPLE": [
+              {
+                "TYPENAME": "ObjectClass"
+              },
+              "STR"
+            ]
+          }
+        },
+        "2": {
+          "RelatedOf": {
+            "TUPLE": [
+              "STR",
+              "STR"
+            ]
+          }
+        },
+        "3": {
+          "ParentOf": {
             "TUPLE": [
               {
                 "TYPENAME": "ObjectClass"

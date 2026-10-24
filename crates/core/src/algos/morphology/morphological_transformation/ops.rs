@@ -1,4 +1,13 @@
-use crate::extlibs::libmorphology::{Kernel, Separable};
+//! Dilation, erosion, opening and closing of Morphological Transformation.
+//!
+//! Derived from kornia-rs (`crates/kornia-imgproc/src/morphology/ops.rs`,
+//! <https://github.com/kornia/kornia-rs>), Copyright kornia.org, licensed
+//! under the Apache License 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>).
+//! Modified by Joachim Danmayr, 2026 (moved into this command and adapted).
+//! The modifications are licensed under the **AGPL-3.0** like the rest of
+//! this crate.
+
+use super::kernels::{Kernel, Separable};
 use kornia_image::{Image, ImageError, ImageSize};
 use kornia_imgproc::padding::{Padding2D, PaddingMode, spatial_padding};
 use rayon::prelude::*;
@@ -462,7 +471,7 @@ pub fn close<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
 #[cfg(test)]
 mod tests {
 
-    use crate::extlibs::libmorphology::KernelShape;
+    use super::super::kernels::KernelShape;
 
     use super::*;
 

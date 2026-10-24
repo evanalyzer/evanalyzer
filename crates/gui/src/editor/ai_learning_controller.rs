@@ -64,6 +64,11 @@ const INTENSITY_STATS: &[(&str, i32)] = &[
     ("Min Intensity", 1),
     ("Max Intensity", 2),
     ("Avg Intensity", 3),
+    ("Std Dev Intensity", 4),
+    ("Median Intensity", 5),
+    ("Lower Quartile Intensity", 6),
+    ("Upper Quartile Intensity", 7),
+    ("MAD Intensity", 8),
 ];
 
 pub struct AiLearningController {
@@ -1279,6 +1284,11 @@ fn object_metric_row_to_metric(row: &ObjectMetricRowSlint) -> ObjectMetric {
             1 => ObjectMetric::IntensityMin(channel),
             2 => ObjectMetric::IntensityMax(channel),
             3 => ObjectMetric::IntensityAvg(channel),
+            4 => ObjectMetric::IntensityStd(channel),
+            5 => ObjectMetric::IntensityMedian(channel),
+            6 => ObjectMetric::IntensityLowerQuartile(channel),
+            7 => ObjectMetric::IntensityUpperQuartile(channel),
+            8 => ObjectMetric::IntensityMad(channel),
             _ => ObjectMetric::IntensitySum(channel),
         };
     }

@@ -134,6 +134,17 @@ impl From<FiltersIlluminationCorrectionCorrectionMethodSettings> for CorrectionM
     }
 }
 
+impl From<MeasureColocalizationCostesMethodSettings> for CostesMethod {
+    fn from(_s: MeasureColocalizationCostesMethodSettings) -> Self {
+        match _s {
+            MeasureColocalizationCostesMethodSettings::Off => CostesMethod::Off,
+            MeasureColocalizationCostesMethodSettings::Faster => CostesMethod::Faster,
+            MeasureColocalizationCostesMethodSettings::Fast => CostesMethod::Fast,
+            MeasureColocalizationCostesMethodSettings::Accurate => CostesMethod::Accurate,
+        }
+    }
+}
+
 impl From<MeasureExcludeImageExcludeWhenSettings> for ExcludeWhen {
     fn from(_s: MeasureExcludeImageExcludeWhenSettings) -> Self {
         match _s {
@@ -224,6 +235,20 @@ impl From<MorphologyMorphologicalTransformationMorphOpsSettings> for MorphOps {
             MorphologyMorphologicalTransformationMorphOpsSettings::Erode => MorphOps::Erode,
             MorphologyMorphologicalTransformationMorphOpsSettings::Open => MorphOps::Open,
             MorphologyMorphologicalTransformationMorphOpsSettings::Close => MorphOps::Close,
+        }
+    }
+}
+
+impl From<MeasureObjectNeighborsNeighborMethodSettings> for NeighborMethod {
+    fn from(_s: MeasureObjectNeighborsNeighborMethodSettings) -> Self {
+        match _s {
+            MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent => {
+                NeighborMethod::ExpandUntilAdjacent
+            }
+            MeasureObjectNeighborsNeighborMethodSettings::Adjacent => NeighborMethod::Adjacent,
+            MeasureObjectNeighborsNeighborMethodSettings::WithinDistance => {
+                NeighborMethod::WithinDistance
+            }
         }
     }
 }
@@ -443,6 +468,13 @@ impl From<ObjectTransformObjectsTransformFunctionSettings> for TransformFunction
                     unit: unit,
                 }
             }
+            ObjectTransformObjectsTransformFunctionSettings::ExpandWithoutOverlap {
+                margin,
+                unit,
+            } => TransformFunction::ExpandWithoutOverlap {
+                margin: margin.clamp(0.0, 65535.0),
+                unit: unit,
+            },
             ObjectTransformObjectsTransformFunctionSettings::Shrink { margin, unit } => {
                 TransformFunction::Shrink {
                     margin: margin.clamp(0.0, 65535.0),
@@ -811,6 +843,50 @@ impl From<LoadChannelSettings> for LoadChannel {
     }
 }
 
+impl From<MeasureColocalizationSettings> for MeasureColocalization {
+    fn from(_s: MeasureColocalizationSettings) -> Self {
+        MeasureColocalization {
+            id: _s.id,
+            channel_a: _s.channel_a,
+            channel_b: _s.channel_b,
+            threshold_percent: _s.threshold_percent.clamp(0.0, 100.0),
+            costes: CostesMethod::from(_s.costes),
+            objects: _s.objects,
+        }
+    }
+}
+
+impl From<MeasureDistanceToParentSettings> for MeasureDistanceToParent {
+    fn from(_s: MeasureDistanceToParentSettings) -> Self {
+        MeasureDistanceToParent {
+            id: _s.id,
+            children: _s.children,
+            parent_class: _s.parent_class,
+        }
+    }
+}
+
+impl From<MeasureObjectNeighborsSettings> for MeasureObjectNeighbors {
+    fn from(_s: MeasureObjectNeighborsSettings) -> Self {
+        MeasureObjectNeighbors {
+            id: _s.id,
+            objects: _s.objects,
+            neighbors: _s.neighbors,
+            method: NeighborMethod::from(_s.method),
+            distance: _s.distance,
+        }
+    }
+}
+
+impl From<MeasureObjectShapeSettings> for MeasureObjectShape {
+    fn from(_s: MeasureObjectShapeSettings) -> Self {
+        MeasureObjectShape {
+            id: _s.id,
+            objects: _s.objects,
+        }
+    }
+}
+
 impl From<MedianSubtractSettings> for MedianSubtract {
     fn from(_s: MedianSubtractSettings) -> Self {
         MedianSubtract { radius: _s.radius }
@@ -843,16 +919,6 @@ impl From<ObjectMathSettings> for ObjectMath {
             min_overlap_area: _s.min_overlap_area,
             output_class: _s.output_class,
             keep_unmatched: _s.keep_unmatched,
-        }
-    }
-}
-
-impl From<PearsonCorrelationCoefficientSettings> for PearsonCorrelationCoefficient {
-    fn from(_s: PearsonCorrelationCoefficientSettings) -> Self {
-        PearsonCorrelationCoefficient {
-            id: _s.id,
-            channel_a: _s.channel_a,
-            channel_b: _s.channel_b,
         }
     }
 }
@@ -1177,6 +1243,18 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::LoadChannel(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::LoadChannel::from(settings),
         ))),
+        PipelineCommand::MeasureColocalization(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureColocalization::from(settings),
+        ))),
+        PipelineCommand::MeasureDistanceToParent(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureDistanceToParent::from(settings),
+        ))),
+        PipelineCommand::MeasureObjectNeighbors(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureObjectNeighbors::from(settings),
+        ))),
+        PipelineCommand::MeasureObjectShape(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureObjectShape::from(settings),
+        ))),
         PipelineCommand::MedianSubtract(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MedianSubtract::from(settings),
         ))),
@@ -1186,9 +1264,6 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::ObjectMath(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ObjectMath::from(settings),
         ))),
-        PipelineCommand::PearsonCorrelationCoefficient(settings) => Ok(PipelineStep::Image(
-            Box::new(crate::algos::PearsonCorrelationCoefficient::from(settings)),
-        )),
         PipelineCommand::PixelClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::PixelClassifier::from(settings),
         ))),

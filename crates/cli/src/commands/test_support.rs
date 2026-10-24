@@ -43,18 +43,13 @@ impl Drop for TempProjectFile {
 
 /// The `objects` intensity and colocalization columns, in the order
 /// [`intensity_values_sql`] (plus a colocalization map) fills them.
-const INTENSITY_AND_COLOC_COLUMNS: &str = "intensity_sum_normalized, intensity_sum_gray, \
-     intensity_mean_normalized, intensity_mean_gray, intensity_min_normalized, intensity_min_gray, \
-     intensity_max_normalized, intensity_max_gray, coloc_partner_ids";
+const INTENSITY_AND_COLOC_COLUMNS: &str = "intensity_sum_gray, intensity_mean_gray, intensity_min_gray, intensity_max_gray, coloc_partner_ids";
 
-/// SQL values for the eight `intensity_*` list columns: `n_channels`
-/// channels, each with sum 1.0 (255 gray values), mean 0.5 (127), min 0 and
-/// max 1.0 (255).
+/// SQL values for the four `intensity_*` list columns: `n_channels`
+/// channels, each with sum 255, mean 127, min 0 and max 255 (gray values).
 fn intensity_values_sql(n_channels: usize) -> String {
     let list = |value: f64| format!("[{}]", vec![format!("{value:.1}"); n_channels].join(", "));
-    [1.0, 255.0, 0.5, 127.0, 0.0, 0.0, 1.0, 255.0]
-        .map(list)
-        .join(", ")
+    [255.0, 127.0, 0.0, 255.0].map(list).join(", ")
 }
 
 fn create_results_schema(conn: &duckdb::Connection) {
@@ -85,11 +80,15 @@ fn create_results_schema(conn: &duckdb::Connection) {
             touches_edge BOOLEAN,
             pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
             image_bit_depth UTINYINT,
-            intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
-            intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
-            intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
-            intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
-            coloc_partner_ids MAP(INTEGER, UUID[])
+            intensity_sum_gray DOUBLE[],
+            intensity_mean_gray DOUBLE[],
+            intensity_min_gray DOUBLE[],
+            intensity_max_gray DOUBLE[],
+            intensity_std_gray DOUBLE[], intensity_median_gray DOUBLE[],
+            intensity_lower_quartile_gray DOUBLE[], intensity_upper_quartile_gray DOUBLE[],
+            intensity_mad_gray DOUBLE[],
+            coloc_partner_ids MAP(INTEGER, UUID[]),
+            measurement_values DOUBLE[]
         );
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,

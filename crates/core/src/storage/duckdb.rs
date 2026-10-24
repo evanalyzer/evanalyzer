@@ -10,7 +10,9 @@ use duckdb::arrow::array::{
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::types::Value;
 use duckdb::{Connection, params};
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, max_gray_value};
+use evanalyzer_cfg::core_types::{
+    InternalErrors, MeasurementInfo, ObjectClass, ObjectId, max_gray_value,
+};
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -108,6 +110,19 @@ fn image_display_name(image_rel_path: &Path) -> String {
         .unwrap_or(rel)
 }
 
+/// The per-object measurements' `objects.measurement_values` positions an
+/// earlier run gave (`measurement_info.object_index`).
+fn existing_object_indices(conn: &Connection) -> Result<HashMap<String, i32>, InternalErrors> {
+    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    let mut stmt = conn
+        .prepare("SELECT key, object_index FROM measurement_info WHERE object_index IS NOT NULL")
+        .map_err(err)?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(err)?;
+    rows.collect::<Result<_, _>>().map_err(err)
+}
+
 pub struct DuckDbExporter {
     // Connection is Send but !Sync; the Mutex makes the struct Sync so it can
     // satisfy the `PipelineResultExporter: Send + Sync` bound.
@@ -117,6 +132,10 @@ pub struct DuckDbExporter {
     /// Each object's mask is stored (`objects.mask`, see `mask_codec`) - the
     /// project's "Store object masks"; else the column stays NULL.
     store_masks: bool,
+    /// Each per-object measurement's position in `objects.measurement_values`
+    /// (1-based, by key) - given the first time a key is exported, kept in
+    /// `measurement_info.object_index`.
+    object_indices: Mutex<HashMap<String, i32>>,
 }
 
 impl DuckDbExporter {
@@ -221,6 +240,7 @@ impl DuckDbExporter {
             conn: Mutex::new(conn),
             class_names,
             store_masks: true,
+            object_indices: Mutex::new(HashMap::new()),
         })
     }
 
@@ -240,10 +260,13 @@ impl DuckDbExporter {
                 path.display()
             )));
         }
+        let conn = shared_connection(path)?;
+        let object_indices = existing_object_indices(&conn)?;
         Ok(Self {
-            conn: Mutex::new(shared_connection(path)?),
+            conn: Mutex::new(conn),
             class_names: HashMap::new(),
             store_masks: true,
+            object_indices: Mutex::new(object_indices),
         })
     }
 
@@ -273,8 +296,9 @@ impl DuckDbExporter {
     /// (once per key, in `measurement_info`) and its values (`measurements`,
     /// a row each with its image, plane, region and classes).
     ///
-    /// Row by row: fine for image values (one per measurement and plane).
-    /// Many objects' values want the Arrow appender `objects` uses.
+    /// The values go in through the Arrow appender, like `objects`: a value
+    /// per object for every object of a big image is far too many rows to
+    /// insert one by one.
     fn write_measurements(
         &self,
         tx: &duckdb::Transaction<'_>,
@@ -285,111 +309,66 @@ impl DuckDbExporter {
         if measured.measurements.is_empty() {
             return Ok(());
         }
-        let image_rel = cache.image_rel_path.display().to_string();
-        let image_name = image_display_name(&cache.image_rel_path);
         let mut info = tx
             .prepare(
                 "INSERT OR IGNORE INTO measurement_info \
-                 (key, measurement, step, unit, target, range_min, range_max, aggregatable) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (key, measurement, step, unit, target, range_min, range_max, aggregatable, \
+                 object_index, related_objects) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .map_err(err)?;
-        let mut value_row = tx
-            .prepare(
-                "INSERT INTO measurements (image_name, image_rel_path, z_stack, t_stack, \
-                 region, object_id, object_class_name, object_class_id, step, measurement, \
-                 unit, key, value) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), ?, ?, ?, ?, ?)",
-            )
-            .map_err(err)?;
-        // The classes as `objects` has them: names (a JSON list) and ids.
-        let classes = |classes: &[ObjectClass]| {
-            let names: Vec<String> = classes
-                .iter()
-                .filter(|c| **c != ObjectClass::Unset)
-                .map(|c| self.class_label(c))
-                .collect();
-            let ids: Vec<i32> = classes
-                .iter()
-                .filter_map(|c| match c {
-                    ObjectClass::Global(n) => Some(*n as i32),
-                    _ => None,
-                })
-                .collect();
-            (Some(json_string_array(&names)), Some(format!("{ids:?}")))
-        };
-        for Measurement { info: i, values } in &measured.measurements {
-            let unit = format!("{:?}", i.unit);
+        let indices = self
+            .object_indices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for Measurement { info: i, .. } in &measured.measurements {
             info.execute(params![
                 i.key,
                 i.name,
                 i.step,
-                unit,
+                format!("{:?}", i.unit),
                 format!("{:?}", i.target),
                 i.range.map(|r| r.0),
                 i.range.map(|r| r.1),
-                i.aggregatable
+                i.aggregatable,
+                indices.get(&i.key),
+                i.related_objects
             ])
             .map_err(err)?;
-            let mut insert = |region: &str,
-                              object: Option<String>,
-                              (class_names, class_ids): (Option<String>, Option<String>),
-                              value: f64| {
-                value_row
-                    .execute(params![
-                        image_name,
-                        image_rel,
-                        measured.z_stack,
-                        measured.t_stack,
-                        region,
-                        object,
-                        class_names,
-                        class_ids,
-                        i.step,
-                        i.name,
-                        unit,
-                        i.key,
-                        value.is_finite().then_some(value)
-                    ])
-                    .map(|_| ())
-                    .map_err(err)
-            };
+        }
+        drop(indices);
+
+        let mut rows = MeasurementRows::new(self, cache);
+        let mut app = tx.appender("measurements").map_err(err)?;
+        for Measurement { info: i, values } in &measured.measurements {
+            let unit = format!("{:?}", i.unit);
+            let row =
+                |region, object, related| MeasurementRow::of(i, &unit, region, object, related);
             match values {
                 MeasurementValues::Image(values) => {
                     for (region, value) in values {
                         match region {
                             MeasurementRegion::Image => {
-                                insert("image", None, (None, None), *value)?
+                                rows.push(row(RowRegion::Image, None, None), *value)
                             }
                             MeasurementRegion::Class(class) => {
-                                insert("class", None, classes(&[*class]), *value)?
+                                rows.push(row(RowRegion::Class(*class), None, None), *value)
                             }
                         }
+                        rows.flush_if_full(&mut app)?;
                     }
                 }
                 MeasurementValues::Objects(values) => {
-                    for (object_id, value) in values {
-                        let object_classes = cache
-                            .object_cache
-                            .get(object_id)
-                            .map(|o| {
-                                let mut sorted: Vec<ObjectClass> =
-                                    o.object_classes().iter().copied().collect();
-                                sorted.sort();
-                                classes(&sorted)
-                            })
-                            .unwrap_or((None, None));
-                        insert(
-                            "object",
-                            Some(object_id.to_string()),
-                            object_classes,
-                            *value,
-                        )?;
+                    for v in values {
+                        rows.push(
+                            row(RowRegion::Object, Some(&v.object), v.related.as_ref()),
+                            v.value,
+                        );
+                        rows.flush_if_full(&mut app)?;
                     }
                 }
             }
         }
-        Ok(())
+        rows.flush(&mut app)
     }
 
     fn class_label(&self, class: &ObjectClass) -> String {
@@ -476,25 +455,49 @@ struct ObjectColumns {
     area_px: UInt64Builder,
     touches_edge: BooleanBuilder,
     image_bit_depth: UInt8Builder,
-    /// `intensity_{sum,mean,min,max}_{raw,scaled}`, in table order.
+    /// `INTENSITY_COLUMNS`, in table order.
     intensities: [ListBuilder<Float64Builder>; INTENSITY_COLUMNS.len()],
     coloc_partner_ids: MapBuilder<Int32Builder, ListBuilder<StringBuilder>>,
+    /// The per-object measurements' values, by `object_index`.
+    measurement_values: ListBuilder<Float64Builder>,
     /// The mask, run-length encoded (`mask_codec`); NULL when not stored.
     mask: BinaryBuilder,
     f64: Vec<Float64Builder>,
 }
 
-/// The per-channel intensity list columns, in table order.
-const INTENSITY_COLUMNS: [&str; 8] = [
-    "intensity_sum_normalized",
+/// The per-channel intensity list columns, in table order, in gray values
+/// (as ImageJ/Fiji): sum, mean, min, max, then how the values spread. The
+/// spread's lists are NULL for an object without it (a stored annotation).
+const INTENSITY_COLUMNS: [&str; 9] = [
     "intensity_sum_gray",
-    "intensity_mean_normalized",
     "intensity_mean_gray",
-    "intensity_min_normalized",
     "intensity_min_gray",
-    "intensity_max_normalized",
     "intensity_max_gray",
+    "intensity_std_gray",
+    "intensity_median_gray",
+    "intensity_lower_quartile_gray",
+    "intensity_upper_quartile_gray",
+    "intensity_mad_gray",
 ];
+
+/// The first spread column in `INTENSITY_COLUMNS`.
+const FIRST_SPREAD_COLUMN: usize = 4;
+
+/// One channel's values in `INTENSITY_COLUMNS`' order (0..1); the spread
+/// NaN where it wasn't measured.
+fn intensity_stats(v: &Intensity) -> [f64; INTENSITY_COLUMNS.len()] {
+    [
+        v.sum_intensity,
+        v.avg_intensity,
+        v.min_intensity,
+        v.max_intensity,
+        v.std_intensity,
+        v.median_intensity,
+        v.lower_quartile_intensity,
+        v.upper_quartile_intensity,
+        v.mad_intensity,
+    ]
+}
 
 /// `coloc_partner_ids` / `parent_ids` key for a class without a number.
 const UNSET_CLASS_KEY: i32 = -1;
@@ -535,6 +538,7 @@ impl ObjectColumns {
                 Int32Builder::new(),
                 ListBuilder::new(StringBuilder::new()),
             ),
+            measurement_values: ListBuilder::new(Float64Builder::new()),
             mask: BinaryBuilder::with_capacity(rows, rows * 16),
             f64: (0..F64_COLUMNS)
                 .map(|_| Float64Builder::with_capacity(rows))
@@ -547,33 +551,30 @@ impl ObjectColumns {
     }
 
     /// One row of every `intensity_*` list: position c + 1 holds channel c,
-    /// NULL for a channel without a measurement. `bit_max` turns the
-    /// `_normalized` values into gray values (`_gray`).
+    /// NULL for a channel without a measurement - in gray values (`bit_max`
+    /// times the 0..1 values). The spread's lists are NULL for an object
+    /// without any (a stored annotation).
     fn append_intensities(&mut self, intensities: &IndexMap<i32, Intensity>, bit_max: f64) {
         let channels = intensities
             .keys()
             .filter(|channel| **channel >= 0)
             .max()
             .map_or(0, |max| *max as usize + 1);
+        let with_spread = intensities.values().any(Intensity::has_spread);
+        let columns = if with_spread {
+            INTENSITY_COLUMNS.len()
+        } else {
+            FIRST_SPREAD_COLUMN
+        };
         for channel in 0..channels {
-            let stats = intensities.get(&(channel as i32)).map(|v| {
-                [
-                    v.sum_intensity,
-                    v.avg_intensity as f64,
-                    v.min_intensity as f64,
-                    v.max_intensity as f64,
-                ]
-            });
-            for (stat, pair) in self.intensities.chunks_mut(2).enumerate() {
-                let normalized = stats.map(|values| values[stat]);
-                pair[0].values().append_option(normalized);
-                pair[1]
-                    .values()
-                    .append_option(normalized.map(|normalized| normalized * bit_max));
+            let stats = intensities.get(&(channel as i32)).map(intensity_stats);
+            for (column, list) in self.intensities[..columns].iter_mut().enumerate() {
+                let value = stats.map(|values| values[column]).filter(|v| v.is_finite());
+                list.values().append_option(value.map(|v| v * bit_max));
             }
         }
-        for list in &mut self.intensities {
-            list.append(true);
+        for (column, list) in self.intensities.iter_mut().enumerate() {
+            list.append(column < columns);
         }
     }
 
@@ -607,6 +608,26 @@ impl ObjectColumns {
         self.coloc_partner_ids
             .append(true)
             .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    /// One row of `measurement_values`: position i holds the value of the
+    /// measurement with `object_index` i, NULL where the object has none
+    /// (or it isn't a number); NULL without any.
+    fn append_measurement_values(&mut self, values: Option<&Vec<(i32, f64)>>) {
+        let Some(values) = values else {
+            self.measurement_values.append(false);
+            return;
+        };
+        let len = values.iter().map(|(i, _)| *i).max().unwrap_or(0);
+        let mut row = vec![None; len.max(0) as usize];
+        for (index, value) in values {
+            row[*index as usize - 1] = value.is_finite().then_some(*value);
+        }
+        let list = self.measurement_values.values();
+        for value in row {
+            list.append_option(value);
+        }
+        self.measurement_values.append(true);
     }
 
     fn len(&self) -> usize {
@@ -745,8 +766,225 @@ impl ObjectColumns {
             columns.push((name, arr(builder)));
         }
         columns.push(("coloc_partner_ids", arr(&mut self.coloc_partner_ids)));
+        columns.push(("measurement_values", arr(&mut self.measurement_values)));
         columns.push(("mask", arr(&mut self.mask)));
         RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arrow columns for the measurements table
+// ---------------------------------------------------------------------------
+
+/// What a `measurements` row is about.
+#[derive(Clone, Copy)]
+enum RowRegion {
+    Image,
+    Class(ObjectClass),
+    Object,
+}
+
+/// One `measurements` row but its image, plane and value.
+struct MeasurementRow<'a> {
+    region: RowRegion,
+    object: Option<&'a ObjectId>,
+    related: Option<&'a ObjectId>,
+    step: &'a str,
+    measurement: &'a str,
+    unit: &'a str,
+    key: &'a str,
+}
+
+impl<'a> MeasurementRow<'a> {
+    fn of(
+        info: &'a MeasurementInfo,
+        unit: &'a str,
+        region: RowRegion,
+        object: Option<&'a ObjectId>,
+        related: Option<&'a ObjectId>,
+    ) -> Self {
+        Self {
+            region,
+            object,
+            related,
+            step: &info.step,
+            measurement: &info.name,
+            unit,
+            key: &info.key,
+        }
+    }
+}
+
+/// `measurements` rows of one image plane, column by column, handed to the
+/// Appender `ARROW_BATCH_ROWS` at a time (in the table's column order).
+struct MeasurementRows<'a> {
+    exporter: &'a DuckDbExporter,
+    cache: &'a GlobalPipelineCache,
+    image_name: String,
+    image_rel_path: String,
+    /// An object's classes as `objects` has them (names as a JSON list,
+    /// ids) - looked up once per object, not once per value.
+    object_classes: HashMap<ObjectId, (String, Vec<i32>)>,
+    columns: MeasurementColumns,
+}
+
+struct MeasurementColumns {
+    image_name: StringBuilder,
+    image_rel_path: StringBuilder,
+    z_stack: Int32Builder,
+    t_stack: Int32Builder,
+    region: StringBuilder,
+    object_id: StringBuilder,
+    related_object_id: StringBuilder,
+    object_class_name: StringBuilder,
+    object_class_id: ListBuilder<Int32Builder>,
+    step: StringBuilder,
+    measurement: StringBuilder,
+    unit: StringBuilder,
+    key: StringBuilder,
+    value: Float64Builder,
+}
+
+impl MeasurementColumns {
+    fn new() -> Self {
+        Self {
+            image_name: StringBuilder::new(),
+            image_rel_path: StringBuilder::new(),
+            z_stack: Int32Builder::new(),
+            t_stack: Int32Builder::new(),
+            region: StringBuilder::new(),
+            object_id: StringBuilder::new(),
+            related_object_id: StringBuilder::new(),
+            object_class_name: StringBuilder::new(),
+            object_class_id: ListBuilder::new(Int32Builder::new()),
+            step: StringBuilder::new(),
+            measurement: StringBuilder::new(),
+            unit: StringBuilder::new(),
+            key: StringBuilder::new(),
+            value: Float64Builder::new(),
+        }
+    }
+
+    /// The collected rows as one batch; leaves the builders empty.
+    fn finish(&mut self) -> Result<RecordBatch, InternalErrors> {
+        fn arr(builder: &mut dyn ArrayBuilder) -> ArrayRef {
+            builder.finish()
+        }
+        RecordBatch::try_from_iter([
+            ("image_name", arr(&mut self.image_name)),
+            ("image_rel_path", arr(&mut self.image_rel_path)),
+            ("z_stack", arr(&mut self.z_stack)),
+            ("t_stack", arr(&mut self.t_stack)),
+            ("region", arr(&mut self.region)),
+            ("object_id", arr(&mut self.object_id)),
+            ("related_object_id", arr(&mut self.related_object_id)),
+            ("object_class_name", arr(&mut self.object_class_name)),
+            ("object_class_id", arr(&mut self.object_class_id)),
+            ("step", arr(&mut self.step)),
+            ("measurement", arr(&mut self.measurement)),
+            ("unit", arr(&mut self.unit)),
+            ("key", arr(&mut self.key)),
+            ("value", arr(&mut self.value)),
+        ])
+        .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+}
+
+impl<'a> MeasurementRows<'a> {
+    fn new(exporter: &'a DuckDbExporter, cache: &'a GlobalPipelineCache) -> Self {
+        Self {
+            exporter,
+            cache,
+            image_name: image_display_name(&cache.image_rel_path),
+            image_rel_path: cache.image_rel_path.display().to_string(),
+            object_classes: HashMap::new(),
+            columns: MeasurementColumns::new(),
+        }
+    }
+
+    /// The classes' names (a JSON list, without `Unset`) and ids, sorted.
+    fn classes(&self, classes: &[ObjectClass]) -> (String, Vec<i32>) {
+        let mut sorted = classes.to_vec();
+        sorted.sort();
+        let names: Vec<String> = sorted
+            .iter()
+            .filter(|c| **c != ObjectClass::Unset)
+            .map(|c| self.exporter.class_label(c))
+            .collect();
+        let ids = sorted
+            .iter()
+            .filter_map(|c| match c {
+                ObjectClass::Global(n) => Some(*n as i32),
+                _ => None,
+            })
+            .collect();
+        (json_string_array(&names), ids)
+    }
+
+    /// Adds a row; a value that isn't a number (NaN, infinite) is NULL.
+    fn push(&mut self, row: MeasurementRow<'_>, value: f64) {
+        let classes = match row.region {
+            RowRegion::Image => None,
+            RowRegion::Class(class) => Some(self.classes(&[class])),
+            RowRegion::Object => row.object.and_then(|id| {
+                if !self.object_classes.contains_key(id) {
+                    let object = self.cache.object_cache.get(id)?;
+                    let classes: Vec<ObjectClass> =
+                        object.object_classes().iter().copied().collect();
+                    let entry = self.classes(&classes);
+                    self.object_classes.insert(id.clone(), entry);
+                }
+                self.object_classes.get(id).cloned()
+            }),
+        };
+        let c = &mut self.columns;
+        c.image_name.append_value(&self.image_name);
+        c.image_rel_path.append_value(&self.image_rel_path);
+        c.z_stack.append_value(self.cache.measurements.z_stack);
+        c.t_stack.append_value(self.cache.measurements.t_stack);
+        c.region.append_value(match row.region {
+            RowRegion::Image => "image",
+            RowRegion::Class(_) => "class",
+            RowRegion::Object => "object",
+        });
+        c.object_id
+            .append_option(row.object.map(|id| id.to_string()));
+        c.related_object_id
+            .append_option(row.related.map(|id| id.to_string()));
+        match classes {
+            Some((names, ids)) => {
+                c.object_class_name.append_value(names);
+                for id in ids {
+                    c.object_class_id.values().append_value(id);
+                }
+                c.object_class_id.append(true);
+            }
+            None => {
+                c.object_class_name.append_null();
+                c.object_class_id.append(false);
+            }
+        }
+        c.step.append_value(row.step);
+        c.measurement.append_value(row.measurement);
+        c.unit.append_value(row.unit);
+        c.key.append_value(row.key);
+        c.value.append_option(value.is_finite().then_some(value));
+    }
+
+    fn flush_if_full(&mut self, app: &mut duckdb::Appender<'_>) -> Result<(), InternalErrors> {
+        if self.columns.value.len() >= ARROW_BATCH_ROWS {
+            self.flush(app)?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self, app: &mut duckdb::Appender<'_>) -> Result<(), InternalErrors> {
+        if self.columns.value.len() == 0 {
+            return Ok(());
+        }
+        let batch = self.columns.finish()?;
+        app.append_record_batch(batch)
+            .map_err(|e| InternalErrors::Io(e.to_string()))
     }
 }
 
@@ -814,20 +1052,28 @@ CREATE TABLE IF NOT EXISTS objects (
     image_bit_depth      UTINYINT,
     -- Per-channel intensity statistics, one list each, indexed by channel:
     -- channel c is at position c + 1 (DuckDB lists are 1-based), NULL for a
-    -- channel that wasn't measured. `_normalized` is the value divided by
-    -- the image's maximum gray value (0..1); `_gray` is the same value in
-    -- gray values, as in ImageJ/Fiji (normalized * (2^image_bit_depth - 1)).
-    intensity_sum_normalized     DOUBLE[],
-    intensity_sum_gray           DOUBLE[],
-    intensity_mean_normalized    DOUBLE[],
-    intensity_mean_gray          DOUBLE[],
-    intensity_min_normalized     DOUBLE[],
-    intensity_min_gray           DOUBLE[],
-    intensity_max_normalized     DOUBLE[],
-    intensity_max_gray           DOUBLE[],
+    -- channel that wasn't measured. In gray values, as in ImageJ/Fiji (0..1:
+    -- divided by 2^image_bit_depth - 1). Then how the values spread
+    -- (CellProfiler's MeasureObjectIntensity): standard deviation, median,
+    -- quartiles, median absolute deviation - NULL where not measured (a
+    -- stored annotation's).
+    intensity_sum_gray             DOUBLE[],
+    intensity_mean_gray            DOUBLE[],
+    intensity_min_gray             DOUBLE[],
+    intensity_max_gray             DOUBLE[],
+    intensity_std_gray             DOUBLE[],
+    intensity_median_gray          DOUBLE[],
+    intensity_lower_quartile_gray  DOUBLE[],
+    intensity_upper_quartile_gray  DOUBLE[],
+    intensity_mad_gray             DOUBLE[],
     -- Colocalization partners: partner object class id -> the ids of the
     -- partner objects of that class (key -1: partners without a class).
     coloc_partner_ids            MAP(INTEGER, UUID[]),
+    -- The object's values of the measurement steps measuring per object,
+    -- at their `measurement_info.object_index` - the same values as in
+    -- `measurements` (one row each), here for the results to aggregate
+    -- without a join. NULL where the object has no value.
+    measurement_values           DOUBLE[],
     -- The object's mask relative to its bounding box (row by row): the
     -- lengths of its alternating unset / set runs as LEB128 varints (see
     -- evanalyzer_core's mask_codec.rs). NULL when not stored.
@@ -867,7 +1113,12 @@ CREATE TABLE IF NOT EXISTS measurement_info (
     target        VARCHAR NOT NULL,   -- 'Object' or 'Image'
     range_min     DOUBLE,
     range_max     DOUBLE,
-    aggregatable  BOOLEAN NOT NULL
+    aggregatable  BOOLEAN NOT NULL,
+    -- A value per object: its position in `objects.measurement_values`
+    -- (1-based). NULL for an image measurement.
+    object_index  INTEGER,
+    -- Each value names another object (`measurements.related_object_id`).
+    related_objects BOOLEAN NOT NULL DEFAULT false
 );
 
 -- The measurements' values, one row each with what it is about - like
@@ -883,6 +1134,9 @@ CREATE TABLE IF NOT EXISTS measurements (
     t_stack            INTEGER NOT NULL,
     region             VARCHAR NOT NULL,
     object_id          UUID,
+    -- The other object a value is about (the nearest neighbour a distance
+    -- is to, the parent it is from); NULL for most.
+    related_object_id  UUID,
     object_class_name  VARCHAR,
     object_class_id    INTEGER[],
     step               VARCHAR NOT NULL,
@@ -935,6 +1189,34 @@ impl DuckDbExporter {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Each object's values of `cache`'s per-object measurements, as
+    /// (`object_index`, value) - a measurement exported for the first time
+    /// gets the next free index.
+    fn object_measurement_values(
+        &self,
+        cache: &GlobalPipelineCache,
+    ) -> HashMap<ObjectId, Vec<(i32, f64)>> {
+        let mut indices = self
+            .object_indices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut by_object: HashMap<ObjectId, Vec<(i32, f64)>> = HashMap::new();
+        for Measurement { info, values } in &cache.measurements.measurements {
+            let MeasurementValues::Objects(values) = values else {
+                continue;
+            };
+            let next = indices.len() as i32 + 1;
+            let index = *indices.entry(info.key.clone()).or_insert(next);
+            for v in values {
+                by_object
+                    .entry(v.object.clone())
+                    .or_default()
+                    .push((index, v.value));
+            }
+        }
+        by_object
+    }
+
     /// The `objects` rows for the next up to `ARROW_BATCH_ROWS` objects
     /// taken from `objects`, or `None` once it is exhausted. Needs no
     /// database connection - see `export` for why that matters.
@@ -942,6 +1224,7 @@ impl DuckDbExporter {
         &self,
         cache: &GlobalPipelineCache,
         objects: &mut std::iter::Peekable<impl Iterator<Item = &'a Object>>,
+        measurement_values: &HashMap<ObjectId, Vec<(i32, f64)>>,
     ) -> Result<Option<RecordBatch>, InternalErrors> {
         if objects.peek().is_none() {
             return Ok(None);
@@ -977,8 +1260,8 @@ impl DuckDbExporter {
             let perimeter = perimeter_f32 as f64;
             let ellipse = object.get_ellipse();
             let centroid = object.get_centroid();
-            let feret = object.get_feret_diameter() as f64;
-            let min_feret = ellipse.minor as f64;
+            // Computed from the mask here, at export (not kept on the object).
+            let (min_feret, feret) = object.feret_diameters();
             let aspect_ratio = if ellipse.minor > 0.0 {
                 (ellipse.major / ellipse.minor) as f64
             } else {
@@ -1065,6 +1348,7 @@ impl DuckDbExporter {
             c.image_bit_depth.append_value(nr_of_bits as u8);
             c.append_intensities(&object.intensities, bit_max);
             c.append_coloc(&object.colocalized_with)?;
+            c.append_measurement_values(measurement_values.get(&object.id));
             if self.store_masks {
                 c.mask
                     .append_value(crate::storage::mask_codec::encode_mask(&object.mask_data));
@@ -1110,7 +1394,8 @@ impl PipelineResultExporter for DuckDbExporter {
         // turns for the append and commit. Further batches of a huge image
         // are built under the lock, as before, so no thread ever holds more
         // than one batch in memory.
-        let first_batch = self.next_object_batch(cache, &mut objects)?;
+        let measurement_values = self.object_measurement_values(cache);
+        let first_batch = self.next_object_batch(cache, &mut objects, &measurement_values)?;
 
         let conn = self.lock_conn();
         // Objects and their colocalization stats must land together or not at
@@ -1138,7 +1423,9 @@ impl PipelineResultExporter for DuckDbExporter {
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             app.append_record_batch(batch)
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            while let Some(batch) = self.next_object_batch(cache, &mut objects)? {
+            while let Some(batch) =
+                self.next_object_batch(cache, &mut objects, &measurement_values)?
+            {
                 app.append_record_batch(batch)
                     .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
@@ -1218,7 +1505,9 @@ impl DatasetStore for DuckDbExporter {
                 "SELECT object_id::VARCHAR, image_rel_path, t_stack, z_stack,
                         centroid_x_px, centroid_y_px,
                         bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-                        area_px, object_class_id, intensity_mean_normalized,
+                        area_px, object_class_id,
+                        list_transform(intensity_mean_gray,
+                            v -> v / ((1::UBIGINT << image_bit_depth) - 1)),
                         NULLIF(pixel_size_x_nm, 0), NULLIF(track_id, 0)
                  FROM objects
                  WHERE (?1 IS NULL OR image_rel_path = ?1)
@@ -1364,6 +1653,7 @@ mod tests {
 
     use super::*;
     use crate::object::{Object, ObjectInit};
+    use crate::pipeline::pipeline_measure::ObjectValue;
     use bitvec::prelude::*;
     use std::collections::HashSet;
 
@@ -1663,6 +1953,7 @@ mod tests {
             target: MeasurementTarget::Image,
             range: Some((-1.0, 1.0)),
             aggregatable: true,
+            related_objects: false,
         };
         for (t, value) in [(0, 0.5), (1, f64::NAN)] {
             // Object 1, in class 1 ("Nucleus").
@@ -1682,7 +1973,11 @@ mod tests {
                             target: MeasurementTarget::Object,
                             ..info.clone()
                         },
-                        values: MeasurementValues::Objects(vec![(ObjectId(1), 0.25)]),
+                        values: MeasurementValues::Objects(vec![ObjectValue {
+                            object: ObjectId(1),
+                            value: 0.25,
+                            related: Some(ObjectId(7)),
+                        }]),
                     },
                 ],
                 z_stack: 0,
@@ -1699,6 +1994,15 @@ mod tests {
             })
             .unwrap();
         assert_eq!(described, 2, "each measurement described once");
+        let related: Vec<Option<String>> = conn
+            .prepare("SELECT related_object_id::VARCHAR FROM measurements ORDER BY t_stack, region")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let seven = Some(ObjectId(7).to_string());
+        assert_eq!(related, [None, None, seven.clone(), None, None, seven]);
         let mut stmt = conn
             .prepare(
                 "SELECT image_name, t_stack, region, object_id IS NOT NULL, object_class_name, \
@@ -1761,6 +2065,128 @@ mod tests {
                 row(1, "object", true, true, Some(0.25)),
             ]
         );
+    }
+
+    /// Each per-object measurement gets a position in `measurement_values`
+    /// (`measurement_info.object_index`), the same in every image; an
+    /// object without a value has NULL there, an image measurement none.
+    #[test]
+    fn object_values_are_also_kept_on_the_object_by_index() {
+        use crate::pipeline::pipeline_measure::PipelineMeasurements;
+        use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new(), &MetaData::default()).unwrap();
+        let info = |key: &str, target| MeasurementInfo {
+            key: key.into(),
+            name: key.into(),
+            step: "s_01".into(),
+            unit: MeasurementUnit::None,
+            target,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+        };
+        let objects = |key: &str, values: Vec<(u128, f64)>| Measurement {
+            info: info(key, MeasurementTarget::Object),
+            values: MeasurementValues::Objects(
+                values
+                    .into_iter()
+                    .map(|(id, v)| (ObjectId(id), v).into())
+                    .collect(),
+            ),
+        };
+        // Image a: "a" first, then "b"; image b: only "b" - "b" keeps index 2.
+        let mut a = cache_with_objects("a.tif", 2);
+        a.measurements = PipelineMeasurements {
+            measurements: vec![
+                Measurement {
+                    info: info("s_01/image", MeasurementTarget::Image),
+                    values: MeasurementValues::Image(vec![(MeasurementRegion::Image, 1.0)]),
+                },
+                objects("s_01/a", vec![(1, 0.5)]),
+                objects("s_01/b", vec![(1, 1.5), (2, f64::NAN)]),
+            ],
+            ..Default::default()
+        };
+        exporter.export(&a).unwrap();
+        let mut b = GlobalPipelineCache::default();
+        b.image_rel_path = PathBuf::from("b.tif");
+        b.image_meta.nr_of_bits = 8;
+        b.object_cache
+            .insert(ObjectId(3), object_in_classes(3, &[1]));
+        b.measurements = PipelineMeasurements {
+            measurements: vec![objects("s_01/b", vec![(3, 7.0)])],
+            ..Default::default()
+        };
+        exporter.export(&b).unwrap();
+
+        let conn = exporter.conn.lock().unwrap();
+        let strings = |sql: &str| -> Vec<String> {
+            conn.prepare(sql)
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(
+            strings(
+                "SELECT key || '=' || COALESCE(object_index::VARCHAR, '-') \
+                 FROM measurement_info ORDER BY key"
+            ),
+            ["s_01/a=1", "s_01/b=2", "s_01/image=-"]
+        );
+        let ids = [ObjectId(1), ObjectId(2), ObjectId(3)].map(|id| id.to_string());
+        let values = strings(&format!(
+            "SELECT COALESCE(measurement_values::VARCHAR, '-') FROM objects \
+             ORDER BY CASE object_id::VARCHAR WHEN '{}' THEN 1 WHEN '{}' THEN 2 ELSE 3 END",
+            ids[0], ids[1]
+        ));
+        assert_eq!(values, ["[0.5, 1.5]", "[NULL, NULL]", "[NULL, 7.0]"]);
+    }
+
+    /// More object values than one Arrow batch holds: every one is written.
+    #[test]
+    fn every_object_value_is_written_also_beyond_one_batch() {
+        use crate::pipeline::pipeline_measure::PipelineMeasurements;
+        use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new(), &MetaData::default()).unwrap();
+        let count = ARROW_BATCH_ROWS as u128 + 3;
+        let mut cache = cache_with_objects("a.tif", count);
+        cache.measurements = PipelineMeasurements {
+            measurements: vec![Measurement {
+                info: MeasurementInfo {
+                    key: "n_01/count".into(),
+                    name: "Neighbours".into(),
+                    step: "n_01".into(),
+                    unit: MeasurementUnit::Count,
+                    target: MeasurementTarget::Object,
+                    range: None,
+                    aggregatable: true,
+                    related_objects: false,
+                },
+                values: MeasurementValues::Objects(
+                    (1..=count)
+                        .map(|id| (ObjectId(id), id as f64).into())
+                        .collect(),
+                ),
+            }],
+            ..Default::default()
+        };
+        exporter.export(&cache).unwrap();
+        let conn = exporter.conn.lock().unwrap();
+        let (rows, sum): (i64, f64) = conn
+            .query_row(
+                "SELECT count(*), sum(value) FROM measurements WHERE region = 'object'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(rows as u128, count);
+        assert_eq!(sum, (count * (count + 1) / 2) as f64);
     }
 
     #[test]
@@ -1866,18 +2292,33 @@ mod tests {
         .unwrap();
         let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("a.tif");
-        cache.image_meta.nr_of_bits = 8; // gray value = normalized * 255
+        cache.image_meta.nr_of_bits = 8; // gray value = 0..1 value * 255
         let mut object = object_in_classes(1, &[4]);
-        // Channels 0 and 2 measured, channel 1 not.
+        // Channels 0 and 2 measured, channel 1 not; channel 2 without its
+        // spread (as a stored annotation's).
         for (channel, value) in [(0, 0.5), (2, 0.25)] {
             object.intensities.insert(
                 channel,
-                Intensity {
-                    sum_intensity: value * 4.0,
-                    min_intensity: value / 2.0,
-                    max_intensity: value * 2.0,
-                    avg_intensity: value,
-                    pixel_values: Vec::new(),
+                if channel == 0 {
+                    Intensity {
+                        sum_intensity: value * 4.0,
+                        min_intensity: value / 2.0,
+                        max_intensity: value * 2.0,
+                        avg_intensity: value,
+                        std_intensity: 0.1,
+                        median_intensity: 0.4,
+                        lower_quartile_intensity: 0.2,
+                        upper_quartile_intensity: 0.6,
+                        mad_intensity: 0.05,
+                    }
+                } else {
+                    Intensity {
+                        sum_intensity: value * 4.0,
+                        min_intensity: value / 2.0,
+                        max_intensity: value * 2.0,
+                        avg_intensity: value,
+                        ..Default::default()
+                    }
                 },
             );
         }
@@ -1900,11 +2341,15 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(row("intensity_mean_normalized"), "[0.5, NULL, 0.25]");
         assert_eq!(row("intensity_mean_gray"), "[127.5, NULL, 63.75]");
-        assert_eq!(row("intensity_sum_normalized"), "[2.0, NULL, 1.0]");
-        assert_eq!(row("intensity_min_normalized"), "[0.25, NULL, 0.125]");
+        assert_eq!(row("intensity_sum_gray"), "[510.0, NULL, 255.0]");
+        assert_eq!(row("intensity_min_gray"), "[63.75, NULL, 31.875]");
         assert_eq!(row("intensity_max_gray"), "[255.0, NULL, 127.5]");
+        assert_eq!(row("intensity_std_gray"), "[25.5, NULL, NULL]");
+        assert_eq!(row("intensity_median_gray"), "[102.0, NULL, NULL]");
+        assert_eq!(row("intensity_lower_quartile_gray"), "[51.0, NULL, NULL]");
+        assert_eq!(row("intensity_upper_quartile_gray"), "[153.0, NULL, NULL]");
+        assert_eq!(row("intensity_mad_gray"), "[12.75, NULL, NULL]");
         assert_eq!(row("len(coloc_partner_ids[7])"), "2");
         assert_eq!(
             row("coloc_partner_ids[7][1]"),
@@ -1913,7 +2358,7 @@ mod tests {
         );
         let without: (String, String) = conn
             .query_row(
-                "SELECT CAST(intensity_mean_normalized AS VARCHAR), CAST(coloc_partner_ids AS VARCHAR) \
+                "SELECT CAST(intensity_mean_gray AS VARCHAR), CAST(coloc_partner_ids AS VARCHAR) \
                  FROM objects ORDER BY object_id DESC LIMIT 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
@@ -2108,7 +2553,7 @@ mod tests {
                 min_intensity: 0.25,
                 max_intensity: 0.75,
                 avg_intensity: 0.5,
-                pixel_values: Vec::new(),
+                ..Default::default()
             },
         );
         object

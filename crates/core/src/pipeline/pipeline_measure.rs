@@ -2,7 +2,7 @@
 //! travel to the app and over the server connection, like the objects).
 
 pub use evanalyzer_cfg::core_types::{
-    Measurement, MeasurementRegion, MeasurementValues, PipelineMeasurements,
+    Measurement, MeasurementRegion, MeasurementValues, ObjectValue, PipelineMeasurements,
 };
 
 use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
@@ -52,6 +52,15 @@ impl<'a> Outputs<'a> {
             target: MeasurementTarget::Image,
             range: None,
             aggregatable: true,
+            related_objects: false,
+        }
+    }
+
+    /// One value per object - like [`Self::image`] otherwise.
+    pub fn object(&self, id: &str, name: &str, unit: MeasurementUnit) -> MeasurementInfo {
+        MeasurementInfo {
+            target: MeasurementTarget::Object,
+            ..self.image(id, name, unit)
         }
     }
 }

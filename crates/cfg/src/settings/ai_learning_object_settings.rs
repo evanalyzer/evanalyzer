@@ -37,6 +37,13 @@ pub enum ObjectMetric {
     IntensityMin(i32),
     IntensityMax(i32),
     IntensityAvg(i32),
+    /// How the pixel values spread in the channel (CellProfiler's
+    /// MeasureObjectIntensity).
+    IntensityStd(i32),
+    IntensityMedian(i32),
+    IntensityLowerQuartile(i32),
+    IntensityUpperQuartile(i32),
+    IntensityMad(i32),
 }
 
 /// The closed, versioned feature recipe for an object classifier: one entry

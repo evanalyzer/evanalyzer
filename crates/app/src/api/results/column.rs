@@ -69,13 +69,34 @@ pub enum Column {
     Circularity,
     Solidity,
     Eccentricity,
+    /// Feret (caliper) diameters over the pixel centres, in pixels.
+    MaxFeret,
+    MinFeret,
+    /// The fitted ellipse's axes, in pixels.
+    MajorAxis,
+    MinorAxis,
+    /// The diameter of a disk of the object's area, in pixels.
+    EquivalentDiameter,
+    /// The area over the bounding box's.
+    Extent,
     ColocCount(ObjectClass),
     IntensityAvg(u32),
     IntensitySum(u32),
     IntensityMin(u32),
     IntensityMax(u32),
+    /// How the pixel values spread in a channel (CellProfiler's
+    /// MeasureObjectIntensity).
+    IntensityStd(u32),
+    IntensityMedian(u32),
+    IntensityLowerQuartile(u32),
+    IntensityUpperQuartile(u32),
+    /// Median absolute deviation from the median.
+    IntensityMad(u32),
     /// A measurement step's measurement (`measurements` table).
     Measurement(MeasurementColumn),
+    /// The object a measurement's value names (its nearest neighbour, its
+    /// parent): its id (`measurements.related_object_id`).
+    MeasurementObject(MeasurementColumn),
     /// The row's children of a class: their number or an aggregate.
     Children(ChildColumn),
     /// The row's parent of a class: its id or one of its columns.
@@ -152,6 +173,9 @@ fn class_label(class: &ObjectClass, classes: &[Class]) -> String {
 /// How a measurement column's [`Column::as_key`] starts.
 const MEASUREMENT_KEY_PREFIX: &str = "measurement:";
 
+/// How a [`Column::MeasurementObject`]'s key starts.
+const MEASUREMENT_OBJECT_KEY_PREFIX: &str = "measurement_object:";
+
 impl Column {
     /// Stable string key (matches the underlying database column name, with
     /// a `_ch{n}` suffix for the per-channel intensity variants) used to
@@ -178,6 +202,12 @@ impl Column {
             Column::Circularity => "circularity".to_string(),
             Column::Solidity => "solidity".to_string(),
             Column::Eccentricity => "eccentricity".to_string(),
+            Column::MaxFeret => "feret_diameter_px".to_string(),
+            Column::MinFeret => "min_feret_px".to_string(),
+            Column::MajorAxis => "major_axis_px".to_string(),
+            Column::MinorAxis => "minor_axis_px".to_string(),
+            Column::EquivalentDiameter => "equivalent_diameter_px".to_string(),
+            Column::Extent => "extent".to_string(),
             Column::ColocCount(ObjectClass::Global(class_id)) => {
                 let name = classes
                     .iter()
@@ -193,7 +223,17 @@ impl Column {
             Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
             Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),
             Column::IntensityMax(channel) => format!("intensity_max_gray_ch{channel}"),
+            Column::IntensityStd(channel) => format!("intensity_std_gray_ch{channel}"),
+            Column::IntensityMedian(channel) => format!("intensity_median_gray_ch{channel}"),
+            Column::IntensityLowerQuartile(channel) => {
+                format!("intensity_lower_quartile_gray_ch{channel}")
+            }
+            Column::IntensityUpperQuartile(channel) => {
+                format!("intensity_upper_quartile_gray_ch{channel}")
+            }
+            Column::IntensityMad(channel) => format!("intensity_mad_gray_ch{channel}"),
             Column::Measurement(m) => format!("{MEASUREMENT_KEY_PREFIX}{}", m.key),
+            Column::MeasurementObject(m) => format!("{MEASUREMENT_OBJECT_KEY_PREFIX}{}", m.key),
             // children:<parent>:<child>:count | ...:<aggregation>:<column key>
             Column::Children(c) => {
                 let classes_part = format!(
@@ -226,8 +266,10 @@ impl Column {
     /// a measurement's. [`Column::from_key`] can't make the column from it
     /// alone (its name comes from the results' `measurement_info`): look it
     /// up among the available columns.
+    /// Also of a [`Column::MeasurementObject`]'s key.
     pub fn measurement_key(key: &str) -> Option<&str> {
         key.strip_prefix(MEASUREMENT_KEY_PREFIX)
+            .or_else(|| key.strip_prefix(MEASUREMENT_OBJECT_KEY_PREFIX))
     }
 
     /// Human-facing label for this column — every header/caption actually
@@ -254,6 +296,12 @@ impl Column {
             Column::Circularity => "Circularity".to_string(),
             Column::Solidity => "Solidity".to_string(),
             Column::Eccentricity => "Eccentricity".to_string(),
+            Column::MaxFeret => "Max Feret [px]".to_string(),
+            Column::MinFeret => "Min Feret [px]".to_string(),
+            Column::MajorAxis => "Major Axis [px]".to_string(),
+            Column::MinorAxis => "Minor Axis [px]".to_string(),
+            Column::EquivalentDiameter => "Equivalent Diameter [px]".to_string(),
+            Column::Extent => "Extent".to_string(),
             Column::ColocCount(class_id) => classes
                 .iter()
                 .find(|class| class.global() == *class_id)
@@ -266,7 +314,17 @@ impl Column {
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
             Column::IntensityMin(channel) => format!("Min Intensity (Ch {channel})"),
             Column::IntensityMax(channel) => format!("Max Intensity (Ch {channel})"),
+            Column::IntensityStd(channel) => format!("Std Dev Intensity (Ch {channel})"),
+            Column::IntensityMedian(channel) => format!("Median Intensity (Ch {channel})"),
+            Column::IntensityLowerQuartile(channel) => {
+                format!("Lower Quartile Intensity (Ch {channel})")
+            }
+            Column::IntensityUpperQuartile(channel) => {
+                format!("Upper Quartile Intensity (Ch {channel})")
+            }
+            Column::IntensityMad(channel) => format!("MAD Intensity (Ch {channel})"),
             Column::Measurement(m) => format!("{} · {}", m.step, m.name),
+            Column::MeasurementObject(m) => format!("{} · {} · object", m.step, m.name),
             Column::Children(c) => {
                 let child = class_label(&c.child_class, classes);
                 match &c.value {
@@ -311,6 +369,7 @@ impl Column {
                 | Column::TrackId
                 | Column::ImageName
                 | Column::ObjectClass
+                | Column::MeasurementObject(_)
                 | Column::Parent(ParentColumn {
                     value: ParentValue::Id,
                     ..
@@ -369,6 +428,21 @@ impl Column {
         if let Some(channel) = key.strip_prefix("intensity_max_gray_ch") {
             return channel.parse().ok().map(Column::IntensityMax);
         }
+        if let Some(channel) = key.strip_prefix("intensity_std_gray_ch") {
+            return channel.parse().ok().map(Column::IntensityStd);
+        }
+        if let Some(channel) = key.strip_prefix("intensity_median_gray_ch") {
+            return channel.parse().ok().map(Column::IntensityMedian);
+        }
+        if let Some(channel) = key.strip_prefix("intensity_lower_quartile_gray_ch") {
+            return channel.parse().ok().map(Column::IntensityLowerQuartile);
+        }
+        if let Some(channel) = key.strip_prefix("intensity_upper_quartile_gray_ch") {
+            return channel.parse().ok().map(Column::IntensityUpperQuartile);
+        }
+        if let Some(channel) = key.strip_prefix("intensity_mad_gray_ch") {
+            return channel.parse().ok().map(Column::IntensityMad);
+        }
         Some(match key {
             "object_id" => Column::ObjectId,
             "track_id" => Column::TrackId,
@@ -382,6 +456,12 @@ impl Column {
             "circularity" => Column::Circularity,
             "solidity" => Column::Solidity,
             "eccentricity" => Column::Eccentricity,
+            "feret_diameter_px" => Column::MaxFeret,
+            "min_feret_px" => Column::MinFeret,
+            "major_axis_px" => Column::MajorAxis,
+            "minor_axis_px" => Column::MinorAxis,
+            "equivalent_diameter_px" => Column::EquivalentDiameter,
+            "extent" => Column::Extent,
             _ => return None,
         })
     }

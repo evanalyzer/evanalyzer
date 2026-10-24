@@ -16,6 +16,8 @@
 // `--object-size N` (default 4: a solid 4 × 4 square): a round object with
 // a ragged edge in an N × N box, like a real cell or nucleus - what object
 // masks cost depends on their shape. `BENCH_MASKS=0` doesn't store masks.
+// `--spread 0`: objects without intensity distributions (std, median, ...;
+// default 1: with, as a pipeline's objects have them).
 
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
@@ -84,7 +86,9 @@ fn mask(id: u128, size: u32) -> (BitVec<u64, Lsb0>, usize) {
     (mask, area)
 }
 
-fn object(id: u128, size: u32) -> Object {
+/// `spread`: each channel with its intensity distribution, as a pipeline's
+/// objects have it (else none, as a stored annotation's).
+fn object(id: u128, size: u32, spread: bool) -> Object {
     let class = (id % 21) as u32 + 1;
     let mut object_class: HashSet<ObjectClass> = HashSet::from([ObjectClass::Global(class)]);
     if id % 20 == 0 {
@@ -103,7 +107,11 @@ fn object(id: u128, size: u32) -> Object {
                     min_intensity: (0.004471 * v),
                     max_intensity: (0.025757 * v),
                     avg_intensity: (0.008481 * v),
-                    pixel_values: Vec::new(),
+                    std_intensity: if spread { 0.002113 * v } else { f64::NAN },
+                    median_intensity: if spread { 0.008302 * v } else { f64::NAN },
+                    lower_quartile_intensity: if spread { 0.006917 * v } else { f64::NAN },
+                    upper_quartile_intensity: if spread { 0.009875 * v } else { f64::NAN },
+                    mad_intensity: if spread { 0.001414 * v } else { f64::NAN },
                 },
             )
         })
@@ -141,6 +149,7 @@ fn main() {
     let images = arg_value("--images", 1776);
     let per_image = arg_value("--objects-per-image", 2150);
     let size = arg_value("--object-size", 4) as u32;
+    let spread = arg_value("--spread", 1) != 0;
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(format!("{}.wal", out.display()));
 
@@ -175,7 +184,7 @@ fn main() {
         for _ in 0..per_image {
             cache
                 .object_cache
-                .insert(ObjectId(next_id), object(next_id, size));
+                .insert(ObjectId(next_id), object(next_id, size, spread));
             next_id += 1;
         }
         let start = Instant::now();

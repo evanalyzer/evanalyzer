@@ -80,6 +80,7 @@ pub mod core_types {
     pub use crate::types::measurement::MeasurementTarget;
     pub use crate::types::measurement::MeasurementUnit;
     pub use crate::types::measurement::MeasurementValues;
+    pub use crate::types::measurement::ObjectValue;
     pub use crate::types::measurement::PipelineMeasurements;
     pub use crate::types::measurement::is_valid_measurement_id;
     pub use crate::types::measurement::measurement_label;

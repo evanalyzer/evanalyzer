@@ -138,7 +138,7 @@ fn main() {
                                 min_intensity: mean * 0.5,
                                 max_intensity: mean * 1.8,
                                 avg_intensity: mean,
-                                pixel_values: Vec::new(),
+                                ..Default::default()
                             },
                         )
                     })
