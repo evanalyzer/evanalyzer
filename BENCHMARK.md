@@ -98,7 +98,9 @@ only when it changes.
 | Split: draw the ellipses, zoom 1 | 37 ms | 323 MB |
 
 The ellipses were 36 / 73 ms before a fast path for pixels with nothing
-under them yet (same pixels, checked by a test). They are drawn on the
+under them yet (same pixels, checked by a test). Since 2026-10-23 the
+split view draws masks with the editor's code, no ellipses - see "One
+drawing code for the editor and the split view". They are drawn on the
 viewer's worker thread, not the UI thread.
 
 ### Screen repaints, 1920 × 1080, software renderer
@@ -481,7 +483,67 @@ with the switch off / on.
   objects now each get their own outline (`bench_export`'s area/centroid
   columns compress a little worse with it: 1489 instead of 1473 MB, and
   writing is slower - base isn't comparable on that row).
-- Split view: the masks are decoded per shown image (one image's objects).
+- Split view: the masks are decoded per shown image (one image's objects);
+  drawing them see "One drawing code for the editor and the split view".
+
+## One drawing code for the editor and the split view, old vs new (2026-10-23)
+
+Results' split view draws and picks its objects with the editor's code
+(`editor/object_render.rs`), from the stored masks (switched off: their
+boxes, filled); no ellipses. The compositor fills each mask row's runs of
+set pixels at once instead of pixel by pixel (both views gain). **Old** =
+95d79ded (before masks), **new** = this change; release builds, alternated,
+10 s pauses, 22 cores. Time per step; RAM peak of the test process.
+
+Results views (`bench_results_views`), 2 runs each:
+
+| File | Step | Old | New |
+|---|---|---|---|
+| Real analysis, 1.7 GB, 4500 objects an image (no masks: boxes) | Open, List first page | 71-74 ms | 73-76 ms |
+| | Plate / Charts | 8-9 / 18-19 ms | 9-10 / 17 ms |
+| | Split: one image's objects | 7-9 ms | 6-9 ms |
+| | Split: draw, fitted | 16-17 ms | 19-20 ms |
+| | Split: draw, zoom 1 | 32 ms | 38-39 ms |
+| | RAM peak | 221-224 MB | 227-231 MB |
+| Real segmentation with masks (`bench_pipeline`), 1045 objects an image | Split: one image's objects | 3.3-3.5 ms | 2.8-2.9 ms |
+| | Split: draw, fitted | 9.7-9.8 ms | 8.1-8.7 ms |
+| | Split: draw, zoom 1 | 17.3-17.4 ms | 10.4-10.8 ms |
+| | RAM peak | 112-115 MB | 116-120 MB |
+| Synthetic, 3.8M objects with masks, 1.58 GB | Open, List first page | 169-173 ms | 166-180 ms |
+| | Plate / Charts | 7-10 / 14-17 ms | 6-7 / 12-13 ms |
+| | Split: one image's objects (2150) | 6.5-7.9 ms | 6.4-6.9 ms |
+| | Split: draw (24 px objects, mostly beside the view) | 0-0.4 ms | 0.6-2.0 ms |
+| | RAM peak | 169-172 MB | 171-175 MB |
+
+- With masks the split view draws faster than the old ellipses. Without
+  them (old results, or the switch off) its filled boxes take ~20 % longer
+  than the ellipses did: a box has 27 % more pixels.
+- Reading one image's objects: the check whether the file keeps masks is
+  made once per open file (an `information_schema` query each time cost
+  3 ms).
+- Leak check (`bench_soak_results`, the 3.8M file opened 15 times): old
+  and new alike, +88 / +91 / +93 MB after 5 / 10 / 15 rounds - levelling
+  off.
+
+The compositor alone (`object_render::bench_draw_objects`, 1045 round
+objects on a 2048² image, best of 20) - the editor's drawing too:
+
+| Objects | Before (column runs zoomed out) | After (runs of set pixels) |
+|---|---|---|
+| 20 px, fitted (zoom 0.47) / zoom 1 | 2.2 / 2.5 ms | 1.8 / 2.7 ms |
+| 60 px, fitted / zoom 1 | 12.7 / 11.7 ms | 6.8 / 12.3 ms |
+| 120 px, fitted / zoom 1 | 50.7 / 57.2 ms | 24.5 / 58.8 ms |
+
+At zoom 1 the time is the blending (every covered screen pixel once per
+object); the first new version without the runs was 87-90 ms at zoom 1 on
+the real analysis.
+
+Writing and running, same session (2 runs each):
+
+| Benchmark | Old | New, masks off | New, masks on |
+|---|---|---|---|
+| `bench_export --object-size 24`, 3.8M objects (old built with the same generator) | 52.7 / 51.3 s, 2.54-2.55 GB, 1489 MB | 51.4 / 51.3 s, 2.49-2.60 GB, 1489 MB | 53.0 / 52.9 s, 2.55-2.58 GB, 1577-1578 MB |
+| `bench_pipeline` 200 × 2048², 8 threads, 208,002 objects | 5.45 / 5.54 s, 1.00-1.11 GB, 54.0 MB | 5.24 / 5.36 s, 1.00-1.02 GB, 54.3 MB | 5.34 / 5.65 s, 1.04-1.13 GB, 111.4-111.7 MB |
 
 ## Peak RAM overview - for the system requirements
 
@@ -496,6 +558,7 @@ graphics driver).
 | Image viewer, 2 threads, small caches | ~190 MB above start | 2026-10-17 | Image viewer |
 | Viewer with a breakpoint tile compared | ~400 MB | 2026-10-18 | Breakpoint compare |
 | Results views, 1.7 GB analysis (List, Plate, Charts, split) | 323 MB (test process) | 2026-10-17 | Results |
+| Results views, 3.8M objects with masks (List, Plate, Charts, split) | 175 MB (test process) | 2026-10-23 | One drawing code, old vs new |
 | Over time chart, 6.6M objects | 180-470 MB (query process) | 2026-10-21 | Time course |
 | Time course export, 6.6M objects | 250-410 MB (query process) | 2026-10-21 | Time course |
 | List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |

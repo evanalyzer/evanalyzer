@@ -313,8 +313,8 @@ Decided - to build, in this order:
     - [x] Same regions as CellProfiler pixel for pixel (`same_regions_as_cellprofiler`, fixture from `crates/core/tests/propagation_centrosome.py`, incl. tie order); citation checked against Crossref.
     - [x] Speed/RAM step: 4096² 13.8 → 10.4 s, 438 → 397 MB; 8192² 68 → 58 s, 1.71 → 1.55 GB (BENCHMARK.md). Still single-threaded; next would be a radix (monotone) queue keeping CellProfiler's tie order.
     - [ ] Optional: "watershed seeded by objects" (λ = 0 is close).
-  - [ ] Expand objects without growing into neighbours (today `Expand` dilates each object alone, so neighbours overlap).
-  - [ ] More object intensity statistics: std, median, quartiles (cheap); edge intensity, center of mass / mass displacement (niche).
+  - [ ] Expand objects without growing into neighbours - planned in "CellProfiler parity - next" (5).
+  - [ ] More object intensity statistics: std, median, quartiles - planned in "CellProfiler parity - next" (2); edge intensity, center of mass / mass displacement (niche, later).
   - [x] Image Quality (focus score, power log-log slope, % maximal/minimal - identical to CellProfiler's code, fixture `crates/core/tests/image_quality_cellprofiler.py`; noise σ Immerkær) + Exclude Image (rules on any image measurement, any/all; the run disables the whole image with the reason, keeps analysing; a new run decides afresh; manual re-enable clears the reason) - 2026-10-22.
     - [ ] Look at the rule editor (measurement dropdown) and the "Excluded" banners (preview panel, results image card) in the real app.
     - [ ] A module exposing a rule's measurement as a parameter: the module parameter is a plain text field (no dropdown yet).
@@ -326,6 +326,23 @@ Decided - to build, in this order:
   - [ ] Texture (Haralick), granularity, radial distribution, Zernike, object neighbours, skeleton.
   - [ ] Screening statistics: math between measurements, Z'/V-factor, EC50.
   - [ ] Validation against CellProfiler numbers; example pipelines.
+
+## CellProfiler parity - next (planned 2026-10-23, start 2026-10-24)
+
+Where values go: per-object values every object always has → fixed columns in `objects` (like `intensity_mean_gray DOUBLE[]`); values only a measurement step makes → `measurements` (key `<id>/<output>`). Old results `.duckdb` files need not open any more (decided 2026-10-23): change the schema directly, no version or migration.
+
+Order:
+- [ ] 0. Schema changes in one go (one remote protocol bump, one round of export changes):
+  - [ ] `objects`: `intensity_{std,median,q1,q3,mad}_{normalized,gray} DOUBLE[]` (2); `convex_area_px/_nm2`, `euler_number`, `max_radius_*`, `mean_radius_*`, `median_radius_*` (3).
+  - [ ] `measurements`: `related_object_id UUID` (nearest neighbour, the parent a distance is to) - clickable like parent/partner links (4).
+  - [ ] File export (`storage/file.rs` CSV/Parquet), `Column` variants with `key()`/`from_key()`, export dialog picker.
+  - [ ] Arrow appender for `measurements` (row-by-row insert is too slow once every object has values).
+  - [ ] Benchmark object-measurement columns in the results (today a correlated subquery per object) with ~1M objects × ~10 values; if slow, one pivoted query per page. Speed + RAM before/after into BENCHMARK.md.
+- [ ] 2. Object intensity statistics: std (sum of squares), median, Q1/Q3, MAD in `IntensityAccumulator` (`object.rs` `measure_intensities`); median/quantiles from each object's values per channel (`select_nth_unstable`, transient). Remove the never-filled `Intensity::pixel_values` (core `object.rs`, cfg `object_settings.rs`). Quantile interpolation as CellProfiler's MeasureObjectIntensity - fixture test. Measure RAM / results-file size before and after.
+- [ ] 5. Expand without overlap: `TransformObjects::Expand` option "Stop at neighbours" = scikit-image `expand_labels` (each background pixel within d goes to the nearest object; exact Euclidean feature transform, Felzenszwalb/Maurer, SciPy's tie order). Not Voronoi (grows from centroids) nor Propagation (8-neighbour path distance). Whole image after TileMerge, or tile overlap ≥ d. Pixel-exact fixture against `expand_labels`. No DB change.
+- [ ] 1. Colocalization measurements: new step (or extend Pearson) - Pearson, Manders M1/M2 (threshold % of max, default 15 % like CellProfiler), Costes auto threshold (thresholded M1/M2; pick CellProfiler's "fast" or "accurate" and match it), overlap coefficient, K1/K2; RWC optional. Regions: whole image, inside a class (`MeasurementRegion::Class`), per object (`MeasurementValues::Objects`). Fixture against CellProfiler MeasureColocalization.
+- [ ] 4. Measure neighbours (CellProfiler MeasureObjectNeighbors): new step, `WholeImage` after TileMerge, `BboxGrid` lookup. Per object: neighbour count within distance / touching, percent of border touching, first/second closest distance (+ `related_object_id`), angle between them; neighbours of the same or another class (class in the key). Plus Relate distances: child centroid → parent centroid and → parent edge. Fixture against CellProfiler.
+- [ ] 3. Shape, the rest of MeasureObjectSizeShape: extent (area / bbox area) and equivalent diameter (√(4A/π)) as computed `Column`s (no DB column); convex area (hull exists for solidity), Euler number, max/mean/median radius (distance transform inside the mask) as columns (0.). Check `circularity` against CellProfiler's FormFactor (4πA/P²) and how the perimeter is computed - same name, different numbers otherwise.
 
 ## Relate objects and Coloc (decided 2026-10-23, design canvas "Object relations in the results", VISION.md §7.0)
 
@@ -372,6 +389,7 @@ Results (aggregates computed by the queries, nothing stored):
 - [ ] Linked objects: the parent's columns are the ticked ones (one picker less than board U1's "Its columns"); a picker of its own if users need other columns.
 - [x] Editor viewer: the selected object was drawn magenta-ish, not yellow - `Color::from_argb_u8(0xfc, 0xe9, 0x03, alpha)` had the alpha last (Slint: alpha first) - 2026-10-23.
 - [x] Results split view: the image drawer's OBJECTS list picks which classes are drawn on the split image (session only, not saved in the view); "Overlapping pairs" → "Coloc pairs", "Partners X · Count" → "Coloc with X" - 2026-10-23.
+- [x] Results split view: the drawer shows the editor's Classes panel (the analysis' classes, their objects on the image; eye = drawn, click = on top) instead of an OBJECTS list; objects drawn and picked by the editor's code (`editor/object_render.rs`: compositor, layers selected object > selected class > list order > unclassified, selection/family colors, lines to relatives, click picks the top one) - no ellipses any more, results without masks show filled boxes; the objects' opacity slider sets their fill; a click found the wrong object with a class hidden (overlay index ≠ object index) - fixed - 2026-10-23.
 
 ## Whole image preview and object masks (2026-10-23)
 

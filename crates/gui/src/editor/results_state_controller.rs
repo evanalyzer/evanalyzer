@@ -2740,7 +2740,11 @@ impl ResultsStateController {
                         *self.classes.lock().expect("Poisened") = classes.clone();
                         self.set_object_classes_in_slint(&classes);
                         // Another analysis: every class drawn again.
-                        self.split.lock().expect("Poisoned").hidden_classes.clear();
+                        {
+                            let mut split = self.split.lock().expect("Poisoned");
+                            split.hidden_classes.clear();
+                            split.selected_class = None;
+                        }
                         self.split_push_class_items();
                     }
                     Err(err) => {
@@ -7002,35 +7006,93 @@ pub(crate) mod tests {
         assert!(!controller.list_filter.lock().unwrap().with_coloc_details);
     }
 
-    /// The split image's OBJECTS list: every class, ticked; an unticked
-    /// one is hidden, "all" shows them again.
+    /// The split drawer's Classes panel: the analysis' classes, shown; an
+    /// eye hides one, again shows it.
     #[test]
     fn the_split_drawer_picks_the_classes_drawn() {
         let (ui, controller) = controller_with_open_database();
         drain_ui_queue();
         let state = ui.global::<ResultsState>();
-        let ticked = || -> Vec<(String, bool)> {
+        let shown = || -> Vec<(String, bool)> {
             state
-                .get_split_class_items()
+                .get_split_classes()
                 .iter()
-                .map(|item| (item.value.to_string(), item.selected))
+                .map(|class| (class.name.to_string(), class.visible))
                 .collect()
         };
-        assert_eq!(ticked(), [("ClassA".into(), true), ("ClassB".into(), true)]);
+        assert_eq!(shown(), [("ClassA".into(), true), ("ClassB".into(), true)]);
 
-        state.invoke_split_class_selected("1".into(), false);
+        state.invoke_split_class_toggled(1);
         drain_ui_queue();
-        assert_eq!(
-            ticked(),
-            [("ClassA".into(), false), ("ClassB".into(), true)]
-        );
-        assert_eq!(state.get_split_class_summary().as_str(), "1 of 2");
+        assert_eq!(shown(), [("ClassA".into(), false), ("ClassB".into(), true)]);
         assert!(controller.split.lock().unwrap().hidden_classes.contains(&1));
 
-        state.invoke_split_class_select_all(true);
+        state.invoke_split_class_toggled(1);
         drain_ui_queue();
         assert!(controller.split.lock().unwrap().hidden_classes.is_empty());
-        assert_eq!(state.get_split_class_summary().as_str(), "2 of 2");
+    }
+
+    /// The split image's objects in the editor's layers: the list's first
+    /// class on top, above it the selected class, above all the selected
+    /// object - and a click finds the object by its own index, also with
+    /// a class hidden.
+    #[test]
+    fn split_objects_are_layered_as_in_the_editor() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        let order: Vec<i32> = controller
+            .classes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.id as i32)
+            .collect();
+        let (first, second) = (order[0], order[1]);
+        {
+            let mut split = controller.split.lock().unwrap();
+            let template = split.objects.first().cloned().expect("row 0's objects");
+            let object = |class_id: i32, x: u32| evanalyzer_app::results::ResultObject {
+                class_id,
+                bbox_px: [x, 0, x + 9, 9],
+                mask: Vec::new(),
+                ..template.clone()
+            };
+            split.objects = Arc::new(vec![
+                object(second, 0),
+                object(first, 20),
+                object(second, 40),
+            ]);
+            split.selected = None;
+        }
+        // The objects bottom to top, by their own index.
+        let sources = || {
+            controller.split_push_overlay();
+            let overlay = controller.viewport().results_overlay().unwrap();
+            let mut drawn: Vec<usize> = (0..overlay.objects.len()).collect();
+            drawn.sort_by_key(|i| overlay.objects[*i].layer);
+            drawn
+                .into_iter()
+                .map(|i| overlay.source(i))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sources(), [0, 2, 1], "the list's first class on top");
+
+        state.invoke_split_class_selected(second);
+        assert_eq!(sources(), [1, 0, 2], "the selected class on top");
+
+        controller.split.lock().unwrap().selected = Some(0);
+        assert_eq!(sources(), [1, 2, 0], "the selected object above all");
+
+        state.invoke_split_class_selected(second);
+        state.invoke_split_class_toggled(first);
+        let overlay = {
+            controller.split_push_overlay();
+            controller.viewport().results_overlay().unwrap()
+        };
+        assert_eq!(overlay.sources, [0, 2], "the first class hidden");
+        assert_eq!(overlay.source(1), 2);
     }
 
     #[test]
@@ -7474,11 +7536,18 @@ pub(crate) mod tests {
             start.elapsed(),
         );
         let overlay = crate::editor::results_overlay::ResultsOverlay {
-            objects: objects.iter().map(|o| (o.bbox_px, [255, 0, 255])).collect(),
-            masks: objects
+            objects: objects
                 .iter()
-                .map(|o| o.decoded_mask().map(Arc::new))
+                .map(|o| {
+                    crate::editor::results_overlay::OverlayObject::new(
+                        o.bbox_px,
+                        [255, 0, 255],
+                        o.decoded_mask().map(Arc::new),
+                    )
+                })
                 .collect(),
+            sources: Vec::new(),
+            links: Vec::new(),
             trails: None,
         };
         let (w, h) = (1920 + 512, 1080 + 512);
@@ -7498,11 +7567,9 @@ pub(crate) mod tests {
                 zoom,
                 256.0,
                 256.0,
+                0.8,
             );
-            report(
-                &format!("split: draw the ellipses, {name}"),
-                start.elapsed(),
-            );
+            report(&format!("split: draw the objects, {name}"), start.elapsed());
         }
     }
 
@@ -9563,7 +9630,7 @@ pub(crate) mod tests {
             .results_overlay()
             .expect("the analysis' objects on the image");
         assert_eq!(overlay.objects.len(), 1, "the one object of {rel_path}");
-        assert_eq!(Some(overlay.objects[0].0), bbox);
+        assert_eq!(Some(overlay.objects[0].bbox), bbox);
         assert_eq!(controller.split.lock().unwrap().selected, Some(0));
         let sel = state.get_split_sel();
         assert!(sel.active);
@@ -9853,18 +9920,20 @@ pub(crate) mod tests {
                 object.value = Some(1.0);
             }
             split.objects = Arc::new(objects);
+            // The selected one is in the selection's color either way.
+            split.selected = None;
         }
         state.invoke_split_by_value_changed(false);
-        let by_class = controller.viewport().results_overlay().unwrap().objects[0].1;
+        let by_class = controller.viewport().results_overlay().unwrap().objects[0].rgb;
         state.invoke_split_by_value_changed(true);
-        let by_value = controller.viewport().results_overlay().unwrap().objects[0].1;
+        let by_value = controller.viewport().results_overlay().unwrap().objects[0].rgb;
         assert_ne!(by_value, by_class, "the heatmap's color, not the class'");
 
         std::thread::scope(|s| {
             s.spawn(|| controller.split_push_overlay());
         });
         assert_eq!(
-            controller.viewport().results_overlay().unwrap().objects[0].1,
+            controller.viewport().results_overlay().unwrap().objects[0].rgb,
             by_value,
             "still by value"
         );

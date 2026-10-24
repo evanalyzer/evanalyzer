@@ -1,5 +1,8 @@
 use crate::ViewportState as ViewportSlintState;
-use crate::editor::results_overlay::{ResultsOverlay, draw_links, draw_results_overlay};
+use crate::editor::object_render::{
+    CHILD_RGB, DIMMED_RGB, ObjectDrawInstance, PARENT_RGB, SELECTED_RGB, ZOrder, draw_objects,
+};
+use crate::editor::results_overlay::{ResultsOverlay, draw_results_overlay};
 use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
@@ -11,7 +14,7 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use slint::{Color, ComponentHandle, Model, VecModel};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -1180,6 +1183,7 @@ impl ViewportController {
                 zoom,
                 off_x + margin,
                 off_y + margin,
+                object_transparency as f32 / 255.0,
             );
             self.post_object_image(buffer, rect);
             return;
@@ -1235,17 +1239,18 @@ impl ViewportController {
 
             let is_selected = selected_object_id.as_ref() == Some(&object.id);
 
+            let argb = |alpha: u8, [r, g, b]: [u8; 3]| Color::from_argb_u8(alpha, r, g, b);
             let relative = family.as_ref().map(|(children, parents, _)| {
                 if children.contains(&object.id) {
-                    Color::from_argb_u8(object_transparency, 0x7c, 0xc4, 0xfa)
+                    argb(object_transparency, CHILD_RGB)
                 } else if parents.contains(&object.id) {
-                    Color::from_argb_u8(object_transparency, 0xfa, 0xcc, 0x15)
+                    argb(object_transparency, PARENT_RGB)
                 } else {
-                    Color::from_argb_u8(object_transparency / 3, 0x4a, 0x4d, 0x57)
+                    argb(object_transparency / 3, DIMMED_RGB)
                 }
             });
             let color = if is_selected {
-                Color::from_argb_u8(object_transparency, 0xfc, 0xe9, 0x03)
+                argb(object_transparency, SELECTED_RGB)
             } else if let Some(color) = relative {
                 color
             } else {
@@ -1267,35 +1272,20 @@ impl ViewportController {
             ));
         }
 
-        // Stable sort: objects with equal key keep their original vector order.
-        keyed.sort_by_key(|(k, _)| *k);
-        let instances: Vec<ObjectDrawInstance> = keyed.into_iter().map(|(_, i)| i).collect();
-
         // Composited straight into the buffer handed to Slint (starts out
         // transparent) - no second overlay-sized copy.
         let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
-        composite_object_instances_into(
+        let links = family.as_ref().map_or(&[][..], |(_, _, links)| &links[..]);
+        draw_objects(
             buffer.make_mut_slice(),
-            &instances,
+            keyed,
+            links,
             buf_w,
             buf_h,
             zoom,
             off_x + margin,
             off_y + margin,
-            zoom < 1.0,
         );
-        if let Some((_, _, links)) = &family {
-            draw_links(
-                buffer.make_mut_slice(),
-                links,
-                [0xf4, 0xf4, 0xf5],
-                buf_w,
-                buf_h,
-                zoom,
-                off_x + margin,
-                off_y + margin,
-            );
-        }
         self.post_object_image(buffer, rect);
     }
 
@@ -1526,295 +1516,6 @@ impl ViewportController {
     }
 }
 
-/// One object's pre-resolved render inputs. All project-level filtering and color
-/// resolution (selection, class visibility, hide-unclassified) happens before this
-/// is built, so [`composite_object_instances`] is pure pixel math with no project
-/// access - that's what makes it cheap to unit test independently of the Slint/UI
-/// plumbing in [`ViewportController::sync_objects_to_slint_viewport`].
-struct ObjectDrawInstance<'a> {
-    bbox: [u32; 4],
-    mask: &'a bitvec::vec::BitVec<u64, bitvec::order::Lsb0>,
-    color: slint::Rgba8Pixel,
-}
-/// Porter-Duff "over": blends `src` onto `dst` in place.
-fn blend_pixel_over(dst: &mut slint::Rgba8Pixel, src: slint::Rgba8Pixel) {
-    if dst.a == 0 || src.a == 255 {
-        *dst = src;
-        return;
-    }
-    let sa = src.a as f32 / 255.0;
-    let da = dst.a as f32 / 255.0;
-    let out_a = sa + da * (1.0 - sa);
-    *dst = slint::Rgba8Pixel {
-        r: ((src.r as f32 * sa + dst.r as f32 * da * (1.0 - sa)) / out_a) as u8,
-        g: ((src.g as f32 * sa + dst.g as f32 * da * (1.0 - sa)) / out_a) as u8,
-        b: ((src.b as f32 * sa + dst.b as f32 * da * (1.0 - sa)) / out_a) as u8,
-        a: (out_a * 255.0) as u8,
-    };
-}
-
-/// Composites pre-resolved instances (bottom -> top) into a viewport-sized RGBA buffer.
-///
-/// Pass 1 blends every instance's fill in order. Each instance is first rasterized
-/// into a small scratch coverage buffer (its clipped screen footprint, padded by
-/// 1px), so each screen pixel is blended once per object and the outline is derived
-/// from the object's *own* footprint - independent of overlaps.
-/// Pass 2 paints all outlines fully opaque in the same order, so an outline stays
-/// visible even when another object lies on top of it.
-///
-/// Cost scales with visible, larger-than-a-pixel objects:
-/// - off-screen bboxes are culled before touching their mask,
-/// - bboxes within one screen pixel collapse to a single stamped pixel,
-/// - only the visible sub-rectangle of each mask is walked,
-/// - zoomed out, mask columns sharing a screen column are checked as one run.
-#[cfg(test)]
-fn composite_object_instances(
-    instances: &[ObjectDrawInstance],
-    buf_w: u32,
-    buf_h: u32,
-    zoom: f32,
-    off_x: f32,
-    off_y: f32,
-) -> Vec<slint::Rgba8Pixel> {
-    composite_object_instances_with(instances, buf_w, buf_h, zoom, off_x, off_y, zoom < 1.0)
-}
-
-/// [`composite_object_instances`], with the column runs (`use_runs`) chosen
-/// by the caller - the tests check both ways produce the same pixels.
-#[cfg(test)]
-fn composite_object_instances_with(
-    instances: &[ObjectDrawInstance],
-    buf_w: u32,
-    buf_h: u32,
-    zoom: f32,
-    off_x: f32,
-    off_y: f32,
-    use_runs: bool,
-) -> Vec<slint::Rgba8Pixel> {
-    let mut pixels = vec![
-        slint::Rgba8Pixel {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0
-        };
-        buf_w as usize * buf_h as usize
-    ];
-    composite_object_instances_into(
-        &mut pixels,
-        instances,
-        buf_w,
-        buf_h,
-        zoom,
-        off_x,
-        off_y,
-        use_runs,
-    );
-    pixels
-}
-
-/// [`composite_object_instances`] into `pixels` - a transparent
-/// `buf_w * buf_h` buffer.
-#[allow(clippy::too_many_arguments)]
-fn composite_object_instances_into(
-    pixels: &mut [slint::Rgba8Pixel],
-    instances: &[ObjectDrawInstance],
-    buf_w: u32,
-    buf_h: u32,
-    zoom: f32,
-    off_x: f32,
-    off_y: f32,
-    use_runs: bool,
-) {
-    let bw = buf_w as i32;
-    let bh = buf_h as i32;
-    let stride = buf_w as usize;
-    debug_assert_eq!(pixels.len(), stride * buf_h as usize);
-    if zoom <= 0.0 || buf_w == 0 || buf_h == 0 {
-        return;
-    }
-
-    // Scratch buffers reused across instances (no per-instance allocation).
-    let mut coverage: Vec<u8> = Vec::new();
-    let mut x_edges: Vec<(i32, i32)> = Vec::new();
-    // (first mask column, end mask column, first screen column, end screen
-    // column) of each run of mask columns sharing their screen columns.
-    let mut x_runs: Vec<(usize, usize, i32, i32)> = Vec::new();
-    // Outline pixels of all instances, plus (end offset, colour) per instance.
-    let mut outline_idx: Vec<u32> = Vec::new();
-    let mut outline_runs: Vec<(usize, slint::Rgba8Pixel)> = Vec::with_capacity(instances.len());
-
-    for inst in instances {
-        let bbox = inst.bbox;
-        let bbox_w = (bbox[2] - bbox[0] + 1) as usize;
-        let bbox_h = (bbox[3] - bbox[1] + 1) as usize;
-        if bbox_w == 0 || bbox_h == 0 {
-            continue;
-        }
-
-        // Screen footprint of the whole bbox (bbox[2]/[3] are inclusive).
-        let sx0 = bbox[0] as f32 * zoom + off_x;
-        let sy0 = bbox[1] as f32 * zoom + off_y;
-        let sx1 = (bbox[2] + 1) as f32 * zoom + off_x;
-        let sy1 = (bbox[3] + 1) as f32 * zoom + off_y;
-
-        // Viewport culling.
-        if sx1 <= 0.0 || sy1 <= 0.0 || sx0 >= buf_w as f32 || sy0 >= buf_h as f32 {
-            continue;
-        }
-
-        // Sub-pixel collapse: one stamped pixel (isolated -> outline pixel).
-        if sx1 - sx0 <= 1.0 && sy1 - sy0 <= 1.0 {
-            let px = (((sx0 + sx1) * 0.5).max(0.0) as usize).min(stride - 1);
-            let py = (((sy0 + sy1) * 0.5).max(0.0) as usize).min(buf_h as usize - 1);
-            let i = py * stride + px;
-            blend_pixel_over(&mut pixels[i], inst.color);
-            outline_idx.push(i as u32);
-            outline_runs.push((outline_idx.len(), inst.color));
-            continue;
-        }
-
-        // Scratch region = footprint clipped to the viewport, padded by 1px so a
-        // viewport-clipped object doesn't get a fake outline at the clip edge.
-        let rx0 = (sx0.floor() as i32).max(-1);
-        let ry0 = (sy0.floor() as i32).max(-1);
-        let rx1 = ((sx1.floor() as i32) + 1).min(bw + 1);
-        let ry1 = ((sy1.floor() as i32) + 1).min(bh + 1);
-        if rx1 <= rx0 || ry1 <= ry0 {
-            continue;
-        }
-        let rw = (rx1 - rx0) as usize;
-        let rh = (ry1 - ry0) as usize;
-        coverage.clear();
-        coverage.resize(rw * rh, 0);
-
-        // Visible sub-rectangle of the bbox in local image-pixel coordinates.
-        let local_range = |r0: i32, r1: i32, off: f32, origin: u32, len: usize| {
-            let a = (((r0 as f32 - off) / zoom).floor() as i64 - origin as i64 - 1)
-                .clamp(0, len as i64) as usize;
-            let b = (((r1 as f32 - off) / zoom).ceil() as i64 - origin as i64 + 1)
-                .clamp(0, len as i64) as usize;
-            (a, b)
-        };
-        let (lx0, lx1) = local_range(rx0, rx1, off_x, bbox[0], bbox_w);
-        let (ly0, ly1) = local_range(ry0, ry1, off_y, bbox[1], bbox_h);
-
-        // Per-column screen edges, computed once (shared edges => no gaps/overlap;
-        // at least one pixel wide so tiny masks at low zoom don't develop holes).
-        x_edges.clear();
-        x_edges.extend((lx0..lx1).map(|lx| {
-            let ax = (bbox[0] as usize + lx) as f32;
-            let a = (ax * zoom + off_x).floor() as i32;
-            let b = (((ax + 1.0) * zoom + off_x).floor() as i32).max(a + 1);
-            (a.max(rx0), b.min(rx1))
-        }));
-
-        // Zoomed out, several neighbouring mask columns land on the same
-        // screen column(s): group them into runs (mask columns rs..re ->
-        // screen columns x0..x1), so each row checks a run with one
-        // word-level `any()` instead of visiting every set bit. Exactly the
-        // same coverage; zoomed in, every run would be a single column, so
-        // walking the set bits stays cheaper there.
-        if use_runs {
-            x_runs.clear();
-            for (rel, &(x0, x1)) in x_edges.iter().enumerate() {
-                if x0 >= x1 {
-                    continue;
-                }
-                match x_runs.last_mut() {
-                    Some((_, re, rx0_, rx1_)) if *re == rel && (*rx0_, *rx1_) == (x0, x1) => {
-                        *re = rel + 1
-                    }
-                    _ => x_runs.push((rel, rel + 1, x0, x1)),
-                }
-            }
-        }
-
-        for ly in ly0..ly1 {
-            let ay = (bbox[1] as usize + ly) as f32;
-            let y0f = (ay * zoom + off_y).floor() as i32;
-            let y1f = (((ay + 1.0) * zoom + off_y).floor() as i32).max(y0f + 1);
-            let (y0, y1) = (y0f.max(ry0), y1f.min(ry1));
-            if y0 >= y1 {
-                continue;
-            }
-            let row_start = ly * bbox_w;
-            let Some(row_bits) = inst.mask.get(row_start + lx0..row_start + lx1) else {
-                continue;
-            };
-            if use_runs {
-                for py in y0..y1 {
-                    let row = (py - ry0) as usize * rw;
-                    for &(rs, re, x0, x1) in &x_runs {
-                        let cells = row + (x0 - rx0) as usize..row + (x1 - rx0) as usize;
-                        if coverage[cells.clone()].iter().all(|&c| c != 0) {
-                            continue;
-                        }
-                        if row_bits[rs..re].any() {
-                            coverage[cells].fill(1);
-                        }
-                    }
-                }
-                continue;
-            }
-            for rel in row_bits.iter_ones() {
-                let (x0, x1) = x_edges[rel];
-                if x0 >= x1 {
-                    continue;
-                }
-                for py in y0..y1 {
-                    let row = (py - ry0) as usize * rw;
-                    coverage[row + (x0 - rx0) as usize..row + (x1 - rx0) as usize].fill(1);
-                }
-            }
-        }
-
-        // Resolve: blend the fill once per covered on-screen pixel and record
-        // this object's own outline (covered pixel with an uncovered 4-neighbour).
-        for sy in 0..rh {
-            let py = ry0 + sy as i32;
-            if py < 0 || py >= bh {
-                continue;
-            }
-            for sx in 0..rw {
-                let c = sy * rw + sx;
-                if coverage[c] == 0 {
-                    continue;
-                }
-                let px = rx0 + sx as i32;
-                if px < 0 || px >= bw {
-                    continue;
-                }
-                let i = py as usize * stride + px as usize;
-                blend_pixel_over(&mut pixels[i], inst.color);
-
-                let is_border = sx == 0
-                    || sx + 1 == rw
-                    || sy == 0
-                    || sy + 1 == rh
-                    || coverage[c - 1] == 0
-                    || coverage[c + 1] == 0
-                    || coverage[c - rw] == 0
-                    || coverage[c + rw] == 0;
-                if is_border {
-                    outline_idx.push(i as u32);
-                }
-            }
-        }
-        outline_runs.push((outline_idx.len(), inst.color));
-    }
-
-    // Outline pass: opaque, in z-order, always on top of all fills.
-    let mut start = 0;
-    for (end, color) in outline_runs {
-        let opaque = slint::Rgba8Pixel { a: 255, ..color };
-        for &i in &outline_idx[start..end] {
-            pixels[i as usize] = opaque;
-        }
-        start = end;
-    }
-}
-
 /// Whether an object with `classes` is drawn at all: not when it's
 /// unclassified while unclassified objects are hidden, nor when every one of
 /// its classes is hidden. Shared by the redraw and by click picking, so an
@@ -1828,315 +1529,6 @@ pub(crate) fn is_object_drawn<P: ProjectExt + ?Sized>(
         return !hide_unclassified;
     }
     classes.iter().any(|c| project.is_class_visible(c))
-}
-
-/// Draw-order key; instances are painted in ascending key order (bigger = on top).
-/// 0 = unclassified/unknown class, 1..=class_count = class stack (rank 0, the
-/// first class in the list, gets the biggest value), then selected class, then
-/// the selected object.
-fn z_key(
-    is_selected_object: bool,
-    in_selected_class: bool,
-    best_rank: Option<usize>,
-    class_count: usize,
-) -> u32 {
-    if is_selected_object {
-        u32::MAX
-    } else if in_selected_class {
-        u32::MAX - 1
-    } else {
-        best_rank.map_or(0, |r| (class_count - r.min(class_count - 1)) as u32)
-    }
-}
-/// Resolved draw/pick priority for the current project state. Built once per
-/// redraw or click, then queried per object (no per-object project access).
-pub(crate) struct ZOrder {
-    rank: HashMap<ObjectClass, usize>, // class -> index in class list (0 = on top)
-    class_count: usize,
-    selected_class: ObjectClass,
-}
-
-impl ZOrder {
-    pub(crate) fn new<P: ProjectExt + ?Sized>(project: &P) -> Self {
-        let rank: HashMap<ObjectClass, usize> = project
-            .get_object_classes()
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (c.global(), i))
-            .collect();
-        Self {
-            class_count: rank.len().max(1),
-            rank,
-            selected_class: project.get_selected_object_class(),
-        }
-    }
-
-    /// Bigger = further on top.
-    pub(crate) fn key(&self, classes: &HashSet<ObjectClass>, is_selected_object: bool) -> u32 {
-        let in_selected_class = matches!(self.selected_class, ObjectClass::Global(_))
-            && classes.contains(&self.selected_class);
-        let best_rank = classes
-            .iter()
-            .filter_map(|c| self.rank.get(c))
-            .min()
-            .copied();
-        z_key(
-            is_selected_object,
-            in_selected_class,
-            best_rank,
-            self.class_count,
-        )
-    }
-}
-
-#[cfg(test)]
-mod composite_object_instances_tests {
-    use super::*;
-    use bitvec::prelude::*;
-
-    fn rgba(r: u8, g: u8, b: u8, a: u8) -> slint::Rgba8Pixel {
-        slint::Rgba8Pixel { r, g, b, a }
-    }
-
-    fn full_mask(bbox: [u32; 4]) -> BitVec<u64, Lsb0> {
-        let w = (bbox[2] - bbox[0] + 1) as usize;
-        let h = (bbox[3] - bbox[1] + 1) as usize;
-        bitvec![u64, Lsb0; 1; w * h]
-    }
-
-    #[test]
-    fn single_pixel_object_renders_at_correct_location_with_border_alpha() {
-        // 3x3 bbox, only the centre bit set -> one isolated screen pixel.
-        let bbox = [0u32, 0, 2, 2];
-        let mut mask = bitvec![u64, Lsb0; 0; 9];
-        mask.set(4, true); // local (1,1) in a 3-wide bbox
-        let color = rgba(10, 20, 30, 128);
-        let instances = [ObjectDrawInstance {
-            bbox,
-            mask: &mask,
-            color,
-        }];
-
-        let pixels = composite_object_instances(&instances, 5, 5, 1.0, 0.0, 0.0);
-
-        for y in 0..5usize {
-            for x in 0..5usize {
-                let i = y * 5 + x;
-                if x == 1 && y == 1 {
-                    // Isolated pixel: every neighbour is background, so it's a
-                    // border pixel and alpha is forced to 255.
-                    assert_eq!(pixels[i], rgba(10, 20, 30, 255), "at ({x},{y})");
-                } else {
-                    assert_eq!(pixels[i].a, 0, "expected background at ({x},{y})");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn zoomed_in_block_has_no_gaps_and_distinguishes_border_from_interior_alpha() {
-        // 2x2 fully-set mask, zoom=2 -> a gapless 4x4 screen block at (2,2)-(6,6)
-        // inside an 8x8 buffer, with a 2x2 interior that isn't a border.
-        let bbox = [1u32, 1, 2, 2];
-        let mask = full_mask(bbox);
-        let color = rgba(200, 0, 0, 128);
-        let instances = [ObjectDrawInstance {
-            bbox,
-            mask: &mask,
-            color,
-        }];
-
-        let pixels = composite_object_instances(&instances, 8, 8, 2.0, 0.0, 0.0);
-
-        for y in 0..8usize {
-            for x in 0..8usize {
-                let i = y * 8 + x;
-                let in_block = (2..6).contains(&x) && (2..6).contains(&y);
-                if !in_block {
-                    assert_eq!(pixels[i].a, 0, "expected background at ({x},{y})");
-                    continue;
-                }
-                let is_interior = (3..5).contains(&x) && (3..5).contains(&y);
-                assert_eq!(pixels[i].r, 200, "at ({x},{y})");
-                if is_interior {
-                    // Not a border pixel: keeps the original blended alpha.
-                    assert_eq!(pixels[i].a, 128, "interior alpha at ({x},{y})");
-                } else {
-                    assert_eq!(pixels[i].a, 255, "border alpha at ({x},{y})");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn object_entirely_outside_viewport_is_culled_and_produces_no_pixels() {
-        let bbox = [1000u32, 1000, 1001, 1001];
-        let mask = full_mask(bbox);
-        let instances = [ObjectDrawInstance {
-            bbox,
-            mask: &mask,
-            color: rgba(255, 255, 255, 255),
-        }];
-
-        let pixels = composite_object_instances(&instances, 8, 8, 1.0, 0.0, 0.0);
-
-        assert!(pixels.iter().all(|p| p.a == 0));
-    }
-
-    #[test]
-    fn object_straddling_the_viewport_edge_is_not_over_culled() {
-        // 3x3 fully-set mask anchored at the origin, but the buffer is only 2x2:
-        // the bbox extends past the buffer, yet still overlaps it and must not be
-        // culled - the visible 2x2 corner should render fully.
-        let bbox = [0u32, 0, 2, 2];
-        let mask = full_mask(bbox);
-        let instances = [ObjectDrawInstance {
-            bbox,
-            mask: &mask,
-            color: rgba(1, 2, 3, 200),
-        }];
-
-        let pixels = composite_object_instances(&instances, 2, 2, 1.0, 0.0, 0.0);
-
-        assert!(
-            pixels.iter().all(|p| p.r == 1 && p.g == 2 && p.b == 3),
-            "every pixel of the visible corner should be painted: {pixels:?}"
-        );
-    }
-
-    #[test]
-    fn far_zoomed_out_object_collapses_to_exactly_one_pixel_instead_of_vanishing() {
-        // A small (2x2) object viewed at zoom=0.01: its screen footprint
-        // (2 * 0.01 = 0.02px) is far below one pixel. Without the collapse path
-        // this would either vanish (every mask pixel rounds into the same
-        // sub-pixel slot that the old per-pixel clipping logic could drop) or
-        // require iterating mask bits for no visual gain; with it, exactly one
-        // pixel must be painted so the object doesn't silently disappear.
-        let bbox = [100u32, 100, 101, 101];
-        let mask = full_mask(bbox);
-        let color = rgba(50, 60, 70, 222);
-        let instances = [ObjectDrawInstance {
-            bbox,
-            mask: &mask,
-            color,
-        }];
-
-        let pixels = composite_object_instances(&instances, 50, 50, 0.01, 0.0, 0.0);
-
-        let painted: Vec<_> = pixels.iter().filter(|p| p.a != 0).collect();
-        assert_eq!(
-            painted.len(),
-            1,
-            "expected exactly one painted pixel, got {painted:?}"
-        );
-        assert_eq!(painted[0].r, 50);
-        assert_eq!(painted[0].g, 60);
-        assert_eq!(painted[0].b, 70);
-        // Isolated single pixel -> border pass forces full opacity.
-        assert_eq!(painted[0].a, 255);
-    }
-
-    #[test]
-    fn overlapping_objects_blend_with_porter_duff_over() {
-        let bbox = [0u32, 0, 0, 0]; // single-pixel bbox
-        let mask = full_mask(bbox);
-        let bottom = rgba(255, 0, 0, 128);
-        let top = rgba(0, 0, 255, 128);
-        let instances = [
-            ObjectDrawInstance {
-                bbox,
-                mask: &mask,
-                color: bottom,
-            },
-            ObjectDrawInstance {
-                bbox,
-                mask: &mask,
-                color: top,
-            },
-        ];
-
-        let pixels = composite_object_instances(&instances, 3, 3, 1.0, 0.0, 0.0);
-
-        // A single pixel is all outline: outlines are painted opaque in
-        // z-order after every fill, so the top object's outline wins.
-        assert_eq!(pixels[0], rgba(0, 0, 255, 255));
-    }
-
-    /// The zoomed-out column runs are only a shortcut: for any zoom and
-    /// offset they must give exactly the pixels of walking every set bit.
-    #[test]
-    fn column_runs_produce_the_same_pixels_as_walking_every_bit() {
-        let mut seed = 42u64;
-        let mut rnd = |m: u32| {
-            seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((seed >> 33) as u32) % m
-        };
-        let mut masks = Vec::new();
-        let mut bboxes = Vec::new();
-        for _ in 0..60 {
-            let (w, h) = (1 + rnd(40), 1 + rnd(40));
-            let (x, y) = (rnd(300), rnd(300));
-            bboxes.push([x, y, x + w - 1, y + h - 1]);
-            // Random fill, including empty and single-pixel masks.
-            let density = rnd(4);
-            let mask: BitVec<u64, Lsb0> = (0..w * h).map(|_| rnd(4) < density).collect();
-            masks.push(mask);
-        }
-        let instances: Vec<ObjectDrawInstance> = bboxes
-            .iter()
-            .zip(&masks)
-            .enumerate()
-            .map(|(i, (bbox, mask))| ObjectDrawInstance {
-                bbox: *bbox,
-                mask,
-                color: rgba((i * 37) as u8, (i * 91) as u8, 200, 100 + (i % 100) as u8),
-            })
-            .collect();
-
-        for &zoom in &[0.07f32, 0.23, 0.5, 0.77, 0.999, 1.0, 1.5, 3.3] {
-            for &(off_x, off_y) in &[(0.0f32, 0.0f32), (-17.3, 5.6), (11.9, -40.2)] {
-                let bits = composite_object_instances_with(
-                    &instances, 160, 120, zoom, off_x, off_y, false,
-                );
-                let runs =
-                    composite_object_instances_with(&instances, 160, 120, zoom, off_x, off_y, true);
-                assert!(
-                    bits == runs,
-                    "zoom {zoom}, offset ({off_x}, {off_y}): runs differ from bits"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn overlapping_interiors_blend_with_porter_duff_over_and_the_top_outline_wins() {
-        let bbox = [1u32, 1, 3, 3]; // 3x3 -> the centre (2,2) is interior
-        let mask = full_mask(bbox);
-        let bottom = rgba(255, 0, 0, 128);
-        let top = rgba(0, 0, 255, 128);
-        let instances = [
-            ObjectDrawInstance {
-                bbox,
-                mask: &mask,
-                color: bottom,
-            },
-            ObjectDrawInstance {
-                bbox,
-                mask: &mask,
-                color: top,
-            },
-        ];
-
-        let pixels = composite_object_instances(&instances, 5, 5, 1.0, 0.0, 0.0);
-
-        let mut expected = bottom;
-        blend_pixel_over(&mut expected, top);
-        assert_eq!(pixels[2 * 5 + 2], expected, "interior: both fills blended");
-        assert_eq!(pixels[5 + 1], rgba(0, 0, 255, 255), "outline: top, opaque");
-        assert_eq!(pixels[0].a, 0, "background stays empty");
-    }
 }
 
 #[cfg(test)]

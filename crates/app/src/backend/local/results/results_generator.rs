@@ -7,7 +7,7 @@ use evanalyzer_cfg::{
     settings::classification_settings::Class,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// The well-name patterns `Grouping::Auto` chooses from, in order of
@@ -45,6 +45,8 @@ pub struct ResultsGenerator {
     coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
     /// The pattern `Grouping::Auto` picked for this database's images.
     auto_grouping_cache: RefCell<Option<String>>,
+    /// The `objects` table's columns - fixed when the results are written.
+    object_columns_cache: RefCell<Option<HashSet<String>>>,
 }
 
 impl ResultsGenerator {
@@ -55,6 +57,7 @@ impl ResultsGenerator {
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
+            object_columns_cache: RefCell::new(None),
         })
     }
 
@@ -199,6 +202,7 @@ impl ResultsGenerator {
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
+            object_columns_cache: RefCell::new(None),
         })
     }
 
@@ -2717,14 +2721,25 @@ impl ResultsGenerator {
     }
 
     fn has_object_column(&self, column: &str) -> Result<bool, InternalErrors> {
-        self.database
-            .query_row(
-                "SELECT count(*) > 0 FROM information_schema.columns \
-                 WHERE table_name = 'objects' AND column_name = ?",
-                [column],
-                |row| row.get(0),
+        if let Some(columns) = &*self.object_columns_cache.borrow() {
+            return Ok(columns.contains(column));
+        }
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = 'objects'",
             )
-            .map_err(|e| InternalErrors::Io(e.to_string()))
+            .map_err(err)?;
+        let columns: HashSet<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+        let has = columns.contains(column);
+        *self.object_columns_cache.borrow_mut() = Some(columns);
+        Ok(has)
     }
 
     /// The (parent class, child class) pairs Relate Objects linked in these
@@ -4545,6 +4560,7 @@ mod tests {
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
+            object_columns_cache: RefCell::new(None),
         }
     }
 

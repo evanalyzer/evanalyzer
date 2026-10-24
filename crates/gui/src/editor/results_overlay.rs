@@ -1,12 +1,14 @@
-//! The results' split view on the image: every object of the analysis on
-//! the shown image as its mask's outline - an ellipse in its box when the
-//! results keep no masks - in its class's color or the value's heatmap color - all
-//! alike: the selected one is marked by the viewer's yellow crosshair, so
-//! selecting draws nothing again here. Drawn instead of the project's
-//! objects (see `ViewportController::sync_objects_to_slint_viewport`).
-//! With tracks (Results › Tracks) each track's path up to the time point
-//! shown goes under them as a trail, fading into the past.
+//! The results' split view on the image: the analysis' objects on the
+//! shown image, drawn and picked by the editor's code (`object_render`) -
+//! in their class's color or the value's heatmap color, from the masks
+//! the results keep (switched off: their boxes, filled). With tracks
+//! (Results › Tracks) each track's path up to the time point shown goes
+//! under them as a trail, fading into the past. Drawn instead of the
+//! project's objects (see `ViewportController::sync_objects_to_slint_viewport`).
 
+use crate::editor::object_render::{
+    Canvas, Link, ObjectDrawInstance, draw_objects, mask_holds, pick,
+};
 use bitvec::prelude::*;
 use evanalyzer_app::results::ImageTracks;
 use std::sync::Arc;
@@ -14,13 +16,56 @@ use std::sync::Arc;
 /// The objects to draw, in image pixels.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResultsOverlay {
-    /// `[xmin, ymin, xmax, ymax]` (inclusive) and RGB.
-    pub objects: Vec<([u32; 4], [u8; 3])>,
-    /// The objects' masks, by index: a bit per pixel of the box, row by
-    /// row. Missing (results without masks): an ellipse in the box.
-    pub masks: Vec<Option<Arc<BitVec<u64, Lsb0>>>>,
+    pub objects: Vec<OverlayObject>,
+    /// Each object's index in the caller's list (without the hidden ones)
+    /// - empty: the same.
+    pub sources: Vec<usize>,
+    /// Lines from the selected object to its relatives.
+    pub links: Vec<Link>,
     /// The tracks' trails, under the objects.
     pub trails: Option<Arc<TrailsOverlay>>,
+}
+
+impl ResultsOverlay {
+    /// The caller's index of the object at `index` here.
+    pub fn source(&self, index: usize) -> usize {
+        self.sources.get(index).copied().unwrap_or(index)
+    }
+}
+
+/// An object of the overlay.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayObject {
+    /// `[xmin, ymin, xmax, ymax]`, inclusive.
+    pub bbox: [u32; 4],
+    pub rgb: [u8; 3],
+    /// Outside the selected object's family: a third of the opacity.
+    pub dimmed: bool,
+    /// A bit per pixel of the box, row by row.
+    pub mask: Arc<BitVec<u64, Lsb0>>,
+    /// Its layer (`ZOrder::key`), and the same without the selection's
+    /// boost for a click.
+    pub layer: u32,
+    pub pick: u32,
+}
+
+impl OverlayObject {
+    /// In `rgb` on the lowest layer; without a mask its box, filled.
+    pub fn new(bbox: [u32; 4], rgb: [u8; 3], mask: Option<Arc<BitVec<u64, Lsb0>>>) -> Self {
+        let mask = mask.unwrap_or_else(|| {
+            let [x0, y0, x1, y1] = bbox;
+            let len = (x1 - x0 + 1) as usize * (y1 - y0 + 1) as usize;
+            Arc::new(BitVec::repeat(true, len))
+        });
+        Self {
+            bbox,
+            rgb,
+            dimmed: false,
+            mask,
+            layer: 0,
+            pick: 0,
+        }
+    }
 }
 
 /// The image's tracks as trails up to time point `t`.
@@ -43,16 +88,12 @@ pub struct TrailsOverlay {
 const TRAIL_ALPHA: f32 = 0.9;
 /// The selected track's whole path, behind its trail.
 const GHOST_ALPHA: f32 = 0.22;
-const SELECTED_RGB: [u8; 3] = [255, 255, 255];
-
-/// Outline opacity; the inside gets a faint tint.
-const OUTLINE_ALPHA: f32 = 0.95;
-const FILL_ALPHA: f32 = 0.12;
-/// Half the outline's width.
-const HALF_OUTLINE: f32 = 0.75;
+const SELECTED_TRAIL_RGB: [u8; 3] = [255, 255, 255];
 
 /// Draws `overlay` into `buffer` (`buf_w` × `buf_h`, transparent before),
-/// image pixel `p` at `p * zoom + off` on it.
+/// image pixel `p` at `p * zoom + off` on it: the trails, then the objects
+/// as the editor draws its own at opacity `fill` (0..1, the viewer's slider).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_results_overlay(
     buffer: &mut [slint::Rgba8Pixel],
     overlay: &ResultsOverlay,
@@ -61,150 +102,37 @@ pub fn draw_results_overlay(
     zoom: f32,
     off_x: f32,
     off_y: f32,
+    fill: f32,
 ) {
-    let (w, h) = (buf_w as i64, buf_h as i64);
     if let Some(trails) = &overlay.trails {
         draw_trails(buffer, trails, buf_w, buf_h, zoom, off_x, off_y);
     }
-    for (i, (bbox, rgb)) in overlay.objects.iter().enumerate() {
-        let (dim, half) = (1.0, HALF_OUTLINE);
-        // The box's outer edges on screen (`xmax` is inclusive).
-        let x0 = bbox[0] as f32 * zoom + off_x;
-        let y0 = bbox[1] as f32 * zoom + off_y;
-        let x1 = (bbox[2] + 1) as f32 * zoom + off_x;
-        let y1 = (bbox[3] + 1) as f32 * zoom + off_y;
-        if x1 < 0.0 || y1 < 0.0 || x0 >= w as f32 || y0 >= h as f32 {
-            continue;
-        }
-        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        let (rx, ry) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
-        // Too small for a ring: a dot, so it doesn't vanish.
-        if rx < 2.0 || ry < 2.0 {
-            let (px, py) = (cx as i64, cy as i64);
-            for y in py - 1..=py {
-                for x in px - 1..=px {
-                    if x >= 0 && y >= 0 && x < w && y < h {
-                        blend(&mut buffer[(y * w + x) as usize], *rgb, OUTLINE_ALPHA * dim);
-                    }
-                }
-            }
-            continue;
-        }
-        if let Some(mask) = overlay.masks.get(i).and_then(Option::as_deref) {
-            draw_mask(buffer, buf_w, buf_h, *bbox, mask, *rgb, zoom, off_x, off_y);
-            continue;
-        }
-        // Pixels whose centre lies within ~`half` px of the ellipse are its
-        // outline (soft at the edges), inside it the tint. Row by row: the
-        // inside, well away from the outline, is one run (no square root
-        // per pixel); only near the outline is each pixel's distance taken.
-        let xs = (x0.floor() as i64).max(0)..(x1.ceil() as i64).min(w);
-        let ys = (y0.floor() as i64).max(0)..(y1.ceil() as i64).min(h);
-        let r = rx.min(ry);
-        let band = 2.0 * half;
-        for y in ys {
-            let dy = (y as f32 + 0.5 - cy) / ry;
-            let row = &mut buffer[(y * w) as usize..((y + 1) * w) as usize];
-            // Where this row is well inside (`dist < -band`, i.e. d below
-            // `a`): |x - cx| below `inner`, a pixel short to be safe.
-            let a = 1.0 - band / r;
-            let inner = if a > 0.0 && dy.abs() < a {
-                (rx * (a * a - dy * dy).sqrt() - 1.0).max(0.0)
-            } else {
-                0.0
+    let opacity = (fill.clamp(0.0, 1.0) * 255.0) as u8;
+    let objects = overlay
+        .objects
+        .iter()
+        .map(|object| {
+            let [r, g, b] = object.rgb;
+            let a = if object.dimmed { opacity / 3 } else { opacity };
+            let color = slint::Rgba8Pixel { r, g, b, a };
+            let instance = ObjectDrawInstance {
+                bbox: object.bbox,
+                mask: &object.mask,
+                color,
             };
-            // Within the row's part on the buffer: an object cut by its
-            // edge has its middle, even its whole inside, beyond it.
-            let (in0, in1) = if inner > 0.0 {
-                let in0 = ((cx - inner).ceil() as i64).clamp(xs.start, xs.end);
-                (in0, ((cx + inner).floor() as i64).clamp(in0, xs.end))
-            } else {
-                (xs.start, xs.start)
-            };
-            let edge = |x: i64, row: &mut [slint::Rgba8Pixel]| {
-                let dx = (x as f32 + 0.5 - cx) / rx;
-                let d = (dx * dx + dy * dy).sqrt();
-                // Distance to the ellipse in screen pixels (close enough).
-                let dist = (d - 1.0) * r;
-                let alpha = if dist.abs() < band {
-                    OUTLINE_ALPHA * (1.0 - (dist.abs() - half).max(0.0) / half)
-                } else if dist < 0.0 {
-                    FILL_ALPHA
-                } else {
-                    return;
-                };
-                blend(&mut row[x as usize], *rgb, alpha * dim);
-            };
-            for x in xs.start..in0 {
-                edge(x, row);
-            }
-            for px in &mut row[in0 as usize..in1 as usize] {
-                blend(px, *rgb, FILL_ALPHA * dim);
-            }
-            for x in in1..xs.end {
-                edge(x, row);
-            }
-        }
-    }
-}
-
-/// The image pixel of `bbox`'s `mask` (bit per pixel, row by row) at
-/// `(mx, my)` from the box's corner is set - off the box: not.
-fn mask_at(mask: &BitSlice<u64, Lsb0>, bbox: [u32; 4], mx: i64, my: i64) -> bool {
-    let (bw, bh) = (
-        (bbox[2] - bbox[0] + 1) as i64,
-        (bbox[3] - bbox[1] + 1) as i64,
+            (object.layer, instance)
+        })
+        .collect();
+    draw_objects(
+        buffer,
+        objects,
+        &overlay.links,
+        buf_w,
+        buf_h,
+        zoom,
+        off_x,
+        off_y,
     );
-    mx >= 0
-        && my >= 0
-        && mx < bw
-        && my < bh
-        && mask.get((my * bw + mx) as usize).is_some_and(|b| *b)
-}
-
-/// `mask` (of `bbox`) as `draw_results_overlay` places image pixels: its
-/// pixels tinted, the outline where a step of the outline's width (in
-/// screen pixels) leaves it - also zoomed out, where an image pixel is
-/// less than a screen pixel.
-#[allow(clippy::too_many_arguments)]
-fn draw_mask(
-    buffer: &mut [slint::Rgba8Pixel],
-    buf_w: u32,
-    buf_h: u32,
-    bbox: [u32; 4],
-    mask: &BitSlice<u64, Lsb0>,
-    rgb: [u8; 3],
-    zoom: f32,
-    off_x: f32,
-    off_y: f32,
-) {
-    let (w, h) = (buf_w as i64, buf_h as i64);
-    let x0 = bbox[0] as f32 * zoom + off_x;
-    let y0 = bbox[1] as f32 * zoom + off_y;
-    let x1 = (bbox[2] + 1) as f32 * zoom + off_x;
-    let y1 = (bbox[3] + 1) as f32 * zoom + off_y;
-    let xs = (x0.floor() as i64).max(0)..(x1.ceil() as i64).min(w);
-    let ys = (y0.floor() as i64).max(0)..(y1.ceil() as i64).min(h);
-    // The outline's width, in image pixels.
-    let step = 2.0 * HALF_OUTLINE / zoom;
-    let at = |mx: f32, my: f32| mask_at(mask, bbox, mx.floor() as i64, my.floor() as i64);
-    for y in ys {
-        // Position in the box, in image pixels.
-        let fy = (y as f32 + 0.5 - off_y) / zoom - bbox[1] as f32;
-        let row = &mut buffer[(y * w) as usize..((y + 1) * w) as usize];
-        for x in xs.clone() {
-            let fx = (x as f32 + 0.5 - off_x) / zoom - bbox[0] as f32;
-            if !at(fx, fy) {
-                continue;
-            }
-            let edge = !at(fx - step, fy)
-                || !at(fx + step, fy)
-                || !at(fx, fy - step)
-                || !at(fx, fy + step);
-            let alpha = if edge { OUTLINE_ALPHA } else { FILL_ALPHA };
-            blend(&mut row[x as usize], rgb, alpha);
-        }
-    }
 }
 
 /// The trails of `trails` into `buffer`, as `draw_results_overlay` places
@@ -235,8 +163,8 @@ fn draw_trails(
         let track = &trails.tracks.tracks[i];
         let selected = trails.selected == Some(i);
         let rgb = match selected {
-            true => SELECTED_RGB,
-            false => trails.colors.get(i).copied().unwrap_or(SELECTED_RGB),
+            true => SELECTED_TRAIL_RGB,
+            false => trails.colors.get(i).copied().unwrap_or(SELECTED_TRAIL_RGB),
         };
         // Its whole path, faint: where it comes from and goes.
         if selected {
@@ -257,124 +185,6 @@ fn draw_trails(
             canvas.line(screen(&pair[0]), screen(&pair[1]), rgb, alpha, selected);
         }
     }
-}
-
-/// Lines between image points (`links`, each from one point to another)
-/// into `buffer` (`buf_w` × `buf_h`), image pixel `p` at `p * zoom + off` -
-/// the editor's links between the selected object and its relatives.
-pub fn draw_links(
-    buffer: &mut [slint::Rgba8Pixel],
-    links: &[((f32, f32), (f32, f32))],
-    rgb: [u8; 3],
-    buf_w: u32,
-    buf_h: u32,
-    zoom: f32,
-    off_x: f32,
-    off_y: f32,
-) {
-    let screen = |p: (f32, f32)| (p.0 * zoom + off_x, p.1 * zoom + off_y);
-    let mut canvas = Canvas {
-        buffer,
-        w: buf_w as i64,
-        h: buf_h as i64,
-    };
-    for (a, b) in links {
-        canvas.line(screen(*a), screen(*b), rgb, TRAIL_ALPHA, true);
-    }
-}
-
-/// A buffer to draw anti-aliased lines into.
-struct Canvas<'a> {
-    buffer: &'a mut [slint::Rgba8Pixel],
-    w: i64,
-    h: i64,
-}
-
-impl Canvas<'_> {
-    fn plot(&mut self, x: i64, y: i64, rgb: [u8; 3], alpha: f32) {
-        if x >= 0 && y >= 0 && x < self.w && y < self.h && alpha > 0.0 {
-            blend(&mut self.buffer[(y * self.w + x) as usize], rgb, alpha);
-        }
-    }
-
-    /// From `a` to `b` (screen pixels), anti-aliased (Xiaolin Wu) - `bold`:
-    /// a second line beside it, about 2 px wide. Off screen: skipped.
-    fn line(&mut self, a: (f32, f32), b: (f32, f32), rgb: [u8; 3], alpha: f32, bold: bool) {
-        let (w, h) = (self.w as f32, self.h as f32);
-        if a.0.max(b.0) < -1.0 || a.1.max(b.1) < -1.0 || a.0.min(b.0) > w || a.1.min(b.1) > h {
-            return;
-        }
-        self.wu(a, b, rgb, alpha);
-        if bold {
-            // Beside it, across its direction.
-            let steep = (b.1 - a.1).abs() > (b.0 - a.0).abs();
-            let (dx, dy) = if steep { (1.0, 0.0) } else { (0.0, 1.0) };
-            self.wu((a.0 + dx, a.1 + dy), (b.0 + dx, b.1 + dy), rgb, alpha);
-        }
-    }
-
-    fn wu(&mut self, a: (f32, f32), b: (f32, f32), rgb: [u8; 3], alpha: f32) {
-        let (mut x0, mut y0, mut x1, mut y1) = (a.0, a.1, b.0, b.1);
-        let steep = (y1 - y0).abs() > (x1 - x0).abs();
-        if steep {
-            std::mem::swap(&mut x0, &mut y0);
-            std::mem::swap(&mut x1, &mut y1);
-        }
-        if x0 > x1 {
-            std::mem::swap(&mut x0, &mut x1);
-            std::mem::swap(&mut y0, &mut y1);
-        }
-        let gradient = match x1 - x0 {
-            d if d < 1e-6 => 0.0,
-            d => (y1 - y0) / d,
-        };
-        // Only the columns on screen (a long segment zoomed in).
-        let limit = if steep { self.h } else { self.w } as f32;
-        let first = x0.round().max(-1.0);
-        let last = x1.round().min(limit);
-        let mut x = first;
-        while x <= last {
-            let y = y0 + gradient * (x - x0);
-            let (yi, frac) = (y.floor(), y - y.floor());
-            let (xi, yi) = (x as i64, yi as i64);
-            if steep {
-                self.plot(yi, xi, rgb, alpha * (1.0 - frac));
-                self.plot(yi + 1, xi, rgb, alpha * frac);
-            } else {
-                self.plot(xi, yi, rgb, alpha * (1.0 - frac));
-                self.plot(xi, yi + 1, rgb, alpha * frac);
-            }
-            x += 1.0;
-        }
-    }
-}
-
-/// `rgb` at `alpha` over `dst` (Porter-Duff over, straight alpha).
-#[inline]
-fn blend(dst: &mut slint::Rgba8Pixel, rgb: [u8; 3], alpha: f32) {
-    let sa = alpha.clamp(0.0, 1.0);
-    // Nothing there yet (most pixels): the colour itself.
-    if dst.a == 0 {
-        *dst = slint::Rgba8Pixel {
-            r: rgb[0],
-            g: rgb[1],
-            b: rgb[2],
-            a: (sa * 255.0).round() as u8,
-        };
-        return;
-    }
-    let da = dst.a as f32 / 255.0;
-    let out_a = sa + da * (1.0 - sa);
-    if out_a <= 0.0 {
-        return;
-    }
-    let mix = |s: u8, d: u8| ((s as f32 * sa + d as f32 * da * (1.0 - sa)) / out_a).round() as u8;
-    *dst = slint::Rgba8Pixel {
-        r: mix(rgb[0], dst.r),
-        g: mix(rgb[1], dst.g),
-        b: mix(rgb[2], dst.b),
-        a: (out_a * 255.0).round() as u8,
-    };
 }
 
 /// The view that shows `bbox` (image pixels, inclusive) in a `v_w` × `v_h`
@@ -401,8 +211,7 @@ pub fn focus_view(
     (zoom, v_w / 2.0 - cx * zoom, v_h / 2.0 - cy * zoom)
 }
 
-/// The object under the screen point `(x, y)`: the smallest whose mask
-/// (without one: ellipse) holds it, else the nearest within 6 px of its box.
+/// The object under the screen point `(x, y)`, picked as in the editor.
 pub fn object_at(
     overlay: &ResultsOverlay,
     x: f32,
@@ -411,46 +220,25 @@ pub fn object_at(
     off_x: f32,
     off_y: f32,
 ) -> Option<usize> {
-    let ix = (x - off_x) / zoom;
-    let iy = (y - off_y) / zoom;
-    let slack = 6.0 / zoom;
-    let mut best: Option<(usize, f32)> = None;
-    for (i, (bbox, _)) in overlay.objects.iter().enumerate() {
-        let (x0, y0) = (bbox[0] as f32, bbox[1] as f32);
-        let (x1, y1) = ((bbox[2] + 1) as f32, (bbox[3] + 1) as f32);
-        let (rx, ry) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
-        let (dx, dy) = ((ix - (x0 + x1) / 2.0) / rx, (iy - (y0 + y1) / 2.0) / ry);
-        let inside = match overlay.masks.get(i).and_then(Option::as_deref) {
-            Some(mask) => mask_at(
-                mask,
-                *bbox,
-                (ix - x0).floor() as i64,
-                (iy - y0).floor() as i64,
-            ),
-            None => dx * dx + dy * dy <= 1.0,
-        };
-        // Inside: ranked by size. Near the box: by distance, after any inside.
-        let score = if inside {
-            rx * ry
-        } else {
-            let gx = (x0 - ix).max(ix - x1).max(0.0);
-            let gy = (y0 - iy).max(iy - y1).max(0.0);
-            let gap = (gx * gx + gy * gy).sqrt();
-            if gap > slack {
-                continue;
-            }
-            f32::MAX / 2.0 + gap
-        };
-        if best.is_none_or(|(_, s)| score < s) {
-            best = Some((i, score));
-        }
+    let (ix, iy) = ((x - off_x) / zoom, (y - off_y) / zoom);
+    if ix < 0.0 || iy < 0.0 {
+        return None;
     }
-    best.map(|(i, _)| i)
+    let (ix, iy) = (ix as u32, iy as u32);
+    pick(
+        overlay
+            .objects
+            .iter()
+            .map(|o| (o.pick, mask_holds(o.bbox, &o.mask, ix, iy))),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A faint inside, to tell it from the outline.
+    const FILL: f32 = 0.12;
 
     fn buffer(w: u32, h: u32) -> Vec<slint::Rgba8Pixel> {
         vec![
@@ -486,7 +274,8 @@ mod tests {
                 .collect(),
         };
         ResultsOverlay {
-            masks: Vec::new(),
+            sources: Vec::new(),
+            links: Vec::new(),
             objects: Vec::new(),
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: Arc::new(ImageTracks {
@@ -549,7 +338,8 @@ mod tests {
             ..ImageTracks::default()
         });
         let overlay = |frames, selected, only_selected| ResultsOverlay {
-            masks: Vec::new(),
+            sources: Vec::new(),
+            links: Vec::new(),
             objects: Vec::new(),
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: tracks.clone(),
@@ -572,7 +362,7 @@ mod tests {
             for _ in 0..15 {
                 let mut buf = buffer(1920, 1080);
                 let start = std::time::Instant::now();
-                draw_results_overlay(&mut buf, &overlay, 1920, 1080, 0.9, 0.0, 0.0);
+                draw_results_overlay(&mut buf, &overlay, 1920, 1080, 0.9, 0.0, 0.0, FILL);
                 times.push(start.elapsed().as_secs_f64() * 1000.0);
             }
             times.sort_by(f64::total_cmp);
@@ -592,6 +382,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
+            FILL,
         );
         let (old, new) = (alpha_at(&buf, 5, 10), alpha_at(&buf, 45, 10));
         assert!(old > 0 && new > old, "old {old}, new {new}");
@@ -612,6 +403,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
+            FILL,
         );
         assert_eq!(alpha_at(&buf, 35, 10), 0, "before t = 5");
         assert!(alpha_at(&buf, 65, 10) > 0);
@@ -630,46 +422,13 @@ mod tests {
             1.0,
             0.0,
             0.0,
+            FILL,
         );
         let pixel = buf[(10 * 100 + 45) as usize];
         assert_eq!((pixel.r, pixel.g, pixel.b), (255, 255, 255));
         assert!(alpha_at(&buf, 75, 10) > 0, "its path ahead, faint");
         assert!(alpha_at(&buf, 75, 10) < alpha_at(&buf, 45, 10));
         assert_eq!(alpha_at(&buf, 45, 30), 0, "the other track hidden");
-    }
-
-    #[test]
-    fn a_link_is_drawn_between_its_two_points() {
-        // 100 wide, as `alpha_at` reads.
-        let mut buf = buffer(100, 20);
-        draw_links(
-            &mut buf,
-            &[((5.0, 10.0), (35.0, 10.0))],
-            [255, 0, 0],
-            100,
-            20,
-            1.0,
-            0.0,
-            0.0,
-        );
-        assert!(alpha_at(&buf, 20, 10) > 0, "on the line");
-        assert_eq!(alpha_at(&buf, 20, 2), 0, "not beside it");
-    }
-
-    #[test]
-    fn an_object_is_a_ring_with_a_faint_inside() {
-        let overlay = ResultsOverlay {
-            masks: Vec::new(),
-            objects: vec![([10, 10, 29, 29], [255, 0, 0])],
-            trails: None,
-        };
-        let mut buf = buffer(40, 40);
-        draw_results_overlay(&mut buf, &overlay, 40, 40, 1.0, 0.0, 0.0);
-        let at = |x: usize, y: usize| buf[y * 40 + x];
-        assert!(at(10, 20).a > 200, "left edge of the ring");
-        assert!(at(20, 20).a < 40 && at(20, 20).a > 0, "the faint inside");
-        assert_eq!(at(10, 10).a, 0, "the box's corner is outside the ellipse");
-        assert_eq!(at(20, 20).r, 255);
     }
 
     /// A 20 x 20 ring, 5 px thick, in the box `[10, 10, 29, 29]`.
@@ -682,8 +441,13 @@ mod tests {
             }
         }
         ResultsOverlay {
-            objects: vec![([10, 10, 29, 29], [255, 0, 0])],
-            masks: vec![Some(Arc::new(mask))],
+            objects: vec![OverlayObject::new(
+                [10, 10, 29, 29],
+                [255, 0, 0],
+                Some(Arc::new(mask)),
+            )],
+            sources: Vec::new(),
+            links: Vec::new(),
             trails: None,
         }
     }
@@ -694,7 +458,7 @@ mod tests {
         for zoom in [1.0, 3.0] {
             let n = (40.0 * zoom) as usize;
             let mut buf = buffer(n as u32, n as u32);
-            draw_results_overlay(&mut buf, &overlay, n as u32, n as u32, zoom, 0.0, 0.0);
+            draw_results_overlay(&mut buf, &overlay, n as u32, n as u32, zoom, 0.0, 0.0, FILL);
             let at = |x: f32, y: f32| buf[(y * zoom) as usize * n + (x * zoom) as usize];
             assert!(
                 at(10.0, 10.0).a > 200,
@@ -702,137 +466,62 @@ mod tests {
             );
             assert!(at(12.5, 20.0).a > 0, "inside the ring: tinted");
             assert!(at(12.5, 20.0).a < 40, "... faintly");
-            assert!(at(14.5, 20.0).a > 200, "its inner edge outlined");
+            // The editor's outline: the mask's last screen pixel there.
+            let edge = buf[(20.0 * zoom) as usize * n + (15.0 * zoom) as usize - 1];
+            assert!(edge.a > 200, "its inner edge outlined");
             assert_eq!(at(20.0, 20.0).a, 0, "the hole");
         }
     }
 
+    /// The objects' opacity (the viewer's slider) is their insides'; the
+    /// outline stays.
     #[test]
-    fn a_click_in_a_masks_hole_is_not_on_it() {
-        // Around the ring a larger object without a mask (an ellipse).
+    fn the_inside_follows_the_objects_opacity() {
+        let overlay = ring_overlay();
+        for fill in [0.0, 0.5, 0.8] {
+            // 100 wide, as `alpha_at` reads.
+            let mut buf = buffer(100, 40);
+            draw_results_overlay(&mut buf, &overlay, 100, 40, 1.0, 0.0, 0.0, fill);
+            assert_eq!(
+                alpha_at(&buf, 12, 20),
+                (fill * 255.0) as u8,
+                "as the editor"
+            );
+            assert!(alpha_at(&buf, 10, 20) > 200, "the outline");
+        }
+    }
+
+    /// A click picks as in the editor: the highest layer holding the
+    /// point - in a mask's hole the object below, the later one on a tie.
+    #[test]
+    fn a_click_picks_the_top_layer_and_not_a_masks_hole() {
         let mut overlay = ring_overlay();
-        overlay.objects.push(([0, 0, 39, 39], [0, 255, 0]));
+        overlay.objects[0].pick = 1;
+        // Under the ring a larger object without a mask (its box).
+        overlay
+            .objects
+            .insert(0, OverlayObject::new([0, 0, 39, 39], [0, 255, 0], None));
         assert_eq!(
             object_at(&overlay, 12.0, 20.0, 1.0, 0.0, 0.0),
-            Some(0),
+            Some(1),
             "on the ring"
         );
         assert_eq!(
             object_at(&overlay, 20.0, 20.0, 1.0, 0.0, 0.0),
-            Some(1),
-            "in its hole: the one around it"
+            Some(0),
+            "in its hole: the one below"
         );
-    }
-
-    /// The row runs give the pixels the per-pixel rule gives.
-    #[test]
-    fn the_fast_fill_matches_the_pixel_by_pixel_ellipse() {
-        let overlay = ResultsOverlay {
-            masks: Vec::new(),
-            objects: vec![
-                ([3, 7, 61, 40], [255, 0, 0]),
-                ([10, 10, 13, 90], [0, 255, 0]),
-            ],
-            trails: None,
-        };
-        let mut buf = buffer(80, 100);
-        draw_results_overlay(&mut buf, &overlay, 80, 100, 1.0, 0.0, 0.0);
-        // The reference: each pixel's own distance (as before).
-        let mut want = buffer(80, 100);
-        for (bbox, rgb) in &overlay.objects {
-            let (x0, y0, x1, y1) = (
-                bbox[0] as f32,
-                bbox[1] as f32,
-                (bbox[2] + 1) as f32,
-                (bbox[3] + 1) as f32,
-            );
-            let (cx, cy, rx, ry) = (
-                (x0 + x1) / 2.0,
-                (y0 + y1) / 2.0,
-                (x1 - x0) / 2.0,
-                (y1 - y0) / 2.0,
-            );
-            let r = rx.min(ry);
-            for y in y0.floor() as usize..(y1.ceil() as usize).min(100) {
-                for x in x0.floor() as usize..(x1.ceil() as usize).min(80) {
-                    let (dx, dy) = ((x as f32 + 0.5 - cx) / rx, (y as f32 + 0.5 - cy) / ry);
-                    let dist = ((dx * dx + dy * dy).sqrt() - 1.0) * r;
-                    let alpha = if dist.abs() < 1.5 {
-                        OUTLINE_ALPHA * (1.0 - (dist.abs() - 0.75).max(0.0) / 0.75)
-                    } else if dist < 0.0 {
-                        FILL_ALPHA
-                    } else {
-                        continue;
-                    };
-                    blend(&mut want[y * 80 + x], *rgb, alpha);
-                }
-            }
-        }
-        assert!(buf == want, "same pixels");
-    }
-
-    /// An object cut by the buffer's edge - its middle beyond it, on any
-    /// side - is drawn up to the edge, not past it (this panicked the object
-    /// worker: the layer then stayed empty).
-    #[test]
-    fn objects_cut_by_the_edge_are_drawn_up_to_it() {
-        // Off the right, the bottom, the left (the view moved: offset) and
-        // two sides.
-        for (bbox, off_x) in [
-            ([15, 0, 44, 19], 0.0),
-            ([0, 15, 19, 44], 0.0),
-            ([0, 0, 29, 19], -25.0),
-            ([12, 12, 60, 60], 0.0),
-        ] {
-            let overlay = ResultsOverlay {
-                masks: Vec::new(),
-                objects: vec![(bbox, [255, 0, 0])],
-                trails: None,
-            };
-            let mut buf = buffer(20, 20);
-            draw_results_overlay(&mut buf, &overlay, 20, 20, 1.0, off_x, 0.0);
-            assert!(buf.iter().any(|p| p.a > 0), "{bbox:?} at {off_x} drawn");
-        }
-        // Zoomed in, a large object across the right edge, its inside
-        // beyond: the case seen in the app.
-        let overlay = ResultsOverlay {
-            masks: Vec::new(),
-            objects: vec![([1300, 0, 1400, 100], [255, 0, 0])],
-            trails: None,
-        };
-        let mut buf = buffer(1344, 120);
-        draw_results_overlay(&mut buf, &overlay, 1344, 120, 1.0, 0.0, 0.0);
-        assert!(buf[50 * 1344 + 1343].a > 0, "up to the last column");
-    }
-
-    #[test]
-    fn every_object_is_drawn_alike() {
-        let overlay = ResultsOverlay {
-            masks: Vec::new(),
-            objects: vec![([0, 0, 9, 9], [255, 0, 0]), ([20, 0, 29, 9], [0, 255, 0])],
-            trails: None,
-        };
-        let mut buf = buffer(30, 10);
-        draw_results_overlay(&mut buf, &overlay, 30, 10, 1.0, 0.0, 0.0);
-        assert_eq!(buf[5 * 30].a, buf[5 * 30 + 20].a, "as strong");
-        let p = buf[5 * 30 + 20];
-        assert_eq!([p.r, p.g, p.b], [0, 255, 0], "in its own colour");
-    }
-
-    #[test]
-    fn a_tiny_or_far_object_is_still_a_dot_and_off_screen_ones_are_skipped() {
-        let overlay = ResultsOverlay {
-            masks: Vec::new(),
-            objects: vec![
-                ([100, 100, 101, 101], [0, 0, 255]),
-                ([5000, 5000, 5100, 5100], [0, 0, 255]),
-            ],
-            trails: None,
-        };
-        let mut buf = buffer(20, 20);
-        draw_results_overlay(&mut buf, &overlay, 20, 20, 0.1, 0.0, 0.0);
-        assert!(buf[10 * 20 + 10].a > 0 || buf[9 * 20 + 9].a > 0, "the dot");
-        assert_eq!(buf.iter().filter(|p| p.a > 0).count(), 4, "only the dot");
+        overlay.objects[1].pick = 0;
+        assert_eq!(
+            object_at(&overlay, 12.0, 20.0, 1.0, 0.0, 0.0),
+            Some(1),
+            "a tie: the later"
+        );
+        assert_eq!(
+            object_at(&overlay, 45.0, 20.0, 1.0, 0.0, 0.0),
+            None,
+            "beside both"
+        );
     }
 
     #[test]
@@ -854,26 +543,5 @@ mod tests {
             (zoom - 0.6 * 0.95).abs() < 1e-5,
             "a huge object: the whole image fitted"
         );
-    }
-
-    #[test]
-    fn a_click_picks_the_smallest_object_under_it_or_the_nearest() {
-        let overlay = ResultsOverlay {
-            masks: Vec::new(),
-            objects: vec![
-                ([0, 0, 99, 99], [0; 3]),
-                ([40, 40, 59, 59], [0; 3]),
-                ([200, 0, 209, 9], [0; 3]),
-            ],
-            trails: None,
-        };
-        assert_eq!(object_at(&overlay, 50.0, 50.0, 1.0, 0.0, 0.0), Some(1));
-        assert_eq!(object_at(&overlay, 10.0, 50.0, 1.0, 0.0, 0.0), Some(0));
-        assert_eq!(
-            object_at(&overlay, 213.0, 5.0, 1.0, 0.0, 0.0),
-            Some(2),
-            "4 px beside it"
-        );
-        assert_eq!(object_at(&overlay, 150.0, 150.0, 1.0, 0.0, 0.0), None);
     }
 }

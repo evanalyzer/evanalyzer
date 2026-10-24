@@ -5,9 +5,11 @@
 //! [`ResultsOverlay`]), not the project's.
 
 use super::*;
-use crate::editor::results_overlay::{ResultsOverlay, focus_view, object_at};
+use crate::editor::object_render::{CHILD_RGB, DIMMED_RGB, PARENT_RGB, SELECTED_RGB, ZOrder};
+use crate::editor::results_overlay::{OverlayObject, ResultsOverlay, focus_view, object_at};
 use crate::{SplitObject, SplitThumb, ViewportState as ViewportSlintState};
 use evanalyzer_app::results::{ImageObjectsFilter, ResultObject};
+use evanalyzer_cfg::core_types::ObjectClass;
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 
 /// Longest side of a filmstrip thumbnail's pyramid level.
@@ -48,50 +50,42 @@ pub(super) struct SplitState {
     by_value: bool,
     /// Thumbnails made so far, by `rel_path`.
     thumbs: HashMap<String, SharedPixelBuffer<Rgb8Pixel>>,
-    /// Classes (`ResultObject::class_id`) not drawn on the image - the
-    /// drawer's OBJECTS list.
+    /// Classes (`ResultObject::class_id`) not drawn on the image - their
+    /// eye in the drawer's Classes panel.
     pub(super) hidden_classes: HashSet<i32>,
+    /// The class selected in the drawer's Classes panel: drawn on top of
+    /// the others (only the selected object above it), as in the editor.
+    pub(super) selected_class: Option<i32>,
 }
 
 impl ResultsStateController {
     pub(super) fn attach_split_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
 
-        // The drawer's OBJECTS list: which classes are drawn.
+        // The drawer's Classes panel: a class's eye shows or hides its
+        // objects; a click selects it (on top), again unselects it.
         let weak = Arc::downgrade(self);
-        state.on_split_class_selected(move |key, selected| {
+        state.on_split_class_toggled(move |class| {
             let Some(manager) = weak.upgrade() else {
-                return;
-            };
-            let Ok(class) = key.as_str().parse::<i32>() else {
                 return;
             };
             {
                 let mut split = manager.split.lock().expect("Poisoned");
-                match selected {
-                    true => split.hidden_classes.remove(&class),
-                    false => split.hidden_classes.insert(class),
-                };
+                if !split.hidden_classes.remove(&class) {
+                    split.hidden_classes.insert(class);
+                }
             }
-            manager.split_push_class_items();
             manager.split_push_overlay();
         });
         let weak = Arc::downgrade(self);
-        state.on_split_class_select_all(move |all| {
+        state.on_split_class_selected(move |class| {
             let Some(manager) = weak.upgrade() else {
                 return;
             };
-            let classes: HashSet<i32> = manager
-                .classes
-                .lock()
-                .expect("Poisoned")
-                .iter()
-                .map(|class| class.id as i32)
-                .chain(std::iter::once(-1))
-                .collect();
-            manager.split.lock().expect("Poisoned").hidden_classes =
-                if all { HashSet::new() } else { classes };
-            manager.split_push_class_items();
+            {
+                let mut split = manager.split.lock().expect("Poisoned");
+                split.selected_class = (split.selected_class != Some(class)).then_some(class);
+            }
             manager.split_push_overlay();
         });
 
@@ -382,7 +376,8 @@ impl ResultsStateController {
             return;
         };
         let (zoom, off_x, off_y, ..) = self.viewport().view();
-        let Some(index) = object_at(&overlay, x, y, zoom, off_x, off_y) else {
+        let Some(index) = object_at(&overlay, x, y, zoom, off_x, off_y).map(|i| overlay.source(i))
+        else {
             return;
         };
         let (rel_path, bbox, track_id) = {
@@ -596,43 +591,57 @@ impl ResultsStateController {
     /// "Color by value", the heatmap's).
     /// The drawer's OBJECTS list: every class of the analysis, ticked
     /// unless hidden.
+    /// The drawer's Classes panel: the analysis' classes, each with its
+    /// objects on the image shown, drawn or not, the selected one.
     pub(super) fn split_push_class_items(&self) {
-        let hidden = self.split.lock().expect("Poisoned").hidden_classes.clone();
-        let items: Vec<MultiSelectItem> = self
+        let (hidden, selected, objects) = {
+            let split = self.split.lock().expect("Poisoned");
+            (
+                split.hidden_classes.clone(),
+                split.selected_class,
+                split.objects.clone(),
+            )
+        };
+        let mut counts: HashMap<i32, i32> = HashMap::new();
+        for object in objects.iter() {
+            *counts.entry(object.class_id).or_default() += 1;
+        }
+        let rows: Vec<crate::ClassItemData> = self
             .classes
             .lock()
             .expect("Poisoned")
             .iter()
-            .map(|class| MultiSelectItem {
-                key: class.id.to_string().into(),
-                value: class.name.clone().into(),
+            .map(|class| crate::ClassItemData {
+                id: class.id as i32,
+                name: class.name.clone().into(),
                 color: bg_color_to_slint(class.color),
-                group: "".into(),
-                selected: !hidden.contains(&(class.id as i32)),
+                visible: !hidden.contains(&(class.id as i32)),
+                count: counts.get(&(class.id as i32)).copied().unwrap_or(0),
             })
             .collect();
-        let shown = items.iter().filter(|item| item.selected).count();
-        let summary = format!("{shown} of {}", items.len());
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<ResultsState>();
-                state.set_split_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                state.set_split_class_summary(summary.into());
+                state.set_split_classes(ModelRc::from(Rc::new(VecModel::from(rows))));
+                state.set_split_selected_class(selected.unwrap_or(-1));
             }
         })
         .ok();
     }
 
     pub(super) fn split_push_overlay(&self) {
+        // Its counts are the image's objects, its eyes what is drawn.
+        self.split_push_class_items();
         let by_value = self.split.lock().expect("Poisoned").by_value && self.in_plate();
-        let (objects, image, selected, hidden) = {
+        let (objects, image, selected, hidden, selected_class) = {
             let split = self.split.lock().expect("Poisoned");
             (
                 split.objects.clone(),
                 split.image.clone(),
                 split.selected,
                 split.hidden_classes.clone(),
+                split.selected_class,
             )
         };
         // Its image isn't the one in the viewer (yet): opening it takes
@@ -653,13 +662,16 @@ impl ResultsStateController {
             self.viewport().set_results_overlay(None);
             return;
         }
-        let class_colors: HashMap<i32, u32> = self
-            .classes
-            .lock()
-            .expect("Poisoned")
-            .iter()
-            .map(|class| (class.id as i32, class.color))
-            .collect();
+        let (class_colors, class_order): (HashMap<i32, u32>, Vec<i32>) = {
+            let classes = self.classes.lock().expect("Poisoned");
+            (
+                classes
+                    .iter()
+                    .map(|class| (class.id as i32, class.color))
+                    .collect(),
+                classes.iter().map(|class| class.id as i32).collect(),
+            )
+        };
         // No value of each object (e.g. the plate shows a count): by class.
         let by_value = by_value && objects.iter().any(|o| o.value.is_some());
         let gradient = by_value.then(|| {
@@ -679,11 +691,25 @@ impl ResultsStateController {
         let family = selected
             .and_then(|i| objects.get(i))
             .and_then(|selected| family_of(selected, &objects));
-        let (objects, masks) = objects
+        // The editor's layers (`ZOrder`). The classes hidden in the drawer
+        // aren't drawn.
+        let z = ZOrder::of_classes(
+            class_order.iter().map(|id| ObjectClass::Global(*id as u32)),
+            selected_class.map_or(ObjectClass::Unset, |id| ObjectClass::Global(id as u32)),
+        );
+        let classes_of = |object: &ResultObject| -> HashSet<ObjectClass> {
+            (object.class_id >= 0)
+                .then(|| ObjectClass::Global(object.class_id as u32))
+                .into_iter()
+                .collect()
+        };
+        let sources: Vec<usize> = (0..objects.len())
+            .filter(|i| !hidden.contains(&objects[*i].class_id))
+            .collect();
+        let drawn = sources
             .iter()
-            // The classes unticked in the drawer aren't drawn.
-            .filter(|object| !hidden.contains(&object.class_id))
-            .map(|object| {
+            .map(|i| {
+                let object = &objects[*i];
                 let own = || match (&gradient, object.value) {
                     (Some(stops), Some(v)) if !stops.is_empty() => {
                         let t = if hi > lo { (v - lo) / (hi - lo) } else { 1.0 };
@@ -695,23 +721,33 @@ impl ResultsStateController {
                         .copied()
                         .unwrap_or(0xFFFFFF),
                 };
-                // The selected object's family, when it has one.
-                let rgb = family
-                    .as_ref()
-                    .and_then(|f| f.color_of(object))
-                    .unwrap_or_else(own);
-                (
-                    (
-                        object.bbox_px,
-                        [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8],
-                    ),
-                    object.decoded_mask().map(Arc::new),
-                )
+                let rgb = |rgb: u32| [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8];
+                // The selection's color, its family's, else its own.
+                let (rgb, dimmed) = if selected == Some(*i) {
+                    (SELECTED_RGB, false)
+                } else {
+                    family
+                        .as_ref()
+                        .and_then(|f| f.color_of(object))
+                        .unwrap_or_else(|| (rgb(own()), false))
+                };
+                let classes = classes_of(object);
+                OverlayObject {
+                    dimmed,
+                    layer: z.key(&classes, selected == Some(*i)),
+                    pick: z.key(&classes, false),
+                    ..OverlayObject::new(object.bbox_px, rgb, object.decoded_mask().map(Arc::new))
+                }
             })
-            .unzip();
+            .collect();
+        let links = match (&family, selected.and_then(|i| objects.get(i))) {
+            (Some(family), Some(selected)) => family.links(selected, &objects),
+            _ => Vec::new(),
+        };
         let overlay = ResultsOverlay {
-            objects,
-            masks,
+            objects: drawn,
+            sources,
+            links,
             trails,
         };
         self.viewport().set_results_overlay(Some(overlay));
@@ -1299,20 +1335,12 @@ fn class_name_of(class: i32, classes: &HashMap<i32, (String, u32)>) -> String {
         .unwrap_or_else(|| "Unclassified".to_string())
 }
 
-/// The selected object's family on the split image (design canvas "Object
-/// relations in the results", board 4): its children outlined in one
-/// color, its parents in yellow, every other object dimmed.
+/// The selected object's family on the split image, drawn as the editor
+/// draws it (`viewport_controller`'s `CHILD_RGB` & co.).
 struct Family {
     selected: String,
     parents: Vec<String>,
 }
-
-/// Its children's color.
-const CHILD_RGB: u32 = 0x7CC4FA;
-/// Its parents' color - the viewer's selection yellow.
-const PARENT_RGB: u32 = 0xFACC15;
-/// Everything else while a family is shown.
-const DIMMED_RGB: u32 = 0x4A4D57;
 
 /// The family of `selected` among `objects` - `None` without any relation
 /// (then every object keeps its color).
@@ -1327,18 +1355,38 @@ fn family_of(selected: &ResultObject, objects: &[ResultObject]) -> Option<Family
 }
 
 impl Family {
-    /// `object`'s color in the family view - `None` for the selected one
-    /// (its own color, under the crosshair).
-    fn color_of(&self, object: &ResultObject) -> Option<u32> {
+    /// `object`'s color in the family view and whether it is dimmed -
+    /// `None` for the selected one (the selection's color).
+    fn color_of(&self, object: &ResultObject) -> Option<([u8; 3], bool)> {
         if object.object_id == self.selected {
             None
         } else if object.parent_ids.contains(&self.selected) {
-            Some(CHILD_RGB)
+            Some((CHILD_RGB, false))
         } else if self.parents.contains(&object.object_id) {
-            Some(PARENT_RGB)
+            Some((PARENT_RGB, false))
         } else {
-            Some(DIMMED_RGB)
+            Some((DIMMED_RGB, true))
         }
+    }
+
+    /// Lines from `selected` to its relatives among `objects`, centre to
+    /// centre (image pixels).
+    fn links(
+        &self,
+        selected: &ResultObject,
+        objects: &[ResultObject],
+    ) -> Vec<((f32, f32), (f32, f32))> {
+        let centre = |o: &ResultObject| {
+            let [x0, y0, x1, y1] = o.bbox_px;
+            ((x0 + x1) as f32 / 2.0 + 0.5, (y0 + y1) as f32 / 2.0 + 0.5)
+        };
+        objects
+            .iter()
+            .filter(|o| {
+                o.parent_ids.contains(&self.selected) || self.parents.contains(&o.object_id)
+            })
+            .map(|o| (centre(o), centre(selected)))
+            .collect()
     }
 }
 
@@ -1370,11 +1418,17 @@ mod family_tests {
             object("region", &[]),
         ];
         let family = family_of(&objects[0], &objects).expect("the cell has a child");
-        let colors: Vec<Option<u32>> = objects.iter().map(|o| family.color_of(o)).collect();
+        let colors: Vec<_> = objects.iter().map(|o| family.color_of(o)).collect();
         assert_eq!(
             colors,
-            [None, Some(CHILD_RGB), Some(DIMMED_RGB), Some(DIMMED_RGB)]
+            [
+                None,
+                Some((CHILD_RGB, false)),
+                Some((DIMMED_RGB, true)),
+                Some((DIMMED_RGB, true))
+            ]
         );
+        assert_eq!(family.links(&objects[0], &objects).len(), 1, "to its spot");
     }
 
     #[test]
@@ -1402,7 +1456,7 @@ mod family_tests {
             object("alone", &[]),
         ];
         let family = family_of(&objects[1], &objects).unwrap();
-        assert_eq!(family.color_of(&objects[0]), Some(PARENT_RGB));
+        assert_eq!(family.color_of(&objects[0]), Some((PARENT_RGB, false)));
         assert!(family_of(&objects[2], &objects).is_none());
     }
 }
