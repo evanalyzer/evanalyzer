@@ -705,6 +705,21 @@ pub enum FiltersStructureTensorTensorModeSettings {
     Coherence,
 }
 
+/// Which values per feature: the mean of the four directions, or one per
+/// direction.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeasureTextureTextureDirectionsSettings {
+    /// The mean of the four directions - one value per feature.
+    #[default]
+    #[serde(alias = "mean")]
+    Mean,
+    /// A value per direction (0°, 45°, 90°, 135°), as CellProfiler stores
+    /// them - four times as many values.
+    #[serde(alias = "each")]
+    Each,
+}
+
 /// The mathematical strategy used to determine the optimal global threshold.
 ///
 /// Most methods analyze the image histogram to find a "cut-off" point that
@@ -3007,6 +3022,51 @@ pub struct MeasureObjectShapeSettings {
     pub id: String,
     /// The objects measured.
     pub objects: ObjectClass,
+}
+
+/// Measures the texture of a channel - Haralick's features, over the whole
+/// image and per object (CellProfiler's MeasureTexture).
+///
+/// The pixel pairs the scale apart in a direction say how the gray levels
+/// go together: e.g. contrast is high where neighbours differ a lot, the
+/// angular second moment where few pairs repeat over and over (smooth or
+/// regular), entropy where the pairs are all different.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureTextureSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("texture_01/...").
+    pub id: String,
+    /// The channel measured.
+    pub channel: ImageChannelIdx,
+    /// How far apart the two pixels of a pair are, in pixels - about the
+    /// size of the texture's grain.
+    #[schemars(range(min = 1, max = 1000))]
+    pub scale: u32,
+    /// The gray levels the 8-bit values are rescaled to (2 to 256): fewer
+    /// are faster and less noisy, more see finer differences.
+    #[schemars(range(min = 2, max = 256))]
+    pub gray_levels: u32,
+    /// One value per feature (the mean of the directions) or one per
+    /// direction.
+    pub directions: MeasureTextureTextureDirectionsSettings,
+    /// The objects of this class get values of their own as well (unset:
+    /// the whole image only).
+    pub objects: ObjectClass,
+}
+
+impl Default for MeasureTextureSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            channel: ImageChannelIdx::default(),
+            scale: 3u32,
+            gray_levels: 256u32,
+            directions: MeasureTextureTextureDirectionsSettings::Mean,
+            objects: ObjectClass::Unset,
+        }
+    }
 }
 
 // ============ DATASET ============

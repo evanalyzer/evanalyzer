@@ -374,6 +374,15 @@ impl From<FiltersStructureTensorTensorModeSettings> for TensorMode {
     }
 }
 
+impl From<MeasureTextureTextureDirectionsSettings> for TextureDirections {
+    fn from(_s: MeasureTextureTextureDirectionsSettings) -> Self {
+        match _s {
+            MeasureTextureTextureDirectionsSettings::Mean => TextureDirections::Mean,
+            MeasureTextureTextureDirectionsSettings::Each => TextureDirections::Each,
+        }
+    }
+}
+
 impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
     fn from(_s: SegmentationThresholdThresholdMethodSettings) -> Self {
         match _s {
@@ -887,6 +896,19 @@ impl From<MeasureObjectShapeSettings> for MeasureObjectShape {
     }
 }
 
+impl From<MeasureTextureSettings> for MeasureTexture {
+    fn from(_s: MeasureTextureSettings) -> Self {
+        MeasureTexture {
+            id: _s.id,
+            channel: _s.channel,
+            scale: _s.scale,
+            gray_levels: _s.gray_levels,
+            directions: TextureDirections::from(_s.directions),
+            objects: _s.objects,
+        }
+    }
+}
+
 impl From<MedianSubtractSettings> for MedianSubtract {
     fn from(_s: MedianSubtractSettings) -> Self {
         MedianSubtract { radius: _s.radius }
@@ -1254,6 +1276,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::MeasureObjectShape(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectShape::from(settings),
+        ))),
+        PipelineCommand::MeasureTexture(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureTexture::from(settings),
         ))),
         PipelineCommand::MedianSubtract(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MedianSubtract::from(settings),

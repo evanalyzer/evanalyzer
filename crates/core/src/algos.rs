@@ -63,6 +63,7 @@ pub use self::measure::image_intensity::ImageIntensity;
 pub use self::measure::image_quality::ImageQuality;
 pub use self::measure::object_neighbors::{MeasureObjectNeighbors, NeighborMethod};
 pub use self::measure::object_shape::MeasureObjectShape;
+pub use self::measure::texture::{MeasureTexture, TextureDirections};
 pub use self::morphology::fill_holes::FillHoles;
 pub use self::morphology::fill_object_holes::FillObjectHoles;
 pub use self::morphology::morphological_transformation::KernelShapes;

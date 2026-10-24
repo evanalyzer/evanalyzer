@@ -1593,6 +1593,63 @@
         "objects"
       ]
     },
+    "MeasureTextureSettings": {
+      "description": "Measures the texture of a channel - Haralick's features, over the whole\nimage and per object (CellProfiler's MeasureTexture).\n\nThe pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel measured.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "directions": {
+          "description": "One value per feature (the mean of the directions) or one per\ndirection.",
+          "$ref": "#/$defs/MeasureTextureTextureDirectionsSettings",
+          "default": "MEAN"
+        },
+        "grayLevels": {
+          "description": "The gray levels the 8-bit values are rescaled to (2 to 256): fewer\nare faster and less noisy, more see finer differences.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 256,
+          "maximum": 256,
+          "minimum": 2
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"texture_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "objects": {
+          "description": "The objects of this class get values of their own as well (unset:\nthe whole image only).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "scale": {
+          "description": "How far apart the two pixels of a pair are, in pixels - about the\nsize of the texture's grain.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "maximum": 1000,
+          "minimum": 1
+        }
+      }
+    },
+    "MeasureTextureTextureDirectionsSettings": {
+      "description": "Which values per feature: the mean of the four directions, or one per\ndirection.",
+      "oneOf": [
+        {
+          "description": "The mean of the four directions - one value per feature.",
+          "type": "string",
+          "const": "MEAN"
+        },
+        {
+          "description": "A value per direction (0°, 45°, 90°, 135°), as CellProfiler stores\nthem - four times as many values.",
+          "type": "string",
+          "const": "EACH"
+        }
+      ]
+    },
     "MedianSubtractSettings": {
       "description": "A background subtraction filter that uses a median rank operator.\n\nThis algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
       "type": "object",
@@ -2811,6 +2868,19 @@
             }
           },
           "$ref": "#/$defs/MeasureObjectShapeSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_TEXTURE"
+            }
+          },
+          "$ref": "#/$defs/MeasureTextureSettings",
           "required": [
             "type"
           ]

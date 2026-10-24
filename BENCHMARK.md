@@ -687,6 +687,24 @@ and radii are the step "Measure Object Shape":
 | `bench_pipeline` 200 × 2048², 8 threads (3 runs) | 5.58 / 5.80 / 6.96 s, 1.02-1.15 GB | 6.46 / 6.60 / 6.95 s, 1.09-1.19 GB |
 | `bench_export --object-size 24`, 3.8M objects (2 runs) | 53.8 / 54.3 s, 2.53-2.57 GB | 67.7 / 67.9 s, 3.22-3.24 GB |
 
+### Measure Texture (2026-10-24)
+
+`bench_measure_texture` (core, ignored test, release): a textured 16-bit
+image in 4 tiles, a 21 × 21 object every 30 px, scale 3, the 4 directions
+(the machine was busy: load ~14).
+
+| Image | Gray levels | Image only | Image + objects | Peak RSS (test process, incl. the test image) |
+|---|---|---|---|---|
+| 2048², 4,624 objects | 256 | 25 ms | 55-77 ms | 74 MB |
+| 8192², 74,529 objects | 256 | 366 ms | 823 ms | 603 MB |
+| 8192², 74,529 objects | 8 | 382 ms | 506 ms | 603 MB |
+
+~6 µs per 441 px object at 256 gray levels (~2 µs at 8). The counts are
+kept per entry counted, not as dense 256 × 256 matrices summed in full;
+the image's tiles are counted in parallel (1 byte per pixel per tile in
+flight). Most of the 603 MB is the test's own image (256 MB of f32 plus
+its copy while the tiles are built).
+
 ### Intensities in gray values only - no `_normalized` lists (2026-10-24)
 
 `intensity_{sum,mean,min,max}_normalized` dropped (nothing read them; 0..1
@@ -730,6 +748,7 @@ graphics driver).
 | Running a pipeline with intensity spread: 200 images 2048², 8 threads | 1.1-1.16 GB | 2026-10-24 | Measurement storage and object intensity spread |
 | Expand Without Overlap, 42,000 objects on 8192², margin 8 / 100 px | 255 / 861 MB (test process; 100 px measured before the smaller feature transform) | 2026-10-24 | Expand Without Overlap |
 | Measure Object Neighbors, 42,000 objects on 8192², expand until adjacent | 925 MB (test process) | 2026-10-24 | Measure Object Neighbors |
+| Measure Texture, 8192² image + 74,529 objects | 603 MB (test process, ~520 MB of it the test image) | 2026-10-24 | Measure Texture |
 | Results views, 5.6M objects, measurement columns (plate, per image, list, histogram) | 113-228 MB (query process) | 2026-10-24 | Measurement storage and object intensity spread |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 

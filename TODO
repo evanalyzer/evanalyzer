@@ -323,7 +323,8 @@ Decided - to build, in this order:
     - [ ] Look at the list's eye, checkboxes and bar in the real app (screenshot).
     - [ ] The reason in the plate's image list too.
     - [ ] CellProfiler's local focus score (per window) if the global one isn't robust enough.
-  - [ ] Texture (Haralick), granularity, radial distribution, Zernike, object neighbours, skeleton.
+  - [x] Texture (Haralick) - "Measure Texture", 2026-10-24 (see "CellProfiler parity - next" 6). Object neighbours done (4).
+  - [ ] Granularity, radial distribution, Zernike, skeleton.
   - [ ] Screening statistics: math between measurements, Z'/V-factor, EC50.
   - [ ] Validation against CellProfiler numbers; example pipelines.
 
@@ -354,6 +355,10 @@ Order:
   - [x] Measure Distance To Parent (`algos/measure/distance_to_parent.rs`): child centre → parent centre and → parent edge (CellProfiler RelateObjects' distances, fixture `crates/core/tests/distance_to_parent_cellprofiler.py`), `related_object_id` = the parent; a separate measure step (Relate is an object step).
   - [x] Results (2026-10-24): `Column::MeasurementObject` ("‹step› · ‹name› · object": the id the value names) for measurements declared `naming_objects()` (`measurement_info.related_objects`); a click on it opens that object (`RelatedTo::RelatedOf`), a click on a parent's id too (`RelatedTo::ParentOf`, was not clickable).
   - [ ] Look at both steps in the real app.
+- [x] 6. Measure Texture (2026-10-24, `algos/measure/texture.rs`): Haralick's 13 features (CellProfiler's MeasureTexture → mahotas.features.haralick) at a scale (default 3) and gray levels (default 256), over the image and, with "Per object of", per object (pixels outside the object and at 0 left out, as CellProfiler). Value for value (1e-9) - fixture `crates/core/tests/texture_cellprofiler.py`, 37 objects × 3 scale/level cases, image split over 2 tiles; incl. mahotas' difference variance (variance of the n values of P(|i-j|)). 8192², 74k objects: 0.82 s.
+  - Deviations: "Directions" = mean of the 4 (default; keys `<id>/<feature>`) or each (`<feature>_<0|45|90|135>`, CellProfiler's 4 columns); an object with no pixel pair in a direction gets no values (CellProfiler writes 0). Values in 8 bits over the image's bit depth (CellProfiler: over the file type's range).
+  - [ ] Look at the step and its values in the real app.
+  - [ ] Several scales in one step (CellProfiler allows a list); today one step per scale.
 - [x] 3. Shape (2026-10-24), checked against CellProfiler's MeasureObjectSizeShape (fixture `crates/core/tests/object_shape_cellprofiler.py`, 43 irregular objects incl. rings, bars, single pixels):
   - [x] Feret was wrong: max = the bounding box's diagonal, min = the ellipse's minor axis. Now calipers over the pixel centres (rotating calipers on the hull) = CellProfiler's Min/MaxFeretDiameter exactly. `objects.feret_diameter_px` / `min_feret_px` (+ nm) and Classify Objects' Feret filter use it - **objects passing a Feret filter can change in existing pipelines** (tell the testers).
   - [x] `Column::MaxFeret/MinFeret/MajorAxis/MinorAxis/EquivalentDiameter/Extent`: Max/Min Feret, Major/Minor axis (already = CellProfiler's), and computed in SQL (no column): Extent (area / box area), Equivalent diameter (√(4A/π)).

@@ -6,3 +6,4 @@ pub mod image_intensity;
 pub mod image_quality;
 pub mod object_neighbors;
 pub mod object_shape;
+pub mod texture;
