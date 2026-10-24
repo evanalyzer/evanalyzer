@@ -8,9 +8,10 @@ use crate::editor::annotations_controller::AnnotationController;
 use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
+use crate::editor::object_render::{ZOrder, pick};
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
-use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
+use crate::editor::viewport_controller::is_object_drawn;
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::images::{Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask};
@@ -293,27 +294,21 @@ impl ViewPortObjectController {
             let z = ZOrder::new(&*project);
             let hide_unclassified = project.hide_unclassified_objects();
 
-            // Highest z-key wins; on equal keys the later object wins, because
-            // later objects are painted on top. Objects that aren't drawn
+            // As drawn (`object_render::pick`); objects that aren't drawn
             // (hidden class, hidden unclassified) can't be picked.
-            let mut best: Option<(u32, _)> = None;
-            if let Some(objects) = project.get_objects() {
-                for object in objects.iter().chain(project.get_preview_objects()) {
-                    if !object.is_part_of(x1, y1)
-                        || !is_object_drawn(&*project, hide_unclassified, &object.object_class)
-                    {
-                        continue;
-                    }
-                    // Selected-object boost is deliberately NOT applied for picking,
-                    // otherwise an already selected object could never be clicked
-                    // away from in favour of the one underneath.
-                    let key = z.key(&object.object_class, false);
-                    if best.as_ref().is_none_or(|(k, _)| key >= *k) {
-                        best = Some((key, object.id.clone()));
-                    }
-                }
-            }
-            best.map(|(_, id)| id)
+            let objects: Vec<_> = project
+                .get_objects()
+                .into_iter()
+                .flatten()
+                .chain(project.get_preview_objects())
+                .filter(|o| is_object_drawn(&*project, hide_unclassified, &o.object_class))
+                .collect();
+            pick(
+                objects
+                    .iter()
+                    .map(|o| (z.key(&o.object_class, false), o.is_part_of(x1, y1))),
+            )
+            .map(|i| objects[i].id.clone())
         };
 
         let mut project = self.app_state.get_project_write();

@@ -15,6 +15,7 @@ import {
     ClassificationState,
 } from "../api/classification.slint";
 import { LayoutState } from "../api/layout.slint";
+import { ResultsState } from "../api/results.slint";
 import {
     Ink,
     InkIcons,
@@ -33,6 +34,11 @@ import {
 import { FocusBanner } from "pipeline_focus.slint";
 
 export component ClassificationPanel inherits Rectangle {
+    // In the results' split view: the analysis' classes on the image shown
+    // (`ResultsState.split-classes`) - the eye shows or hides them there,
+    // a click puts one on top; nothing to edit.
+    in property <bool> in-split: false;
+    property <[ClassItemData]> classes: root.in-split ? ResultsState.split-classes : ClassificationState.classes_list;
     // The class the row menu is for.
     property <int> menu-class-id: -1;
     property <string> menu-class-name;
@@ -69,7 +75,7 @@ export component ClassificationPanel inherits Rectangle {
 
         head := InkPanelHead {
             title: "Classes";
-            count: ClassificationState.classes_list.length;
+            count: root.classes.length;
             closable: false;
             foldable: true;
             folded: LayoutState.classes-folded;
@@ -80,7 +86,7 @@ export component ClassificationPanel inherits Rectangle {
             // The classes found in the images, merged in - the usual first
             // step after opening an image.
             action-icon: InkIcons.sparkle;
-            action-label: "Add the classes found in the images";
+            action-label: root.in-split ? "" : "Add the classes found in the images";
             action-enabled: ImagesListState.images_list.length > 0;
             action-disabled-reason: "Open images first";
             action => {
@@ -90,8 +96,8 @@ export component ClassificationPanel inherits Rectangle {
                     ClassificationState.class_auto_add_and_replace();
                 }
             }
-            add-label: "New class";
-            has-more: true;
+            add-label: root.in-split ? "" : "New class";
+            has-more: !root.in-split;
             add => {
                 ClassificationSettingsState.reset_to_zero();
                 // Below the head, where the new class appears.
@@ -107,7 +113,7 @@ export component ClassificationPanel inherits Rectangle {
             padding: 4px;
             spacing: 4px;
 
-            FocusBanner { }
+            if !root.in-split: FocusBanner { }
 
             Rectangle {
                 vertical-stretch: 1;
@@ -119,23 +125,31 @@ export component ClassificationPanel inherits Rectangle {
                     rows := VerticalLayout {
                         alignment: start;
                         spacing: 0px;
-                        for data in ClassificationState.classes_list: InkListRow {
+                        for data in root.classes: InkListRow {
                             title: data.name;
                             tag: data.id < 10 ? "0" + data.id : data.id;
                             swatch: data.color;
                             trailing: data.count;
-                            selected: ClassificationState.selected_class_id == data.id;
+                            selected: root.in-split ? ResultsState.split-selected-class == data.id : ClassificationState.selected_class_id == data.id;
                             has-eye: true;
                             shown: data.visible;
-                            has-more: data.id > 0;
+                            has-more: data.id > 0 && !root.in-split;
                             clicked => {
-                                root.select(data);
+                                if root.in-split {
+                                    ResultsState.split-class-selected(data.id);
+                                } else {
+                                    root.select(data);
+                                }
                             }
                             eye-toggled => {
-                                ClassificationState.class_visibility_toggled(data.id);
+                                if root.in-split {
+                                    ResultsState.split-class-toggled(data.id);
+                                } else {
+                                    ClassificationState.class_visibility_toggled(data.id);
+                                }
                             }
                             context-menu(x, y) => {
-                                if data.id > 0 {
+                                if data.id > 0 && !root.in-split {
                                     root.menu-class-id = data.id;
                                     root.menu-class-name = data.name;
                                     root.menu-x = max(0px, self.x + x - 190px);
@@ -148,7 +162,7 @@ export component ClassificationPanel inherits Rectangle {
                         }
                         // Only the background so far: the classes found in
                         // the images are one click away.
-                        if ClassificationState.classes_list.length <= 1: VerticalLayout {
+                        if !root.in-split && ClassificationState.classes_list.length <= 1: VerticalLayout {
                             padding: 12px;
                             spacing: 8px;
                             alignment: center;

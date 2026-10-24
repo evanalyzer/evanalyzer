@@ -384,22 +384,6 @@ export component ImageControlPanel inherits Rectangle {
                 }
             }
 
-            // Results, split: which classes' objects are drawn on the image.
-            if root.in-split && ResultsState.split-class-items.length > 0: InkCheckList {
-                title: "OBJECTS · " + ResultsState.split-class-summary;
-                items <=> ResultsState.split-class-items;
-                list-height: 108px;
-                item-selected(key, value, selected) => {
-                    ResultsState.split-class-selected(key, selected);
-                }
-                select-all => {
-                    ResultsState.split-class-select-all(true);
-                }
-                select-none => {
-                    ResultsState.split-class-select-all(false);
-                }
-            }
-
             InkDivider { }
 
             // -- Histogram --

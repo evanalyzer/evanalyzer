@@ -2,6 +2,7 @@
 // sets, the callbacks it answers.
 
 import { MultiSelectItem } from "../ink/ink.slint";
+import { ClassItemData } from "classification.slint";
 
 // Tracks: only with tracked objects - one image's tracks, beside it.
 export enum ResultsRailMode { list, matrix, charts, tracks }
@@ -462,12 +463,13 @@ export global ResultsState {
     in property <string> list-drill-label: "";
     callback list-drill-up();
 
-    // The split image's objects: which classes are drawn (the drawer's
-    // OBJECTS list) - ticked ones.
-    in-out property <[MultiSelectItem]> split-class-items: [];
-    in property <string> split-class-summary: "";
-    callback split-class-selected(string, bool);
-    callback split-class-select-all(bool);
+    // The split image's classes, in the drawer's Classes panel: each with
+    // its objects on the image, drawn or not (its eye); the selected one
+    // is drawn on top (-1 none).
+    in property <[ClassItemData]> split-classes: [];
+    in property <int> split-selected-class: -1;
+    callback split-class-toggled(int);
+    callback split-class-selected(int);
 
 
     // Rows (one row per object / per (image, class)) or the classes side by

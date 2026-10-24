@@ -247,9 +247,9 @@ export component Workspace inherits Rectangle {
     }
 
     // -- Right --
-    // Results, split with the image: only the image controls, over the
-    // image's right side (its head's "Image"), above the navigator - the
-    // same panel, not a second one.
+    // Results, split with the image: the classes and the image controls,
+    // over the image's right side (its head's "Image"), above the
+    // navigator - the same panels, not second ones.
     property <bool> split-image-panel: root.split && ResultsState.split-image-panel;
     if root.right-shown || root.split-image-panel: VerticalLayout {
         x: root.split-image-panel ? root.pane-x + root.pane-w - Float.right-w - 10px : parent.width - Float.right-w - Float.gap;
@@ -259,10 +259,14 @@ export component Workspace inherits Rectangle {
         spacing: 8px;
 
         // A folded panel keeps its head; Objects (open) takes the rest.
-        if LayoutState.classes-open && !root.split-image-panel: InkPanel {
+        // The same Classes panel - in the split view the analysis'
+        // classes on the image.
+        if LayoutState.classes-open || root.split-image-panel: InkPanel {
             vertical-stretch: 0;
             max-height: 340px;
-            ClassificationPanel { }
+            ClassificationPanel {
+                in-split: root.split-image-panel;
+            }
         }
 
         if LayoutState.image-open || root.split-image-panel: InkPanel {

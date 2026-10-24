@@ -1117,23 +1117,23 @@ mod tests {
     /// (written before they did) none - the split view draws ellipses then.
     #[test]
     fn image_objects_bring_their_masks_when_the_results_keep_them() {
-        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let spec = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
         let filter = ImageObjectsFilter {
             image_rel_path: "img1.tif".into(),
             plane: plane(),
             value_column: None,
         };
-        let objects = || {
+        let objects = |generator: &ResultsGenerator| {
             ResultCharts {}
-                .image_objects(&generator, &filter)
+                .image_objects(generator, &filter)
                 .expect("objects")
         };
-        let [without] = &objects()[..] else {
-            panic!("one object");
-        };
+        let without = objects(&open(&spec)).remove(0);
         assert!(without.mask.is_empty());
         assert_eq!(without.decoded_mask(), None);
 
+        // Results that keep them (the column is there before they're read).
+        let generator = open(&spec);
         let [x0, y0, x1, y1] = without.bbox_px;
         let len = ((x1 - x0 + 1) * (y1 - y0 + 1)) as usize;
         let mut mask = bitvec::vec::BitVec::<u64, bitvec::order::Lsb0>::repeat(true, len);
@@ -1146,10 +1146,7 @@ mod tests {
             [evanalyzer_core::encode_mask(&mask)],
         )
         .unwrap();
-        let [with] = &objects()[..] else {
-            panic!("one object");
-        };
-        assert_eq!(with.decoded_mask(), Some(mask));
+        assert_eq!(objects(&generator).remove(0).decoded_mask(), Some(mask));
     }
 
     /// Tracks: an image's tracks on its plane, each its points in time
