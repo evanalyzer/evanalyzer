@@ -31,6 +31,7 @@ use evanalyzer_app::results::{BoxplotBox, Cell};
 use evanalyzer_app::results::{BoxplotFilter, BoxplotGroup, ScatterResult};
 use evanalyzer_app::results::{ChildColumn, ChildValue};
 use evanalyzer_app::results::{Grouping, PlateSize};
+use evanalyzer_app::results::{ParentColumn, ParentValue};
 use evanalyzer_app::results::{
     TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
     TimeCourseResult, TimeCourseStat,
@@ -167,8 +168,9 @@ struct ListFilter {
 #[derive(Clone, Debug, PartialEq)]
 struct Drill {
     related: evanalyzer_app::results::RelatedTo,
-    /// The class of the objects listed.
-    class: ObjectClass,
+    /// The class of the objects listed (none: one object, whatever its
+    /// class).
+    class: Option<ObjectClass>,
     /// "Spot of Cell 0f3a…" - the bar above the list.
     label: String,
 }
@@ -2998,13 +3000,31 @@ impl ResultsStateController {
                     name(c.parent_class),
                     short_object_id(&id)
                 ),
-                class: c.child_class,
+                class: Some(c.child_class),
                 related: RelatedTo::ChildrenOf(c.parent_class, id),
             },
             Some(Column::ColocCount(class)) => Drill {
                 label: format!("{} coloc with {}", name(class), short_object_id(&id)),
-                class,
+                class: Some(class),
                 related: RelatedTo::PartnersOf(class, id),
+            },
+            // The one object the cell names.
+            Some(Column::MeasurementObject(m)) => Drill {
+                label: format!("{} of {}", m.name, short_object_id(&id)),
+                class: None,
+                related: RelatedTo::RelatedOf(m.key, id),
+            },
+            Some(Column::Parent(ParentColumn {
+                parent_class,
+                value: ParentValue::Id,
+            })) => Drill {
+                label: format!(
+                    "{} - parent of {}",
+                    name(parent_class),
+                    short_object_id(&id)
+                ),
+                class: None,
+                related: RelatedTo::ParentOf(parent_class, id),
             },
             _ => return,
         };
@@ -3705,7 +3725,10 @@ impl ResultsStateController {
         );
         let drill = list_filter.drill.clone();
         let object_classes = match &drill {
-            Some(drill) => Some(vec![drill.class]),
+            Some(Drill {
+                class: Some(class), ..
+            }) => Some(vec![*class]),
+            Some(_) => None,
             None if list_filter.object_classes.is_empty() => None,
             None => Some(list_filter.object_classes.clone()),
         };
@@ -3738,6 +3761,11 @@ impl ResultsStateController {
                             value: ChildValue::Count,
                             ..
                         }) | Column::ColocCount(ObjectClass::Global(_))
+                            | Column::MeasurementObject(_)
+                            | Column::Parent(ParentColumn {
+                                value: ParentValue::Id,
+                                ..
+                            })
                     )
             })
             .collect();
@@ -6291,11 +6319,15 @@ pub(crate) mod tests {
                 touches_edge BOOLEAN,
                 pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
                 image_bit_depth UTINYINT,
-                intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
-                intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
-                intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
-                intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
-                coloc_partner_ids MAP(INTEGER, UUID[])
+                intensity_sum_gray DOUBLE[],
+                intensity_mean_gray DOUBLE[],
+                intensity_min_gray DOUBLE[],
+                intensity_max_gray DOUBLE[],
+                intensity_std_gray DOUBLE[], intensity_median_gray DOUBLE[],
+                intensity_lower_quartile_gray DOUBLE[], intensity_upper_quartile_gray DOUBLE[],
+                intensity_mad_gray DOUBLE[],
+                coloc_partner_ids MAP(INTEGER, UUID[]),
+            measurement_values DOUBLE[]
             );
             CREATE TABLE images (
                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -6312,7 +6344,7 @@ pub(crate) mod tests {
 
         // Channel 0 only: sum 1.0 (255 gray values), mean 0.5 (127), min 0,
         // max 1.0 (255).
-        let ch0_intensities = "[1.0], [255.0], [0.5], [127.0], [0.0], [0.0], [1.0], [255.0]";
+        let ch0_intensities = "[255.0], [127.0], [0.0], [255.0]";
         let insert = |idx: usize,
                       image: &str,
                       class_name: &str,
@@ -6333,9 +6365,8 @@ pub(crate) mod tests {
                     circularity, solidity, aspect_ratio, roundness, compactness,
                     major_axis_px, minor_axis_px, eccentricity, touches_edge,
                     pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                    intensity_sum_normalized, intensity_sum_gray, intensity_mean_normalized,
-                    intensity_mean_gray, intensity_min_normalized, intensity_min_gray,
-                    intensity_max_normalized, intensity_max_gray, coloc_partner_ids
+                    intensity_sum_gray, intensity_mean_gray, intensity_min_gray,
+                    intensity_max_gray, coloc_partner_ids
                 ) VALUES (
                     ?, ?, 0, 0, ?, ?, ?,
                     ?, ?, 0,
@@ -6960,13 +6991,31 @@ pub(crate) mod tests {
         let count_column = headers.iter().position(|h| h == "ClassB · Count").unwrap();
         let drill: Vec<bool> = state.get_list_column_drill().iter().collect();
         assert!(drill[count_column], "the count opens the children");
-        assert_eq!(drill.iter().filter(|d| **d).count(), 1, "only the count");
+        let parent_column = headers.iter().position(|h| h == "Parent ClassA").unwrap();
+        assert!(drill[parent_column], "the parent's id opens the parent");
+        assert_eq!(
+            drill.iter().filter(|d| **d).count(),
+            2,
+            "only the count and the parent's id"
+        );
         state.invoke_list_drill(0, count_column as i32);
         drain_ui_queue();
         assert_eq!(state.get_list_rows().row_count(), 1, "its one ClassB child");
         assert_eq!(
             state.get_list_drill_label().as_str(),
             "ClassB of ClassA 000000000000"
+        );
+        // The child's "Parent ClassA": a click opens its parent.
+        state.invoke_list_drill(0, parent_column as i32);
+        drain_ui_queue();
+        assert_eq!(state.get_list_rows().row_count(), 1, "its one parent");
+        assert!(
+            state
+                .get_list_drill_label()
+                .as_str()
+                .starts_with("ClassA - parent of "),
+            "{}",
+            state.get_list_drill_label()
         );
         state.invoke_list_drill_up();
         drain_ui_queue();

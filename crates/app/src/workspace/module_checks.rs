@@ -1076,8 +1076,7 @@ mod tests {
     }
 
     fn pearson(name: &str) -> PipelineCommand {
-        let mut command =
-            PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+        let mut command = PipelineCommand::default_for_key("measure_colocalization").unwrap();
         *command.measurement_id_mut().unwrap() = name.into();
         command
     }

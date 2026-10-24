@@ -182,7 +182,7 @@ fn format_number(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algos::{ImageQuality, PearsonCorrelationCoefficient};
+    use crate::algos::{ImageQuality, MeasureColocalization};
     use crate::pipeline::pipeline::PipelineImageMeta;
     use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectId};
 
@@ -313,12 +313,15 @@ mod tests {
         assert!(err.contains("rule 1 has no measurement"), "{err}");
 
         // A value per object can't decide about an image.
-        let info = PearsonCorrelationCoefficient {
+        let info = MeasureColocalization {
             id: "per_object".into(),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes: crate::algos::CostesMethod::Off,
+            objects: evanalyzer_cfg::core_types::ObjectClass::Global(1),
         }
-        .measurement_output("pearson");
+        .measurement_output("object_pearson");
         cache.add_object_measurement(info.clone(), vec![(ObjectId(1), 0.5)]);
         let per_object = ExcludeImage {
             exclude_when: ExcludeWhen::AnyRule,

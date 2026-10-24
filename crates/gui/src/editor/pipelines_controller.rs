@@ -10982,7 +10982,7 @@ mod tests {
     /// A measurement step added gets a name; its copy one of its own.
     #[test]
     fn a_measurement_step_and_its_copy_get_names_of_their_own() {
-        let pearson = PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+        let pearson = PipelineCommand::default_for_key("measure_colocalization").unwrap();
         let (ui, ui_state, _controller) = selected(vec![PipelineStepSettings {
             id: StepId::UNASSIGNED,
             enabled: true,
@@ -11003,7 +11003,7 @@ mod tests {
                     .to_string()
             })
             .collect();
-        assert_eq!(names, ["pearson_01", "pearson_02"]);
+        assert_eq!(names, ["coloc_01", "coloc_02"]);
     }
 
     #[test]

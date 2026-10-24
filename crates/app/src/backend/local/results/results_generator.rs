@@ -348,6 +348,17 @@ impl ResultsGenerator {
                 coloc_class_key(*class),
                 id.replace('\'', "''")
             )),
+            Some(RelatedTo::RelatedOf(key, id)) => conditions.push(format!(
+                "object_id IN (SELECT related_object_id FROM measurements \
+                 WHERE region = 'object' AND key = '{}' AND object_id = '{}'::UUID)",
+                key.replace('\'', "''"),
+                id.replace('\'', "''")
+            )),
+            Some(RelatedTo::ParentOf(class, id)) => conditions.push(format!(
+                "object_id IN (SELECT parent_ids[{}] FROM objects WHERE object_id = '{}'::UUID)",
+                coloc_class_key(*class),
+                id.replace('\'', "''")
+            )),
             None => {}
         }
         // Keyset pagination (see the doc comment on `Pagination::after`):
@@ -408,16 +419,18 @@ impl ResultsGenerator {
         let sql = format!(
             "SELECT {}\n FROM (SELECT * FROM objects {where_clause}) o \
              LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n ORDER BY o.object_id",
-            object_select_clause(needs)
+            object_select_clause(&needs)?
         );
+        let value_keys = needs.value_keys();
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
         let mut objects: Vec<ObjectRow> = stmt
-            .query_map([], map_object_row)
+            .query_map([], |row| map_object_row(row, &value_keys))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         self.add_measurement_values(objects.iter_mut(), &ordered_columns)?;
+        self.add_measurement_objects(objects.iter_mut(), &ordered_columns)?;
         self.add_related_values(objects.iter_mut(), &ordered_columns)?;
 
         let (row_names, rows, row_locations) = if details_active {
@@ -594,6 +607,63 @@ impl ResultsGenerator {
             let (id, key, value) = value.map_err(err)?;
             if let Some(object) = objects.get_mut(&id) {
                 object.measurements.insert(key, value);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the objects the [`Column::MeasurementObject`] columns among
+    /// `columns` name for `objects` (a page of the list): their ids, kept
+    /// with the related values. One query for the page.
+    fn add_measurement_objects<'a>(
+        &self,
+        objects: impl Iterator<Item = &'a mut ObjectRow>,
+        columns: &[Column],
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let wanted: Vec<&MeasurementColumn> = columns
+            .iter()
+            .filter_map(|c| match c {
+                Column::MeasurementObject(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        let mut objects: HashMap<String, &mut ObjectRow> =
+            objects.map(|o| (o.object_id.clone(), o)).collect();
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let ids = sql_string_in_list(&objects.keys().cloned().collect::<Vec<_>>());
+        let keys: Vec<String> = wanted.iter().map(|m| m.key.clone()).collect();
+        let sql = format!(
+            "SELECT object_id::VARCHAR, key, related_object_id::VARCHAR FROM measurements \
+             WHERE region = 'object' AND related_object_id IS NOT NULL \
+             AND key IN ({}) AND object_id IN ({ids})",
+            sql_string_in_list(&keys)
+        );
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(err)?;
+        for row in rows {
+            let (id, key, related) = row.map_err(err)?;
+            let Some(m) = wanted.iter().find(|m| m.key == key) else {
+                continue;
+            };
+            if let Some(object) = objects.get_mut(&id) {
+                let column = Column::MeasurementObject((*m).clone());
+                object
+                    .related
+                    .insert(column.as_key(&[]), Some(RelatedValue::Text(related)));
             }
         }
         Ok(())
@@ -1214,17 +1284,19 @@ impl ResultsGenerator {
         let needs = ObjectColumnNeeds::for_columns(&block_columns);
         let sql = format!(
             "SELECT {}\n FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n WHERE o.object_id IN ({})",
-            object_select_clause(needs),
+            object_select_clause(&needs)?,
             sql_string_in_list(&ids)
         );
+        let value_keys = needs.value_keys();
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
         let mut objects: HashMap<String, ObjectRow> = stmt
-            .query_map([], map_object_row)
+            .query_map([], |row| map_object_row(row, &value_keys))
             .map_err(err)?
             .map(|row| row.map(|object| (object.object_id.clone(), object)))
             .collect::<Result<_, _>>()
             .map_err(err)?;
         self.add_measurement_values(objects.values_mut(), &block_columns)?;
+        self.add_measurement_objects(objects.values_mut(), &block_columns)?;
         self.add_related_values(objects.values_mut(), &block_columns)?;
 
         let mut row_names = Vec::new();
@@ -1327,12 +1399,13 @@ impl ResultsGenerator {
             let partner_needs = ObjectColumnNeeds::for_columns(metric_columns);
             let partner_sql = format!(
                 "SELECT {} FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path WHERE o.object_id IN ({})",
-                object_select_clause(partner_needs),
+                object_select_clause(&partner_needs)?,
                 sql_string_in_list(&ids)
             );
+            let value_keys = partner_needs.value_keys();
             let mut partner_stmt = self.database.prepare(&partner_sql).map_err(err)?;
             partner_stmt
-                .query_map([], map_object_row)
+                .query_map([], |row| map_object_row(row, &value_keys))
                 .map_err(err)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(err)?
@@ -2654,6 +2727,12 @@ impl ResultsGenerator {
             entry(Column::Circularity, "Shape"),
             entry(Column::Solidity, "Shape"),
             entry(Column::Eccentricity, "Shape"),
+            entry(Column::MaxFeret, "Shape"),
+            entry(Column::MinFeret, "Shape"),
+            entry(Column::MajorAxis, "Shape"),
+            entry(Column::MinorAxis, "Shape"),
+            entry(Column::EquivalentDiameter, "Shape"),
+            entry(Column::Extent, "Shape"),
         ];
 
         // Coloc count is measured per candidate partner class (like
@@ -2672,11 +2751,22 @@ impl ResultsGenerator {
             ret.push(entry(Column::IntensitySum(channel), "intensity"));
             ret.push(entry(Column::IntensityMin(channel), "intensity"));
             ret.push(entry(Column::IntensityMax(channel), "intensity"));
+            ret.push(entry(Column::IntensityStd(channel), "intensity"));
+            ret.push(entry(Column::IntensityMedian(channel), "intensity"));
+            ret.push(entry(Column::IntensityLowerQuartile(channel), "intensity"));
+            ret.push(entry(Column::IntensityUpperQuartile(channel), "intensity"));
+            ret.push(entry(Column::IntensityMad(channel), "intensity"));
         }
 
-        // The measurement steps' measurements, by step.
+        // The measurement steps' measurements, by step - and the objects
+        // those that name one are about.
+        let naming = self.get_measurement_keys_naming_objects()?;
         for column in self.get_measurement_columns()? {
-            ret.push(entry(Column::Measurement(column), "Measurements"));
+            let names_objects = naming.contains(&column.key);
+            ret.push(entry(Column::Measurement(column.clone()), "Measurements"));
+            if names_objects {
+                ret.push(entry(Column::MeasurementObject(column), "Measurements"));
+            }
         }
 
         // The links Relate Objects made: per (parent class, child class) the
@@ -2811,6 +2901,34 @@ impl ResultsGenerator {
         Ok(columns)
     }
 
+    /// The keys of the measurements whose values name another object
+    /// (`measurement_info.related_objects`).
+    fn get_measurement_keys_naming_objects(&self) -> Result<Vec<String>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let has_column: bool = self
+            .database
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.columns \
+                 WHERE table_name = 'measurement_info' AND column_name = 'related_objects'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(err)?;
+        if !has_column {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .database
+            .prepare("SELECT key FROM measurement_info WHERE related_objects")
+            .map_err(err)?;
+        let keys = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(err)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(err)?;
+        Ok(keys)
+    }
+
     pub fn get_nr_of_c_stacks(&self) -> u32 {
         let max_stacks: u32 = self
             .database
@@ -2940,6 +3058,9 @@ struct ObjectRow {
     bbox_xmax_px: u32,
     bbox_ymax_px: u32,
     disabled: bool,
+    /// The selected plain number columns' values (see
+    /// [`is_value_column`]), by column key - read with the row.
+    values: HashMap<String, Option<f64>>,
     /// The selected measurements' values, by key - filled after the rows
     /// are read (`ResultsGenerator::add_measurement_values`).
     measurements: HashMap<String, f64>,
@@ -2960,7 +3081,7 @@ enum RelatedValue {
 /// and its coloc-detail partner fetch (needs from just `metric_columns`,
 /// see `Column::with_coloc_details` on `ListFilter`), so both build their
 /// `SELECT` list and parse rows the exact same (bug-for-bug consistent) way.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct ObjectColumnNeeds {
     image_name: bool,
     class: bool,
@@ -2974,6 +3095,9 @@ struct ObjectColumnNeeds {
     track_id: bool,
     coloc: bool,
     intensities: bool,
+    /// The plain number columns among the selection, read as
+    /// `column_aggregate_expr` after the fixed columns.
+    values: Vec<Column>,
 }
 
 impl ObjectColumnNeeds {
@@ -2999,8 +3123,38 @@ impl ObjectColumnNeeds {
                         | Column::IntensityMax(_)
                 )
             }),
+            values: columns
+                .iter()
+                .filter(|c| is_value_column(c))
+                .cloned()
+                .collect(),
         }
     }
+
+    /// The `values` columns' keys, in `SELECT` order.
+    fn value_keys(&self) -> Vec<String> {
+        self.values.iter().map(|c| c.as_key(&[])).collect()
+    }
+}
+
+/// A column that is one number per object, read with
+/// [`column_aggregate_expr`] in the list too (instead of a field of its
+/// own in `ObjectRow`): the newer per-object columns.
+fn is_value_column(column: &Column) -> bool {
+    matches!(
+        column,
+        Column::MaxFeret
+            | Column::MinFeret
+            | Column::MajorAxis
+            | Column::MinorAxis
+            | Column::EquivalentDiameter
+            | Column::Extent
+            | Column::IntensityStd(_)
+            | Column::IntensityMedian(_)
+            | Column::IntensityLowerQuartile(_)
+            | Column::IntensityUpperQuartile(_)
+            | Column::IntensityMad(_)
+    )
 }
 
 /// The comma-joined `SELECT` column list `get_list` queries `objects`
@@ -3012,7 +3166,7 @@ impl ObjectColumnNeeds {
 /// for real regardless of `need`, since the GUI needs an object's location
 /// to navigate to and highlight it (see `DatabaseResult::row_locations`)
 /// independent of which columns are actually displayed.
-fn object_select_clause(need: ObjectColumnNeeds) -> String {
+fn object_select_clause(need: &ObjectColumnNeeds) -> Result<String, InternalErrors> {
     let select_image_name = if need.image_name {
         "o.image_name"
     } else {
@@ -3080,19 +3234,28 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
     } else {
         "NULL::DOUBLE[], NULL::DOUBLE[], NULL::DOUBLE[], NULL::DOUBLE[]"
     };
-    format!(
+    let mut select_values = String::new();
+    for column in &need.values {
+        select_values.push_str(&format!(
+            ", CAST(({}) AS DOUBLE)",
+            column_aggregate_expr(column)?
+        ));
+    }
+    Ok(format!(
         "o.object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
                 {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
                 {select_circularity}, {select_solidity}, {select_eccentricity},\n\
                 {select_coloc}, {select_intensities},\n\
                 o.image_rel_path, o.bbox_xmin_px, o.bbox_ymin_px, o.bbox_xmax_px, o.bbox_ymax_px,\n\
-                COALESCE(i.disabled, false), {select_track_id}"
-    )
+                COALESCE(i.disabled, false), {select_track_id}{select_values}"
+    ))
 }
 
 /// Inverse of `object_select_clause`'s fixed column position order —
 /// shared so the main and partner fetches in `get_list` can never drift.
-fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
+/// `value_keys`: [`ObjectColumnNeeds::value_keys`], the columns after the
+/// fixed ones.
+fn map_object_row(row: &duckdb::Row<'_>, value_keys: &[String]) -> duckdb::Result<ObjectRow> {
     Ok(ObjectRow {
         object_id: row.get(0)?,
         image_name: row.get(1)?,
@@ -3127,6 +3290,11 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         bbox_ymax_px: row.get(21)?,
         disabled: row.get(22)?,
         track_id: row.get(23)?,
+        values: value_keys
+            .iter()
+            .enumerate()
+            .map(|(i, key)| Ok((key.clone(), row.get::<_, Option<f64>>(24 + i)?)))
+            .collect::<duckdb::Result<_>>()?,
         measurements: HashMap::new(),
         related: HashMap::new(),
     })
@@ -3174,7 +3342,7 @@ fn is_resolvable_metric(column: &Column) -> bool {
             | Column::IntensitySum(_)
             | Column::IntensityMin(_)
             | Column::IntensityMax(_)
-    )
+    ) || is_value_column(column)
 }
 
 /// Display label for a `coloc_partner_ids`/`object_class_name`-adjacent class,
@@ -3541,6 +3709,25 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(object, IntensityStat::Max, *channel)),
             ..no_bg
         },
+        Column::MaxFeret
+        | Column::MinFeret
+        | Column::MajorAxis
+        | Column::MinorAxis
+        | Column::EquivalentDiameter
+        | Column::Extent
+        | Column::IntensityStd(_)
+        | Column::IntensityMedian(_)
+        | Column::IntensityLowerQuartile(_)
+        | Column::IntensityUpperQuartile(_)
+        | Column::IntensityMad(_) => Cell {
+            value: object
+                .values
+                .get(&column.as_key(&[]))
+                .copied()
+                .flatten()
+                .map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+            ..no_bg
+        },
         Column::Measurement(m) => Cell {
             value: object
                 .measurements
@@ -3548,7 +3735,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
                 .map_or(CellValue::Empty, |v| CellValue::Float(*v as f32)),
             ..no_bg
         },
-        Column::Children(_) | Column::Parent(_) => {
+        Column::Children(_) | Column::Parent(_) | Column::MeasurementObject(_) => {
             let count = matches!(
                 column,
                 Column::Children(ChildColumn {
@@ -3628,6 +3815,16 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         Column::Circularity => "circularity".to_string(),
         Column::Solidity => "solidity".to_string(),
         Column::Eccentricity => "eccentricity".to_string(),
+        Column::MaxFeret => "feret_diameter_px".to_string(),
+        Column::MinFeret => "min_feret_px".to_string(),
+        Column::MajorAxis => "major_axis_px".to_string(),
+        Column::MinorAxis => "minor_axis_px".to_string(),
+        // The diameter of a disk of the object's area.
+        Column::EquivalentDiameter => "sqrt(4.0 * area_px / pi())".to_string(),
+        // The area over the bounding box's.
+        Column::Extent => "area_px / ((bbox_xmax_px - bbox_xmin_px + 1) \
+             * (bbox_ymax_px - bbox_ymin_px + 1))::DOUBLE"
+            .to_string(),
         Column::ColocCount(class) => format!(
             "COALESCE(len(coloc_partner_ids[{}]), 0)",
             coloc_class_key(*class)
@@ -3638,6 +3835,15 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         Column::IntensityAvg(channel) => format!("intensity_mean_gray[{}]", channel + 1),
         Column::IntensityMin(channel) => format!("intensity_min_gray[{}]", channel + 1),
         Column::IntensityMax(channel) => format!("intensity_max_gray[{}]", channel + 1),
+        Column::IntensityStd(channel) => format!("intensity_std_gray[{}]", channel + 1),
+        Column::IntensityMedian(channel) => format!("intensity_median_gray[{}]", channel + 1),
+        Column::IntensityLowerQuartile(channel) => {
+            format!("intensity_lower_quartile_gray[{}]", channel + 1)
+        }
+        Column::IntensityUpperQuartile(channel) => {
+            format!("intensity_upper_quartile_gray[{}]", channel + 1)
+        }
+        Column::IntensityMad(channel) => format!("intensity_mad_gray[{}]", channel + 1),
         Column::Measurement(m) => measurement_value_expr(m),
         Column::Children(c) => children_value_expr(c)?,
         Column::Parent(ParentColumn {
@@ -3667,7 +3873,8 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         | Column::ObjectId
         | Column::TrackId
         | Column::ImageName
-        | Column::ObjectClass => {
+        | Column::ObjectClass
+        | Column::MeasurementObject(_) => {
             // No classes list handy here (this is a plain error-message
             // helper, not a `ResultsGenerator` method) — `as_key` already
             // falls back to the raw numeric id for `ColocCount` when it
@@ -3720,16 +3927,20 @@ fn related_value_expr(column: &Column) -> Result<String, InternalErrors> {
 }
 
 /// A measurement's value for the object of the row - its own (a value per
-/// object) or its image plane's (a value per image). Refers to the row only
-/// by `object_id`, which no other table of these queries has, so it works
-/// whatever `objects` is called there (`o`, `objects`, joined with
-/// `images`). NULL without a value.
+/// object) or its image plane's (a value per image). NULL without a value.
+///
+/// An object's own value is read from its `measurement_values` list, at the
+/// measurement's `object_index` (one lookup for the whole query): a join
+/// with `measurements` per column took ~2 s and ~4 GB for ten columns over
+/// 5.6M objects, the list ~80 ms and ~290 MB (BENCHMARK.md). An image's
+/// value refers to the row only by `object_id`, which no other table of
+/// these queries has, so it works whatever `objects` is called there (`o`,
+/// `objects`, joined with `images`).
 fn measurement_value_expr(m: &MeasurementColumn) -> String {
     let key = m.key.replace('\'', "''");
     if m.per_object {
         format!(
-            "(SELECT mv.v FROM (SELECT object_id AS oid, value AS v FROM measurements \
-             WHERE key = '{key}' AND region = 'object') mv WHERE mv.oid = object_id)"
+            "measurement_values[(SELECT object_index FROM measurement_info WHERE key = '{key}')]"
         )
     } else {
         format!(
@@ -8138,14 +8349,14 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
                  step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
-                 range_max DOUBLE, aggregatable BOOLEAN);
+                 range_max DOUBLE, aggregatable BOOLEAN, object_index INTEGER);
                  CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
                  z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
-                 object_class_name VARCHAR, object_class_id INTEGER[], step VARCHAR, \
-                 measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
+                 related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+                 step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
                  INSERT INTO measurement_info VALUES
-                     ('p_01/p', 'P', 'p_01', 'None', 'Image', -1, 1, true),
-                     ('q_01/q', 'Q', 'q_01', 'None', 'Object', -1, 1, true);
+                     ('p_01/p', 'P', 'p_01', 'None', 'Image', -1, 1, true, NULL),
+                     ('q_01/q', 'Q', 'q_01', 'None', 'Object', -1, 1, true, 1);
                  INSERT INTO measurements (image_rel_path, z_stack, t_stack, region, key, value)
                  VALUES ('A1_01.tif', 0, 0, 'image', 'p_01/p', 0.2),
                         ('A1_02.tif', 0, 0, 'image', 'p_01/p', 0.4),
@@ -8169,6 +8380,14 @@ mod tests {
                     "INSERT INTO measurements (image_rel_path, z_stack, t_stack, region, \
                      object_id, key, value) VALUES ('', 0, 0, 'object', ?::UUID, 'q_01/q', ?)",
                     duckdb::params![id, q],
+                )
+                .unwrap();
+            // ... and on the object, as the analysis writes it.
+            generator
+                .database
+                .execute(
+                    "UPDATE objects SET measurement_values = [?] WHERE object_id = ?::UUID",
+                    duckdb::params![q, id],
                 )
                 .unwrap();
         }
@@ -8389,5 +8608,268 @@ mod tests {
             (Some(0.1), Some(0.8))
         );
         assert_eq!(histogram.counts.iter().sum::<u64>(), 4, "one per object");
+    }
+
+    /// A spread column (e.g. the median intensity of a channel) in the
+    /// list, per image and in a chart - the same values everywhere; an
+    /// object without it (a stored annotation) has none.
+    #[test]
+    fn a_spread_column_is_read_in_every_view() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 30),
+        ]);
+        generator
+            .database
+            .execute_batch(
+                "UPDATE objects SET intensity_median_gray = [CAST(area_px AS DOUBLE) / 10, 99.0] \
+                 WHERE area_px < 30",
+            )
+            .unwrap();
+        let median = Column::IntensityMedian(0);
+        assert!(
+            generator
+                .get_available_columns()
+                .unwrap()
+                .iter()
+                .any(|c| c.key == median),
+            "offered per channel"
+        );
+        assert_eq!(
+            Column::from_key(&median.as_key(&[]), &[]),
+            Some(median.clone())
+        );
+
+        let list = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::AreaSizePx, median.clone()],
+                with_coloc_details: false,
+                related_to: None,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let mut rows: Vec<(i32, Option<f64>)> = list
+            .rows
+            .iter()
+            .map(|row| {
+                let CellValue::Integer(area) = row[0].value else {
+                    panic!("the area");
+                };
+                (area, rounded(as_float(&row[1].value)))
+            })
+            .collect();
+        rows.sort_by_key(|row| row.0);
+        assert_eq!(rows, [(10, Some(1.0)), (20, Some(2.0)), (30, None)]);
+
+        let per_image = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![median.clone()],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let averages: Vec<Option<f64>> = per_image
+            .rows
+            .iter()
+            .map(|row| rounded(as_float(&row[2].value)))
+            .collect();
+        assert_eq!(averages, [Some(1.5), None]);
+
+        let histogram = super::super::results_charts::ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: median,
+                    bins: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            histogram.counts.iter().sum::<u64>(),
+            2,
+            "objects with a value"
+        );
+    }
+
+    /// Shape columns: stored ones (max Feret) and computed ones (extent:
+    /// area over the bounding box's) - in the list and per image.
+    #[test]
+    fn shape_columns_are_read_and_computed() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 60),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 30),
+        ]);
+        // Every seeded object's box is 0..=10 (121 pixels).
+        generator
+            .database
+            .execute_batch("UPDATE objects SET feret_diameter_px = area_px / 10.0")
+            .unwrap();
+        let (feret, extent) = (Column::MaxFeret, Column::Extent);
+        for column in [&feret, &extent] {
+            assert_eq!(
+                Column::from_key(&column.as_key(&[]), &[]),
+                Some(column.clone())
+            );
+        }
+        let list = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::AreaSizePx, feret.clone(), extent.clone()],
+                with_coloc_details: false,
+                related_to: None,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let mut rows: Vec<(i32, Option<f64>, Option<f64>)> = list
+            .rows
+            .iter()
+            .map(|row| {
+                let CellValue::Integer(area) = row[0].value else {
+                    panic!("area")
+                };
+                (
+                    area,
+                    rounded(as_float(&row[1].value)),
+                    rounded(as_float(&row[2].value)),
+                )
+            })
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        assert_eq!(
+            rows,
+            [
+                (30, Some(3.0), rounded(Some(30.0 / 121.0))),
+                (60, Some(6.0), rounded(Some(60.0 / 121.0)))
+            ]
+        );
+        let per_image = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![extent],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        assert_eq!(
+            rounded(as_float(&per_image.rows[0][2].value)),
+            rounded(Some(45.0 / 121.0))
+        );
+    }
+
+    /// A measurement whose values name another object (the nearest
+    /// neighbour) offers that object as a column; a click on it - or on a
+    /// parent's id - lists that one object (`RelatedTo::RelatedOf` /
+    /// `ParentOf`).
+    #[test]
+    fn the_object_a_value_names_is_a_column_and_can_be_listed() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 30),
+        ]);
+        let ids: Vec<String> = generator
+            .database
+            .prepare("SELECT object_id::VARCHAR FROM objects ORDER BY area_px")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let (a, b, c) = (&ids[0], &ids[1], &ids[2]);
+        generator
+            .database
+            .execute_batch(&format!(
+                "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
+                 step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
+                 range_max DOUBLE, aggregatable BOOLEAN, object_index INTEGER, \
+                 related_objects BOOLEAN);
+                 CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+                 z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+                 related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+                 step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
+                 INSERT INTO measurement_info VALUES
+                     ('n_01/first', 'First closest', 'n_01', 'Pixels', 'Object', NULL, NULL,
+                      true, 1, true);
+                 INSERT INTO measurements (image_rel_path, z_stack, t_stack, region, object_id,
+                     related_object_id, key, value) VALUES
+                     ('A1_01.tif', 0, 0, 'object', '{a}', '{b}', 'n_01/first', 3.0),
+                     ('A1_01.tif', 0, 0, 'object', '{b}', '{a}', 'n_01/first', 3.0),
+                     ('A1_01.tif', 0, 0, 'object', '{c}', '{b}', 'n_01/first', 5.0);
+                 UPDATE objects SET parent_ids = MAP {{1: '{c}'::UUID}} WHERE object_id = '{a}';"
+            ))
+            .unwrap();
+        let first = generator
+            .get_available_columns()
+            .unwrap()
+            .into_iter()
+            .find_map(|entry| match entry.key {
+                Column::MeasurementObject(m) => Some(m),
+                _ => None,
+            })
+            .expect("the named object is offered");
+        assert_eq!(first.key, "n_01/first");
+        let list = |columns: Vec<Column>, related_to: Option<RelatedTo>| {
+            generator
+                .get_object_list(&ListFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns,
+                    with_coloc_details: false,
+                    related_to,
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap()
+        };
+        let rows = list(
+            vec![Column::AreaSizePx, Column::MeasurementObject(first.clone())],
+            None,
+        );
+        let named: Vec<(i32, String)> = rows
+            .rows
+            .iter()
+            .map(|row| {
+                let CellValue::Integer(area) = row[0].value else { panic!("area") };
+                let CellValue::String(id) = &row[1].value else { panic!("an id") };
+                (area, id.clone())
+            })
+            .collect();
+        let mut named = named;
+        named.sort();
+        assert_eq!(
+            named,
+            [(10, b.clone()), (20, a.clone()), (30, b.clone())]
+        );
+        // Clicked: the object A's value names - B.
+        let opened = list(
+            vec![Column::AreaSizePx],
+            Some(RelatedTo::RelatedOf(first.key.clone(), a.clone())),
+        );
+        assert_eq!(opened.row_names, [b.clone()]);
+        // A's parent of class 1 - C.
+        let parent = list(
+            vec![Column::AreaSizePx],
+            Some(RelatedTo::ParentOf(ObjectClass::Global(1), a.clone())),
+        );
+        assert_eq!(parent.row_names, [c.clone()]);
     }
 }

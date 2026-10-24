@@ -20,9 +20,9 @@
 //! the link doesn't depend on the order the objects are stored in.
 
 use crate::algos::flow_control::end_scope::remove_where;
+use crate::algos::libs::spatial_grid::BboxGrid;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::object::Object;
-use crate::utils::spatial_grid::BboxGrid;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, ObjectId};
 use macros::CommandsMeta;
 

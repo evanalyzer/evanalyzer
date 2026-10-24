@@ -545,6 +545,162 @@ Writing and running, same session (2 runs each):
 | `bench_export --object-size 24`, 3.8M objects (old built with the same generator) | 52.7 / 51.3 s, 2.54-2.55 GB, 1489 MB | 51.4 / 51.3 s, 2.49-2.60 GB, 1489 MB | 53.0 / 52.9 s, 2.55-2.58 GB, 1577-1578 MB |
 | `bench_pipeline` 200 × 2048², 8 threads, 208,002 objects | 5.45 / 5.54 s, 1.00-1.11 GB, 54.0 MB | 5.24 / 5.36 s, 1.00-1.02 GB, 54.3 MB | 5.34 / 5.65 s, 1.04-1.13 GB, 111.4-111.7 MB |
 
+## Measurement storage and object intensity spread (2026-10-24)
+
+22 cores, release. "base" = the commit before (4f167d47, a worktree with
+its own target dir), alternated with "new", 10 s pauses.
+
+### Writing per-object measurement values
+
+`measurements` rows went in row by row (prepared `INSERT`); now through
+the Arrow appender like `objects`. Temporary test calling
+`write_measurements` on one image's values (peak RSS of the test process):
+
+| Values per object measurement | row by row | Arrow appender |
+|---|---|---|
+| 20,000 | 10.1-11.6 s, 3.6 GB | 52-56 ms, 90 MB |
+| 200,000 | out of memory (DuckDB: 7.6 GB of 7.6 GB) | 0.53-0.75 s, 400 MB |
+
+### Reading them: `objects.measurement_values` (+ `measurement_info.object_index`)
+
+`bench_measurements` (app example) on a copy of the 1.7 GB reference
+analysis (5.6M objects) with 10 per-object measurements added (56M
+`measurements` rows); one query per process, median of 3, peak RSS.
+Before: each object's value by a subquery on `measurements` (DuckDB turns
+it into a join over every value of the key); now a list on the object,
+the position looked up once.
+
+| Query | Area (`objects` column) | measurement, before | measurement, now |
+|---|---|---|---|
+| Plate, mean | 29 ms, 109 MB | 359 ms, 1225 MB | 41 ms, 205 MB |
+| Per image, first page (500) | 29 ms, 132 MB | 205 ms, 1054 MB | 41 ms, 228 MB |
+| Object list, first page (500) | 15 ms, 96 MB | 22 ms, 110 MB | 23 ms, 113 MB |
+| Histogram | 17 ms, 69 MB | 460 ms, 1047 MB | 44 ms, 174 MB |
+
+Several measurement columns at once (per image, the query alone in
+DuckDB 1.5.5): 3 columns 520 ms / 1.85 GB before, 10 columns 2.1 s /
+4.2 GB; with the list 10 columns 56-77 ms / 275-285 MB. Also tried:
+aggregating straight from `measurements` (10 columns 494 ms / 611 MB) and
+a pivot joined to `objects` (10 columns 2.7 s / 8.4 GB). Size: the list
+of 10 values adds 109 MB to `objects` (1719 → 1828 MB, written fresh);
+`measurements` itself is 946 MB.
+
+### Intensity spread (std, median, quartiles, MAD per channel)
+
+CellProfiler's MeasureObjectIntensity numbers (fixture
+`crates/core/tests/object_intensity_cellprofiler.py`), computed for every
+object; stored as `intensity_{std,median,lower_quartile,upper_quartile,mad}_gray`.
+
+| Benchmark | base | new |
+|---|---|---|
+| `bench_pipeline` 200 × 2048², 8 threads, 208,002 objects (507M object pixels), 5 runs | 5.42-5.66 s (median 5.57), 1065-1104 MB | 6.23-7.32 s (median 6.62), 1107-1157 MB |
+| `bench_export --object-size 24`, 3.8M objects × 6 channels, with spread (2 runs) | 53.8 / 54.3 s, 2.53-2.59 GB, file 1578 MB | 61.3 / 61.8 s, 3.12-3.27 GB, file 2375 MB |
+| same, objects without spread (as stored annotations) | | 55.6 / 56.3 s, 2.50-2.54 GB, file 1576 MB |
+
+- The spread is 30 more values per object here (6 channels × 5): +13 %
+  writing time, +50 % file size (~210 bytes per object), +0.6 GB peak
+  RAM while writing. Normalized copies as well (first version) made
+  writing +30 %; only gray values are stored now.
+- `bench_pipeline` is bound by the database writer (its objects are big;
+  the per-image writes add up to ~6 s): ~0.5 s of the +1 s is writing the
+  spread, ~0.5 s collecting and ordering 507M pixel values.
+- Ordering the values: sorting each object's values made the pipeline
+  ~+23 % (median 6.9 s); selecting the few values needed was no better on
+  these big objects; a histogram over 65535 levels (exact for 8/16-bit,
+  falls back to selecting otherwise): 9 → 3.7 ns per pixel after taking
+  the variance from the levels too and rounding without `round()`.
+- Per pixel (2M values, `bench_spread` in core, ignored): 3.6-4.2 ns.
+
+### Transform Objects › Expand Without Overlap (2026-10-24)
+
+`bench_expand_without_overlap` (core, ignored test, release): a 9 × 9
+object every 40 px on 8192² (42,025 objects), worked out in blocks of
+2048² plus the margin; single-threaded.
+
+| Margin | Time | Peak RSS (test process) |
+|---|---|---|
+| 8 px (2 runs) | 2.37 / 2.66 s | 376 MB |
+| 100 px (every pixel of the image ends up in an object) | 2.94 s | 861 MB |
+
+Most of the RAM at 100 px is the list of added pixels (8 bytes each)
+before the masks are built (67M pixels); the masks themselves are 1 bit
+per pixel.
+
+### Measure Colocalization (2026-10-24)
+
+`bench_measure_colocalization` (core, ignored test, release): 2048²
+16-bit image in 4 tiles, 2,601 objects (9 × 9), every value per image
+and per object.
+
+| Costes thresholds | Time | Peak RSS (test process, incl. the test images) |
+|---|---|---|
+| Off | 35 ms | 90 MB |
+| Faster (default, 2 runs) | 211 / 212 ms | 92 MB |
+| Fast | 749 ms | 92 MB |
+
+Costes "Faster" is a few passes over the image per candidate (~15
+candidates for 16 bit); "Fast"/"Accurate" walk down from the maximum one
+gray level (or a few) at a time - on 16-bit images with little
+correlation that can be thousands of passes (CellProfiler warns the same).
+
+### Measure Object Neighbors (2026-10-24)
+
+`bench_object_neighbors` (core, ignored test, release): a 9 × 9 object
+every 40 px on 8192² (42,025 objects), same class as neighbours.
+
+| Method | Time | Peak RSS (test process) |
+|---|---|---|
+| Adjacent | 221-267 ms | 93 MB |
+| Within 35 px | 40.1 s → 5.5 s | 93 MB |
+| Expand until adjacent (whole-image raster) | 4.0 s / 2.76 GB → 3.1 s / 925 MB | |
+
+- Within a distance: dilating with each of the ~4,000 offsets of a 35 px
+  disk was 40 s; dilations with more than 49 offsets now use the nearest
+  source pixel (feature transform of the patch) - the same pixels.
+- Expand: the feature transform stored (row, column) as two `i64` in an
+  `Option` (24 bytes per pixel); now two `i32` (8 bytes). Expand
+  Without Overlap gained the same: 2.4 s / 376 MB → 1.3 s / 255 MB
+  (margin 8, same test as above). The whole-image raster is limited to
+  128 MP (~2 GB); bigger images: "Within a distance".
+
+### Shape: Feret, convex area, Euler number, radii (2026-10-24)
+
+Per object (core, ignored tests `bench_small_shape` / `bench_shape`,
+release): a disk of r = 11 (379 px, like `bench_export --object-size 24`)
+and of r = 700 (1.5M px).
+
+| Value | r = 11, first version | r = 11, now | r = 700, first → now |
+|---|---|---|---|
+| Feret (hull + calipers) | 2.8 µs | ~1.8 µs (O(h) calipers, no sort) | 16.5 → 0.2-0.5 ms |
+| Convex area | 7.4 µs | 4.5-8 µs | 111 → 0.6-1.1 ms |
+| Euler number | 1.5 µs | 0.5 µs | 14 → 3.5 ms |
+| Radii (distance transform) | 9.2 µs | ~7 µs | 102 → 33 ms |
+
+In every export they made writing 3.8M objects 180 s instead of 54 s,
+and `bench_pipeline` 11-12 s instead of 5.7 s (its objects' boxes are
+large). Now only Feret is computed at export (it was the bounding box's
+diagonal and the ellipse's minor axis - wrong); convex area, Euler number
+and radii are the step "Measure Object Shape":
+
+| Benchmark | base | new (spread + Feret) |
+|---|---|---|
+| `bench_pipeline` 200 × 2048², 8 threads (3 runs) | 5.58 / 5.80 / 6.96 s, 1.02-1.15 GB | 6.46 / 6.60 / 6.95 s, 1.09-1.19 GB |
+| `bench_export --object-size 24`, 3.8M objects (2 runs) | 53.8 / 54.3 s, 2.53-2.57 GB | 67.7 / 67.9 s, 3.22-3.24 GB |
+
+### Intensities in gray values only - no `_normalized` lists (2026-10-24)
+
+`intensity_{sum,mean,min,max}_normalized` dropped (nothing read them; 0..1
+= gray / (2^image_bit_depth - 1)); the spread's lists are in the same
+column group. `bench_export --object-size 24` (3.8M objects × 6
+channels, with spread), alternated, 2 runs each (the machine was busy:
+load ~11, so both are slower than in the section above):
+
+| | before | after |
+|---|---|---|
+| Time | 72.8 / 75.6 s | 66.8 / 67.9 s (-8 %) |
+| Peak RSS | 3.16-3.18 GB | 2.57-2.64 GB |
+| File after checkpoint | 2425 MB | 1802-1805 MB (-26 %) |
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -570,6 +726,11 @@ graphics driver).
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB (2.56 GB with masks) | 2026-10-23 | Object masks in the results |
+| Writing results: 1776 images × 2150 objects, 6 channels with intensity spread | 2.57-2.64 GB (gray values only; 3.12-3.27 GB with normalized copies) | 2026-10-24 | Intensities in gray values only |
+| Running a pipeline with intensity spread: 200 images 2048², 8 threads | 1.1-1.16 GB | 2026-10-24 | Measurement storage and object intensity spread |
+| Expand Without Overlap, 42,000 objects on 8192², margin 8 / 100 px | 255 / 861 MB (test process; 100 px measured before the smaller feature transform) | 2026-10-24 | Expand Without Overlap |
+| Measure Object Neighbors, 42,000 objects on 8192², expand until adjacent | 925 MB (test process) | 2026-10-24 | Measure Object Neighbors |
+| Results views, 5.6M objects, measurement columns (plate, per image, list, histogram) | 113-228 MB (query process) | 2026-10-24 | Measurement storage and object intensity spread |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,

@@ -7,7 +7,10 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::extlibs::libmorphology::{self, Kernel};
+// Derived from kornia-rs (Apache-2.0) - see their headers.
+mod kernels;
+mod ops;
+
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
@@ -15,6 +18,7 @@ use crate::{
     pipeline::pipeline_context::PipelineContext,
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
+use kernels::Kernel;
 use kornia_image::Image;
 use kornia_imgproc::padding::PaddingMode;
 use macros::CommandsMeta;
@@ -151,14 +155,14 @@ impl MorphologicalCommand {
     /// Creates the specific kernel structure for the library
     fn get_kernel(&self) -> Kernel {
         let shape = match self.kernel_shape {
-            KernelShapes::Cross => libmorphology::KernelShape::Cross {
+            KernelShapes::Cross => kernels::KernelShape::Cross {
                 size: self.kernel_size,
             },
-            KernelShapes::Ellipse => libmorphology::KernelShape::Ellipse {
+            KernelShapes::Ellipse => kernels::KernelShape::Ellipse {
                 width: self.kernel_size,
                 height: self.kernel_size,
             },
-            KernelShapes::Box => libmorphology::KernelShape::Box {
+            KernelShapes::Box => kernels::KernelShape::Box {
                 size: self.kernel_size,
             },
         };
@@ -175,22 +179,14 @@ impl MorphologicalCommand {
         let pad_val: [f32; C] = [0.0; C];
 
         match self.op {
-            MorphOps::Dilate => {
-                libmorphology::dilate(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
-            MorphOps::Erode => {
-                libmorphology::erode(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
-            MorphOps::Open => {
-                libmorphology::open(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
-            MorphOps::Close => {
-                libmorphology::close(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
+            MorphOps::Dilate => ops::dilate(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
+            MorphOps::Erode => ops::erode(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
+            MorphOps::Open => ops::open(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
+            MorphOps::Close => ops::close(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
         }
         Ok(())
     }
@@ -205,22 +201,14 @@ impl MorphologicalCommand {
         let pad_val: [u32; 1] = [0];
 
         match self.op {
-            MorphOps::Dilate => {
-                libmorphology::dilate(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
-            MorphOps::Erode => {
-                libmorphology::erode(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
-            MorphOps::Open => {
-                libmorphology::open(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
-            MorphOps::Close => {
-                libmorphology::close(input, output, &kernel, PaddingMode::Constant, pad_val)
-                    .map_err(InternalErrors::from_kornia)?
-            }
+            MorphOps::Dilate => ops::dilate(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
+            MorphOps::Erode => ops::erode(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
+            MorphOps::Open => ops::open(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
+            MorphOps::Close => ops::close(input, output, &kernel, PaddingMode::Constant, pad_val)
+                .map_err(InternalErrors::from_kornia)?,
         }
         Ok(())
     }

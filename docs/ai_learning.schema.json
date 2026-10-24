@@ -689,6 +689,72 @@
           "required": [
             "INTENSITY_AVG"
           ]
+        },
+        {
+          "description": "How the pixel values spread in the channel (CellProfiler's\nMeasureObjectIntensity).",
+          "type": "object",
+          "properties": {
+            "INTENSITY_STD": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_STD"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_MEDIAN": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_MEDIAN"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_LOWER_QUARTILE": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_LOWER_QUARTILE"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_UPPER_QUARTILE": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_UPPER_QUARTILE"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_MAD": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_MAD"
+          ]
         }
       ]
     },

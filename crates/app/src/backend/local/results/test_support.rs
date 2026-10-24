@@ -18,12 +18,11 @@ pub(super) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_normalized":1.0,"sum
 
 /// The `objects` columns written from an [`ObjectSpec`]'s intensity and
 /// colocalization JSON, in [`json_columns_sql`]'s order.
-const JSON_DERIVED_COLUMNS: &str = "intensity_sum_normalized, intensity_sum_gray, \
-     intensity_mean_normalized, intensity_mean_gray, intensity_min_normalized, intensity_min_gray, \
-     intensity_max_normalized, intensity_max_gray, coloc_partner_ids";
+const JSON_DERIVED_COLUMNS: &str = "intensity_sum_gray, intensity_mean_gray, \
+     intensity_min_gray, intensity_max_gray, coloc_partner_ids";
 
 /// SQL for [`JSON_DERIVED_COLUMNS`] from the intensity JSON
-/// (`{"<channel>": {"mean_normalized": ..., "mean_gray": ..., ...}}`) and the
+/// (`{"<channel>": {"mean_gray": ..., ...}}` - `_normalized` keys are ignored) and the
 /// colocalization JSON (`{"<class id>": ["<partner uuid>", ...]}`) that
 /// `ObjectSpec`s are written with - keeps the fixtures short to write while
 /// the table has the real per-channel lists and partner map: the JSON's
@@ -32,7 +31,7 @@ const JSON_DERIVED_COLUMNS: &str = "intensity_sum_normalized, intensity_sum_gray
 fn json_columns_sql(intensities: &str, coloc: &str) -> String {
     let mut columns = Vec::new();
     for stat in ["sum", "mean", "min", "max"] {
-        for kind in ["normalized", "gray"] {
+        for kind in ["gray"] {
             columns.push(format!(
                 "list_transform(\
                      range(0, COALESCE(list_max(list_transform(json_keys({intensities}), \
@@ -70,11 +69,15 @@ fn create_schema(conn: &Connection) {
             touches_edge BOOLEAN,
             pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
             image_bit_depth UTINYINT,
-            intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
-            intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
-            intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
-            intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
-            coloc_partner_ids MAP(INTEGER, UUID[])
+            intensity_sum_gray DOUBLE[],
+            intensity_mean_gray DOUBLE[],
+            intensity_min_gray DOUBLE[],
+            intensity_max_gray DOUBLE[],
+            intensity_std_gray DOUBLE[], intensity_median_gray DOUBLE[],
+            intensity_lower_quartile_gray DOUBLE[], intensity_upper_quartile_gray DOUBLE[],
+            intensity_mad_gray DOUBLE[],
+            coloc_partner_ids MAP(INTEGER, UUID[]),
+            measurement_values DOUBLE[]
         );
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,

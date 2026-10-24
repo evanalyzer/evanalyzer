@@ -135,8 +135,7 @@ mod tests {
             PipelineSettings, PipelineStepSettings, StepContent,
         };
         let (dir, mut settings) = project_with_fixture_image();
-        let mut pearson =
-            PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+        let mut pearson = PipelineCommand::default_for_key("measure_colocalization").unwrap();
         *pearson.measurement_id_mut().unwrap() = "pearson_01".into();
         settings.pipelines.push(PipelineSettings {
             id: PipelineId(1),
@@ -175,10 +174,12 @@ mod tests {
         let [plane] = &planes[..] else {
             panic!("one plane, got {}", planes.len());
         };
-        let [measurement] = &plane.measurements[..] else {
-            panic!("one measurement");
-        };
-        assert_eq!(measurement.info.key, "pearson_01/pearson");
+        // Measure Colocalization: Pearson among its values.
+        let measurement = plane
+            .measurements
+            .iter()
+            .find(|m| m.info.key == "pearson_01/pearson")
+            .expect("Pearson measured");
         let MeasurementValues::Image(values) = &measurement.values else {
             panic!("an image measurement");
         };

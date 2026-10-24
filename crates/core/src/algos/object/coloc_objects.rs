@@ -20,9 +20,9 @@
 //! Objects' job.
 //!
 use crate::{
+    algos::libs::spatial_grid::BboxGrid,
     algos::{ExecutionScope, ImageAlgorithm},
     object::{Object, ObjectInit},
-    utils::spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,

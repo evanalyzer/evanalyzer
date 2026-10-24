@@ -6,7 +6,7 @@ use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::{
     core_types::{ObjectClass, ObjectId, SegmentationClass, TrackId},
-    settings::object_settings::{IntensitySettings, ObjectMetricSettings, TrackSettings},
+    settings::object_settings::{ObjectMetricSettings, TrackSettings},
 };
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
@@ -16,8 +16,15 @@ use std::collections::HashSet;
 /// An object's (or annotation's) intensities over its mask - one
 /// implementation for the pipeline and stored annotations.
 pub mod intensities;
+/// Shape measurements computed on demand (Feret, convex area, Euler number,
+/// radii).
+pub mod shape;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+/// An object's intensities in one channel. How the values spread (std to
+/// MAD, as CellProfiler's MeasureObjectIntensity - see
+/// [`Intensity::set_spread`]) is NaN where the pixel values weren't at hand
+/// (a stored annotation's intensities) - the results show no value then.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Intensity {
     /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
@@ -27,8 +34,31 @@ pub struct Intensity {
     pub max_intensity: f64,
     /// Average pixel intensity in the object
     pub avg_intensity: f64,
-    /// All pixel values (used for computing median and std_dev)
-    pub pixel_values: Vec<f32>,
+    /// Standard deviation
+    pub std_intensity: f64,
+    /// Median intensity
+    pub median_intensity: f64,
+    pub lower_quartile_intensity: f64,
+    pub upper_quartile_intensity: f64,
+    /// Median absolute deviation: the median of the distances from the median.
+    pub mad_intensity: f64,
+}
+
+/// Zero sums, the spread not measured (NaN).
+impl Default for Intensity {
+    fn default() -> Self {
+        Self {
+            sum_intensity: 0.0,
+            min_intensity: 0.0,
+            max_intensity: 0.0,
+            avg_intensity: 0.0,
+            std_intensity: f64::NAN,
+            median_intensity: f64::NAN,
+            lower_quartile_intensity: f64::NAN,
+            upper_quartile_intensity: f64::NAN,
+            mad_intensity: f64::NAN,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -751,18 +781,19 @@ impl Object {
         (x_center, y_center)
     }
 
-    /// Returns Feret diameter (longest distance between boundary points).
+    /// Returns Feret diameter (longest distance between boundary points):
+    /// the largest distance between two pixel centres, as CellProfiler's
+    /// MaxFeretDiameter (see [`Object::feret_diameters`]). Was the bounding
+    /// box's diagonal until 2026-10-24.
     pub fn get_feret_diameter(&self) -> f32 {
-        let [x_min, y_min, x_max, y_max] = self.bbox;
-        let dx = (x_max - x_min) as f32;
-        let dy = (y_max - y_min) as f32;
-        (dx * dx + dy * dy).sqrt()
+        self.feret_diameters().1 as f32
     }
 
-    /// Returns minimum Feret diameter (perpendicular to max).
+    /// Returns minimum Feret diameter: the smallest caliper width over the
+    /// pixel centres, as CellProfiler's MinFeretDiameter. Was the fitted
+    /// ellipse's minor axis until 2026-10-24.
     pub fn get_min_feret_diameter(&self) -> f32 {
-        let ellipse = self.get_ellipse();
-        ellipse.minor
+        self.feret_diameters().0 as f32
     }
 
     pub fn to_object_settings(&self) -> ObjectMetricSettings {
@@ -794,18 +825,7 @@ impl Object {
             intensities: self
                 .intensities
                 .iter()
-                .map(|(k, v)| {
-                    (
-                        *k,
-                        IntensitySettings {
-                            sum_intensity: v.sum_intensity,
-                            min_intensity: v.min_intensity,
-                            max_intensity: v.max_intensity,
-                            avg_intensity: v.avg_intensity,
-                            pixel_values: vec![],
-                        },
-                    )
-                })
+                .map(|(k, v)| (*k, v.to_settings()))
                 .collect(),
             perimeter: self.perimeter,
             z_stack: self.plane.z,
@@ -884,18 +904,7 @@ impl Object {
             intensities: s
                 .intensities
                 .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        Intensity {
-                            sum_intensity: v.sum_intensity,
-                            min_intensity: v.min_intensity,
-                            max_intensity: v.max_intensity,
-                            avg_intensity: v.avg_intensity,
-                            pixel_values: Vec::new(),
-                        },
-                    )
-                })
+                .map(|(k, v)| (k, Intensity::from_settings(&v)))
                 .collect(),
             plane: ImagePlane {
                 z: s.z_stack,

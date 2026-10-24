@@ -1,6 +1,6 @@
 use crate::image::Point2d;
 use crate::pipeline::pipeline_measure::{
-    Measurement, MeasurementRegion, MeasurementValues, PipelineMeasurements,
+    Measurement, MeasurementRegion, MeasurementValues, ObjectValue, PipelineMeasurements,
 };
 use crate::pipeline::scope::{Scope, ScopeId};
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
 };
 use evanalyzer_cfg::core_types::{
     InternalErrors, MeasurementInfo, MeasurementTarget, MemoryId, MemorySlot, ObjectClass,
-    ObjectId, ZProjection,
+    ZProjection,
 };
 use kornia_image::{Image, ImageSize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
@@ -139,17 +139,18 @@ impl GlobalPipelineCache {
         });
     }
 
-    /// Adds a measurement with a value per object. `info.target` is set to
-    /// `Object`.
-    pub fn add_object_measurement(
+    /// Adds a measurement with a value per object - `(ObjectId, f64)` or an
+    /// [`ObjectValue`] naming the object it is about. `info.target` is set
+    /// to `Object`.
+    pub fn add_object_measurement<V: Into<ObjectValue>>(
         &mut self,
         mut info: MeasurementInfo,
-        values: impl IntoIterator<Item = (ObjectId, f64)>,
+        values: impl IntoIterator<Item = V>,
     ) {
         info.target = MeasurementTarget::Object;
         self.measurements.measurements.push(Measurement {
             info,
-            values: MeasurementValues::Objects(values.into_iter().collect()),
+            values: MeasurementValues::Objects(values.into_iter().map(Into::into).collect()),
         });
     }
 

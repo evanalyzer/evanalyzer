@@ -4,7 +4,6 @@ pub mod ai_devices;
 pub mod ai_learning;
 mod algos;
 mod dataset;
-mod extlibs;
 mod image;
 mod job;
 mod object;

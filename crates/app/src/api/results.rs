@@ -339,6 +339,11 @@ pub enum RelatedTo {
     ChildrenOf(ObjectClass, String),
     /// Its partners of the class (Colocalization).
     PartnersOf(ObjectClass, String),
+    /// The object a measurement's value of it names (its nearest
+    /// neighbour, its parent): the measurement's key, the object's id.
+    RelatedOf(String, String),
+    /// Its parent of the class (Relate Objects).
+    ParentOf(ObjectClass, String),
 }
 
 #[derive(Clone, Serialize, Deserialize)]

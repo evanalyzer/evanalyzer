@@ -1404,6 +1404,93 @@
         "SEGMENTATION_MASK"
       ]
     },
+    "MeasureColocalizationCostesMethodSettings": {
+      "description": "How Costes' automatic thresholds are searched for (CellProfiler's\n\"Method for Costes thresholding\").",
+      "oneOf": [
+        {
+          "description": "No Costes values.",
+          "type": "string",
+          "const": "OFF"
+        },
+        {
+          "description": "A shrinking window of candidates - a few passes over the image, also\nfor 16-bit images (CellProfiler's \"Faster\").",
+          "type": "string",
+          "const": "FASTER"
+        },
+        {
+          "description": "Candidates from the top down, skipping while far off (CellProfiler's\n\"Fast\" - slow on 16-bit images).",
+          "type": "string",
+          "const": "FAST"
+        },
+        {
+          "description": "Every candidate from the top down (CellProfiler's \"Accurate\" - very\nslow on 16-bit images).",
+          "type": "string",
+          "const": "ACCURATE"
+        }
+      ]
+    },
+    "MeasureColocalizationSettings": {
+      "description": "Measures how two channels go together, over the whole image and per\nobject - CellProfiler's MeasureColocalization.\n\nPearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
+      "type": "object",
+      "properties": {
+        "channelA": {
+          "description": "The first channel (A).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "channelB": {
+          "description": "The second channel (B).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 1
+        },
+        "costes": {
+          "description": "Manders with Costes' automatic thresholds, and how they are found.",
+          "$ref": "#/$defs/MeasureColocalizationCostesMethodSettings",
+          "default": "FASTER"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"coloc_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "objects": {
+          "description": "The objects of this class get values of their own as well (unset:\nthe whole image only).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "thresholdPercent": {
+          "description": "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the image, or in\nthe object).",
+          "type": "number",
+          "format": "float",
+          "default": 15.0,
+          "maximum": 100,
+          "minimum": 0
+        }
+      }
+    },
+    "MeasureDistanceToParentSettings": {
+      "description": "Each child's distance to its parent of a class (linked by Relate\nObjects): centre to centre, and from its centre to the parent's edge.\nA child without a parent of the class has no value.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "description": "The children measured (e.g. spots).",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"parent_distance_01/...\").",
+          "type": "string"
+        },
+        "parentClass": {
+          "description": "The class of their parent (as linked by Relate Objects, e.g. Cell).",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "id",
+        "children",
+        "parentClass"
+      ]
+    },
     "MeasureExcludeImageExcludeWhenSettings": {
       "description": "How the rules combine.",
       "oneOf": [
@@ -1432,6 +1519,78 @@
           "type": "string",
           "const": "ABOVE"
         }
+      ]
+    },
+    "MeasureObjectNeighborsNeighborMethodSettings": {
+      "description": "Which objects count as neighbours (CellProfiler's \"Method to determine\nneighbors\").",
+      "oneOf": [
+        {
+          "description": "Every object first grows over the background until it meets the\nothers; then the ones it touches.",
+          "type": "string",
+          "const": "EXPAND_UNTIL_ADJACENT"
+        },
+        {
+          "description": "The objects it touches (1 px apart at most).",
+          "type": "string",
+          "const": "ADJACENT"
+        },
+        {
+          "description": "The objects within the distance.",
+          "type": "string",
+          "const": "WITHIN_DISTANCE"
+        }
+      ]
+    },
+    "MeasureObjectNeighborsSettings": {
+      "description": "For each object: its neighbours, how much of its outline touches them,\nand its first and second closest object.\n\nThe closest objects are by the distance between the centres; each\ndistance names the object it is to. \"Percent touching\" is the part of\nthe object's outline pixels within the distance (+ ½ px) of a neighbour.",
+      "type": "object",
+      "properties": {
+        "distance": {
+          "description": "With \"Within a distance\": how far, in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 5,
+          "maximum": 1000,
+          "minimum": 1
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"neighbors_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "method": {
+          "description": "Which objects count as neighbours.",
+          "$ref": "#/$defs/MeasureObjectNeighborsNeighborMethodSettings",
+          "default": "EXPAND_UNTIL_ADJACENT"
+        },
+        "neighbors": {
+          "description": "The objects that count as neighbours (unset: the measured objects\nthemselves).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "objects": {
+          "description": "The objects measured.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
+    },
+    "MeasureObjectShapeSettings": {
+      "description": "For each object: its convex area and solidity as CellProfiler gives them\n(the pixels whose centre lies in the convex hull; area / convex area),\nits Euler number (1 - holes, 8-connected) and its radii (the distance of\nits pixels to the nearest pixel outside it: maximum, mean, median).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"shape_01/...\").",
+          "type": "string"
+        },
+        "objects": {
+          "description": "The objects measured.",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "id",
+        "objects"
       ]
     },
     "MedianSubtractSettings": {
@@ -2153,6 +2312,32 @@
           ]
         },
         {
+          "description": "Grows the objects outward by `margin` without growing into each other: every\nbackground pixel within `margin` of an object goes to the nearest object (as\nCellProfiler's ExpandOrShrinkObjects \"Expand objects by a specified number of\npixels\"). With a large margin the objects grow until they touch.",
+          "type": "object",
+          "properties": {
+            "margin": {
+              "description": "How far the objects grow at most",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "EXPAND_WITHOUT_OVERLAP"
+            },
+            "unit": {
+              "description": "Unit `margin` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "margin",
+            "unit"
+          ]
+        },
+        {
           "description": "Shrinks the object inward by `margin`, following its actual contour (standard flat\nerosion with a disk structuring element).",
           "type": "object",
           "properties": {
@@ -2224,27 +2409,6 @@
           }
         }
       ]
-    },
-    "PearsonCorrelationCoefficientSettings": {
-      "description": "Measures how two channels go together across the whole image.\n\nThe Pearson correlation coefficient, from -1 (one bright where the other\nis dark) over 0 (unrelated) to 1 (bright together). It uses every pixel\nof the image, the background too - a large dark background raises it.",
-      "type": "object",
-      "properties": {
-        "channelA": {
-          "description": "The first channel.",
-          "$ref": "#/$defs/ImageChannelIdx",
-          "default": 0
-        },
-        "channelB": {
-          "description": "The second channel.",
-          "$ref": "#/$defs/ImageChannelIdx",
-          "default": 1
-        },
-        "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"pearson_01/...\").",
-          "type": "string",
-          "default": ""
-        }
-      }
     },
     "PipelineCommand": {
       "oneOf": [
@@ -2604,6 +2768,58 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "MEASURE_COLOCALIZATION"
+            }
+          },
+          "$ref": "#/$defs/MeasureColocalizationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_DISTANCE_TO_PARENT"
+            }
+          },
+          "$ref": "#/$defs/MeasureDistanceToParentSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_OBJECT_NEIGHBORS"
+            }
+          },
+          "$ref": "#/$defs/MeasureObjectNeighborsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_OBJECT_SHAPE"
+            }
+          },
+          "$ref": "#/$defs/MeasureObjectShapeSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "MEDIAN_SUBTRACT"
             }
           },
@@ -2634,19 +2850,6 @@
             }
           },
           "$ref": "#/$defs/ObjectMathSettings",
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "PEARSON_CORRELATION_COEFFICIENT"
-            }
-          },
-          "$ref": "#/$defs/PearsonCorrelationCoefficientSettings",
           "required": [
             "type"
           ]

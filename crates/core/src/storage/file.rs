@@ -1,3 +1,4 @@
+use crate::object::Intensity;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, max_gray_value};
@@ -34,6 +35,28 @@ struct CsvWriterState {
     /// though it can't recover a previous process's exact column set.
     columns: Option<(Vec<i32>, Vec<ObjectClass>)>,
 }
+
+/// The per-channel intensity columns, in order: `ch<n>_<name>_gray`, gray
+/// values in [0, 2^bit_depth - 1] (as ImageJ/Fiji, and as in the results
+/// database), from an object's 0..1 values (the object's area for the
+/// mean). Empty where not measured (the spread of a stored annotation's).
+const INTENSITY_COLUMNS: [(&str, fn(&Intensity, usize) -> f64); 9] = [
+    ("integrated_density", |i, _| i.sum_intensity),
+    ("mean_intensity", |i, area| {
+        i.sum_intensity / (area as f64).max(1.0)
+    }),
+    ("min_intensity", |i, _| i.min_intensity),
+    ("max_intensity", |i, _| i.max_intensity),
+    ("std_intensity", |i, _| i.std_intensity),
+    ("median_intensity", |i, _| i.median_intensity),
+    ("lower_quartile_intensity", |i, _| {
+        i.lower_quartile_intensity
+    }),
+    ("upper_quartile_intensity", |i, _| {
+        i.upper_quartile_intensity
+    }),
+    ("mad_intensity", |i, _| i.mad_intensity),
+];
 
 pub struct CsvExporter {
     // csv::Writer<File> is Send but not Sync; the Mutex makes the struct Sync
@@ -193,15 +216,9 @@ impl PipelineResultExporter for CsvExporter {
             ];
 
             for ch in &channel_ids {
-                // `_normalized` values are in [0, 1]; `_gray` values are gray values, in [0, 2^bit_depth - 1]
-                header.push(format!("ch{}_integrated_density_normalized", ch));
-                header.push(format!("ch{}_integrated_density_gray", ch));
-                header.push(format!("ch{}_mean_intensity_normalized", ch));
-                header.push(format!("ch{}_mean_intensity_gray", ch));
-                header.push(format!("ch{}_min_intensity_normalized", ch));
-                header.push(format!("ch{}_min_intensity_gray", ch));
-                header.push(format!("ch{}_max_intensity_normalized", ch));
-                header.push(format!("ch{}_max_intensity_gray", ch));
+                for (name, _) in INTENSITY_COLUMNS {
+                    header.push(format!("ch{ch}_{name}_gray"));
+                }
             }
 
             for class in &coloc_classes {
@@ -234,8 +251,8 @@ impl PipelineResultExporter for CsvExporter {
             let solidity = object.get_solidity();
             let centroid = object.get_centroid();
             let bbox_center = object.get_bbox_center();
-            let feret = object.get_feret_diameter();
-            let min_feret = object.get_min_feret_diameter();
+            let (min_feret, feret) = object.feret_diameters();
+            let (min_feret, feret) = (min_feret as f32, feret as f32);
 
             // "Cell:<id>,Region:<id>" - the parent's class, then its id.
             let parent_ids = object
@@ -313,22 +330,12 @@ impl PipelineResultExporter for CsvExporter {
             ];
 
             for ch in &channel_ids {
-                if let Some(intensity) = object.intensities.get(ch) {
-                    let mean_normalized = intensity.sum_intensity / (object.area as f64).max(1.0);
-                    let min_normalized = intensity.min_intensity as f64;
-                    let max_normalized = intensity.max_intensity as f64;
-
-                    row.push(format!("{:.6}", intensity.sum_intensity));
-                    row.push(format!("{:.2}", intensity.sum_intensity * bit_max));
-                    row.push(format!("{:.6}", mean_normalized));
-                    row.push(format!("{:.2}", mean_normalized * bit_max));
-                    row.push(format!("{:.6}", min_normalized));
-                    row.push(format!("{:.2}", min_normalized * bit_max));
-                    row.push(format!("{:.6}", max_normalized));
-                    row.push(format!("{:.2}", max_normalized * bit_max));
-                } else {
-                    // 8 empty cells (4 metrics × 2 scales)
-                    row.extend(std::iter::repeat_n("".to_string(), 8));
+                let intensity = object.intensities.get(ch);
+                for (_, value) in INTENSITY_COLUMNS {
+                    row.push(match intensity.map(|i| value(i, object.area)) {
+                        Some(v) if v.is_finite() => format!("{:.2}", v * bit_max),
+                        _ => String::new(),
+                    });
                 }
             }
 
@@ -741,14 +748,14 @@ mod tests {
             min_intensity: 0.1,
             max_intensity: 0.9,
             avg_intensity: 0.5,
-            pixel_values: vec![],
+            ..Default::default()
         };
         let ch3 = Intensity {
             sum_intensity: 1.2,
             min_intensity: 0.05,
             max_intensity: 0.4,
             avg_intensity: 0.24,
-            pixel_values: vec![],
+            ..Default::default()
         };
 
         let object_id = ObjectId::next();
@@ -773,36 +780,16 @@ mod tests {
             let max_normalized = intensity.max_intensity as f64;
 
             assert_eq!(
-                column(
-                    &headers,
-                    row,
-                    &format!("ch{ch}_integrated_density_normalized")
-                ),
-                format!("{:.6}", intensity.sum_intensity)
-            );
-            assert_eq!(
                 column(&headers, row, &format!("ch{ch}_integrated_density_gray")),
                 format!("{:.2}", intensity.sum_intensity * bit_max)
-            );
-            assert_eq!(
-                column(&headers, row, &format!("ch{ch}_mean_intensity_normalized")),
-                format!("{:.6}", mean_normalized)
             );
             assert_eq!(
                 column(&headers, row, &format!("ch{ch}_mean_intensity_gray")),
                 format!("{:.2}", mean_normalized * bit_max)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_min_intensity_normalized")),
-                format!("{:.6}", min_normalized)
-            );
-            assert_eq!(
                 column(&headers, row, &format!("ch{ch}_min_intensity_gray")),
                 format!("{:.2}", min_normalized * bit_max)
-            );
-            assert_eq!(
-                column(&headers, row, &format!("ch{ch}_max_intensity_normalized")),
-                format!("{:.6}", max_normalized)
             );
             assert_eq!(
                 column(&headers, row, &format!("ch{ch}_max_intensity_gray")),

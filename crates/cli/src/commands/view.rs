@@ -24,6 +24,11 @@ fn is_intensity_column(column: &Column) -> bool {
             | Column::IntensitySum(_)
             | Column::IntensityMin(_)
             | Column::IntensityMax(_)
+            | Column::IntensityStd(_)
+            | Column::IntensityMedian(_)
+            | Column::IntensityLowerQuartile(_)
+            | Column::IntensityUpperQuartile(_)
+            | Column::IntensityMad(_)
     )
 }
 

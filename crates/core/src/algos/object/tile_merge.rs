@@ -30,11 +30,11 @@
 //! batch pass instead of incrementally online.
 
 use crate::ImageTile;
+use crate::algos::libs::spatial_grid::BboxGrid;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
-use crate::object::{Intensity, Object, ObjectInit};
+use crate::object::{Object, ObjectInit};
 use crate::pipeline::scope::Scope;
 use crate::pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext};
-use crate::utils::spatial_grid::BboxGrid;
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, ObjectId};
 use indexmap::IndexMap;
@@ -180,7 +180,6 @@ impl ImageAlgorithm for TileMerge {
                 let object_refs: Vec<&Object> = objects.iter().collect();
 
                 let geometry = union_merge(&object_refs);
-                let intensities = merge_intensities(&object_refs, geometry.area);
 
                 let mut object_class = std::collections::HashSet::new();
                 for o in &object_refs {
@@ -188,7 +187,7 @@ impl ImageAlgorithm for TileMerge {
                 }
 
                 let first = object_refs[0];
-                let merged = Object::new(ObjectInit {
+                let mut merged = Object::new(ObjectInit {
                     id: ObjectId::next(),
                     segmentation_class: first.segmentation_class,
                     object_class,
@@ -203,10 +202,20 @@ impl ImageAlgorithm for TileMerge {
                     sum_x2: geometry.sum_x2,
                     sum_y2: geometry.sum_y2,
                     sum_xy: geometry.sum_xy,
-                    intensities,
                     plane: first.plane,
                     ..Default::default()
                 });
+
+                // Measured again on the merged mask, from every tile it covers - the
+                // median, quartiles, ... can't be combined from the fragments'.
+                merged.intensities = merged.measure_intensities(cache);
+                if merged.intensities.is_empty()
+                    && object_refs.iter().any(|o| !o.intensities.is_empty())
+                {
+                    return Err(InternalErrors::Internal(
+                        "Tile merge: the channels to measure a merged object aren't loaded".into(),
+                    ));
+                }
 
                 for id in &ids {
                     cache.object_cache.remove(id);
@@ -462,33 +471,6 @@ fn union_merge(objects: &[&Object]) -> UnionGeometry {
     }
 }
 
-/// Additively merges a merge-group's per-channel intensities: `sum`/`min`/`max`
-/// combine directly, `avg` is re-derived from the merged `sum`/`area` (the
-/// per-fragment averages themselves can't just be averaged - fragments don't
-/// necessarily have equal pixel counts).
-fn merge_intensities(objects: &[&Object], merged_area: usize) -> IndexMap<i32, Intensity> {
-    let mut merged: IndexMap<i32, Intensity> = IndexMap::new();
-    for o in objects {
-        for (&channel, intensity) in &o.intensities {
-            let acc = merged.entry(channel).or_insert_with(|| Intensity {
-                sum_intensity: 0.0,
-                min_intensity: f64::MAX,
-                max_intensity: f64::MIN,
-                avg_intensity: 0.0,
-                pixel_values: Vec::new(),
-            });
-            acc.sum_intensity += intensity.sum_intensity;
-            acc.min_intensity = acc.min_intensity.min(intensity.min_intensity);
-            acc.max_intensity = acc.max_intensity.max(intensity.max_intensity);
-        }
-    }
-    let n = merged_area.max(1) as f64;
-    for intensity in merged.values_mut() {
-        intensity.avg_intensity = intensity.sum_intensity / n;
-    }
-    merged
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +655,82 @@ mod tests {
             "the merged object must get a brand-new id"
         );
         assert_ne!(merged.id, ObjectId(2));
+    }
+
+    /// A merged object's intensities are measured again on its whole mask:
+    /// the median and the other order statistics can't be added up from
+    /// the fragments'.
+    #[test]
+    fn a_merged_object_has_the_intensity_spread_of_its_whole_mask() {
+        use crate::image::{ManagedImage, Point2d};
+        use crate::object::intensities::Spread;
+        use crate::{ImageContainer, ImagePlane};
+        use kornia_image::{Image, ImageSize};
+        use std::sync::Arc;
+        // Two 10 x 20 tiles; pixel values 0, 1, 2, ... over the full 20 x 20.
+        let value = |x: usize, y: usize| (y * 20 + x) as f32;
+        let mut cache = cache_with(vec![
+            rect_object(
+                1,
+                [0, 0, 9, 19],
+                ObjectClass::Global(1),
+                ImagePlane::default(),
+                tile(0, 0, 10, 20),
+                false,
+            ),
+            rect_object(
+                2,
+                [10, 0, 19, 19],
+                ObjectClass::Global(1),
+                ImagePlane::default(),
+                tile(10, 0, 10, 20),
+                false,
+            ),
+        ]);
+        for offset_x in [0, 10] {
+            let samples: Vec<f32> = (0..20)
+                .flat_map(|y| (0..10).map(move |x| value(offset_x + x, y)))
+                .collect();
+            let image = ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::from_size_slice(
+                    ImageSize {
+                        width: 10,
+                        height: 20,
+                    },
+                    &samples,
+                )
+                .unwrap(),
+                tile_offset: Point2d { x: offset_x, y: 0 },
+                plane: Some(ImagePlane::default()),
+            });
+            cache.add_to_channel_cache(Arc::new(image), 0, tile(offset_x, 0, 10, 20));
+        }
+
+        run(&mut cache, tile_merge(Connectivity::EightConnected));
+
+        let merged = cache.object_cache.values().next().unwrap();
+        let mut all: Vec<f32> = (0..20)
+            .flat_map(|y| (0..20).map(move |x| value(x, y)))
+            .collect();
+        let intensity = &merged.intensities[&0];
+        assert_eq!(intensity.sum_intensity, (0..400).sum::<usize>() as f64);
+        let expected = Spread::of(&mut all, 199.5).unwrap();
+        assert_eq!(
+            [
+                intensity.std_intensity,
+                intensity.median_intensity,
+                intensity.lower_quartile_intensity,
+                intensity.upper_quartile_intensity,
+                intensity.mad_intensity,
+            ],
+            [
+                expected.std,
+                expected.median,
+                expected.lower_quartile,
+                expected.upper_quartile,
+                expected.mad,
+            ]
+        );
     }
 
     /// Same seam, but the two fragments come from the *same* tile (a

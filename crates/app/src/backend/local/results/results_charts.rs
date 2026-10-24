@@ -270,7 +270,7 @@ impl ResultCharts {
         };
 
         let bounds_sql = format!(
-            "SELECT MIN(v), MAX(v), COUNT(*) FROM (SELECT {value_expr} AS v FROM objects {where_clause})"
+            "SELECT MIN(v), MAX(v), COUNT(v) FROM (SELECT {value_expr} AS v FROM objects {where_clause})"
         );
         let (min, max, count): (Option<f64>, Option<f64>, i64) = database
             .connection()
@@ -296,6 +296,7 @@ impl ResultCharts {
                 "SELECT LEAST({bins} - 1, CAST(FLOOR({bins}::DOUBLE * (v - {min}) / ({max} - {min})) AS BIGINT)) AS bucket,\n\
                         COUNT(*) AS cnt\n\
                  FROM (SELECT {value_expr} AS v FROM objects {where_clause})\n\
+                 WHERE v IS NOT NULL\n\
                  GROUP BY bucket"
             );
             let mut stmt = database.connection().prepare(&bucket_sql).map_err(err)?;

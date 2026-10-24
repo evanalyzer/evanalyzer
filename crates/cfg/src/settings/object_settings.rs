@@ -30,9 +30,18 @@ pub struct IntensitySettings {
     /// Average pixel intensity in the object
     #[serde(default)]
     pub avg_intensity: f64,
-    /// Unused scratch buffer kept for layout compatibility; never serialized.
-    #[serde(skip)]
-    pub pixel_values: Vec<f32>,
+    /// How the pixel values spread (CellProfiler's MeasureObjectIntensity) -
+    /// none where not measured (an annotation stored before 2026-10-24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub std_intensity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub median_intensity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lower_quartile_intensity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upper_quartile_intensity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mad_intensity: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, JsonSchema)]

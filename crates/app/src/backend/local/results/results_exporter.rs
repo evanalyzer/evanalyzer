@@ -1085,13 +1085,14 @@ impl ResultExport {
                 ));
             }
         }
-        const COLUMNS: [&str; 12] = [
+        const COLUMNS: [&str; 13] = [
             "image_name",
             "image_rel_path",
             "z_stack",
             "t_stack",
             "region",
             "object_id",
+            "related_object_id",
             "object_class_name",
             "step",
             "measurement",
@@ -1101,7 +1102,7 @@ impl ResultExport {
         ];
         let sql = format!(
             "SELECT image_name, image_rel_path, z_stack, t_stack, region, object_id::VARCHAR, \
-             object_class_name, step, measurement, unit, key, value \
+             related_object_id::VARCHAR, object_class_name, step, measurement, unit, key, value \
              FROM measurements WHERE {} \
              ORDER BY image_name, t_stack, z_stack, step, key, region, object_id",
             conditions.join(" AND ")
@@ -1122,7 +1123,7 @@ impl ResultExport {
                 for i in 0..COLUMNS.len() {
                     match i {
                         2 | 3 => out.number(row.get::<_, i32>(i).map_err(err)? as f64)?,
-                        11 => out.optional(row.get::<_, Option<f64>>(i).map_err(err)?)?,
+                        12 => out.optional(row.get::<_, Option<f64>>(i).map_err(err)?)?,
                         _ => match row.get::<_, Option<String>>(i).map_err(err)? {
                             Some(text) => out.text(&text)?,
                             None => out.empty()?,
@@ -4937,19 +4938,20 @@ mod tests {
             .execute_batch(&format!(
                 "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
                  step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
-                 range_max DOUBLE, aggregatable BOOLEAN);
+                 range_max DOUBLE, aggregatable BOOLEAN, object_index INTEGER);
                  CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
                  z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
-                 object_class_name VARCHAR, object_class_id INTEGER[], step VARCHAR, \
-                 measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
+                 related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+                 step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
                  INSERT INTO measurement_info VALUES
-                     ('p_01/p', 'Pearson', 'p_01', 'None', 'Image', -1, 1, true),
-                     ('q_01/q', 'Pearson', 'q_01', 'None', 'Object', -1, 1, true);
+                     ('p_01/p', 'Pearson', 'p_01', 'None', 'Image', -1, 1, true, NULL),
+                     ('q_01/q', 'Pearson', 'q_01', 'None', 'Object', -1, 1, true, 1);
                  INSERT INTO measurements VALUES
-                     ('img1.tif', 'img1.tif', 0, 1, 'image', NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', NULL),
-                     ('img1.tif', 'img1.tif', 0, 0, 'image', NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.5),
-                     ('img1.tif', 'img1.tif', 0, 0, 'object', '{object}', '[\"ClassA\"]', [1], 'q_01', 'Pearson', 'None', 'q_01/q', 0.25),
-                     ('img2.tif', 'img2.tif', 0, 0, 'image', NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.75);"
+                     ('img1.tif', 'img1.tif', 0, 1, 'image', NULL, NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', NULL),
+                     ('img1.tif', 'img1.tif', 0, 0, 'image', NULL, NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.5),
+                     ('img1.tif', 'img1.tif', 0, 0, 'object', '{object}', '{object}', '[\"ClassA\"]', [1], 'q_01', 'Pearson', 'None', 'q_01/q', 0.25),
+                     ('img2.tif', 'img2.tif', 0, 0, 'image', NULL, NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.75);
+                 UPDATE objects SET measurement_values = [0.25] WHERE object_id = '{object}';"
             ))
             .unwrap();
         (generator, out_dir, object)
@@ -4973,14 +4975,14 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "image_name,image_rel_path,z_stack,t_stack,region,object_id,\
+                "image_name,image_rel_path,z_stack,t_stack,region,object_id,related_object_id,\
                  object_class_name,step,measurement,unit,key,value",
-                "img1.tif,img1.tif,0,0,image,,,p_01,Pearson,None,p_01/p,0.5",
+                "img1.tif,img1.tif,0,0,image,,,,p_01,Pearson,None,p_01/p,0.5",
                 &format!(
-                    "img1.tif,img1.tif,0,0,object,{object},\"[\"\"ClassA\"\"]\",q_01,Pearson,None,q_01/q,0.25"
+                    "img1.tif,img1.tif,0,0,object,{object},{object},\"[\"\"ClassA\"\"]\",q_01,Pearson,None,q_01/q,0.25"
                 ),
-                "img1.tif,img1.tif,0,1,image,,,p_01,Pearson,None,p_01/p,",
-                "img2.tif,img2.tif,0,0,image,,,p_01,Pearson,None,p_01/p,0.75",
+                "img1.tif,img1.tif,0,1,image,,,,p_01,Pearson,None,p_01/p,",
+                "img2.tif,img2.tif,0,0,image,,,,p_01,Pearson,None,p_01/p,0.75",
             ]
         );
     }
@@ -5010,7 +5012,7 @@ mod tests {
         let csv = std::fs::read_to_string(out_dir.join("measurements.csv")).unwrap();
         assert_eq!(
             csv.lines().skip(1).collect::<Vec<_>>(),
-            ["img1.tif,img1.tif,0,0,image,,,p_01,Pearson,None,p_01/p,0.5"]
+            ["img1.tif,img1.tif,0,0,image,,,,p_01,Pearson,None,p_01/p,0.5"]
         );
     }
 

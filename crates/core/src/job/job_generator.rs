@@ -1646,8 +1646,7 @@ mod tests {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
         let pearson = || {
-            let mut command =
-                PipelineCommand::default_for_key("pearson_correlation_coefficient").unwrap();
+            let mut command = PipelineCommand::default_for_key("measure_colocalization").unwrap();
             *command.measurement_id_mut().unwrap() = "coloc".into();
             PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,

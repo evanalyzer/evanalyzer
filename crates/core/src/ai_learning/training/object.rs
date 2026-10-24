@@ -64,8 +64,25 @@ pub fn compute_object_features(
                 .get(channel)
                 .map(|i| i.avg_intensity)
                 .unwrap_or(0.0) as f32,
+            // NaN where not measured (an annotation stored without it).
+            ObjectMetric::IntensityStd(channel) => spread(object, channel, |i| i.std_intensity),
+            ObjectMetric::IntensityMedian(channel) => {
+                spread(object, channel, |i| i.median_intensity)
+            }
+            ObjectMetric::IntensityLowerQuartile(channel) => {
+                spread(object, channel, |i| i.lower_quartile_intensity)
+            }
+            ObjectMetric::IntensityUpperQuartile(channel) => {
+                spread(object, channel, |i| i.upper_quartile_intensity)
+            }
+            ObjectMetric::IntensityMad(channel) => spread(object, channel, |i| i.mad_intensity),
         })
         .collect()
+}
+
+/// One of the channel's spread values (`pick`), NaN without the channel.
+fn spread(object: &Object, channel: &i32, pick: fn(&crate::Intensity) -> f64) -> f32 {
+    object.intensities.get(channel).map_or(f64::NAN, pick) as f32
 }
 
 /// Trains an object classifier from a flat list of already-labeled objects -
@@ -114,8 +131,20 @@ impl ObjectTrainingJob {
             match resolve_label(class_labels, &object_settings.object_class) {
                 Ok(label) => {
                     let object = Object::from_object_settings(object_settings.clone());
-                    rows.push(compute_object_features(&object, feature_spec));
-                    labels.push(label);
+                    let row = compute_object_features(&object, feature_spec);
+                    if row.iter().any(|v| v.is_nan()) {
+                        // A spread feature of an annotation stored before
+                        // it was measured with them.
+                        let _ = progress.send(TrainingProgressEvent::ObjectSkipped {
+                            index,
+                            reason: "a chosen feature isn't measured for it (the intensity \
+                                     spread: draw or import the annotation again)"
+                                .to_string(),
+                        });
+                    } else {
+                        rows.push(row);
+                        labels.push(label);
+                    }
                 }
                 Err(reason) => {
                     let _ = progress.send(TrainingProgressEvent::ObjectSkipped {
@@ -192,6 +221,7 @@ mod tests {
         AiLearningBackendSettings, AiLearningSettings, KnnSettings, PixelClassLabel,
     };
     use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::object_settings::IntensitySettings;
     use indexmap::IndexMap;
 
     // -- compute_object_features ---------------------------------------------
@@ -206,7 +236,7 @@ mod tests {
                 min_intensity: 1.0,
                 max_intensity: 9.0,
                 avg_intensity: 5.0,
-                pixel_values: vec![],
+                ..Default::default()
             },
         );
         let object = Object::new(ObjectInit {
@@ -334,6 +364,80 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TrainingProgressEvent::ObjectSkipped { index: 1, .. }))
         );
+    }
+
+    /// An annotation with its median (in channel 0) and one without - the
+    /// one without is skipped, not trained on with NaN.
+    fn with_median(id: u128, class: ObjectClass, median: Option<f64>) -> ObjectMetricSettings {
+        let mut object = labeled_object(id, class, 10);
+        object.intensities.insert(
+            0,
+            IntensitySettings {
+                median_intensity: median,
+                ..Default::default()
+            },
+        );
+        object
+    }
+
+    #[test]
+    fn a_spread_feature_trains_and_skips_annotations_without_it() {
+        let mut job = object_job(vec![
+            with_median(1, ObjectClass::Global(1), Some(0.1)),
+            with_median(2, ObjectClass::Global(1), Some(0.12)),
+            with_median(3, ObjectClass::Global(2), None),
+            with_median(4, ObjectClass::Global(2), Some(0.8)),
+            with_median(5, ObjectClass::Global(2), Some(0.82)),
+        ]);
+        let AiLearningClassifierSettings::Object { feature_spec, .. } =
+            &mut job.settings.classifier
+        else {
+            unreachable!()
+        };
+        feature_spec.metrics = vec![ObjectMetric::IntensityMedian(0)];
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let skipped: Vec<usize> = rx
+            .try_iter()
+            .filter_map(|e| match e {
+                TrainingProgressEvent::ObjectSkipped { index, .. } => Some(index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(skipped, [2], "only the annotation without a median");
+    }
+
+    /// The spread goes into an annotation and comes back out as the
+    /// features.
+    #[test]
+    fn the_spread_round_trips_through_an_annotation() {
+        let mut intensity = crate::Intensity {
+            avg_intensity: 2.5,
+            ..Default::default()
+        };
+        intensity.set_spread(&mut [1.0, 2.0, 3.0, 4.0]);
+        let stored = intensity.to_settings();
+        assert_eq!(stored.median_intensity, Some(3.0));
+        let mut annotation = labeled_object(1, ObjectClass::Global(1), 4);
+        annotation.intensities.insert(0, stored);
+        let object = Object::from_object_settings(annotation);
+        let spec = AiLearningObjectFeatureSettings {
+            metrics: vec![
+                ObjectMetric::IntensityMedian(0),
+                ObjectMetric::IntensityLowerQuartile(0),
+                ObjectMetric::IntensityUpperQuartile(0),
+                ObjectMetric::IntensityMad(0),
+            ],
+        };
+        assert_eq!(
+            compute_object_features(&object, &spec),
+            [3.0, 2.0, 4.0, 1.0]
+        );
+        // Not measured: none in the project file, NaN as a feature.
+        let unmeasured = crate::Intensity::default().to_settings();
+        assert_eq!(unmeasured.std_intensity, None);
+        let json = serde_json::to_string(&unmeasured).unwrap();
+        assert!(!json.contains("stdIntensity"), "{json}");
     }
 
     #[test]
