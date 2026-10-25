@@ -154,8 +154,12 @@ mod tests {
                 kernel_size: 5,
                 sigma: 1.5,
             }),
-            PreprocessingSteps::EdgeDetectionSobel(EdgeDetectionSobelSettings { kernel_size: 3 }),
-            PreprocessingSteps::Laplacian(LaplacianSettings { kernel_size: 5 }),
+            PreprocessingSteps::EdgeDetectionSobel(EdgeDetectionSobelSettings {
+                kernel_size: 3,
+            }),
+            PreprocessingSteps::Laplacian(LaplacianSettings {
+                kernel_size: 5,
+            }),
             PreprocessingSteps::RankFilter(RankFilterSettings {
                 radius: 2.0,
                 filter_type:

@@ -15,6 +15,7 @@
 //! `radial_power_spectrum.py`, BSD-3-Clause, Broad Institute) - the same
 //! image gives the same numbers. The noise is Immerkær's estimate.
 
+use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
 use crate::pipeline::pipeline_measure::{MeasurementRegion, Outputs};
@@ -589,6 +590,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             2,
             ImageTile {
@@ -676,6 +678,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
         let window = spectrum_window(&[tile], |_| Ok(container.clone())).unwrap();
         assert_eq!((window.width, window.height), (MAX_SPECTRUM_SIDE, 10));

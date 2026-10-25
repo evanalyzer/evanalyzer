@@ -21,6 +21,7 @@
 //! BSD-3-Clause, Broad Institute): the same step cost, 8 neighbours and
 //! order of equally cheap pixels, so the same image gives the same regions.
 
+use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::object::{Object, ObjectInit};
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
@@ -700,6 +701,7 @@ mod tests {
                 data: Image::new(ImageSize { width, height }, values).unwrap(),
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             1,
             ImageTile {
@@ -867,6 +869,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             1,
             ImageTile {

@@ -29,6 +29,12 @@
 //! now (parent class -> parent, set by Relate Objects), and annotations
 //! never had any.
 //!
+//! Size filters are named for a size, not an area - an area in 2D, a volume
+//! in 3D (`SIZE_SETTINGS`): Classify Objects' `minArea`, `maxArea` and
+//! `minIntersectionArea`, Object Math's `minOverlapArea` and Colocalize
+//! Objects' `minColocArea` become `minSize`, `maxSize`, `minIntersectionSize`,
+//! `minOverlapSize` and `minColocSize`; module bindings follow.
+//!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-15
 //!
@@ -106,10 +112,15 @@ fn renamed_path(param: &str, command_type: Option<&str>) -> String {
         && segments.first() == Some(&"segmentation_mapping");
     segments
         .iter()
-        .map(|segment| match *segment {
-            "object_class_id" => "segmentation_class",
-            "segmentation_class" if pixel_mapping => "model_class",
-            other => other,
+        .enumerate()
+        .map(|(i, segment)| match *segment {
+            "object_class_id" => "segmentation_class".to_string(),
+            "segmentation_class" if pixel_mapping => "model_class".to_string(),
+            other => i
+                .eq(&0)
+                .then(|| command_type.and_then(|ty| renamed_size_setting(ty, other)))
+                .flatten()
+                .unwrap_or_else(|| other.to_string()),
         })
         .collect::<Vec<_>>()
         .join(".")
@@ -151,11 +162,79 @@ fn rename_bindings(module: &mut Value) {
     }
 }
 
+/// The renamed size settings: command type, old and new key - as stored
+/// (camelCase), a binding names them in snake_case.
+const SIZE_SETTINGS: &[(&str, &str, &str)] = &[
+    ("CLASSIFY_OBJECTS", "minArea", "minSize"),
+    ("CLASSIFY_OBJECTS", "maxArea", "maxSize"),
+    (
+        "CLASSIFY_OBJECTS",
+        "minIntersectionArea",
+        "minIntersectionSize",
+    ),
+    ("OBJECT_MATH", "minOverlapArea", "minOverlapSize"),
+    ("COLOCALIZE_OBJECTS", "minColocArea", "minColocSize"),
+];
+
+/// `key` in snake_case ("minArea" -> "min_area").
+fn snake_case(key: &str) -> String {
+    let mut snake = String::new();
+    for c in key.chars() {
+        if c.is_ascii_uppercase() {
+            snake.push('_');
+            snake.push(c.to_ascii_lowercase());
+        } else {
+            snake.push(c);
+        }
+    }
+    snake
+}
+
+/// The new name of size setting `key` of a `command_type` command, in the
+/// case `key` is given in.
+fn renamed_size_setting(command_type: &str, key: &str) -> Option<String> {
+    let command_type = renamed_type(command_type).unwrap_or(command_type);
+    SIZE_SETTINGS
+        .iter()
+        .filter(|(ty, ..)| *ty == command_type)
+        .find_map(|(_, old, new)| {
+            if key == *old {
+                Some(new.to_string())
+            } else if key == snake_case(old) {
+                Some(snake_case(new))
+            } else {
+                None
+            }
+        })
+}
+
 /// The new type of a renamed command.
 fn renamed_type(command_type: &str) -> Option<&'static str> {
     match command_type {
         "COLOCALIZATION" => Some("COLOCALIZE_OBJECTS"),
         _ => None,
+    }
+}
+
+/// Renames the size settings of `command` (`SIZE_SETTINGS`).
+fn rename_size_settings(command: &mut Value) {
+    let Some(ty) = command
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Value::Object(settings) = command else {
+        return;
+    };
+    let keys: Vec<String> = settings.keys().cloned().collect();
+    for key in keys {
+        if let Some(new) = renamed_size_setting(&ty, &key)
+            && let Some(value) = settings.remove(&key)
+        {
+            settings.insert(new, value);
+        }
     }
 }
 
@@ -170,6 +249,7 @@ fn rename_commands(steps: Option<&mut Value>) {
                 {
                     *ty = renamed.into();
                 }
+                rename_size_settings(command);
             }
         }
     }
@@ -319,7 +399,7 @@ mod tests {
         let steps = &raw["pipelines"][0]["steps"];
         assert_eq!(
             steps[0]["command"],
-            json!({ "type": "COLOCALIZE_OBJECTS", "minColocArea": 2.0 })
+            json!({ "type": "COLOCALIZE_OBJECTS", "minColocSize": 2.0 })
         );
         assert_eq!(steps[1]["command"]["type"], "THRESHOLD");
         assert_eq!(
@@ -387,6 +467,81 @@ mod tests {
                 "segmentation_mapping.0.segmentation_class",
                 "class_mapping.0.segmentation_class",
                 "class_mapping.0.object_class",
+            ]
+        );
+    }
+
+    #[test]
+    fn size_filters_are_named_for_a_size_in_pipelines_and_modules() {
+        let mut raw = json!({
+            "pipelines": [{ "steps": [
+                { "command": { "type": "CLASSIFY_OBJECTS", "minArea": 10.0, "maxArea": 99.0,
+                    "minIntersectionArea": 2.0, "minCircularity": 0.5 }},
+                { "command": { "type": "OBJECT_MATH", "minOverlapArea": 3.0 }},
+                { "command": { "type": "COLOCALIZE_OBJECTS", "minColocArea": 4.0 }},
+                { "command": { "type": "CONNECTED_COMPONENTS", "minSize": 5 }}
+            ]}],
+            "modules": [{ "key": "G", "steps": [
+                { "id": 1, "command": { "type": "CLASSIFY_OBJECTS", "minArea": 7.0 }}
+            ], "parameters": []}]
+        });
+        migrate_from_v3_to_v4(&mut raw);
+        let steps = &raw["pipelines"][0]["steps"];
+        assert_eq!(
+            steps[0]["command"],
+            json!({ "type": "CLASSIFY_OBJECTS", "minSize": 10.0, "maxSize": 99.0,
+                "minIntersectionSize": 2.0, "minCircularity": 0.5 })
+        );
+        assert_eq!(
+            steps[1]["command"],
+            json!({ "type": "OBJECT_MATH", "minOverlapSize": 3.0 })
+        );
+        assert_eq!(
+            steps[2]["command"],
+            json!({ "type": "COLOCALIZE_OBJECTS", "minColocSize": 4.0 })
+        );
+        assert_eq!(
+            steps[3]["command"],
+            json!({ "type": "CONNECTED_COMPONENTS", "minSize": 5 })
+        );
+        assert_eq!(
+            raw["modules"][0]["steps"][0]["command"],
+            json!({ "type": "CLASSIFY_OBJECTS", "minSize": 7.0 })
+        );
+    }
+
+    #[test]
+    fn module_bindings_follow_the_renamed_size_filters() {
+        let mut raw = json!({ "modules": [{
+            "key": "G",
+            "steps": [
+                { "id": 1, "command": { "type": "CLASSIFY_OBJECTS" }},
+                { "id": 2, "command": { "type": "COLOCALIZATION" }},
+                { "id": 3, "command": { "type": "THRESHOLD", "thresholds": [] }}
+            ],
+            "parameters": [{ "bindings": [
+                { "step": 1, "param": "min_area" },
+                { "step": 1, "param": "max_area" },
+                { "step": 1, "param": "min_circularity" },
+                { "step": 2, "param": "min_coloc_area" },
+                { "step": 3, "param": "min_area" }
+            ]}]
+        }]});
+        migrate_from_v3_to_v4(&mut raw);
+        let params: Vec<&str> = raw["modules"][0]["parameters"][0]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["param"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            params,
+            [
+                "min_size",
+                "max_size",
+                "min_circularity",
+                "min_coloc_size",
+                "min_area"
             ]
         );
     }

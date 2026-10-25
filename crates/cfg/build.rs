@@ -38,6 +38,11 @@ mod types {
     pub mod units {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types/units.rs"));
     }
+    // The schema only needs `ImageDimensionality`; the rest are unused here.
+    #[allow(dead_code)]
+    pub mod image {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types/image.rs"));
+    }
 }
 mod core_types {
     pub use super::types::classes::{ObjectClass, SegmentationClass};

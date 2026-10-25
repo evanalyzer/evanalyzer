@@ -230,6 +230,9 @@ pub fn resolve_z_projection(
         ZStackHandling::AvgIntensity => (ZProjection::AvgIntensity, 0..=0),
         ZStackHandling::SumIntensity => (ZProjection::SumIntensity, 0..=0),
         ZStackHandling::TakeTheMiddle => (ZProjection::TakeTheMiddle, 0..=0),
+        // Every plane, as one volume - refused by the caller until training
+        // can run on volumes.
+        ZStackHandling::Volume3d => (ZProjection::None, 0..=(nr_z_stacks - 1)),
     }
 }
 

@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
@@ -387,6 +388,7 @@ mod tests {
             data: Image::<f32, 1>::new(size, vec![123.456f32; 16])?,
             tile_offset: ctx.scratch_pad.tile_offset(),
             plane: ctx.scratch_pad.plane(),
+            dimensionality: ctx.scratch_pad.dimensionality(),
         }));
 
         let edm = DistanceTransform {

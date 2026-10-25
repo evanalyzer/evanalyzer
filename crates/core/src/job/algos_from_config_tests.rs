@@ -483,15 +483,15 @@ fn classify_objects_settings_convert_identity_fields() {
 #[test]
 fn classify_objects_settings_clamp_area_and_circularity_fields() {
     let settings = ClassifyObjectsSettings {
-        min_area: -5.0,
-        max_area: 9999999999.0,
+        min_size: -5.0,
+        max_size: 9999999999.0,
         min_circularity: -0.5,
         max_circularity: 5.0,
         ..Default::default()
     };
     let result = ClassifyObjects::from(settings);
-    assert_eq!(result.min_area, 0.0);
-    assert_eq!(result.max_area, 2147483600.0);
+    assert_eq!(result.min_size, 0.0);
+    assert_eq!(result.max_size, 2147483600.0);
     assert_eq!(result.min_circularity, 0.0);
     assert_eq!(result.max_circularity, 1.0);
 }
@@ -508,7 +508,7 @@ fn colocalization_settings_convert_all_fields() {
         exclude_classes: vec![ObjectClass::Global(4)],
         multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
         size_unit: SizeUnitsRel::Pixels,
-        min_coloc_area: 12.5,
+        min_coloc_size: 12.5,
     };
     let result = ColocalizeObjects::from(settings);
     assert_eq!(
@@ -523,7 +523,7 @@ fn colocalization_settings_convert_all_fields() {
     assert_eq!(result.exclude_classes, vec![ObjectClass::Global(4)]);
     assert_eq!(result.multiplicity, ColocMultiplicity::ManyToMany);
     assert_eq!(result.size_unit, SizeUnitsRel::Pixels);
-    assert_eq!(result.min_coloc_area, 12.5);
+    assert_eq!(result.min_coloc_size, 12.5);
 }
 
 #[test]
@@ -766,7 +766,7 @@ fn object_math_settings_convert_all_fields() {
         other_class: ObjectClass::Global(2),
         other_filter_classes: vec![ObjectClass::Global(3)],
         size_unit: SizeUnits::Pixels,
-        min_overlap_area: 4.0,
+        min_overlap_size: 4.0,
         output_class: ObjectClass::Global(5),
         keep_unmatched: false,
     };
@@ -776,7 +776,7 @@ fn object_math_settings_convert_all_fields() {
     assert_eq!(result.other_class, ObjectClass::Global(2));
     assert_eq!(result.other_filter_classes, vec![ObjectClass::Global(3)]);
     assert_eq!(result.size_unit, SizeUnits::Pixels);
-    assert_eq!(result.min_overlap_area, 4.0);
+    assert_eq!(result.min_overlap_size, 4.0);
     assert_eq!(result.output_class, ObjectClass::Global(5));
     assert!(!result.keep_unmatched);
 }

@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage, PixelSizes};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
@@ -79,6 +80,7 @@ impl ImageAlgorithm for Hessian {
                     data: result,
                     tile_offset: input.tile_offset,
                     plane: input.plane,
+                    dimensionality: input.dimensionality,
                 };
                 ctx.swap()?;
                 Ok(())

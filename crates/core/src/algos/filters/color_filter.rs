@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::ImagePlane;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::Point2d;
@@ -140,6 +141,7 @@ impl ImageAlgorithm for ColorFilterCommand {
                 })?,
                 tile_offset: input.tile_offset.clone(),
                 plane: input.plane.clone(),
+                dimensionality: input.dimensionality,
             }));
         }
 
@@ -418,6 +420,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
         let mut cache = GlobalPipelineCache::default();
         let filter = ColorFilterCommand {

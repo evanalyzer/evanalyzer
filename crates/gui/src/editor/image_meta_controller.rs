@@ -522,14 +522,15 @@ impl ImageMetaController {
                 .set_size(format!("{}x{} px", pyramid_info.width, pyramid_info.height).into());
             image_meta_ui.set_pixel_type(format!("{} bits", pyramid_info.nr_bits).into());
 
-            // --- Pixel size ---
+            // --- Pixel size (an unknown z shown as 0, as the reader's) ---
+            let pixel_size_z = pixel_sizes.z.unwrap_or(0.0);
             image_meta_ui.set_pixel_size_x(pixel_sizes.x);
             image_meta_ui.set_pixel_size_y(pixel_sizes.y);
-            image_meta_ui.set_pixel_size_z(pixel_sizes.z);
+            image_meta_ui.set_pixel_size_z(pixel_size_z);
             image_meta_ui.set_pixel_size_str(
                 format!(
                     "{:.1}x{:.1}x{:.1} nm/px",
-                    pixel_sizes.x, pixel_sizes.y, pixel_sizes.z
+                    pixel_sizes.x, pixel_sizes.y, pixel_size_z
                 )
                 .into(),
             );
@@ -551,6 +552,7 @@ impl ImageMetaController {
                 ZStackHandling::AvgIntensity => IntensityProjection::Avg,
                 ZStackHandling::SumIntensity => IntensityProjection::Sum,
                 ZStackHandling::TakeTheMiddle => IntensityProjection::Middle,
+                ZStackHandling::Volume3d => IntensityProjection::Volume,
             });
         }) {
             warn!("Failed to enqueue UI update: {:?}", e);
@@ -582,7 +584,8 @@ impl ImageMetaController {
     pub(crate) fn set_manual_pixel_sizes(&self, px: f32, py: f32, pz: f32) {
         {
             let mut project = self.app_state.get_project_write();
-            project.set_global_pixel_size_settings(px, py, pz);
+            // 0 (or less): the z spacing is unknown.
+            project.set_global_pixel_size_settings(px, py, (pz > 0.0).then_some(pz));
         }
         self.sync_pixel_size_settings_to_slint();
         self.viewport_controller.sync_scale_bar_to_slint();
@@ -621,15 +624,16 @@ impl ImageMetaController {
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
-                // Pixel size
+                // Pixel size (an unknown z shown as 0)
+                let pixel_size_z = pixel_sizes.z.unwrap_or(0.0);
                 let px_size = format!(
                     "{:.1}x{:.1}x{:1} nm/px",
-                    pixel_sizes.x, pixel_sizes.y, pixel_sizes.z
+                    pixel_sizes.x, pixel_sizes.y, pixel_size_z
                 );
                 let image_meta_ui = ui_ready.global::<ImageMetaData>();
                 image_meta_ui.set_pixel_size_x(pixel_sizes.x);
                 image_meta_ui.set_pixel_size_y(pixel_sizes.y);
-                image_meta_ui.set_pixel_size_z(pixel_sizes.z);
+                image_meta_ui.set_pixel_size_z(pixel_size_z);
                 image_meta_ui.set_pixel_size_str(px_size.into());
             } else {
                 warn!(
@@ -763,7 +767,7 @@ mod tests {
         let sizes = project.get_pixel_sizes();
         assert_eq!(sizes.x, 1.5);
         assert_eq!(sizes.y, 2.5);
-        assert_eq!(sizes.z, 3.5);
+        assert_eq!(sizes.z, Some(3.5));
     }
 
     #[test]
@@ -779,7 +783,7 @@ mod tests {
         let sizes = project.get_pixel_sizes();
         assert_eq!(sizes.x, 1.0);
         assert_eq!(sizes.y, 1.0);
-        assert_eq!(sizes.z, 1.0);
+        assert_eq!(sizes.z, None);
     }
 
     // -- sync_image_meta_to_slint --------------------------------------------------

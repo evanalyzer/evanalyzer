@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, MeasurementValues};
@@ -98,6 +99,46 @@ pub fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
     let handle = anchor.try_clone().map_err(to_io_err)?;
     cache.insert(path.to_path_buf(), anchor);
     Ok(handle)
+}
+
+/// The format of the results files this build writes (`run.schema_version`).
+/// Raise it with every change a reader of an older build would misread, and
+/// teach the readers the older formats they still open.
+pub const RESULTS_SCHEMA_VERSION: u32 = 1;
+
+/// The format `conn`'s results file was written in - 0 for a file from before
+/// it was recorded (no `run` table or no `schema_version`).
+pub fn results_schema_version(conn: &Connection) -> Result<u32, InternalErrors> {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM information_schema.columns
+             WHERE table_name = 'run' AND column_name = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+    if !has_column {
+        return Ok(0);
+    }
+    let version: Option<Option<u32>> = conn
+        .query_row("SELECT max(schema_version) FROM run", [], |row| row.get(0))
+        .map(Some)
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+    Ok(version.flatten().unwrap_or(0))
+}
+
+/// Refuses a results file written by a newer build: its format may hold
+/// what this build would misread.
+pub fn reject_newer_results(conn: &Connection) -> Result<(), InternalErrors> {
+    let version = results_schema_version(conn)?;
+    if version > RESULTS_SCHEMA_VERSION {
+        return Err(InternalErrors::ParseError(format!(
+            "these results were saved by a newer version of EVAnalyzer (format version \
+             {version}, this build reads up to version {RESULTS_SCHEMA_VERSION}) - update \
+             EVAnalyzer to open them"
+        )));
+    }
+    Ok(())
 }
 
 /// The memory DuckDB may use for a results file on a computer with
@@ -211,11 +252,13 @@ impl DuckDbExporter {
 
         conn.execute(
             "INSERT INTO run (
-                status, title, short_description, description, app_version, author_full_name, author_organization
+                schema_version, status, title, short_description, description, app_version,
+                author_full_name, author_organization
             ) VALUES (
-                'running', ?, ?, ?, ?, ?::VARCHAR[], ?::VARCHAR[]
+                ?, 'running', ?, ?, ?, ?, ?::VARCHAR[], ?::VARCHAR[]
             )",
             params![
+                RESULTS_SCHEMA_VERSION,
                 project_meta.name,
                 project_meta.short_description,
                 project_meta.description,
@@ -270,6 +313,14 @@ impl DuckDbExporter {
             )));
         }
         let conn = shared_connection(path)?;
+        // Only into a file of this build's format: another one's rows wouldn't fit.
+        let version = results_schema_version(&conn)?;
+        if version != RESULTS_SCHEMA_VERSION {
+            return Err(InternalErrors::ParseError(format!(
+                "these results are in format version {version}, this build writes version \
+                 {RESULTS_SCHEMA_VERSION} - run the analysis again"
+            )));
+        }
         let object_indices = existing_object_indices(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -401,7 +452,7 @@ impl DuckDbExporter {
 /// huge image are buffered at once.
 const ARROW_BATCH_ROWS: usize = 50_000;
 
-/// The `objects` table's DOUBLE columns, in table order (see
+/// The `objects` table's DOUBLE columns (placed by
 /// `ObjectColumns::finish`).
 #[derive(Clone, Copy)]
 enum F64 {
@@ -438,9 +489,17 @@ enum F64 {
     PixelSizeXNm,
     PixelSizeYNm,
     PixelSizeZNm,
+    BboxZminNm,
+    BboxZmaxNm,
+    CentroidZPx,
+    CentroidZNm,
+    BboxCenterZPx,
+    BboxCenterZNm,
+    VolumeNm3,
+    SurfaceAreaNm2,
 }
 
-const F64_COLUMNS: usize = F64::PixelSizeZNm as usize + 1;
+const F64_COLUMNS: usize = F64::SurfaceAreaNm2 as usize + 1;
 
 /// One batch of `objects` rows, column by column, for the Appender's Arrow
 /// path - the only way to append the `object_class_id` list: the row-wise
@@ -471,6 +530,10 @@ struct ObjectColumns {
     measurement_values: ListBuilder<Float64Builder>,
     /// The mask, run-length encoded (`mask_codec`); NULL when not stored.
     mask: BinaryBuilder,
+    ndim: UInt8Builder,
+    bbox_z_px: [UInt32Builder; 2],
+    volume_px: UInt64Builder,
+    touches_z_edge: BooleanBuilder,
     f64: Vec<Float64Builder>,
 }
 
@@ -549,6 +612,10 @@ impl ObjectColumns {
             ),
             measurement_values: ListBuilder::new(Float64Builder::new()),
             mask: BinaryBuilder::with_capacity(rows, rows * 16),
+            ndim: UInt8Builder::with_capacity(rows),
+            bbox_z_px: std::array::from_fn(|_| UInt32Builder::with_capacity(rows)),
+            volume_px: UInt64Builder::with_capacity(rows),
+            touches_z_edge: BooleanBuilder::with_capacity(rows),
             f64: (0..F64_COLUMNS)
                 .map(|_| Float64Builder::with_capacity(rows))
                 .collect(),
@@ -557,6 +624,11 @@ impl ObjectColumns {
 
     fn f64(&mut self, column: F64, value: f64) {
         self.f64[column as usize].append_value(value);
+    }
+
+    /// NULL for `None`.
+    fn f64_opt(&mut self, column: F64, value: Option<f64>) {
+        self.f64[column as usize].append_option(value);
     }
 
     /// One row of every `intensity_*` list: position c + 1 holds channel c,
@@ -639,6 +711,48 @@ impl ObjectColumns {
         self.measurement_values.append(true);
     }
 
+    /// One row of the z columns: where `object` lies in z - for a plane
+    /// zmin = zmax = its plane - and a volume's size. NULL where unknown: the
+    /// plane (-1), the z spacing (`pxz`); the volume of a plane. `pxx`, `pxy`:
+    /// the pixel size in x and y, in nm.
+    fn append_z_extent(&mut self, object: &Object, pxx: f64, pxy: f64, pxz: Option<f64>) {
+        let dimensionality = object.dimensionality;
+        self.ndim.append_value(dimensionality.ndim());
+        let z_min = (object.plane.z >= 0).then_some(object.plane.z as u32);
+        let z_max = z_min.map(|z| z + dimensionality.depth() - 1);
+        let in_nm = |z: Option<f64>| z.zip(pxz).map(|(z, pxz)| z * pxz);
+        let centroid_z = z_min.map(|z| match dimensionality {
+            ImageDimensionality::Planar => z as f64,
+            ImageDimensionality::Volume { .. } => {
+                z as f64 + object.sum_z as f64 / object.area.max(1) as f64
+            }
+        });
+        let box_center_z = z_min.zip(z_max).map(|(min, max)| (min + max) as f64 / 2.0);
+        let [zmin_px, zmax_px] = &mut self.bbox_z_px;
+        zmin_px.append_option(z_min);
+        zmax_px.append_option(z_max);
+        self.f64_opt(F64::BboxZminNm, in_nm(z_min.map(f64::from)));
+        self.f64_opt(F64::BboxZmaxNm, in_nm(z_max.map(f64::from)));
+        self.f64_opt(F64::CentroidZPx, centroid_z);
+        self.f64_opt(F64::CentroidZNm, in_nm(centroid_z));
+        self.f64_opt(F64::BboxCenterZPx, box_center_z);
+        self.f64_opt(F64::BboxCenterZNm, in_nm(box_center_z));
+        let voxels = match dimensionality {
+            ImageDimensionality::Planar => None,
+            ImageDimensionality::Volume { .. } => Some(object.area as u64),
+        };
+        self.volume_px.append_option(voxels);
+        self.f64_opt(
+            F64::VolumeNm3,
+            voxels
+                .zip(pxz)
+                .map(|(voxels, pxz)| voxels as f64 * pxx * pxy * pxz),
+        );
+        // Needs the 3D geometry (a later step).
+        self.f64_opt(F64::SurfaceAreaNm2, None);
+        self.touches_z_edge.append_null();
+    }
+
     fn len(&self) -> usize {
         self.object_id.len()
     }
@@ -650,78 +764,23 @@ impl ObjectColumns {
         fn arr(builder: &mut dyn ArrayBuilder) -> ArrayRef {
             builder.finish()
         }
-        let mut f = |column: F64| arr(&mut self.f64[column as usize]);
-        let doubles_1 = [
-            f(F64::CentroidXPx),
-            f(F64::CentroidYPx),
-            f(F64::CentroidXNm),
-            f(F64::CentroidYNm),
-            f(F64::BboxCenterXPx),
-            f(F64::BboxCenterYPx),
-            f(F64::BboxCenterXNm),
-            f(F64::BboxCenterYNm),
-        ];
-        let doubles_2 = [
-            f(F64::BboxXminNm),
-            f(F64::BboxYminNm),
-            f(F64::BboxXmaxNm),
-            f(F64::BboxYmaxNm),
-        ];
-        let doubles_3 = [
-            f(F64::AreaNm2),
-            f(F64::PerimeterPx),
-            f(F64::PerimeterNm),
-            f(F64::Circularity),
-            f(F64::Solidity),
-            f(F64::AspectRatio),
-            f(F64::Roundness),
-            f(F64::Compactness),
-            f(F64::MajorAxisPx),
-            f(F64::MinorAxisPx),
-            f(F64::MajorAxisNm),
-            f(F64::MinorAxisNm),
-            f(F64::MajorAxisAngle),
-            f(F64::Eccentricity),
-            f(F64::FeretDiameterPx),
-            f(F64::MinFeretPx),
-            f(F64::FeretDiameterNm),
-            f(F64::MinFeretNm),
-        ];
-        let doubles_4 = [
-            f(F64::PixelSizeXNm),
-            f(F64::PixelSizeYNm),
-            f(F64::PixelSizeZNm),
-        ];
-        let [b0, b1, b2, b3] = &mut self.bbox_px;
-        let [n0, n1, n2, n3] = doubles_2;
-        let [
-            a0,
-            a1,
-            a2,
-            a3,
-            a4,
-            a5,
-            a6,
-            a7,
-            a8,
-            a9,
-            a10,
-            a11,
-            a12,
-            a13,
-            a14,
-            a15,
-            a16,
-            a17,
-        ] = doubles_3;
-        let [c0, c1, c2, c3, m0, m1, m2, m3] = doubles_1;
-        let [p0, p1, p2] = doubles_4;
-        let columns: Vec<(&str, ArrayRef)> = vec![
+        // The DOUBLE columns, each finished once, taken in table order.
+        let mut doubles: Vec<Option<ArrayRef>> =
+            self.f64.iter_mut().map(|b| Some(arr(b))).collect();
+        let mut f = |column: F64| {
+            doubles[column as usize]
+                .take()
+                .expect("each DOUBLE column is in the table once")
+        };
+        let [xmin_px, ymin_px, xmax_px, ymax_px] = &mut self.bbox_px;
+        let [zmin_px, zmax_px] = &mut self.bbox_z_px;
+        let mut columns: Vec<(&str, ArrayRef)> = vec![
             ("image_name", arr(&mut self.image_name)),
             ("image_rel_path", arr(&mut self.image_rel_path)),
             ("c_stack", arr(&mut self.c_stack)),
             ("z_stack", arr(&mut self.z_stack)),
             ("t_stack", arr(&mut self.t_stack)),
+            ("ndim", arr(&mut self.ndim)),
             ("object_id", arr(&mut self.object_id)),
             ("seg_class_name", arr(&mut self.seg_class_name)),
             ("seg_class_id", arr(&mut self.seg_class_id)),
@@ -729,48 +788,59 @@ impl ObjectColumns {
             ("object_class_id", arr(&mut self.object_class_id)),
             ("parent_ids", arr(&mut self.parent_ids)),
             ("track_id", arr(&mut self.track_id)),
-            ("centroid_x_px", c0),
-            ("centroid_y_px", c1),
-            ("centroid_x_nm", c2),
-            ("centroid_y_nm", c3),
-            ("bbox_center_x_px", m0),
-            ("bbox_center_y_px", m1),
-            ("bbox_center_x_nm", m2),
-            ("bbox_center_y_nm", m3),
-            ("bbox_xmin_px", arr(b0)),
-            ("bbox_ymin_px", arr(b1)),
-            ("bbox_xmax_px", arr(b2)),
-            ("bbox_ymax_px", arr(b3)),
-            ("bbox_xmin_nm", n0),
-            ("bbox_ymin_nm", n1),
-            ("bbox_xmax_nm", n2),
-            ("bbox_ymax_nm", n3),
+            ("centroid_x_px", f(F64::CentroidXPx)),
+            ("centroid_y_px", f(F64::CentroidYPx)),
+            ("centroid_z_px", f(F64::CentroidZPx)),
+            ("centroid_x_nm", f(F64::CentroidXNm)),
+            ("centroid_y_nm", f(F64::CentroidYNm)),
+            ("centroid_z_nm", f(F64::CentroidZNm)),
+            ("bbox_center_x_px", f(F64::BboxCenterXPx)),
+            ("bbox_center_y_px", f(F64::BboxCenterYPx)),
+            ("bbox_center_z_px", f(F64::BboxCenterZPx)),
+            ("bbox_center_x_nm", f(F64::BboxCenterXNm)),
+            ("bbox_center_y_nm", f(F64::BboxCenterYNm)),
+            ("bbox_center_z_nm", f(F64::BboxCenterZNm)),
+            ("bbox_xmin_px", arr(xmin_px)),
+            ("bbox_ymin_px", arr(ymin_px)),
+            ("bbox_zmin_px", arr(zmin_px)),
+            ("bbox_xmax_px", arr(xmax_px)),
+            ("bbox_ymax_px", arr(ymax_px)),
+            ("bbox_zmax_px", arr(zmax_px)),
+            ("bbox_xmin_nm", f(F64::BboxXminNm)),
+            ("bbox_ymin_nm", f(F64::BboxYminNm)),
+            ("bbox_zmin_nm", f(F64::BboxZminNm)),
+            ("bbox_xmax_nm", f(F64::BboxXmaxNm)),
+            ("bbox_ymax_nm", f(F64::BboxYmaxNm)),
+            ("bbox_zmax_nm", f(F64::BboxZmaxNm)),
             ("area_px", arr(&mut self.area_px)),
-            ("area_nm2", a0),
-            ("perimeter_px", a1),
-            ("perimeter_nm", a2),
-            ("circularity", a3),
-            ("solidity", a4),
-            ("aspect_ratio", a5),
-            ("roundness", a6),
-            ("compactness", a7),
-            ("major_axis_px", a8),
-            ("minor_axis_px", a9),
-            ("major_axis_nm", a10),
-            ("minor_axis_nm", a11),
-            ("major_axis_angle", a12),
-            ("eccentricity", a13),
-            ("feret_diameter_px", a14),
-            ("min_feret_px", a15),
-            ("feret_diameter_nm", a16),
-            ("min_feret_nm", a17),
+            ("area_nm2", f(F64::AreaNm2)),
+            ("volume_px", arr(&mut self.volume_px)),
+            ("volume_nm3", f(F64::VolumeNm3)),
+            ("perimeter_px", f(F64::PerimeterPx)),
+            ("perimeter_nm", f(F64::PerimeterNm)),
+            ("surface_area_nm2", f(F64::SurfaceAreaNm2)),
+            ("circularity", f(F64::Circularity)),
+            ("solidity", f(F64::Solidity)),
+            ("aspect_ratio", f(F64::AspectRatio)),
+            ("roundness", f(F64::Roundness)),
+            ("compactness", f(F64::Compactness)),
+            ("major_axis_px", f(F64::MajorAxisPx)),
+            ("minor_axis_px", f(F64::MinorAxisPx)),
+            ("major_axis_nm", f(F64::MajorAxisNm)),
+            ("minor_axis_nm", f(F64::MinorAxisNm)),
+            ("major_axis_angle", f(F64::MajorAxisAngle)),
+            ("eccentricity", f(F64::Eccentricity)),
+            ("feret_diameter_px", f(F64::FeretDiameterPx)),
+            ("min_feret_px", f(F64::MinFeretPx)),
+            ("feret_diameter_nm", f(F64::FeretDiameterNm)),
+            ("min_feret_nm", f(F64::MinFeretNm)),
             ("touches_edge", arr(&mut self.touches_edge)),
-            ("pixel_size_x_nm", p0),
-            ("pixel_size_y_nm", p1),
-            ("pixel_size_z_nm", p2),
+            ("touches_z_edge", arr(&mut self.touches_z_edge)),
+            ("pixel_size_x_nm", f(F64::PixelSizeXNm)),
+            ("pixel_size_y_nm", f(F64::PixelSizeYNm)),
+            ("pixel_size_z_nm", f(F64::PixelSizeZNm)),
             ("image_bit_depth", arr(&mut self.image_bit_depth)),
         ];
-        let mut columns = columns;
         for (name, builder) in INTENSITY_COLUMNS.iter().zip(&mut self.intensities) {
             columns.push((name, arr(builder)));
         }
@@ -1002,12 +1072,19 @@ impl<'a> MeasurementRows<'a> {
 // ---------------------------------------------------------------------------
 
 const CREATE_TABLES: &str = "
+-- An object is a plane's (ndim 2) or a volume's (ndim 3, an object over
+-- several z-planes). Each z column follows its x and y ones; a plane's
+-- object has zmin = zmax = its plane. The z values are NULL for an unknown
+-- plane, their nm values also for an unknown z spacing.
 CREATE TABLE IF NOT EXISTS objects (
     image_name           VARCHAR NOT NULL,
     image_rel_path       VARCHAR NOT NULL,
     c_stack              INTEGER,
+    -- The object's plane; NULL for a volume's (bbox_zmin_px..bbox_zmax_px).
     z_stack              INTEGER,
     t_stack              INTEGER,
+    -- 2: a plane's object, 3: a volume's.
+    ndim                 UTINYINT NOT NULL DEFAULT 2,
     object_id            UUID NOT NULL,
     seg_class_name       VARCHAR,
     seg_class_id         INTEGER,
@@ -1019,26 +1096,40 @@ CREATE TABLE IF NOT EXISTS objects (
     track_id             UBIGINT,
     centroid_x_px        DOUBLE,
     centroid_y_px        DOUBLE,
+    centroid_z_px        DOUBLE,
     centroid_x_nm        DOUBLE,
     centroid_y_nm        DOUBLE,
+    centroid_z_nm        DOUBLE,
     -- The centroid is the mean position of the object's pixels; the
     -- bounding box's centre differs from it for asymmetric shapes.
     bbox_center_x_px     DOUBLE,
     bbox_center_y_px     DOUBLE,
+    bbox_center_z_px     DOUBLE,
     bbox_center_x_nm     DOUBLE,
     bbox_center_y_nm     DOUBLE,
+    bbox_center_z_nm     DOUBLE,
     bbox_xmin_px         UINTEGER,
     bbox_ymin_px         UINTEGER,
+    bbox_zmin_px         UINTEGER,
     bbox_xmax_px         UINTEGER,
     bbox_ymax_px         UINTEGER,
+    bbox_zmax_px         UINTEGER,
     bbox_xmin_nm         DOUBLE,
     bbox_ymin_nm         DOUBLE,
+    bbox_zmin_nm         DOUBLE,
     bbox_xmax_nm         DOUBLE,
     bbox_ymax_nm         DOUBLE,
+    bbox_zmax_nm         DOUBLE,
+    -- A plane's object's size and shape - area to min_feret are NULL for a
+    -- volume's; its volume and surface NULL for a plane's. More 3D shape
+    -- measurements come as measurement steps (`measurement_values`).
     area_px              UBIGINT,
     area_nm2             DOUBLE,
+    volume_px            UBIGINT,
+    volume_nm3           DOUBLE,
     perimeter_px         DOUBLE,
     perimeter_nm         DOUBLE,
+    surface_area_nm2     DOUBLE,
     circularity          DOUBLE,
     solidity             DOUBLE,
     aspect_ratio         DOUBLE,
@@ -1054,9 +1145,13 @@ CREATE TABLE IF NOT EXISTS objects (
     min_feret_px         DOUBLE,
     feret_diameter_nm    DOUBLE,
     min_feret_nm         DOUBLE,
+    -- Touches the image's border in x or y; a volume's also its first or
+    -- last z-plane (touches_z_edge, NULL for a plane's).
     touches_edge         BOOLEAN,
+    touches_z_edge       BOOLEAN,
     pixel_size_x_nm      DOUBLE,
     pixel_size_y_nm      DOUBLE,
+    -- The distance between two z-planes; NULL if unknown.
     pixel_size_z_nm      DOUBLE,
     image_bit_depth      UTINYINT,
     -- Per-channel intensity statistics, one list each, indexed by channel:
@@ -1083,9 +1178,10 @@ CREATE TABLE IF NOT EXISTS objects (
     -- `measurements` (one row each), here for the results to aggregate
     -- without a join. NULL where the object has no value.
     measurement_values           DOUBLE[],
-    -- The object's mask relative to its bounding box (row by row): the
-    -- lengths of its alternating unset / set runs as LEB128 varints (see
-    -- evanalyzer_core's mask_codec.rs). NULL when not stored.
+    -- The object's mask relative to its bounding box (row by row, of a
+    -- volume plane by plane from bbox_zmin_px): the lengths of its
+    -- alternating unset / set runs as LEB128 varints (see evanalyzer_core's
+    -- mask_codec.rs). NULL when not stored.
     mask                         BLOB
 );
 
@@ -1139,7 +1235,8 @@ CREATE TABLE IF NOT EXISTS measurement_info (
 CREATE TABLE IF NOT EXISTS measurements (
     image_name         VARCHAR NOT NULL,
     image_rel_path     VARCHAR NOT NULL,
-    z_stack            INTEGER NOT NULL,
+    -- The plane; NULL for a value of a whole volume (all its z-planes).
+    z_stack            INTEGER,
     t_stack            INTEGER NOT NULL,
     region             VARCHAR NOT NULL,
     object_id          UUID,
@@ -1160,6 +1257,9 @@ CREATE TABLE IF NOT EXISTS measurements (
 -- 'running' afterwards means it was interrupted (crash, killed process).
 -- One row. Files from before this table existed have none.
 CREATE TABLE IF NOT EXISTS run (
+    -- The format of this file (`RESULTS_SCHEMA_VERSION`); NULL in files
+    -- from before it was recorded.
+    schema_version      INTEGER,
     status              VARCHAR NOT NULL,
     title               VARCHAR,
     short_description   VARCHAR,
@@ -1253,6 +1353,8 @@ impl DuckDbExporter {
         let px_len = (px.px_size_x * px.px_size_y).sqrt() as f64;
         let pxx = px.px_size_x as f64;
         let pxy = px.px_size_y as f64;
+        // The reader's 0: the z spacing is unknown - its nm columns NULL.
+        let pxz = (px.px_size_z > 0.0).then_some(px.px_size_z as f64);
 
         let image_rel = cache.image_rel_path.display().to_string();
         let image_name = image_display_name(&cache.image_rel_path);
@@ -1260,6 +1362,9 @@ impl DuckDbExporter {
         let mut columns =
             ObjectColumns::with_capacity(cache.object_cache.len().min(ARROW_BATCH_ROWS));
         for object in objects.by_ref().take(ARROW_BATCH_ROWS) {
+            // A plane's shape measurements; NULL for a volume, whose 3D
+            // geometry (volume aside) comes with the 3D commands.
+            let planar = object.dimensionality == ImageDimensionality::Planar;
             // get_perimeter()/get_ellipse() are precomputed at object creation (see
             // Object::finalize_geometry), so here they are just field reads - which
             // matters for batches built under the connection lock. We pull each into a local and
@@ -1270,7 +1375,10 @@ impl DuckDbExporter {
             let ellipse = object.get_ellipse();
             let centroid = object.get_centroid();
             // Computed from the mask here, at export (not kept on the object).
-            let (min_feret, feret) = object.feret_diameters();
+            let (min_feret, feret) = match planar {
+                true => object.feret_diameters(),
+                false => (f64::NAN, f64::NAN),
+            };
             let aspect_ratio = if ellipse.minor > 0.0 {
                 (ellipse.major / ellipse.minor) as f64
             } else {
@@ -1295,7 +1403,8 @@ impl DuckDbExporter {
             c.image_name.append_value(&image_name);
             c.image_rel_path.append_value(&image_rel);
             c.c_stack.append_value(object.plane.c);
-            c.z_stack.append_value(object.plane.z);
+            // A volume lies on several planes: its extent is in the z columns.
+            c.z_stack.append_option(planar.then_some(object.plane.z));
             c.t_stack.append_value(object.plane.t);
             c.object_id.append_value(object.id.to_string());
             c.seg_class_name
@@ -1328,32 +1437,34 @@ impl DuckDbExporter {
             c.f64(F64::BboxYminNm, object.bbox[1] as f64 * pxy);
             c.f64(F64::BboxXmaxNm, object.bbox[2] as f64 * pxx);
             c.f64(F64::BboxYmaxNm, object.bbox[3] as f64 * pxy);
-            c.area_px.append_value(object.area as u64);
-            c.f64(F64::AreaNm2, object.area as f64 * pxx * pxy);
-            c.f64(F64::PerimeterPx, perimeter);
-            c.f64(F64::PerimeterNm, perimeter * px_len);
-            c.f64(F64::Circularity, roundness);
-            c.f64(F64::Solidity, object.get_solidity() as f64);
-            c.f64(F64::AspectRatio, aspect_ratio);
-            c.f64(F64::Roundness, roundness);
-            c.f64(
+            let plane_only = |value: f64| planar.then_some(value);
+            c.area_px
+                .append_option(planar.then_some(object.area as u64));
+            c.f64_opt(F64::AreaNm2, plane_only(object.area as f64 * pxx * pxy));
+            c.f64_opt(F64::PerimeterPx, plane_only(perimeter));
+            c.f64_opt(F64::PerimeterNm, plane_only(perimeter * px_len));
+            c.f64_opt(F64::Circularity, plane_only(roundness));
+            c.f64_opt(F64::Solidity, planar.then(|| object.get_solidity() as f64));
+            c.f64_opt(F64::AspectRatio, plane_only(aspect_ratio));
+            c.f64_opt(F64::Roundness, plane_only(roundness));
+            c.f64_opt(
                 F64::Compactness,
-                object.get_compactness(perimeter_f32) as f64,
+                plane_only(object.get_compactness(perimeter_f32) as f64),
             );
-            c.f64(F64::MajorAxisPx, ellipse.major as f64);
-            c.f64(F64::MinorAxisPx, ellipse.minor as f64);
-            c.f64(F64::MajorAxisNm, ellipse.major as f64 * px_len);
-            c.f64(F64::MinorAxisNm, ellipse.minor as f64 * px_len);
-            c.f64(F64::MajorAxisAngle, ellipse.angle as f64);
-            c.f64(F64::Eccentricity, ellipse.eccentricity as f64);
-            c.f64(F64::FeretDiameterPx, feret);
-            c.f64(F64::MinFeretPx, min_feret);
-            c.f64(F64::FeretDiameterNm, feret * px_len);
-            c.f64(F64::MinFeretNm, min_feret * px_len);
+            c.f64_opt(F64::MajorAxisPx, plane_only(ellipse.major as f64));
+            c.f64_opt(F64::MinorAxisPx, plane_only(ellipse.minor as f64));
+            c.f64_opt(F64::MajorAxisNm, plane_only(ellipse.major as f64 * px_len));
+            c.f64_opt(F64::MinorAxisNm, plane_only(ellipse.minor as f64 * px_len));
+            c.f64_opt(F64::MajorAxisAngle, plane_only(ellipse.angle as f64));
+            c.f64_opt(F64::Eccentricity, plane_only(ellipse.eccentricity as f64));
+            c.f64_opt(F64::FeretDiameterPx, plane_only(feret));
+            c.f64_opt(F64::MinFeretPx, plane_only(min_feret));
+            c.f64_opt(F64::FeretDiameterNm, plane_only(feret * px_len));
+            c.f64_opt(F64::MinFeretNm, plane_only(min_feret * px_len));
             c.touches_edge.append_value(object.touches_edge);
             c.f64(F64::PixelSizeXNm, pxx);
             c.f64(F64::PixelSizeYNm, pxy);
-            c.f64(F64::PixelSizeZNm, px.px_size_z as f64);
+            c.f64_opt(F64::PixelSizeZNm, pxz);
             c.image_bit_depth.append_value(nr_of_bits as u8);
             c.append_intensities(&object.intensities, bit_max);
             c.append_coloc(&object.colocalized_with)?;
@@ -1364,6 +1475,7 @@ impl DuckDbExporter {
             } else {
                 c.mask.append_null();
             }
+            c.append_z_extent(object, pxx, pxy, pxz);
         }
         columns.finish().map(Some)
     }
@@ -2517,6 +2629,211 @@ mod tests {
         assert!((values.0 - 6.0 / 7.0).abs() < 1e-4, "{values:?}");
         assert!((values.1 - 15.0 / 7.0).abs() < 1e-4, "{values:?}");
         assert_eq!((values.2, values.3), (1.5, 1.5));
+    }
+
+    /// The Appender matches columns by position: the batch has the
+    /// `objects` table's columns in its order.
+    #[test]
+    fn the_object_batch_has_the_tables_columns_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        drop(test_exporter(&path));
+        let conn = shared_connection(&path).unwrap();
+        let table: Vec<String> = conn
+            .prepare(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_name = 'objects' ORDER BY ordinal_position",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let batch = ObjectColumns::with_capacity(0).finish().unwrap();
+        let names: Vec<String> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, table);
+    }
+
+    /// The z columns of a plane's object (`plane.z` 4) and a volume's (3
+    /// planes from z 4, two voxels on its middle plane, one on its last):
+    /// a plane's zmin = zmax = its plane, no volume; a volume's extent,
+    /// centroid and size, no `z_stack` and no planar shape.
+    #[test]
+    fn export_writes_where_an_object_lies_in_z() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        cache.image_meta.pixel_sizes = crate::image::PixelSizes {
+            px_size_x: 100.0,
+            px_size_y: 100.0,
+            px_size_z: 500.0,
+        };
+        let plane = crate::ImagePlane { z: 4, c: 0, t: 0 };
+        let one = |mask: &[bool]| {
+            mask.iter()
+                .collect::<bitvec::vec::BitVec<u64, bitvec::order::Lsb0>>()
+        };
+        let flat = Object::new(crate::object::ObjectInit {
+            id: ObjectId(1),
+            bbox: [0, 0, 1, 0],
+            mask_data: one(&[true, true]),
+            area: 2,
+            plane,
+            ..Default::default()
+        });
+        // A 2 × 1 box over 3 planes: plane 1 (z 5) full, plane 2 (z 6) its first.
+        let volume = Object::new(crate::object::ObjectInit {
+            id: ObjectId(2),
+            bbox: [0, 0, 1, 0],
+            mask_data: one(&[false, false, true, true, true, false]),
+            area: 3,
+            sum_z: 1 + 1 + 2,
+            plane,
+            dimensionality: ImageDimensionality::Volume { depth: 3 },
+            ..Default::default()
+        });
+        cache.object_cache.insert(ObjectId(1), flat);
+        cache.object_cache.insert(ObjectId(2), volume);
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        type Row = (
+            u8,
+            Option<i32>,
+            u32,
+            u32,
+            f64,
+            f64,
+            f64,
+            Option<u64>,
+            Option<f64>,
+            Option<u64>,
+        );
+        let mut rows: Vec<Row> = conn
+            .prepare(
+                "SELECT ndim, z_stack, bbox_zmin_px, bbox_zmax_px, bbox_zmax_nm, centroid_z_px,
+                        bbox_center_z_px, volume_px, volume_nm3, area_px
+                 FROM objects ORDER BY ndim",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let volume = rows.pop().unwrap();
+        let flat = rows.pop().unwrap();
+        assert_eq!(
+            flat,
+            (2, Some(4), 4, 4, 2000.0, 4.0, 4.0, None, None, Some(2))
+        );
+        // Centroid: 4 + (1 + 1 + 2) / 3; 3 voxels of 100 × 100 × 500 nm.
+        assert_eq!(
+            volume,
+            (
+                3,
+                None,
+                4,
+                6,
+                3000.0,
+                4.0 + 4.0 / 3.0,
+                5.0,
+                Some(3),
+                Some(15_000_000.0),
+                None
+            )
+        );
+    }
+
+    /// An unknown z spacing (the reader's 0) is no number: its nm values
+    /// are NULL, not 0.
+    #[test]
+    fn an_unknown_z_spacing_leaves_the_nm_values_in_z_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        let mut object = frame_object(1, 1, 0);
+        object.plane.z = 2;
+        cache.object_cache.insert(object.id.clone(), object);
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let row: (Option<f64>, Option<f64>, f64) = conn
+            .query_row(
+                "SELECT pixel_size_z_nm, centroid_z_nm, centroid_z_px FROM objects",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (None, None, 2.0));
+    }
+
+    #[test]
+    fn a_results_file_records_its_format_and_a_newer_one_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        drop(exporter);
+        let conn = shared_connection(&path).unwrap();
+        assert_eq!(
+            results_schema_version(&conn).unwrap(),
+            RESULTS_SCHEMA_VERSION
+        );
+        reject_newer_results(&conn).unwrap();
+
+        conn.execute(
+            "UPDATE run SET schema_version = ?",
+            params![RESULTS_SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+        let refused = reject_newer_results(&conn).unwrap_err().to_string();
+        assert!(refused.contains("newer version"), "{refused}");
+        assert!(
+            DuckDbExporter::open_existing(&path).is_err(),
+            "nor added to"
+        );
+    }
+
+    #[test]
+    fn a_results_file_without_a_recorded_format_is_version_0() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open(dir.path().join("old.evadb")).unwrap();
+        assert_eq!(results_schema_version(&conn).unwrap(), 0, "no run table");
+        conn.execute_batch(
+            "CREATE TABLE run (status VARCHAR); INSERT INTO run VALUES ('finished');",
+        )
+        .unwrap();
+        assert_eq!(
+            results_schema_version(&conn).unwrap(),
+            0,
+            "no version column"
+        );
+        reject_newer_results(&conn).unwrap();
     }
 
     // ---- reading objects back for dataset steps ----

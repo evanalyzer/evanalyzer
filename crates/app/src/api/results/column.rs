@@ -73,6 +73,12 @@ pub enum Column {
     #[default]
     AreaSizePx,
     AreaSizeNm,
+    /// A volume's object's size (3D): its voxels, in nm³; empty for a
+    /// plane's object (its area).
+    VolumePx,
+    VolumeNm,
+    /// A volume's object's surface, in nm².
+    SurfaceAreaNm,
     PerimeterPx,
     PerimeterNm,
     Circularity,
@@ -206,6 +212,9 @@ impl Column {
             Column::Count => "count".to_string(),
             Column::AreaSizePx => "area_px".to_string(),
             Column::AreaSizeNm => "area_nm2".to_string(),
+            Column::VolumePx => "volume_px".to_string(),
+            Column::VolumeNm => "volume_nm3".to_string(),
+            Column::SurfaceAreaNm => "surface_area_nm2".to_string(),
             Column::PerimeterPx => "perimeter_px".to_string(),
             Column::PerimeterNm => "perimeter_nm".to_string(),
             Column::Circularity => "circularity".to_string(),
@@ -300,6 +309,9 @@ impl Column {
             Column::Count => "Count".to_string(),
             Column::AreaSizePx => "Area [px]".to_string(),
             Column::AreaSizeNm => "Area [nm²]".to_string(),
+            Column::VolumePx => "Volume [px³]".to_string(),
+            Column::VolumeNm => "Volume [nm³]".to_string(),
+            Column::SurfaceAreaNm => "Surface Area [nm²]".to_string(),
             Column::PerimeterPx => "Perimeter [px]".to_string(),
             Column::PerimeterNm => "Perimeter [nm]".to_string(),
             Column::Circularity => "Circularity".to_string(),
@@ -460,6 +472,9 @@ impl Column {
             "count" => Column::Count,
             "area_px" => Column::AreaSizePx,
             "area_nm2" => Column::AreaSizeNm,
+            "volume_px" => Column::VolumePx,
+            "volume_nm3" => Column::VolumeNm,
+            "surface_area_nm2" => Column::SurfaceAreaNm,
             "perimeter_px" => Column::PerimeterPx,
             "perimeter_nm" => Column::PerimeterNm,
             "circularity" => Column::Circularity,

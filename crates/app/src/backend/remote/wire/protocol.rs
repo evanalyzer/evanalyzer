@@ -69,7 +69,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 31;
+pub const PROTOCOL_VERSION: u32 = 32;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -580,6 +580,7 @@ pub(crate) fn channels_from_wire(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::core_types::ImageDimensionality;
 
     /// The serde format of every type that travels as postcard - the
     /// results view's queries, answers and exports. Postcard isn't
@@ -702,6 +703,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 256, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 1, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 
@@ -717,6 +719,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d::default(),
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 

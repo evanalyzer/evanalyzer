@@ -56,17 +56,21 @@ pub struct ResultsGenerator {
     auto_grouping_cache: RefCell<Option<String>>,
     /// The `objects` table's columns - fixed when the results are written.
     object_columns_cache: RefCell<Option<HashSet<String>>>,
+    /// Whether the results hold a volume's objects (`has_volumes`).
+    volumes_cache: RefCell<Option<bool>>,
 }
 
 impl ResultsGenerator {
     pub fn open_database(path: PathBuf) -> Result<Self, InternalErrors> {
         let database = evanalyzer_core::open_results_database(&path)?;
+        evanalyzer_core::reject_newer_results(&database)?;
         Ok(Self {
             database,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
+            volumes_cache: RefCell::new(None),
         })
     }
 
@@ -212,6 +216,7 @@ impl ResultsGenerator {
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
+            volumes_cache: RefCell::new(None),
         })
     }
 
@@ -326,7 +331,7 @@ impl ResultsGenerator {
         };
 
         let mut conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
+            self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let Some(names) = &image_names {
@@ -593,7 +598,7 @@ impl ResultsGenerator {
             parts.push(format!(
                 "SELECT o.object_id::VARCHAR, m.key, m.value FROM objects o \
                  JOIN measurements m ON m.image_rel_path = o.image_rel_path \
-                 AND m.z_stack = o.z_stack AND m.t_stack = o.t_stack \
+                 AND m.z_stack IS NOT DISTINCT FROM o.z_stack AND m.t_stack = o.t_stack \
                  WHERE m.region = 'image' AND m.value IS NOT NULL \
                  AND m.key IN ({}) AND o.object_id IN ({ids})",
                 sql_string_in_list(&image_keys)
@@ -734,7 +739,7 @@ impl ResultsGenerator {
         // (`pre`) and on the unpacked (object, class) rows (`post`) - see
         // `per_image_class_sql`.
         let mut pre = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
+            self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         let mut post = Vec::new();
@@ -1500,7 +1505,7 @@ impl ResultsGenerator {
         values: &[(String, &'static str)],
     ) -> Result<String, InternalErrors> {
         let mut conditions = vec![
-            format!("z_stack = {}", plane.z_stack),
+            self.object_on_plane_sql("", plane.z_stack)?,
             format!("t_stack = {}", plane.t_stack),
         ];
         if let ObjectClass::Global(id) = object_class {
@@ -1581,7 +1586,8 @@ impl ResultsGenerator {
                  LEFT JOIN (\n\
                      SELECT image_rel_path, {per_image}\n\
                      FROM measurements\n\
-                     WHERE region = 'image' AND z_stack = {z} AND t_stack = {t}\n\
+                     WHERE region = 'image' AND (z_stack = {z} OR z_stack IS NULL) \
+                         AND t_stack = {t}\n\
                      GROUP BY image_rel_path\n\
                  ) m ON m.image_rel_path = i.image_rel_path\n\
                  WHERE NOT i.disabled AND i.successful AND {measured}\n\
@@ -1637,7 +1643,7 @@ impl ResultsGenerator {
         } else {
             let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
             let mut object_conditions = vec![
-                format!("o.z_stack = {}", filter.plane.z_stack),
+                self.object_on_plane_sql("o", filter.plane.z_stack)?,
                 format!("o.t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Global(id) = filter.object_class {
@@ -1789,7 +1795,7 @@ impl ResultsGenerator {
                 String::new()
             } else {
                 let mut object_conditions = vec![
-                    format!("o.z_stack = {}", filter.plane.z_stack),
+                    self.object_on_plane_sql("o", filter.plane.z_stack)?,
                     format!("o.t_stack = {}", filter.plane.t_stack),
                 ];
                 if let ObjectClass::Global(id) = object_class {
@@ -1928,7 +1934,7 @@ impl ResultsGenerator {
         let (group_col, regex) = (grouping.column, grouping.regex.as_str());
 
         let mut object_conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
+            self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Global(id) = filter.object_class {
@@ -2050,7 +2056,7 @@ impl ResultsGenerator {
         let (group_col, regex) = (grouping.column, grouping.regex.as_str());
 
         let mut object_conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
+            self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Global(id) = filter.object_class {
@@ -2208,7 +2214,7 @@ impl ResultsGenerator {
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
         for object_class in &filter.object_class {
             let mut object_conditions = vec![
-                format!("z_stack = {}", filter.plane.z_stack),
+                self.object_on_plane_sql("", filter.plane.z_stack)?,
                 format!("t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Global(id) = object_class {
@@ -2360,7 +2366,7 @@ impl ResultsGenerator {
         let rows = (height as usize).div_ceil(square_size).max(1);
 
         let mut conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
+            self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
             format!("image_rel_path = '{image_rel_path}'"),
         ];
@@ -2743,6 +2749,12 @@ impl ResultsGenerator {
             entry(Column::EquivalentDiameter, "Shape"),
             entry(Column::Extent, "Shape"),
         ];
+        // A volume's objects' size - only offered for results with any.
+        if self.has_volumes()? {
+            ret.push(entry(Column::VolumePx, "Geometry"));
+            ret.push(entry(Column::VolumeNm, "Geometry"));
+            ret.push(entry(Column::SurfaceAreaNm, "Geometry"));
+        }
 
         // Coloc count is measured per candidate partner class (like
         // intensity is measured per channel below), so there's one column
@@ -2817,6 +2829,48 @@ impl ResultsGenerator {
     /// or written with them switched off, have no or empty `mask`s).
     pub fn has_masks(&self) -> Result<bool, InternalErrors> {
         self.has_object_column("mask")
+    }
+
+    /// Whether these results hold a volume's objects (3D) - none in results
+    /// from before the z columns. Cached: the objects don't change.
+    fn has_volumes(&self) -> Result<bool, InternalErrors> {
+        if let Some(cached) = *self.volumes_cache.borrow() {
+            return Ok(cached);
+        }
+        let has = self.has_object_column("ndim")?
+            && self
+                .database
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM objects WHERE ndim = 3)",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        *self.volumes_cache.borrow_mut() = Some(has);
+        Ok(has)
+    }
+
+    /// The condition for objects on z-plane `z` (of `objects` aliased as
+    /// `alias`, "" for none): a volume's object is on each plane from its
+    /// `bbox_zmin_px` to its `bbox_zmax_px`. Results from before the z
+    /// columns only have `z_stack`.
+    pub(super) fn object_on_plane_sql(
+        &self,
+        alias: &str,
+        z: u32,
+    ) -> Result<String, InternalErrors> {
+        let column = |name: &str| match alias {
+            "" => name.to_string(),
+            alias => format!("{alias}.{name}"),
+        };
+        Ok(match self.has_object_column("bbox_zmin_px")? {
+            true => format!(
+                "{z} BETWEEN {} AND {}",
+                column("bbox_zmin_px"),
+                column("bbox_zmax_px")
+            ),
+            false => format!("{} = {z}", column("z_stack")),
+        })
     }
 
     fn has_object_column(&self, column: &str) -> Result<bool, InternalErrors> {
@@ -3152,7 +3206,10 @@ impl ObjectColumnNeeds {
 fn is_value_column(column: &Column) -> bool {
     matches!(
         column,
-        Column::MaxFeret
+        Column::VolumePx
+            | Column::VolumeNm
+            | Column::SurfaceAreaNm
+            | Column::MaxFeret
             | Column::MinFeret
             | Column::MajorAxis
             | Column::MinorAxis
@@ -3475,7 +3532,7 @@ fn image_measurements_sql(
         format!(
             "SELECT image_rel_path, {}\n\
              FROM measurements\n\
-             WHERE region = 'image' AND z_stack = {} AND t_stack = {}\n\
+             WHERE region = 'image' AND (z_stack = {} OR z_stack IS NULL) AND t_stack = {}\n\
              GROUP BY image_rel_path",
             values.join(", "),
             plane.z_stack,
@@ -3718,7 +3775,10 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(object, IntensityStat::Max, *channel)),
             ..no_bg
         },
-        Column::MaxFeret
+        Column::VolumePx
+        | Column::VolumeNm
+        | Column::SurfaceAreaNm
+        | Column::MaxFeret
         | Column::MinFeret
         | Column::MajorAxis
         | Column::MinorAxis
@@ -3819,6 +3879,9 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
     Ok(match column {
         Column::AreaSizePx => "area_px".to_string(),
         Column::AreaSizeNm => "area_nm2".to_string(),
+        Column::VolumePx => "volume_px".to_string(),
+        Column::VolumeNm => "volume_nm3".to_string(),
+        Column::SurfaceAreaNm => "surface_area_nm2".to_string(),
         Column::PerimeterPx => "perimeter_px".to_string(),
         Column::PerimeterNm => "perimeter_nm".to_string(),
         Column::Circularity => "circularity".to_string(),
@@ -3955,7 +4018,7 @@ fn measurement_value_expr(m: &MeasurementColumn) -> String {
         format!(
             "(SELECT mv.v FROM (SELECT ob.object_id AS oid, m.value AS v \
              FROM objects ob JOIN measurements m ON m.image_rel_path = ob.image_rel_path \
-             AND m.z_stack = ob.z_stack AND m.t_stack = ob.t_stack \
+             AND m.z_stack IS NOT DISTINCT FROM ob.z_stack AND m.t_stack = ob.t_stack \
              WHERE m.key = '{key}' AND m.region = 'image') mv WHERE mv.oid = object_id)"
         )
     }
@@ -4781,6 +4844,7 @@ mod tests {
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
+            volumes_cache: RefCell::new(None),
         }
     }
 
@@ -5283,6 +5347,34 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
+    }
+
+    /// A volume's object (z-planes 1 to 3) is on each of its planes, a
+    /// plane's object (z 2) only on its own.
+    #[test]
+    fn a_volumes_object_is_on_every_plane_it_covers() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100).at_plane(2, 0),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 200).in_volume(1, 3),
+        ]);
+        for (z, objects) in [(0, 0), (1, 1), (2, 2), (3, 1), (4, 0)] {
+            let result = generator
+                .get_object_list(&ListFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: 0,
+                    },
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::AreaSizePx],
+                    with_coloc_details: false,
+                    related_to: None,
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap();
+            assert_eq!(result.source_object_count, objects, "objects at Z {z}");
+        }
     }
 
     /// The List shows one time point: objects of the others are not on
@@ -6243,6 +6335,9 @@ mod tests {
             Column::Count,
             Column::AreaSizePx,
             Column::AreaSizeNm,
+            Column::VolumePx,
+            Column::VolumeNm,
+            Column::SurfaceAreaNm,
             Column::PerimeterPx,
             Column::PerimeterNm,
             Column::Circularity,
@@ -6332,6 +6427,37 @@ mod tests {
     }
 
     // -- get_available_columns -------------------------------------------------
+
+    /// Volume and surface are offered for results with a volume's objects,
+    /// not for planes only.
+    #[test]
+    fn the_volume_columns_are_offered_only_for_results_with_volumes() {
+        let volume_columns = |objects: &[ObjectSpec]| -> Vec<Column> {
+            open(objects)
+                .get_available_columns()
+                .unwrap()
+                .into_iter()
+                .map(|c| c.key)
+                .filter(|c| {
+                    matches!(
+                        c,
+                        Column::VolumePx | Column::VolumeNm | Column::SurfaceAreaNm
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            volume_columns(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]),
+            []
+        );
+        assert_eq!(
+            volume_columns(&[
+                ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+                ObjectSpec::new("img1.tif", "ClassA", 1, 10).in_volume(0, 2),
+            ]),
+            [Column::VolumePx, Column::VolumeNm, Column::SurfaceAreaNm]
+        );
+    }
 
     #[test]
     fn get_available_columns_only_lists_coloc_count_for_classes_that_actually_colocalize() {

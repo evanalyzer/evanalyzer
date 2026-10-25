@@ -36,7 +36,7 @@ impl ResultCharts {
         let value_expr = chart_value_expr(&filter.column)?;
 
         let mut conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
+            database.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let Some(images) = &filter.images {
@@ -267,9 +267,12 @@ impl ResultCharts {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let value_expr = chart_value_expr(&filter.column)?;
         let bins = filter.bins.max(1);
-        let Some(where_clause) =
-            chart_where_clause(&filter.plane, &filter.images, &filter.object_classes)
-        else {
+        let Some(where_clause) = chart_where_clause(
+            &filter.plane,
+            database.object_on_plane_sql("", filter.plane.z_stack)?,
+            &filter.images,
+            &filter.object_classes,
+        ) else {
             return Ok(HistogramResult {
                 bin_edges: (0..=bins).map(|i| i as f64).collect(),
                 counts: vec![0; bins],
@@ -350,9 +353,12 @@ impl ResultCharts {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let x_expr = chart_value_expr(&filter.x_column)?;
         let y_expr = chart_value_expr(&filter.y_column)?;
-        let Some(where_clause) =
-            chart_where_clause(&filter.plane, &filter.images, &filter.object_classes)
-        else {
+        let Some(where_clause) = chart_where_clause(
+            &filter.plane,
+            database.object_on_plane_sql("", filter.plane.z_stack)?,
+            &filter.images,
+            &filter.object_classes,
+        ) else {
             return Ok(ScatterResult {
                 points: Vec::new(),
                 images: Vec::new(),
@@ -471,16 +477,13 @@ impl ResultCharts {
              bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
              centroid_x_px, centroid_y_px, area_px, intensity_mean_gray, \
              ({value_expr})::DOUBLE, NULLIF(track_id, 0), {parents_expr}, {mask_expr} \
-             FROM objects WHERE image_rel_path = ? AND z_stack = ? AND t_stack = ? \
-             ORDER BY object_id"
+             FROM objects WHERE image_rel_path = ? AND {on_plane} AND t_stack = ? \
+             ORDER BY object_id",
+            on_plane = database.object_on_plane_sql("", filter.plane.z_stack)?,
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         stmt.query_map(
-            duckdb::params![
-                filter.image_rel_path,
-                filter.plane.z_stack,
-                filter.plane.t_stack
-            ],
+            duckdb::params![filter.image_rel_path, filter.plane.t_stack],
             |row| {
                 let means = match row.get::<_, duckdb::types::Value>(9)? {
                     duckdb::types::Value::List(values) => values
@@ -652,15 +655,14 @@ fn chart_value_expr(column: &Column) -> Result<String, InternalErrors> {
 /// image/class actually selected) that can never match anything — the
 /// caller should short-circuit to an empty result instead of building an
 /// invalid `IN ()`.
+/// `on_plane`: [`ResultsGenerator::object_on_plane_sql`] of `plane`'s z.
 fn chart_where_clause(
     plane: &PlaneFilter,
+    on_plane: String,
     images: &Option<Vec<String>>,
     object_classes: &Option<Vec<ObjectClass>>,
 ) -> Option<String> {
-    let mut conditions = vec![
-        format!("z_stack = {}", plane.z_stack),
-        format!("t_stack = {}", plane.t_stack),
-    ];
+    let mut conditions = vec![on_plane, format!("t_stack = {}", plane.t_stack)];
     if let Some(images) = images {
         if images.is_empty() {
             return None;

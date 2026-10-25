@@ -21,6 +21,7 @@ use evanalyzer_app::images::Point2d;
 use evanalyzer_app::images::PyramidInfo;
 use evanalyzer_app::images::TileRequest;
 use evanalyzer_app::project::ProjectExt;
+use evanalyzer_cfg::core_types::ImageDimensionality;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
@@ -818,12 +819,14 @@ fn read_subsampled(
                     data: Image::<f32, 3>::new(size, data).map_err(InternalErrors::from_kornia)?,
                     tile_offset,
                     plane,
+                    dimensionality: ImageDimensionality::Planar,
                 })
             } else {
                 ImageContainer::F32Gray(ManagedImage {
                     data: Image::<f32, 1>::new(size, data).map_err(InternalErrors::from_kornia)?,
                     tile_offset,
                     plane,
+                    dimensionality: ImageDimensionality::Planar,
                 })
             };
             Ok(ImageChannel {
@@ -1096,12 +1099,14 @@ fn crop_columns(
             data: Image::<f32, 3>::new(new_size, data).map_err(InternalErrors::from_kornia)?,
             tile_offset,
             plane,
+            dimensionality: ImageDimensionality::Planar,
         })
     } else {
         ImageContainer::F32Gray(ManagedImage {
             data: Image::<f32, 1>::new(new_size, data).map_err(InternalErrors::from_kornia)?,
             tile_offset,
             plane,
+            dimensionality: ImageDimensionality::Planar,
         })
     };
     Ok(ImageChannel {
@@ -1207,6 +1212,7 @@ fn assemble_channel(
                 data: image,
                 tile_offset: first.tile_offset,
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })))
         }
     };
@@ -1266,6 +1272,7 @@ pub(crate) fn scale_image(
                         data: dst,
                         tile_offset: channel.image.tile_offset(),
                         plane: channel.image.plane(),
+                        dimensionality: channel.image.dimensionality(),
                     }))
                 }
                 ImageContainer::F32Rgb(img) => {
@@ -1282,6 +1289,7 @@ pub(crate) fn scale_image(
                         data: dst,
                         tile_offset: channel.image.tile_offset(),
                         plane: channel.image.plane(),
+                        dimensionality: channel.image.dimensionality(),
                     }))
                 }
                 ImageContainer::U32(img) => {
@@ -1310,6 +1318,8 @@ pub fn to_z_projection(z_handling: ZStackHandling) -> ZProjection {
         ZStackHandling::AvgIntensity => ZProjection::AvgIntensity,
         ZStackHandling::SumIntensity => ZProjection::SumIntensity,
         ZStackHandling::TakeTheMiddle => ZProjection::TakeTheMiddle,
+        // The viewer shows a volume plane by plane.
+        ZStackHandling::Volume3d => ZProjection::None,
     }
 }
 
@@ -1350,6 +1360,7 @@ mod tests {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         });
         Arc::new(CachedTile {
             data: Arc::new(vec![ViewChannel::wrap(&ImageChannel {
@@ -1532,6 +1543,7 @@ mod tests {
                         y: t.offset_y,
                     },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 })),
                 color: [1.0, 1.0, 1.0],
                 is_visible: true,
@@ -1901,6 +1913,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: offset,
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             color: [1.0, 1.0, 1.0],
             is_visible: true,
@@ -1923,6 +1936,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             color: [1.0, 1.0, 1.0],
             is_visible: true,

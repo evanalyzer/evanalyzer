@@ -168,8 +168,10 @@ pub trait ProjectExt {
     /// `image_value`: the project's if set, else the image's, else
     /// [`DEFAULT_FRAME_INTERVAL_S`]. Non-positive values count as unset.
     fn get_effective_frame_interval(&self, image_value: Option<f32>) -> (f32, ConfigValueSource);
-    fn set_image_pixel_size_settings(&mut self, px: f32, py: f32, pz: f32);
-    fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: f32);
+    /// `pz`: `None` if the z spacing is unknown.
+    fn set_image_pixel_size_settings(&mut self, px: f32, py: f32, pz: Option<f32>);
+    /// `pz`: `None` if the z spacing is unknown.
+    fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: Option<f32>);
     fn reset_global_pixel_size_settings(&mut self);
     fn set_image_selected_channel(&mut self, selected_channel: &i32);
     fn set_global_selected_channel(&mut self, selected_channel: &i32);
@@ -871,11 +873,7 @@ impl ProjectExt for ProjectWithRuntime {
             .unwrap_or_else(|| {
                 self.get_current_image_channel_settings()
                     .map(|(_, s)| s.pixel_sizes.clone())
-                    .unwrap_or_else(|| PixelSizeSettings {
-                        x: 1.0,
-                        y: 1.0,
-                        z: 1.0,
-                    })
+                    .unwrap_or_default()
             })
     }
 
@@ -938,7 +936,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     /// Sets the pixel size settings for the current image series.
-    fn set_image_pixel_size_settings(&mut self, px: f32, py: f32, pz: f32) {
+    fn set_image_pixel_size_settings(&mut self, px: f32, py: f32, pz: Option<f32>) {
         self.with_current_series_mut(|series| {
             series.pixel_sizes = PixelSizeSettings {
                 x: px,
@@ -949,7 +947,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     /// Sets the global pixel size settings.
-    fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: f32) {
+    fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: Option<f32>) {
         self.images.settings.pixel_sizes = Some(PixelSizeSettings {
             x: px,
             y: py,
@@ -1374,7 +1372,8 @@ impl ProjectExt for ProjectWithRuntime {
                     pixel_sizes: PixelSizeSettings {
                         x: pixel_sizes.px_size_x,
                         y: pixel_sizes.px_size_y,
-                        z: pixel_sizes.px_size_z,
+                        // The reader's 0: unknown.
+                        z: (pixel_sizes.px_size_z > 0.0).then_some(pixel_sizes.px_size_z),
                     },
                     z_stack: None,
                     t_stack: None,
@@ -2075,7 +2074,7 @@ mod tests {
             pixel_sizes: PixelSizeSettings {
                 x: 0.5,
                 y: 0.5,
-                z: 1.0,
+                z: Some(1.0),
             },
             z_stack: None,
             t_stack: None,
@@ -2253,29 +2252,29 @@ mod tests {
     // -- Pixel sizes: series-level, then global override, then reset ------
 
     #[test]
-    fn pixel_sizes_default_to_one_when_nothing_is_set() {
+    fn pixel_sizes_default_to_one_and_an_unknown_z_when_nothing_is_set() {
         let project = ProjectWithRuntime::default();
         let px = project.get_pixel_sizes();
-        assert_eq!((px.x, px.y, px.z), (1.0, 1.0, 1.0));
+        assert_eq!((px.x, px.y, px.z), (1.0, 1.0, None));
     }
 
     #[test]
     fn pixel_sizes_prefer_global_over_series_and_reset_falls_back() {
         let mut project = project_with_one_image();
 
-        project.set_image_pixel_size_settings(0.1, 0.2, 0.3);
+        project.set_image_pixel_size_settings(0.1, 0.2, Some(0.3));
         let px = project.get_pixel_sizes();
         assert_eq!(
             (px.x, px.y, px.z),
-            (0.1, 0.2, 0.3),
+            (0.1, 0.2, Some(0.3)),
             "falls back to the series value"
         );
 
-        project.set_global_pixel_size_settings(9.0, 9.0, 9.0);
+        project.set_global_pixel_size_settings(9.0, 9.0, Some(9.0));
         let px = project.get_pixel_sizes();
         assert_eq!(
             (px.x, px.y, px.z),
-            (9.0, 9.0, 9.0),
+            (9.0, 9.0, Some(9.0)),
             "global overrides series"
         );
 
@@ -2283,7 +2282,7 @@ mod tests {
         let px = project.get_pixel_sizes();
         assert_eq!(
             (px.x, px.y, px.z),
-            (0.1, 0.2, 0.3),
+            (0.1, 0.2, Some(0.3)),
             "clearing global falls back to series again"
         );
     }

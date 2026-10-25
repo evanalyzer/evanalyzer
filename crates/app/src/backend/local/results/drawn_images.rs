@@ -88,13 +88,14 @@ fn object_boxes(
     let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
     let mut stmt = database
         .connection()
-        .prepare(
+        .prepare(&format!(
             "SELECT bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
              coalesce(object_class_id[1], -1) FROM objects \
-             WHERE image_rel_path = ? AND z_stack = ? AND t_stack = ?",
-        )
+             WHERE image_rel_path = ? AND {} AND t_stack = ?",
+            database.object_on_plane_sql("", z_stack)?
+        ))
         .map_err(err)?;
-    stmt.query_map(duckdb::params![rel_path, z_stack, t_stack], |row| {
+    stmt.query_map(duckdb::params![rel_path, t_stack], |row| {
         Ok((
             [row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?],
             row.get(4)?,

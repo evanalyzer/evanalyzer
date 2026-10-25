@@ -2330,27 +2330,30 @@ pub struct ClassifyObjectsSettings {
     ///
     /// If unset (the default) this filter is not applied. When set, an object only
     /// satisfies the overall criteria if it also overlaps at least one object carrying this
-    /// class by at least `min_intersection_area`. Combine with e.g.
+    /// class by at least `min_intersection_size`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
     pub overlapping_with: ObjectClass,
-    /// Minimum intersection area with an `overlapping_with` object, in `size_unit`
+    /// Minimum intersection size with an `overlapping_with` object, in `size_unit`
     ///
+    /// An area in 2D (px² or nm²), a volume in 3D (px³ or nm³).
     /// Has no effect while `overlapping_with` is Unset.
     #[schemars(range(min = 0, max = 2147483600))]
-    pub min_intersection_area: f32,
+    pub min_intersection_size: f32,
     /// Unit to use for object extraction
     pub size_unit: SizeUnits,
-    /// Minimum area size
+    /// Minimum size
     ///
-    /// Minimum area size of the object in selected unit (px^2 or nm^2).
+    /// Minimum size of the object in the selected unit: its area in 2D
+    /// (px² or nm²), its volume in 3D (px³ or nm³).
     #[schemars(range(min = 0, max = 2147483600))]
-    pub min_area: f32,
-    /// Maximum area size
+    pub min_size: f32,
+    /// Maximum size
     ///
-    /// Maximum area size of the object in selected unit (px^2 or nm^2).
+    /// Maximum size of the object in the selected unit: its area in 2D
+    /// (px² or nm²), its volume in 3D (px³ or nm³).
     #[schemars(range(min = 0, max = 2147483600))]
-    pub max_area: f32,
+    pub max_size: f32,
     /// Circularity range: 0 = elongated, 1 = perfect circle
     ///
     /// Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
@@ -2452,10 +2455,10 @@ impl Default for ClassifyObjectsSettings {
                 ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch,
             output_class: ObjectClass::Unset,
             overlapping_with: ObjectClass::Unset,
-            min_intersection_area: 0.0f32,
+            min_intersection_size: 0.0f32,
             size_unit: SizeUnits::NanoMeter,
-            min_area: 0.0f32,
-            max_area: 2147483648.0f32,
+            min_size: 0.0f32,
+            max_size: 2147483648.0f32,
             min_circularity: 0.0f32,
             max_circularity: 1.0f32,
             min_solidity: 0.0f32,
@@ -2520,9 +2523,9 @@ pub struct ColocalizeObjectsSettings {
     /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
     #[serde(default = "_serde_default_colocalizeobjects_exclude_classes")]
     pub exclude_classes: Vec<ObjectClass>,
-    /// Minimum overlapping area size to count objects as coloc
-    pub min_coloc_area: f32,
-    /// Size unit for the minimum coloc area size
+    /// Minimum overlap to count objects as coloc - an area in 2D, a volume in 3D
+    pub min_coloc_size: f32,
+    /// Size unit for the minimum coloc size
     pub size_unit: SizeUnitsRel,
     /// Which overlapping objects count as partners.
     pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
@@ -2552,7 +2555,7 @@ impl Default for ColocalizeObjectsSettings {
             classes_to_coloc: vec![],
             all_combinations: bool::default(),
             exclude_classes: vec![],
-            min_coloc_area: 0.0f32,
+            min_coloc_size: 0.0f32,
             size_unit: SizeUnitsRel::Pixels,
             multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
             class_for_overlapping_areas: ObjectClass::default(),
@@ -2668,11 +2671,12 @@ pub struct ObjectMathSettings {
     ///
     /// Only `other_class` objects that carry all listed classes are used.
     pub other_filter_classes: Vec<ObjectClass>,
-    /// Size unit for `min_overlap_area`
+    /// Size unit for `min_overlap_size`
     pub size_unit: SizeUnits,
-    /// Minimum overlap area before an `other_class` object is treated as a partner
+    /// Minimum overlap before an `other_class` object is treated as a partner
     /// of an input object; objects overlapping less than this are ignored.
-    pub min_overlap_area: f32,
+    /// An area in 2D, a volume in 3D.
+    pub min_overlap_size: f32,
     /// If unset, the result replaces the input object in place.
     ///
     /// If set, a new object carrying this class is created for each input object instead,
@@ -2695,7 +2699,7 @@ impl Default for ObjectMathSettings {
             other_class: ObjectClass::default(),
             other_filter_classes: vec![],
             size_unit: SizeUnits::Pixels,
-            min_overlap_area: 2.0f32,
+            min_overlap_size: 2.0f32,
             output_class: ObjectClass::Unset,
             keep_unmatched: true,
         }

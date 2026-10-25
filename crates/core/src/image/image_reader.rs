@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::image_ome_parser::{build_image_meta, channel_select, is_signed, scopeio_err};
@@ -50,8 +51,12 @@ pub struct ManagedImage<T, const C: usize> {
     pub data: Image<T, C>,
     /// The x/y offset from the top left of the tile which was loaded
     pub tile_offset: Point2d,
-    /// Image plane info this image was extracted from
+    /// Image plane info this image was extracted from - of a volume, its
+    /// first plane.
     pub plane: Option<ImagePlane>,
+    /// One plane or a volume. A volume's planes lie one below the other in
+    /// `data` (z-major): `data` is `depth` planes high.
+    pub dimensionality: ImageDimensionality,
     ///// The size of the original image (not the tile)
     //pub full_image_size: ImageSize,
     ///// Image bit depth: 8, 16, 32
@@ -116,6 +121,7 @@ impl ImageContainer {
                     data: new_img,
                     tile_offset: img.tile_offset.clone(),
                     plane: img.plane.clone(),
+                    dimensionality: img.dimensionality,
                 })
             }
             ImageContainer::F32Rgb(img) => {
@@ -125,6 +131,7 @@ impl ImageContainer {
                     data: new_img,
                     tile_offset: img.tile_offset.clone(),
                     plane: img.plane.clone(),
+                    dimensionality: img.dimensionality,
                 })
             }
             ImageContainer::U32(img) => {
@@ -134,6 +141,7 @@ impl ImageContainer {
                     data: new_img,
                     tile_offset: img.tile_offset.clone(),
                     plane: img.plane.clone(),
+                    dimensionality: img.dimensionality,
                 })
             }
         }
@@ -186,6 +194,31 @@ impl ImageContainer {
             Self::F32Rgb(img) => return img.plane,
             Self::U32(img) => return img.plane,
         }
+    }
+
+    pub fn dimensionality(&self) -> ImageDimensionality {
+        match self {
+            Self::F32Gray(img) => img.dimensionality,
+            Self::F32Rgb(img) => img.dimensionality,
+            Self::U32(img) => img.dimensionality,
+        }
+    }
+}
+
+impl<T, const C: usize> ManagedImage<T, C> {
+    /// The size of one plane - of a planar image its whole size.
+    pub fn plane_size(&self) -> ImageSize {
+        let size = self.data.size();
+        ImageSize {
+            width: size.width,
+            height: size.height / self.dimensionality.depth() as usize,
+        }
+    }
+
+    /// The samples of plane `z` (counted from the image's first plane).
+    pub fn plane_slice(&self, z: usize) -> &[T] {
+        let len = self.plane_size().width * self.plane_size().height * C;
+        &self.data.as_slice()[z * len..(z + 1) * len]
     }
 }
 
@@ -434,12 +467,9 @@ impl ImageReader {
         )
     }
 
-    /// Reads `select` of one z/t plane as f32 samples, normalized by
-    /// scopeio in the same pass as the read: integers by their significant
-    /// bits (the largest value becomes 1.0), signed ones shifted by the
-    /// type's minimum first as in ImageJ (int8: -128 -> 0.0, 127 -> 1.0),
-    /// floats as stored. One gray or RGB image (alpha dropped) at `plane`.
-    fn read_region_f32(
+    /// The request for `select` of one z/t plane as f32 samples (see
+    /// [`Self::read_region_f32`]).
+    fn region_request(
         &self,
         series: i32,
         resolution_idx: i32,
@@ -447,7 +477,7 @@ impl ImageReader {
         select: ChannelSelect,
         image_tile: &ImageTile,
         size: ImageSize,
-    ) -> Result<ImageContainer, InternalErrors> {
+    ) -> Result<RegionRequest, InternalErrors> {
         let series_meta = self
             .inner
             .series_meta(series as usize)
@@ -460,7 +490,7 @@ impl ImageReader {
         } else {
             OutputType::F32SignificantBits
         };
-        let request = RegionRequest {
+        Ok(RegionRequest {
             series: series as usize,
             level,
             z: plane.z.max(0) as u32,
@@ -476,7 +506,151 @@ impl ImageReader {
                 dtype,
                 ..Default::default()
             },
+        })
+    }
+
+    /// Reads planes `z_range` of channel `image_plane.c` at time
+    /// `image_plane.t` (its `z` is ignored) of `image_tile` as one volume:
+    /// the planes one below the other (z-major), no projection - gray or RGB
+    /// as the plane would be. Each plane is decoded straight into its part
+    /// of the volume, the planes in parallel. A tile of size 0 is the whole
+    /// image.
+    pub fn read_image_tile_volume(
+        &self,
+        series: i32,
+        resolution_idx: i32,
+        image_plane: &ImagePlane,
+        z_range: RangeInclusive<i32>,
+        image_tile: &ImageTile,
+    ) -> Result<ImageContainer, InternalErrors> {
+        let series_info = self.image_meta.series.get(&series).ok_or_else(|| {
+            InternalErrors::ImageReadError(format!("Series {} does not exist", series))
+        })?;
+        series_info.channels.get(&image_plane.c).ok_or_else(|| {
+            InternalErrors::ImageReadError(format!(
+                "Channel {} does not exist in series {}",
+                image_plane.c, series
+            ))
+        })?;
+        let pyramid_info = series_info
+            .resolutions
+            .get(&resolution_idx)
+            .ok_or_else(|| {
+                InternalErrors::ImageReadError(format!(
+                    "Pyramid {} does not exist in series {}",
+                    resolution_idx, series
+                ))
+            })?;
+        if z_range.is_empty() || *z_range.start() < 0 || *z_range.end() >= series_info.nr_z_stacks {
+            return Err(InternalErrors::ImageReadError(format!(
+                "Z-planes {}..={} are not in series {series} (it has {} planes)",
+                z_range.start(),
+                z_range.end(),
+                series_info.nr_z_stacks
+            )));
+        }
+        if !(1..=32).contains(&pyramid_info.nr_bits) {
+            return Err(InternalErrors::ImageReadError(format!(
+                "Series {series}, resolution {resolution_idx} reports an implausible bit depth \
+                 of {} (expected 1-32, missing or corrupt BitsPerPixel metadata) - cannot read tile",
+                pyramid_info.nr_bits
+            )));
+        }
+        let (width, height) = match (image_tile.width, image_tile.height) {
+            (0, _) | (_, 0) => (pyramid_info.width as usize, pyramid_info.height as usize),
+            size => size,
         };
+        let depth = (z_range.end() - z_range.start() + 1) as usize;
+        let nr_bytes = (pyramid_info.nr_bits as f32 / 8.0).ceil() as usize;
+        checked_tile_buffer_size(width, height * depth, pyramid_info.color_channels, nr_bytes)?;
+
+        let series_meta = self
+            .inner
+            .series_meta(series as usize)
+            .map_err(scopeio_err)?;
+        let select = channel_select(series_meta, self.read_mode, image_plane.c.max(0) as u32);
+        let size = ImageSize { width, height };
+        let request = |z: i32| {
+            let plane = ImagePlane { z, ..*image_plane };
+            self.region_request(
+                series,
+                resolution_idx,
+                &plane,
+                select.clone(),
+                image_tile,
+                size,
+            )
+        };
+        let channels = self
+            .inner
+            .output_shape(&request(*z_range.start())?)
+            .map_err(scopeio_err)?
+            .channels;
+        let plane_len = width * height * channels as usize;
+        let mut data = vec![0f32; plane_len * depth];
+        data.par_chunks_mut(plane_len)
+            .enumerate()
+            .try_for_each(|(i, plane)| {
+                let z = z_range.start() + i as i32;
+                let out = scopeio::PixelViewMut::contiguous(
+                    plane,
+                    width as u64,
+                    height as u64,
+                    channels,
+                    scopeio::Layout::Hwc,
+                );
+                self.inner
+                    .read_region_into(&request(z)?, out)
+                    .map_err(scopeio_err)
+            })?;
+
+        let tile_offset = Point2d {
+            x: image_tile.offset_x,
+            y: image_tile.offset_y,
+        };
+        let plane = Some(ImagePlane {
+            z: *z_range.start(),
+            ..*image_plane
+        });
+        let dimensionality = ImageDimensionality::Volume {
+            depth: depth as u32,
+        };
+        let stacked = ImageSize {
+            width,
+            height: height * depth,
+        };
+        Ok(match channels {
+            3 => ImageContainer::F32Rgb(ManagedImage {
+                data: Image::new(stacked, data).map_err(InternalErrors::from_kornia)?,
+                tile_offset,
+                plane,
+                dimensionality,
+            }),
+            _ => ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(stacked, data).map_err(InternalErrors::from_kornia)?,
+                tile_offset,
+                plane,
+                dimensionality,
+            }),
+        })
+    }
+
+    /// Reads `select` of one z/t plane as f32 samples, normalized by
+    /// scopeio in the same pass as the read: integers by their significant
+    /// bits (the largest value becomes 1.0), signed ones shifted by the
+    /// type's minimum first as in ImageJ (int8: -128 -> 0.0, 127 -> 1.0),
+    /// floats as stored. One gray or RGB image (alpha dropped) at `plane`.
+    fn read_region_f32(
+        &self,
+        series: i32,
+        resolution_idx: i32,
+        plane: &ImagePlane,
+        select: ChannelSelect,
+        image_tile: &ImageTile,
+        size: ImageSize,
+    ) -> Result<ImageContainer, InternalErrors> {
+        let request =
+            self.region_request(series, resolution_idx, plane, select, image_tile, size)?;
         let image = self.inner.read_region(&request).map_err(scopeio_err)?;
         let channels = image.channels as usize;
         let data: Vec<f32> = image.into_vec().map_err(scopeio_err)?;
@@ -492,6 +666,7 @@ impl ImageReader {
                 data,
                 tile_offset,
                 plane,
+                dimensionality: ImageDimensionality::Planar,
             }));
         }
         let data = Image::<f32, 1>::new(size, data).map_err(InternalErrors::from_kornia)?;
@@ -499,6 +674,7 @@ impl ImageReader {
             data,
             tile_offset,
             plane,
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 
@@ -1124,6 +1300,93 @@ mod tests {
         assert_eq!(result[0].c_stack, 0);
     }
 
+    /// A volume of planes 1..=3 is those planes one below the other - each
+    /// the same as the plane read on its own.
+    #[test]
+    fn a_volume_is_its_planes_one_below_the_other() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        );
+        let reader = ImageReader::new(&path.into(), ReadMode::Default).unwrap();
+        let tile = ImageTile::default();
+        let channel = ImagePlane { z: 0, c: 1, t: 0 };
+
+        let volume = reader
+            .read_image_tile_volume(0, 0, &channel, 1..=3, &tile)
+            .unwrap();
+        let ImageContainer::F32Gray(volume) = volume else {
+            panic!("a gray volume");
+        };
+        assert_eq!(
+            volume.dimensionality,
+            ImageDimensionality::Volume { depth: 3 }
+        );
+        assert_eq!(volume.plane, Some(ImagePlane { z: 1, c: 1, t: 0 }));
+        let plane_size = volume.plane_size();
+        assert_eq!(volume.size().height, plane_size.height * 3);
+        for (i, z) in (1..=3).enumerate() {
+            let ImageContainer::F32Gray(plane) = reader
+                .read_image_tile(0, 0, &ImagePlane { z, ..channel }, &tile)
+                .unwrap()
+            else {
+                panic!("a gray plane");
+            };
+            assert_eq!(plane.size(), plane_size);
+            assert_eq!(volume.plane_slice(i), plane.as_slice(), "plane {z}");
+        }
+        assert_ne!(
+            volume.plane_slice(0),
+            volume.plane_slice(2),
+            "the planes differ"
+        );
+    }
+
+    #[test]
+    fn a_volume_outside_the_planes_is_refused() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        );
+        let reader = ImageReader::new(&path.into(), ReadMode::Default).unwrap();
+        let planes = reader.get_image_meta().series[&0].nr_z_stacks;
+        let read = |z| {
+            reader.read_image_tile_volume(0, 0, &ImagePlane::default(), z, &ImageTile::default())
+        };
+        assert!(read(0..=planes).is_err(), "one plane too many");
+        assert!(read(-1..=0).is_err());
+        assert!(read(0..=planes - 1).is_ok());
+    }
+
+    /// Fiji's "Fly Brain" sample (RGB, 57 planes), downloaded by hand to
+    /// `tests/3D/` (gitignored, licence unchecked): read as one RGB volume.
+    #[test]
+    #[ignore = "needs tests/3D/flybrain.tif (local only); fails until scopeio reads RGB \
+                ImageJ stacks' z-planes"]
+    fn the_fly_brain_sample_reads_as_an_rgb_volume() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/3D/flybrain.tif");
+        let reader = ImageReader::new(&path.into(), ReadMode::Default).unwrap();
+        let series = &reader.get_image_meta().series[&0];
+        // Fails with scopeio 0.0.0-alpha.2: it applies an ImageJ stack's
+        // `slices=` only to gray stacks - an RGB one reads as 57 time points.
+        assert_eq!(series.nr_z_stacks, 57, "{series:?}");
+        let started = std::time::Instant::now();
+        let volume = reader
+            .read_image_tile_volume(0, 0, &ImagePlane::default(), 0..=56, &ImageTile::default())
+            .unwrap();
+        eprintln!(
+            "flybrain: {:?}, pixel sizes {:?} nm, read in {:?}",
+            volume,
+            series.pixel_sizes,
+            started.elapsed()
+        );
+        assert_eq!(
+            volume.dimensionality(),
+            ImageDimensionality::Volume { depth: 57 }
+        );
+        assert!(matches!(volume, ImageContainer::F32Rgb(_)), "{volume:?}");
+    }
+
     #[test]
     fn take_the_middle_projection_returns_the_middle_slice_not_the_first() {
         let path = concat!(
@@ -1461,6 +1724,7 @@ mod tests {
             data: Image::<u32, 1>::new(size, vec![7u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 1, y: 2 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
 
         let empty = source.clone_empty();
@@ -1493,6 +1757,7 @@ mod tests {
             data: Image::<u32, 1>::new(size, vec![7u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 5, y: 6 },
             plane,
+            dimensionality: ImageDimensionality::Planar,
         });
 
         assert_eq!(container.nr_color_channels(), 1);

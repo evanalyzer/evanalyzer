@@ -38,6 +38,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::ImageTile;
 use crate::algos::libs::spatial_grid::BboxGrid;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
@@ -724,6 +725,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: Point2d { x: offset_x, y: 0 },
                 plane: Some(ImagePlane::default()),
+                dimensionality: ImageDimensionality::Planar,
             });
             cache.add_to_channel_cache(Arc::new(image), 0, tile(offset_x, 0, 10, 20));
         }

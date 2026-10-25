@@ -28,6 +28,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::algos::ExecutionScope;
 use crate::image::ImageContainer;
 use crate::job::algos_from_config::into_algorithm;
@@ -901,6 +902,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: Default::default(),
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             },
         )));
         assert!(host.set_image(other).is_err());

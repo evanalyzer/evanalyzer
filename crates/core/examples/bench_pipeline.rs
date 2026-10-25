@@ -170,7 +170,7 @@ fn main() {
                         ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
                     output_class: ObjectClass::Global(2 + i as u32),
                     size_unit: SizeUnits::Pixels,
-                    min_area: 100.0,
+                    min_size: 100.0,
                     ..Default::default()
                 }))
             }))
@@ -260,7 +260,7 @@ fn main() {
 /// A module that reclassifies the larger objects into a local class and
 /// classifies those once more - internal objects only.
 fn internal_objects_module() -> evanalyzer_cfg::settings::modules::ModuleDefinition {
-    let classify = |id: u32, input: ObjectClass, handling, output: ObjectClass, min_area: f32| {
+    let classify = |id: u32, input: ObjectClass, handling, output: ObjectClass, min_size: f32| {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(id),
             enabled: true,
@@ -270,7 +270,7 @@ fn internal_objects_module() -> evanalyzer_cfg::settings::modules::ModuleDefinit
                     match_handling: handling,
                     output_class: output,
                     size_unit: SizeUnits::Pixels,
-                    min_area,
+                    min_size,
                     ..Default::default()
                 }),
             ),

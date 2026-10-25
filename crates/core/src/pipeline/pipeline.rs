@@ -234,6 +234,7 @@ impl Pipeline {
                             data: s.clone(),
                             tile_offset: ctx.image.tile_offset(),
                             plane: ctx.image.plane(),
+                            dimensionality: ctx.image.dimensionality(),
                         }))
                     }),
                     instances: ctx.instance_map.as_ref().map(|i| {
@@ -241,6 +242,7 @@ impl Pipeline {
                             data: i.clone(),
                             tile_offset: ctx.image.tile_offset(),
                             plane: ctx.image.plane(),
+                            dimensionality: ctx.image.dimensionality(),
                         }))
                     }),
                 };
@@ -284,6 +286,7 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ImageDimensionality;
     use crate::algos::ExecutionScope;
     use crate::image::Point2d;
     use crate::{
@@ -398,6 +401,7 @@ mod tests {
                         y: tile_offset.1,
                     },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 })),
                 0,
                 crate::ImageTile {
@@ -577,6 +581,7 @@ mod tests {
             data: Image::<f32, 1>::new(size, vec![2.0f32; 16]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
 
         let mut cache = GlobalPipelineCache::default();
@@ -634,6 +639,7 @@ mod tests {
             data: Image::<f32, 1>::new(size, vec![1.0f32; 4]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
 
         let mut cache = GlobalPipelineCache::default();
@@ -712,6 +718,7 @@ mod tests {
             data: Image::<f32, 3>::new(size, vec![0.5f32; 16 * 3]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
 
         let mut cache = GlobalPipelineCache::default();

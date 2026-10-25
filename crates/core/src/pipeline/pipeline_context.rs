@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::image::Point2d;
 use crate::pipeline::scope::Scope;
 use crate::{
@@ -134,6 +135,7 @@ impl PipelineContext {
                     y: tile.offset_y,
                 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })))
         };
         Ok(Self {
@@ -171,6 +173,7 @@ impl PipelineContext {
                 .expect("1x1 image with 1 pixel is valid"),
                 tile_offset: Point2d::default(),
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             }))
         };
         let empty = PipelineContext {
@@ -300,6 +303,7 @@ impl PipelineContext {
                 data: Image::new(size, vec![0.0; size.width * size.height]).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
+                dimensionality: self.image.dimensionality(),
             }));
         }
 
@@ -318,6 +322,7 @@ impl PipelineContext {
                 data: Image::new(size, vec![0.0; size.width * size.height * 3]).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
+                dimensionality: self.image.dimensionality(),
             }));
         }
 
@@ -336,6 +341,7 @@ impl PipelineContext {
                 data: Image::new(size, vec![0u32; size.width * size.height]).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
+                dimensionality: self.image.dimensionality(),
             }));
         }
 
@@ -355,6 +361,7 @@ impl PipelineContext {
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
+                dimensionality: self.image.dimensionality(),
             }));
         }
         Ok(())
@@ -381,6 +388,7 @@ impl PipelineContext {
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
+                dimensionality: self.image.dimensionality(),
             }));
         }
         Ok(())
@@ -397,6 +405,7 @@ impl PipelineContext {
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
+                dimensionality: self.image.dimensionality(),
             }));
         }
         Ok(())
@@ -681,6 +690,7 @@ mod tests {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             });
 
             let empty_image = image.clone_empty();
@@ -726,6 +736,7 @@ mod tests {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             });
 
             let empty_image = image.clone_empty();
@@ -771,6 +782,7 @@ mod tests {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             });
 
             let empty_image = image.clone_empty();
@@ -911,6 +923,7 @@ mod tests {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             })
         }
 
@@ -919,6 +932,7 @@ mod tests {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             })
         }
     }
@@ -1241,6 +1255,7 @@ mod tests {
             data: Image::<u32, 1>::new(size(2, 1), vec![0, 0]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
         assert!(is_format_mismatch(ctx.swap()));
     }
@@ -1280,16 +1295,19 @@ mod tests {
                 data: Image::<f32, 1>::new(size(2, 1), vec![0.0; 2]).unwrap(),
                 tile_offset: offset,
                 plane,
+                dimensionality: ImageDimensionality::Planar,
             }),
             ImageContainer::F32Rgb(ManagedImage {
                 data: Image::<f32, 3>::new(size(2, 1), vec![0.0; 6]).unwrap(),
                 tile_offset: offset,
                 plane,
+                dimensionality: ImageDimensionality::Planar,
             }),
             ImageContainer::U32(ManagedImage {
                 data: Image::<u32, 1>::new(size(2, 1), vec![0; 2]).unwrap(),
                 tile_offset: offset,
                 plane,
+                dimensionality: ImageDimensionality::Planar,
             }),
         ];
         for image in images {
@@ -1391,6 +1409,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }));
         ctx.prepare_scratch_matching_image().unwrap();
         assert_eq!(ctx.scratch_pad.size(), ctx.image.size());

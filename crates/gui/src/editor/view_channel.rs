@@ -19,6 +19,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, Point2d};
+use evanalyzer_cfg::core_types::ImageDimensionality;
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::{Image, ImageSize};
 use rayon::prelude::*;
@@ -150,6 +151,7 @@ impl ViewChannel {
             data: image,
             tile_offset: self.tile_offset,
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         })))
     }
 
@@ -235,6 +237,7 @@ mod tests {
                 .unwrap(),
                 tile_offset: Point2d { x: 3, y: 4 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             })),
             color: [1.0, 0.5, 0.0],
             is_visible: true,

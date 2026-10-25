@@ -15,7 +15,7 @@ import { Ink, InkIcons, InkIconButton, InkSelect, InkCaption, InkTipZone } from 
 // One step through the slices or the frames: the bar's ◀ ▶ and the keys.
 export global StackSteps {
     public function step-z(d: int) {
-        if ImageMetaData.nr_z_stacks > 1 && ChannelState.intensity_projection == IntensityProjection.single-stack {
+        if ImageMetaData.nr_z_stacks > 1 && (ChannelState.intensity_projection == IntensityProjection.single-stack || ChannelState.intensity_projection == IntensityProjection.volume) {
             StackSteps.set-z(ChannelState.selected_z_stack + d);
         }
     }
@@ -160,7 +160,8 @@ export component StackBar inherits Rectangle {
     in property <length> room: 10000px;
     property <bool> has-z: ImageMetaData.nr_z_stacks > 1;
     property <bool> has-t: ImageMetaData.nr_t_stacks > 1;
-    property <bool> slice: ChannelState.intensity_projection == IntensityProjection.single-stack;
+    // One slice shown: a single plane, or a volume (3D) slice by slice.
+    property <bool> slice: ChannelState.intensity_projection == IntensityProjection.single-stack || ChannelState.intensity_projection == IntensityProjection.volume;
     property <[string]> fps-names: ["1 fps", "2 fps", "5 fps", "10 fps", "20 fps", "25 fps"];
     property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
     property <string> z-text: root.slice ? "\{ChannelState.selected_z_stack + 1} / \{ImageMetaData.nr_z_stacks}" : "all \{ImageMetaData.nr_z_stacks}";
@@ -290,12 +291,13 @@ export component StackBar inherits Rectangle {
             height: 26px;
             horizontal-stretch: 0;
             label: "Z projection";
-            model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid"];
+            model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid", "3D"];
             selected: ChannelState.intensity_projection == IntensityProjection.max ? 1
                 : ChannelState.intensity_projection == IntensityProjection.min ? 2
                 : ChannelState.intensity_projection == IntensityProjection.avg ? 3
                 : ChannelState.intensity_projection == IntensityProjection.sum ? 4
                 : ChannelState.intensity_projection == IntensityProjection.middle ? 5
+                : ChannelState.intensity_projection == IntensityProjection.volume ? 6
                 : 0;
             picked(i) => {
                 root.projection(i == 1 ? IntensityProjection.max
@@ -303,6 +305,7 @@ export component StackBar inherits Rectangle {
                     : i == 3 ? IntensityProjection.avg
                     : i == 4 ? IntensityProjection.sum
                     : i == 5 ? IntensityProjection.middle
+                    : i == 6 ? IntensityProjection.volume
                     : IntensityProjection.single-stack);
             }
         }

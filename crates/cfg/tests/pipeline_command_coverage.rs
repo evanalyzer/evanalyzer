@@ -530,13 +530,13 @@ fn to_summary_formats_gaussian_blur_kernel_and_sigma() {
 #[test]
 fn to_summary_formats_classify_objects_criteria() {
     let mut cmd = default_command(id_of("ClassifyObjects")).unwrap();
-    cmd.apply_param_change("min_area", "10");
+    cmd.apply_param_change("min_size", "10");
     cmd.apply_param_change("min_eccentricity", "0.1");
     cmd.apply_param_change("max_eccentricity", "0.9");
     cmd.apply_param_change("allow_edge_touching", "true");
     assert_eq!(
         cmd.to_summary(),
-        "Min Area: 10.000 · Min Eccentricity: 0.100 · Max Eccentricity: 0.900 · Allow Edge Touching: true"
+        "Min Size: 10.000 · Min Eccentricity: 0.100 · Max Eccentricity: 0.900 · Allow Edge Touching: true"
     );
 }
 

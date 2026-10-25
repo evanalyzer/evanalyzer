@@ -562,6 +562,44 @@ pub fn rekey_parameters(project: &mut ProjectSettings, key: &str) -> usize {
     renames.len()
 }
 
+/// The settings that are a size: an area on planes (2D), a volume on
+/// volumes (3D).
+const SIZE_SETTINGS: [&str; 6] = [
+    "min_size",
+    "max_size",
+    "min_intersection_size",
+    "min_overlap_size",
+    "min_coloc_size",
+    "min_object_size",
+];
+
+/// The size settings changed from their default in the enabled pipelines'
+/// steps, as "Pipeline › Command: Setting" - an area set for planes is no
+/// volume and the other way round, so they need a look when the z-stacks
+/// switch between planes (2D) and volumes (3D).
+pub fn size_settings_set(project: &ProjectSettings) -> Vec<String> {
+    let mut found = Vec::new();
+    for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
+        for step in &pipeline.steps {
+            for resolved in resolved_commands(step, &project.modules) {
+                for parameter in resolved.command.to_parameters() {
+                    if SIZE_SETTINGS.contains(&parameter.name.as_str())
+                        && parameter.value != parameter.default_value
+                    {
+                        found.push(format!(
+                            "{} › {}: {}",
+                            pipeline.name.trim(),
+                            resolved.command.name(),
+                            parameter.display_name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,6 +610,37 @@ mod tests {
         BlurSettings, ExtractClassMappingSettings, ExtractObjectsSettings, LoadChannelSettings,
     };
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+
+    /// The size settings changed from their default, by pipeline and
+    /// command - not the ones left alone, not a disabled pipeline's.
+    #[test]
+    fn the_size_settings_set_are_named_with_their_pipeline_and_command() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings;
+        let pipeline = |id: u32, name: &str, enabled: bool, min_size: f32| PipelineSettings {
+            id: PipelineId(id),
+            name: name.into(),
+            description: None,
+            image_source: ImageAddress::None,
+            enabled,
+            steps: vec![step(
+                1,
+                PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    min_size,
+                    ..Default::default()
+                }),
+            )],
+        };
+        let mut project = ProjectSettings::default();
+        project.pipelines = vec![
+            pipeline(1, "Cells", true, 50.0),
+            pipeline(2, "Spots", true, 0.0),
+            pipeline(3, "Off", false, 50.0),
+        ];
+        assert_eq!(
+            size_settings_set(&project),
+            ["Cells › ClassifyObjects: Min Size"]
+        );
+    }
 
     fn step(id: u32, command: PipelineCommand) -> PipelineStepSettings {
         PipelineStepSettings {

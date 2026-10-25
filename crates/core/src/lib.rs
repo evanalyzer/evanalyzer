@@ -23,6 +23,7 @@ mod utils;
 // System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::job::job_generator::random_job_name;
 pub use crate::storage::duckdb::shared_connection as open_results_database;
+pub use crate::storage::duckdb::{RESULTS_SCHEMA_VERSION, reject_newer_results};
 pub use crate::storage::mask_codec::{decode_mask, encode_mask};
 pub use crate::utils::resources::SystemDiagnostics;
 pub use crate::utils::resources::cpu_ram_diagnostics;
@@ -45,6 +46,7 @@ pub use crate::image::Point2d;
 pub use crate::image::PyramidInfo;
 pub use crate::image::ReadMode;
 pub use crate::image::supported_image_formats;
+pub use evanalyzer_cfg::core_types::ImageDimensionality;
 pub use evanalyzer_cfg::core_types::ImagePlane;
 pub use evanalyzer_cfg::core_types::ImageTile;
 pub use evanalyzer_cfg::core_types::ZProjection;

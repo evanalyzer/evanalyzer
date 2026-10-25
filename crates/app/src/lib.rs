@@ -60,7 +60,7 @@ pub mod modules {
     };
     pub use crate::workspace::module_insights::{
         ImageChannels, image_channels, parameter_key, parameter_wiring, rekey_parameters,
-        resolved_commands, setting_wiring,
+        resolved_commands, setting_wiring, size_settings_set,
     };
     pub use crate::workspace::module_library::{
         content_hash, insert_module_template, library_name, merge_module_definitions,

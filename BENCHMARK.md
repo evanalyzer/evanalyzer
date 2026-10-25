@@ -897,6 +897,29 @@ project, old / new alternated:
 
 Identical objects (298,262 and 99,441), every column except the ids.
 
+## 3D-ready results: z columns and the schema version (2026-10-25)
+
+Phase 1 of 3D support: the `objects` table got its z columns (`ndim`,
+`bbox_z*`, `centroid_z_*`, `bbox_center_z_*`, `volume_*`,
+`surface_area_nm2`, `touches_z_edge` - for a plane's objects zmin = zmax =
+its plane, the volume columns NULL), the readers filter planes by the z
+extent, `run.schema_version` records the format. `bench_pipeline` 50 ×
+2048², 8 threads, `--classify 2`, 52,103 objects; base = HEAD before,
+alternated, 10 s pauses, 22 cores:
+
+| | base | 3D-ready |
+|---|---|---|
+| Pipeline time (2 runs each) | 2.08 / 2.05 s | 1.95 / 2.01 s |
+| Peak RAM | 885 / 935 MB | 860 / 963 MB |
+| Results file | 26.2 MB | 26.8 MB (+~10 bytes per object) |
+
+- No measurable cost: time and RAM within the run-to-run spread.
+- **Same results**: all 60 earlier `objects` columns compared row by row
+  (without the random ids; class lists sorted - their order varies between
+  two runs of the same build too): no difference. `measurements` and
+  `images` the same. Only `pixel_size_z_nm` changed on purpose: an unknown
+  z spacing is NULL now (was a number).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -919,6 +942,7 @@ graphics driver).
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB (1.05 GB with masks) | 2026-10-23 | Object masks in the results |
+| Running a pipeline: 50 images 2048², 8 threads, with the z columns | 860-963 MB | 2026-10-25 | 3D-ready results |
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB (2.56 GB with masks) | 2026-10-23 | Object masks in the results |

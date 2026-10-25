@@ -12,7 +12,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::{ImageContainer, ManagedImage, Point2d};
-use evanalyzer_cfg::core_types::{ImagePlane, InternalErrors};
+use evanalyzer_cfg::core_types::{ImageDimensionality, ImagePlane, InternalErrors};
 use kornia_image::{Image, ImageSize};
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +45,8 @@ pub struct RawImageInfo {
     pub tile_offset_x: usize,
     pub tile_offset_y: usize,
     pub plane: Option<ImagePlane>,
+    /// One plane or a volume; a volume's `height` is all its planes'.
+    pub dimensionality: ImageDimensionality,
 }
 
 /// Splits `image` into its description and its pixels as little-endian
@@ -78,6 +80,7 @@ pub fn image_to_raw(image: &ImageContainer) -> (RawImageInfo, Vec<u8>) {
         tile_offset_x: offset.x,
         tile_offset_y: offset.y,
         plane: image.plane(),
+        dimensionality: image.dimensionality(),
     };
     (info, bytes)
 }
@@ -91,6 +94,13 @@ pub fn image_from_raw(info: &RawImageInfo, bytes: &[u8]) -> Result<ImageContaine
         .and_then(|n| n.checked_mul(info.kind.channels()))
         .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| InternalErrors::InvalidArgument("image dimensions overflow".into()))?;
+    let depth = info.dimensionality.depth() as usize;
+    if depth == 0 || info.height % depth != 0 {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "an image {} pixels high can't be a volume of {depth} planes",
+            info.height
+        )));
+    }
     if bytes.len() != expected {
         return Err(InternalErrors::InvalidArgument(format!(
             "image data is {} bytes, expected {expected} for {}x{} {:?}",
@@ -119,11 +129,13 @@ pub fn image_from_raw(info: &RawImageInfo, bytes: &[u8]) -> Result<ImageContaine
             data: Image::new(size, f32s()).map_err(InternalErrors::from_kornia)?,
             tile_offset,
             plane: info.plane,
+            dimensionality: info.dimensionality,
         }),
         PixelKind::Rgb32F => ImageContainer::F32Rgb(ManagedImage {
             data: Image::new(size, f32s()).map_err(InternalErrors::from_kornia)?,
             tile_offset,
             plane: info.plane,
+            dimensionality: info.dimensionality,
         }),
         PixelKind::Label32U => {
             let u32s = bytes
@@ -134,6 +146,7 @@ pub fn image_from_raw(info: &RawImageInfo, bytes: &[u8]) -> Result<ImageContaine
                 data: Image::new(size, u32s).map_err(InternalErrors::from_kornia)?,
                 tile_offset,
                 plane: info.plane,
+                dimensionality: info.dimensionality,
             })
         }
     };
@@ -157,6 +170,7 @@ mod tests {
             data: Image::new(ImageSize { width, height }, values).unwrap(),
             tile_offset: Point2d { x: 512, y: 1024 },
             plane: Some(ImagePlane { z: 1, c: 2, t: 3 }),
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 
@@ -185,6 +199,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d::default(),
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         let (info, bytes) = image_to_raw(&rgb);
         assert_eq!(info.kind, PixelKind::Rgb32F);
@@ -202,12 +217,40 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d::default(),
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         let (info, bytes) = image_to_raw(&labels);
         let ImageContainer::U32(restored) = image_from_raw(&info, &bytes).unwrap() else {
             panic!("expected a label image");
         };
         assert_eq!(restored.as_slice(), &[0, 1, 7, u32::MAX]);
+    }
+
+    /// A volume keeps its planes and says how many there are.
+    #[test]
+    fn a_volume_round_trips_with_its_depth() {
+        let ImageContainer::F32Gray(mut volume) = gray(2, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        else {
+            unreachable!()
+        };
+        volume.dimensionality = ImageDimensionality::Volume { depth: 3 };
+        let volume = ImageContainer::F32Gray(volume);
+        let (info, bytes) = image_to_raw(&volume);
+        let restored = image_from_raw(&info, &bytes).unwrap();
+        assert_eq!(
+            restored.dimensionality(),
+            ImageDimensionality::Volume { depth: 3 }
+        );
+        assert_eq!(restored.as_f32_slice(), volume.as_f32_slice());
+
+        let uneven = RawImageInfo {
+            dimensionality: ImageDimensionality::Volume { depth: 2 },
+            ..info
+        };
+        assert!(
+            image_from_raw(&uneven, &bytes).is_err(),
+            "3 rows aren't 2 planes"
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@
 //! This module implements object classification algorithms that assign object classes
 //! to regions of interest based on configurable criteria and machine learning models.
 
+use crate::ImageDimensionality;
 use crate::{
     ImageChannel,
     algos::libs::spatial_grid::BboxGrid,
@@ -195,17 +196,18 @@ pub struct ClassifyObjects {
     ///
     /// If unset (the default) this filter is not applied. When set, an object only
     /// satisfies the overall criteria if it also overlaps at least one object carrying this
-    /// class by at least `min_intersection_area`. Combine with e.g.
+    /// class by at least `min_intersection_size`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
     #[cmdsmeta(default = ObjectClass::Unset, display_name = "Intersecting With", visibility = Advanced)]
     pub overlapping_with: ObjectClass,
 
-    /// Minimum intersection area with an `overlapping_with` object, in `size_unit`
+    /// Minimum intersection size with an `overlapping_with` object, in `size_unit`
     ///
+    /// An area in 2D (px² or nm²), a volume in 3D (px³ or nm³).
     /// Has no effect while `overlapping_with` is Unset.
     #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, visibility = Advanced)]
-    pub min_intersection_area: f32,
+    pub min_intersection_size: f32,
 
     /// Unit to use for object extraction
     #[cmdsmeta(
@@ -213,17 +215,19 @@ pub struct ClassifyObjects {
     )]
     pub size_unit: SizeUnits,
 
-    /// Minimum area size
+    /// Minimum size
     ///
-    /// Minimum area size of the object in selected unit (px^2 or nm^2).
+    /// Minimum size of the object in the selected unit: its area in 2D
+    /// (px² or nm²), its volume in 3D (px³ or nm³).
     #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = true)]
-    pub min_area: f32,
+    pub min_size: f32,
 
-    /// Maximum area size
+    /// Maximum size
     ///
-    /// Maximum area size of the object in selected unit (px^2 or nm^2).
+    /// Maximum size of the object in the selected unit: its area in 2D
+    /// (px² or nm²), its volume in 3D (px³ or nm³).
     #[cmdsmeta(default = 2147483648.0, min = 0.0, max = 2147483648.0, summary = false)]
-    pub max_area: f32,
+    pub max_size: f32,
 
     /// Circularity range: 0 = elongated, 1 = perfect circle
     ///
@@ -347,8 +351,8 @@ pub struct ClassifyObjects {
 impl Default for ClassifyObjects {
     fn default() -> Self {
         Self {
-            min_area: 0.0,
-            max_area: 2147483648.0,
+            min_size: 0.0,
+            max_size: 2147483648.0,
             min_circularity: 0.0,
             max_circularity: 1.0,
             min_solidity: 0.0,
@@ -364,7 +368,7 @@ impl Default for ClassifyObjects {
             origin_segmentation: vec![],
             output_class: Unset,
             overlapping_with: Unset,
-            min_intersection_area: 0.0,
+            min_intersection_size: 0.0,
             input_classes: vec![],
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             intensity_filters: vec![],
@@ -382,7 +386,7 @@ impl ImageAlgorithm for ClassifyObjects {
         let pixel_area_size_nm = px_size.px_size_x * px_size.px_size_y;
         let min_intersection_px = self
             .size_unit
-            .to_pixel(self.min_intersection_area, pixel_area_size_nm);
+            .to_pixel(self.min_intersection_size, pixel_area_size_nm);
 
         // ROIs carrying the class the overlap criterion checks against. Collected once
         // up front since evaluating it below needs to read other `object_cache` entries while
@@ -535,8 +539,8 @@ impl ClassifyObjects {
     /// `true` if the object matches all criteria, `false` otherwise
     fn matches_criteria(&self, object: &Object, pixel_sizes: &PixelSizes) -> bool {
         let pixel_area_size_nm = pixel_sizes.px_size_x * pixel_sizes.px_size_y;
-        let min_area_px = self.size_unit.to_pixel(self.min_area, pixel_area_size_nm);
-        let max_area_px = self.size_unit.to_pixel(self.max_area, pixel_area_size_nm);
+        let min_area_px = self.size_unit.to_pixel(self.min_size, pixel_area_size_nm);
+        let max_area_px = self.size_unit.to_pixel(self.max_size, pixel_area_size_nm);
 
         // Check area
         if object.area < min_area_px || object.area > max_area_px {
@@ -641,11 +645,11 @@ mod tests {
     #[test]
     fn test_classification_criteria_default() {
         let criteria = ClassifyObjects::default();
-        assert_eq!(criteria.min_area, 0.0);
-        assert_eq!(criteria.max_area, 2147483600.0);
+        assert_eq!(criteria.min_size, 0.0);
+        assert_eq!(criteria.max_size, 2147483600.0);
         assert!(criteria.allow_edge_touching);
         assert_eq!(criteria.overlapping_with, ObjectClass::Unset);
-        assert_eq!(criteria.min_intersection_area, 0.0);
+        assert_eq!(criteria.min_intersection_size, 0.0);
     }
 
     fn make_ctx() -> PipelineContext {
@@ -658,6 +662,7 @@ mod tests {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         };
         PipelineContext::new_from_image(
             PathBuf::default(),
@@ -799,11 +804,11 @@ mod tests {
 
     #[test]
     fn min_intersection_area_rejects_too_small_an_overlap() {
-        // A and B overlap by a single pixel ([4,4]x[4,4] = 1 px), but min_intersection_area
+        // A and B overlap by a single pixel ([4,4]x[4,4] = 1 px), but min_intersection_size
         // demands at least 4 - too small an overlap must not count as a match.
         let cmd = ClassifyObjects {
             overlapping_with: CLASS_B,
-            min_intersection_area: 4.0,
+            min_intersection_size: 4.0,
             size_unit: SizeUnits::Pixels,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
@@ -823,7 +828,7 @@ mod tests {
                 .get(&ObjectId(ID_A))
                 .unwrap()
                 .is_of(&CLASS_A, Scope::Global),
-            "overlap area (1px) is below min_intersection_area (4px), so A should fail"
+            "overlap area (1px) is below min_intersection_size (4px), so A should fail"
         );
     }
 

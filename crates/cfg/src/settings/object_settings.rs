@@ -10,6 +10,7 @@
 use crate::types::{
     classes::{ObjectClass, SegmentationClass},
     ids::{ObjectId, TrackId},
+    image::ImageDimensionality,
 };
 use bitvec::prelude::*;
 use indexmap::IndexMap;
@@ -113,4 +114,24 @@ pub struct ObjectMetricSettings {
     pub z_stack: i32,
     pub c_stack: i32,
     pub t_stack: i32,
+
+    /// One plane (`z_stack`) or a volume of `depth` planes from `z_stack` on -
+    /// then `bbox` is the box of every plane and `mask_data` covers them one
+    /// after the other (z-major).
+    #[serde(default)]
+    pub dimensionality: ImageDimensionality,
+
+    /// z moments of a volume, z counted from `z_stack` (0 for one plane).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sum_z: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sum_z2: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sum_xz: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sum_yz: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }

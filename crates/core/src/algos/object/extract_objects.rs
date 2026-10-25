@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::image::Point2d;
 use crate::pipeline::scope::Scope;
 use crate::{
@@ -399,6 +400,7 @@ mod tests {
             .expect("Failed to create test image"),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         }));
 
         ctx.segmentation_map = Some(
@@ -494,6 +496,7 @@ mod tests {
                 data: Image::<f32, 1>::from_size_slice(size, &case.image).unwrap(),
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
             }));
             let semantic: Vec<u32> = case.labels.iter().map(|&l| u32::from(l > 0)).collect();
             ctx.segmentation_map = Some(Image::<u32, 1>::from_size_slice(size, &semantic).unwrap());
@@ -549,6 +552,7 @@ mod tests {
             data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         }));
 
         ctx.instance_map = Some(Image::<u32, 1>::from_size_slice(tile_size, &classes).unwrap());
@@ -622,6 +626,7 @@ mod tests {
             data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         }));
 
         ctx.instance_map = Some(Image::<u32, 1>::from_size_slice(tile_size, &classes).unwrap());

@@ -20,6 +20,7 @@
 //! all the objects; an object's Costes values use the whole image's Costes
 //! thresholds (Measure Object Colocalization searches for them itself).
 
+use crate::ImageDimensionality;
 use crate::algos::GlobalPipelineCache;
 use crate::object::Object;
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
@@ -1042,6 +1043,7 @@ mod tests {
                     data: Image::<f32, 1>::from_size_slice(size, &samples).unwrap(),
                     tile_offset: Point2d { x: x0, y: 0 },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 });
                 let tile = ImageTile {
                     offset_x: x0,
@@ -1271,6 +1273,7 @@ mod tests {
                     .unwrap(),
                     tile_offset: Point2d { x: x0, y: y0 },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 });
                 let tile = ImageTile {
                     offset_x: x0,

@@ -240,7 +240,8 @@ export global HistogramState {
 //
 // Channel settings
 //
-export enum IntensityProjection { single_stack, all_stacks, max, min, avg, sum, middle }
+// `volume`: the z-stack analysed as one volume (3D) - shown slice by slice.
+export enum IntensityProjection { single_stack, all_stacks, max, min, avg, sum, middle, volume }
 
 // `wavelength_overridden`: the project sets this channel's emission
 // wavelength itself (instead of taking the image's own) - shown as "edited".

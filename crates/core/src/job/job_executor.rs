@@ -630,6 +630,11 @@ impl<'a> JobExecutor {
             };
             let (z_proj, z_handling, z_range) =
                 self.prepare_z_stack_iterator(series_info, image_entry);
+            if z_handling == ZStackHandling::Volume3d {
+                return Err(InternalErrors::InvalidArgument(
+                    "Z-stacks as volumes (3D) can't be analysed yet".into(),
+                ));
+            }
             let t_stacks: Vec<i32> = self
                 .prepare_t_stack_iterator(series_info, image_entry)
                 .collect();
@@ -1314,6 +1319,11 @@ impl<'a> JobExecutor {
             ZStackHandling::AvgIntensity => (ZProjection::AvgIntensity, 0..=0),
             ZStackHandling::SumIntensity => (ZProjection::SumIntensity, 0..=0),
             ZStackHandling::TakeTheMiddle => (ZProjection::TakeTheMiddle, 0..=0),
+            // Every plane, read as one volume - refused by the caller until
+            // the commands can run on volumes.
+            ZStackHandling::Volume3d => {
+                (ZProjection::None, 0..=(image_info.nr_z_stacks as i32 - 1))
+            }
         };
 
         (projection, handling, range)
@@ -3711,7 +3721,7 @@ mod full_run_integration_tests {
             classes_to_coloc: vec![cell, bar],
             all_combinations: false,
             exclude_classes: vec![],
-            min_coloc_area: 0.0,
+            min_coloc_size: 0.0,
             size_unit: evanalyzer_cfg::core_types::SizeUnitsRel::Pixels,
             multiplicity: crate::algos::ColocMultiplicity::OneToOne,
             class_for_overlapping_areas: overlap,
@@ -4438,6 +4448,7 @@ mod full_run_integration_tests {
 #[cfg(test)]
 mod tile_merge_end_to_end_tests {
     use super::*;
+    use crate::ImageDimensionality;
     use crate::ImagePlane;
     use crate::Object;
     use crate::algos::TileMerge;
@@ -4511,6 +4522,7 @@ mod tile_merge_end_to_end_tests {
                 y: 0,
             },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         }));
         let mut images: ImageCache = ImageCache::new().unwrap();
         images.insert(

@@ -13,8 +13,9 @@ use crate::editor::image_meta_controller::ImageMetaController;
 use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb, this_computer_ram_bytes};
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
-    AppWindow, ChannelInfo, ChannelState, ImageMetaData, ImagePixelInfo, IntensityProjection,
-    LayoutState, ViewportMemoryState, ViewportState as ViewportSlintState,
+    AppWindow, ChannelInfo, ChannelState, DialogType, GlobalAppState, ImageMetaData,
+    ImagePixelInfo, IntensityProjection, LayoutState, ViewportMemoryState,
+    ViewportState as ViewportSlintState, WarningState,
 };
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::project::ProjectExt;
@@ -630,7 +631,7 @@ impl ViewportImageController {
                 "({:.1} {:.1} {:.1}) nm",
                 local_x * pixel_sizes.x,
                 local_y * pixel_sizes.y,
-                (z_stack as f32 + 1.0) * pixel_sizes.z
+                (z_stack as f32 + 1.0) * pixel_sizes.z.unwrap_or(0.0)
             );
 
             let ui_weak = self.ui.clone();
@@ -686,7 +687,21 @@ impl ViewportImageController {
             IntensityProjection::Avg => (None, ZStackHandling::AvgIntensity),
             IntensityProjection::Sum => (None, ZStackHandling::SumIntensity),
             IntensityProjection::Middle => (None, ZStackHandling::TakeTheMiddle),
+            // The analysis takes every plane; the viewer shows this one.
+            IntensityProjection::Volume => (Some(z_stack..=z_stack), ZStackHandling::Volume3d),
         };
+
+        // Between planes (2D) and volumes (3D) the size settings change
+        // meaning (an area, a volume): the ones set need a look.
+        let was_volume = project
+            .get_z_stack()
+            .is_some_and(|z| z.z_projection == ZStackHandling::Volume3d);
+        if was_volume != (z_projection == ZStackHandling::Volume3d) {
+            let sizes = evanalyzer_app::modules::size_settings_set(&project.settings);
+            if !sizes.is_empty() {
+                self.show_size_settings_warning(z_projection == ZStackHandling::Volume3d, sizes);
+            }
+        }
 
         // Store the new settings to the project - in grayscale mode with
         // one visible channel at most; the list then shows that, too.
@@ -720,9 +735,43 @@ impl ViewportImageController {
         // E.g. the results' split view: its objects of this plane. A
         // projection (Max, …) shows no one slice: its hidden Z slider says
         // nothing.
-        let z =
-            matches!(projection, IntensityProjection::SingleStack).then(|| z_stack.max(0) as u32);
+        let z = matches!(
+            projection,
+            IntensityProjection::SingleStack | IntensityProjection::Volume
+        )
+        .then(|| z_stack.max(0) as u32);
         self.app_state.plane_changed(z, t_stack.max(0) as u32);
+    }
+
+    /// The warning after switching the z-stacks between planes and volumes
+    /// (`to_volumes`): `sizes` are the size settings set ("Pipeline ›
+    /// Command: Setting"), made for the other one.
+    fn show_size_settings_warning(&self, to_volumes: bool, sizes: Vec<String>) {
+        let (now, before) = match to_volumes {
+            true => ("volumes (px³ / nm³)", "areas"),
+            false => ("areas (px² / nm²)", "volumes"),
+        };
+        let message = format!(
+            "The z-stacks are now analyzed as {}. These size settings are {now} now - \
+             set as {before}, they probably need new values:\n\n{}",
+            if to_volumes {
+                "volumes (3D)"
+            } else {
+                "planes (2D)"
+            },
+            sizes.join("\n")
+        );
+        let ui = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui.upgrade() {
+                let warning = ui.global::<WarningState>();
+                warning.set_info(false);
+                warning.set_title("Check the size settings".into());
+                warning.set_message(message.into());
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::Warning);
+            }
+        });
     }
 
     /// Shows how many channels are visible - and with `update_rows` which,
@@ -872,6 +921,7 @@ mod tests {
     use super::*;
     use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
     use crate::editor::viewport_cache::ViewportCache;
+    use evanalyzer_cfg::core_types::ImageDimensionality;
 
     fn make_controller() -> (Arc<UiState>, Arc<ViewportImageController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
@@ -1079,6 +1129,8 @@ mod tests {
                 ZStackHandling::TakeTheMiddle,
                 false,
             ),
+            // The analysis takes every plane; the range is the slice shown.
+            (IntensityProjection::Volume, ZStackHandling::Volume3d, true),
         ];
 
         for (projection, expected_handling, expects_range) in cases {
@@ -1679,6 +1731,7 @@ mod tests {
                 data: image,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             color: [1.0, 1.0, 1.0],
             is_visible: true,
@@ -1739,7 +1792,7 @@ mod tests {
                 "({:.1} {:.1} {:.1}) nm",
                 2.5 * sizes.x,
                 1.5 * sizes.y,
-                3.0 * sizes.z
+                3.0 * sizes.z.unwrap()
             ),
             "the z of the shown plane"
         );

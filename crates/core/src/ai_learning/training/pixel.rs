@@ -183,6 +183,7 @@ fn split_rgb(rgb: &ManagedImage<f32, 3>) -> Result<[Arc<ImageContainer>; 3], Int
             data: Image::<f32, 1>::new(size, values).map_err(InternalErrors::from_kornia)?,
             tile_offset: rgb.tile_offset,
             plane: rgb.plane,
+            dimensionality: rgb.dimensionality,
         })))
     };
     let [r, g, b] = planes;
@@ -367,6 +368,11 @@ impl PixelTrainingJob {
                 height: full_height,
             };
 
+            if self.z_stack_handling == ZStackHandling::Volume3d {
+                return Err(InternalErrors::InvalidArgument(
+                    "Training on z-stacks as volumes (3D) isn't supported yet".into(),
+                ));
+            }
             let (z_projection, z_range) =
                 resolve_z_projection(&self.z_stack_handling, series_info.nr_z_stacks);
 

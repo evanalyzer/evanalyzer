@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use clru::{CLruCache, CLruCacheConfig, WeightScale};
 use log::{debug, warn};
 
@@ -442,6 +443,7 @@ impl ImageCache {
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
+                    dimensionality: ImageDimensionality::Planar,
                 }))
             }
             TAG_F32_RGB => {
@@ -451,6 +453,7 @@ impl ImageCache {
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
+                    dimensionality: ImageDimensionality::Planar,
                 }))
             }
             TAG_U32 => {
@@ -460,6 +463,7 @@ impl ImageCache {
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
+                    dimensionality: ImageDimensionality::Planar,
                 }))
             }
             other => Err(to_io_err(format!("unknown image cache tag {other}"))),
@@ -612,6 +616,7 @@ mod tests {
             data: Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 
@@ -743,6 +748,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 640, y: 1280 },
             plane: plane.clone(),
+            dimensionality: ImageDimensionality::Planar,
         });
         match round_trip(&original) {
             ImageContainer::F32Rgb(img) => {
@@ -775,6 +781,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 3, y: 5 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         match round_trip(&original) {
             ImageContainer::U32(img) => {

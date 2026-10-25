@@ -63,19 +63,26 @@ fn create_schema(conn: &Connection) {
         "CREATE TABLE objects (
             image_name           VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL,
             c_stack               INTEGER, z_stack INTEGER, t_stack INTEGER,
+            ndim UTINYINT NOT NULL DEFAULT 2,
             object_id             UUID NOT NULL,
             seg_class_name        VARCHAR, seg_class_id INTEGER,
             object_class_name     VARCHAR, object_class_id INTEGER[],
             parent_ids             MAP(INTEGER, UUID), track_id UBIGINT,
-            centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE, bbox_center_x_px DOUBLE, bbox_center_y_px DOUBLE, bbox_center_x_nm DOUBLE, bbox_center_y_nm DOUBLE,
-            bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
-            bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
-            area_px UBIGINT, area_nm2 DOUBLE, perimeter_px DOUBLE, perimeter_nm DOUBLE,
+            centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_z_px DOUBLE,
+            centroid_x_nm DOUBLE, centroid_y_nm DOUBLE, centroid_z_nm DOUBLE,
+            bbox_center_x_px DOUBLE, bbox_center_y_px DOUBLE, bbox_center_z_px DOUBLE,
+            bbox_center_x_nm DOUBLE, bbox_center_y_nm DOUBLE, bbox_center_z_nm DOUBLE,
+            bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_zmin_px UINTEGER,
+            bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER, bbox_zmax_px UINTEGER,
+            bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_zmin_nm DOUBLE,
+            bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE, bbox_zmax_nm DOUBLE,
+            area_px UBIGINT, area_nm2 DOUBLE, volume_px UBIGINT, volume_nm3 DOUBLE,
+            perimeter_px DOUBLE, perimeter_nm DOUBLE, surface_area_nm2 DOUBLE,
             circularity DOUBLE, solidity DOUBLE, aspect_ratio DOUBLE, roundness DOUBLE, compactness DOUBLE,
             major_axis_px DOUBLE, minor_axis_px DOUBLE, major_axis_nm DOUBLE, minor_axis_nm DOUBLE,
             major_axis_angle DOUBLE, eccentricity DOUBLE,
             feret_diameter_px DOUBLE, min_feret_px DOUBLE, feret_diameter_nm DOUBLE, min_feret_nm DOUBLE,
-            touches_edge BOOLEAN,
+            touches_edge BOOLEAN, touches_z_edge BOOLEAN,
             pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
             image_bit_depth UTINYINT,
             intensity_sum_gray DOUBLE[],
@@ -127,6 +134,9 @@ pub(super) struct ObjectSpec {
     pub(super) image_height: u32,
     /// 0 = not tracked, as the analysis writes it.
     pub(super) track_id: u64,
+    /// A volume's object from z-plane `.0` to `.1` (then no `z_stack`);
+    /// `None`: a plane's, on `z_stack`.
+    pub(super) volume: Option<(u32, u32)>,
 }
 
 impl ObjectSpec {
@@ -150,7 +160,14 @@ impl ObjectSpec {
             image_width: 100,
             image_height: 100,
             track_id: 0,
+            volume: None,
         }
+    }
+
+    /// A volume's object over z-planes `z_min` to `z_max`.
+    pub(super) fn in_volume(mut self, z_min: u32, z_max: u32) -> Self {
+        self.volume = Some((z_min, z_max));
+        self
     }
 
     pub(super) fn in_track(mut self, track_id: u64) -> Self {
@@ -220,7 +237,8 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 area_px, area_nm2, perimeter_px, perimeter_nm,
                 circularity, solidity, aspect_ratio, roundness, compactness,
                 major_axis_px, minor_axis_px, eccentricity, touches_edge,
-                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm
+                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                ndim, bbox_zmin_px, bbox_zmax_px
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?,
@@ -230,13 +248,14 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 ?, ?, 40, 40,
                 1.0, 1.0, 1.0, 1.0, 1.0,
                 10, 10, 1.0, false,
-                1.0, 1.0, 1.0
+                1.0, 1.0, 1.0,
+                ?, ?, ?
             )",
             duckdb::params![
                 spec.image,
                 spec.image,
                 spec.t_stack,
-                spec.z_stack,
+                spec.volume.is_none().then_some(spec.z_stack),
                 object_id,
                 spec.class_name,
                 spec.class_id,
@@ -247,6 +266,9 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 spec.centroid_y_px,
                 spec.area_px,
                 spec.area_px as f64,
+                if spec.volume.is_some() { 3u8 } else { 2 },
+                spec.volume.map_or(spec.z_stack as u32, |(min, _)| min),
+                spec.volume.map_or(spec.z_stack as u32, |(_, max)| max),
             ],
         )
         .unwrap_or_else(|e| panic!("insert object {idx}: {e}"));
@@ -280,7 +302,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
         let entry = max_channel_by_image.entry(spec.image).or_insert(-1);
         *entry = (*entry).max(channel_max);
         let z_entry = max_z_by_image.entry(spec.image).or_insert(0);
-        *z_entry = (*z_entry).max(spec.z_stack);
+        *z_entry = (*z_entry).max(spec.volume.map_or(spec.z_stack, |(_, max)| max as i32));
         let t_entry = max_t_by_image.entry(spec.image).or_insert(0);
         *t_entry = (*t_entry).max(spec.t_stack);
     }
@@ -330,6 +352,7 @@ pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_clas
             circularity, solidity, aspect_ratio, roundness, compactness,
             major_axis_px, minor_axis_px, eccentricity, touches_edge,
             pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+            bbox_zmin_px, bbox_zmax_px,
             {JSON_DERIVED_COLUMNS})
          SELECT
             'img_' || lpad(i::VARCHAR, 5, '0') || '.tif', 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif',
@@ -341,6 +364,7 @@ pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_clas
             random(), random(), 1, 1, 1,
             10, 10, random(), false,
             1, 1, 1,
+            0, 0,
             {json_derived}
          FROM range({images}) t1(i), range(1, {classes} + 1) t2(c), range({per_class}) t3(k);
          INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks)

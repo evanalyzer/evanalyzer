@@ -36,7 +36,8 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
 
     // Keys allowed on struct-level #[cmdsmeta(...)]
     // `key`: stable serialized/script name, snake_case (defaults to the struct name).
-    let struct_allowed_keys = ["category", "display_name", "next", "key"];
+    // `volumes = true`: the command runs on volumes (3D) too, not only on planes.
+    let struct_allowed_keys = ["category", "display_name", "next", "key", "volumes"];
 
     // Keys allowed on field-level #[cmdsmeta(...)]
     let field_allowed_keys = [

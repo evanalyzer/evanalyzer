@@ -450,7 +450,7 @@ Results (aggregates computed by the queries, nothing stored):
 Goal: volumes (z-stacks analysed as 3D) without breaking the project schema, the results DB or the remote protocol once implementation starts. scopeio needs nothing new: it reads one (z, t) plane per `RegionRequest`, `read_region_into` can fill a preallocated volume plane by plane (in parallel), and `SeriesMeta` has `size_z` and `physical_size.z_nm`. Pyramids are xy only (fine for 3D: downsample xy, keep every plane).
 
 Reference data (licences unchecked - local only in `tests/3D/` (gitignored), never commit/ship without checking; only results compared, no code read):
-- Viewer/reader: Fiji samples (File > Open Samples) - Fly Brain (RGB volume, 57 planes, z 3.95 µm vs xy ~0.37 µm: anisotropy ~10.6; downloaded as `tests/3D/flybrain.tif` from imagej.net/images/flybrain.zip), T1 Head / MRI Stack (16-bit gray), Confocal Series (2 channels × z), Mitosis 5D / Organ of Corti 4D (z with t and c).
+- Viewer/reader: Fiji samples (File > Open Samples) - Fly Brain (RGB volume, 57 planes, 256 × 256, xy 2.68 µm, z 3.95 µm: anisotropy ~1.5; downloaded as `tests/3D/flybrain.tif` from imagej.net/images/flybrain.zip - scopeio alpha.2 reads it as 57 time points, see the reader item in phase 1), T1 Head / MRI Stack (16-bit gray), Confocal Series (2 channels × z), Mitosis 5D / Organ of Corti 4D (z with t and c).
 - 3D blur / anisotropy: BBBC034 (3D hiPSC monolayer, membrane/mitochondria/DNA, xy 0.065 µm, z 0.29 µm) and the CellProfiler tutorial "3D segmentation of cell monolayer" (github.com/CellProfiler/tutorials, 3d_monolayer) - compare results step by step. Numeric reference: scipy.ndimage.gaussian_filter with an anisotropic sigma.
 - 3D segmentation with ground truth: BBBC024 (synthetic 3D HL60 nuclei, 0/25/50/75 % clustering, high/low SNR, 20 nuclei per image, 16-bit label masks); BBBC035 (simulated HL60, Cell Tracking Challenge) is CC-BY - the candidate for committed test data.
 - Small unit-test volumes: scikit-image `cells3d` (membrane + nuclei), `kidney` (multi-channel confocal) - licence in the scikit-image data repo README.
@@ -458,41 +458,68 @@ Reference data (licences unchecked - local only in `tests/3D/` (gitignored), nev
 ### Phase 1 - interfaces ready for 3D (no 3D algorithms yet)
 Everything below is shaped as if 3D already worked; 2D fills it with depth 1 / zmin = zmax = z. After this phase, 3D must not need another schema, DB, protocol or enum change.
 
-Results DB (`core/src/storage/duckdb.rs`):
-- [ ] A results-DB schema version (none today, only `run.app_version`) - `run.schema_version` or a `meta` table. Needed for any later migration, 3D or not.
-- [ ] `measurements.z_stack` nullable: NULL = the whole z range (a volume measurement). Readers must handle NULL.
-- [ ] `objects`: `bbox_zmin_px`, `bbox_zmax_px` (UINTEGER), `bbox_zmin_nm`, `bbox_zmax_nm`, `centroid_z_px/_nm`, `bbox_center_z_px/_nm`, `ndim UTINYINT NOT NULL DEFAULT 2` - filled for 2D objects too (zmin = zmax = z_stack).
-- [ ] `objects`: `volume_px UBIGINT`, `volume_nm3`, `surface_area_nm2` (NULL in 2D); optionally `touches_z_edge BOOLEAN`. `area_*` stays the planar area.
-- [ ] Document the semantics in the DDL comments: `z_stack` = the plane for ndim 2, NULL for ndim 3; `mask` = run lengths over the bbox row by row, plane by plane (z-major) - the codec is already dimension-agnostic; `touches_edge` = the xy border; perimeter, circularity, solidity, feret, ellipse columns NULL for 3D objects. 3D-only shape descriptors (sphericity, third axis, orientation) go through measurement steps (`measurements` / `measurement_values`), no new columns.
-- [ ] Write 2D results through the new columns and adapt the ~37 `z_stack = ?` filters (results, charts, drawn images, regions, viewer) to `? BETWEEN bbox_zmin_px AND bbox_zmax_px`, so 3D objects show up without query changes later.
-- [ ] If the results DB format already shipped: a migration step for old files (no compat readers).
+Done 2026-10-25 (not committed yet; all 3135 tests pass, regression check below):
 
-Project schema (fold into the unreleased v3 → v4 where it changes existing fields):
-- [ ] `ZStackHandling`: add a volume variant (e.g. `Volume3d`) now, so every match handles it; hidden in the UI / rejected by module checks until 3D works.
-- [ ] Annotations (`ObjectMetricSettings`): z extent of the bbox (bbox and mask become 3D, depth 1 for 2D) next to `bbox: [u32; 4]`.
-- [ ] Spatial command parameters (phase-3 decision: existing commands extended): z derived from the anisotropy (`PixelSizeSettings.z` / scopeio `z_nm` vs the xy pixel size); each spatial command (blur, morphology radius, rolling ball, …) gets its optional z override field now (default auto, `serde(default)`), and every command its 2D / 2D + 3D capability.
+Results DB (`core/src/storage/duckdb.rs`):
+- [x] Schema version: `run.schema_version` = `RESULTS_SCHEMA_VERSION` (1); a file without it reads as 0. The results view refuses a newer file (`reject_newer_results`), adding to an earlier run (`open_existing`) needs the same version.
+- [x] `measurements.z_stack` nullable (NULL = the whole volume); the readers take a plane's image values with `(z_stack = z OR z_stack IS NULL)`, joins with `IS NOT DISTINCT FROM`.
+- [x] `objects` z columns, each after its x/y ones (area / volume and perimeter / surface area side by side; the Arrow batch follows the table order, pinned by a test): `ndim` (DEFAULT 2, after `t_stack`), `bbox_zmin/zmax_px/_nm`, `centroid_z_px/_nm`, `bbox_center_z_px/_nm`, `volume_px`, `volume_nm3`, `surface_area_nm2`, `touches_z_edge`. A plane's object: zmin = zmax = its plane (NULL for the unknown plane -1), volume NULL. A volume's object: `z_stack` NULL, extent / centroid (`sum_z`) / voxels written, the planar shape columns (area to min_feret) NULL; surface area and `touches_z_edge` NULL until the 3D geometry exists. An unknown z spacing: `pixel_size_z_nm` and the z nm values NULL (was a number).
+- [x] Semantics documented in the DDL comments (z_stack, mask plane by plane, touches_edge = xy, planar columns NULL for volumes, 3D shape descriptors as measurement steps).
+- [x] Readers: every objects plane filter (list, per image, plate, heatmap, charts, image objects, drawn images) via `ResultsGenerator::object_on_plane_sql` - `z BETWEEN bbox_zmin_px AND bbox_zmax_px`, `z_stack = z` for results without the columns. The tracks query stays on `z_stack` (the tracker is 2D - see 4D below). The results test schema (`test_support.rs`) has the z columns; `ObjectSpec::in_volume`.
+- [x] Migration for old results files: not needed - the results format hasn't shipped (before the first release).
+
+Results API / export (`app/src/api/results/column.rs`):
+- [x] `Column::VolumePx` / `VolumeNm` / `SurfaceAreaNm` (keys `volume_px`, `volume_nm3`, `surface_area_nm2`), offered in the picker's Geometry group only for results with a volume's object. No columns for z centroid / z box / ndim: x/y centroid and box aren't columns either - add the three axes together if wanted (additive).
+
+Project schema (folded into the unreleased v3 → v4):
+- [x] `ZStackHandling::Volume3d`: in the viewer's Z selector as "3D" (shown slice by slice, the Z stepper works); every match handles it; refused by module checks (every command is 2D-only so far), by the job executor and by AI training.
+- [x] Annotations (`ObjectMetricSettings`): `dimensionality` and the z moments (`serde(default)`, zeros not written) - bbox / mask stay as they are, a volume's covers its planes z-major.
+- [x] Command capability: `#[cmdsmeta(volumes = true)]` -> generated `PipelineCommand::supports_volumes()` (all false today).
+- [x] No z settings per command (decided 2026-10-25): a command's extent in z comes from its xy value and the project's (or image's) x/y/z pixel sizes - z = xy value × xy pixel size / z spacing. A per-command override (sigma_z, …) only if users need a different reach in z; it would be additive (`optional` field), nothing to migrate.
+- [ ] A 3D run with an unknown z spacing (`PixelSizeSettings.z` None, nothing in the image) is refused with "set the z spacing" (project / image settings) - with the first 3D command.
+- [x] Unknown z spacing: `PixelSizeSettings.z: Option<f32>` (None = unknown; old files with a number load unchanged). Core keeps the reader's 0 = unknown, bridged both ways; the UI shows unknown as 0.
+- [x] Size filters: `min_area`/`max_area`/`min_intersection_area` (Classify Objects), `min_overlap_area` (Object Math), `min_coloc_area` (Colocalize Objects) -> `…_size`, renamed in v3 → v4 (commands and module bindings); descriptions "area in 2D, volume in 3D". `min_size` (Connected Components) / `min_object_size` were already neutral. Open: a project already saved as v4 (your own test projects) with one of these steps doesn't load ("missing field `minSize`") - the v3 -> v4 step doesn't run on it. Decide: rename the keys in those files by hand, or a v4 -> v5 step.
+- [x] Size filters, switching (2026-10-25): switching the Z selector between 2D and 3D shows "Check the size settings" with the size settings changed from their default (`module_insights::size_settings_set`). Still open: the UI showing µm² / µm³ by the image.
+- [x] Module files (`.evamodule`): not migrated by design ("updated by hand"); none in the repo.
 
 Internal types (`core`):
-- [ ] `ImageContainer` volumes - decided: no separate gray/RGB volume variants. `ManagedImage` gets an explicit `dimensionality: ImageDimensionality` - `Planar` (2D) or `Volume { depth: u32 }` (3D, `depth` planes, z-major); an enum so 2D/3D is seen at every match and no "2D with 87 planes" can be built (DB: `ndim` 2/3 maps 1:1). So F32Gray, F32Rgb and U32 (label images - needed in 3D too) can all be volumes; separate variants would be 3 more (gray, RGB, label), and RGB volumes exist (e.g. volumetric BIF scans). Storage idea: contiguous z-major, i.e. a kornia image of width × (height · depth), so a plane is a sub-slice and the 2D code runs per plane without a copy.
-- [ ] `ImagePlane { z, c, t }` / `ManagedImage.plane`: a z range (or z = the first plane + depth) for a volume.
-- [ ] `Object`: bbox with z_min/z_max, `plane` with a z range, `mask_data` z-major over the 3D bbox, moment accumulators `sum_z`, `sum_z2`, `sum_xz`, `sum_yz` (3D centroid, 3x3 inertia tensor), `area` = voxel count in 3D; perimeter/ellipse slots that can hold surface area / ellipsoid.
-- [ ] Image reader: a volume read path (all planes of an xy region/tile into one buffer, no projection) next to `read_image_tile_combined*`; z spacing from scopeio with the project's `PixelSizeSettings.z` as fallback.
-- [ ] Remote protocol (`app/backend/remote/wire`): images and objects carry depth / z range - one `PROTOCOL_VERSION` bump in this phase, not later.
+- [x] `ImageDimensionality { Planar, Volume { depth } }` (cfg `types/image.rs`, `depth()`, `ndim()`); `ManagedImage.dimensionality` + `ImageContainer::dimensionality()`, `ManagedImage::plane_size()` / `plane_slice(z)`. Every construction says it (`Planar`), copies and scratch pads inherit it.
+- [x] `ImagePlane`: unchanged - of a volume its first plane (`z` .. `z + depth - 1`), documented.
+- [x] `Object` / `ObjectInit`: `dimensionality`, `sum_z`, `sum_z2`, `sum_xz`, `sum_yz` (z counted from `plane.z`, 0 for a plane). Still 2D-only inside (internal, changes with the 3D geometry): `finalize_geometry`, perimeter / ellipse, `TransformedGeometry`, `StoredObject` (z_stack of a volume reads as 0).
+- [x] Image reader: `read_image_tile_volume` (planes decoded in parallel straight into one z-major buffer via scopeio `read_region_into`); tests against plane-by-plane reads. The z spacing fallback is the project's `PixelSizeSettings.z` (job generator).
+- [ ] scopeio (0.0.0-alpha.2) reads an RGB ImageJ stack's planes as time points: `formats/tiff/imagej.rs` `apply` uses `channels/slices/frames` only for gray stacks. Fiji's Fly Brain (RGB, `slices=57`) opens as 57 time points - test `the_fly_brain_sample_reads_as_an_rgb_volume` (ignored, needs `tests/3D/flybrain.tif`). Fix in scopeio.
+- [x] Remote protocol 31 -> 32: `RawImageInfo.dimensionality` (checked: the height must be whole planes), the new `Column` variants; objects travel with their settings (dimensionality included).
+
+Check at the end of phase 1:
+- [x] 2D regression (2026-10-25, BENCHMARK.md "3D-ready results"): `bench_pipeline` 50 × 2048² base vs new - all 60 earlier `objects` columns, `measurements` and `images` identical (ids aside, class lists sorted); only `pixel_size_z_nm` NULL on purpose. Time / RAM within the spread, file +~10 bytes per object.
 
 ### Phase 2 - viewer shows volumes (CPU compositor, no GPU pipeline)
 - [ ] Step 1 - slices (z stepper exists in `viewport_stack_bar.slint`): draw a 3D object on the current slice as its mask cut at z; hit-testing on the cut; object list follows the slice.
 - [ ] Step 2 - orthogonal views XY + XZ + YZ: volume cache of the visible region (an XZ view needs every plane of the visible rows), XZ/YZ stretched by z spacing / xy pixel size, 3-panel layout, linked crosshair. Measure RAM (a 2048 × 2048 × 100 f32 volume is ~1.6 GB per channel - keep u16 until a step needs f32, tile in xy) and add it to BENCHMARK.md's RAM overview.
 - [ ] Step 3 (optional) - rotatable 3D: CPU maximum-intensity ray-caster as a downsampled preview (pure Rust); a wgpu/OpenGL view inside Slint only if that is too slow.
+- [ ] Results views: the split view draws a 3D object as its cut at the current z; lists / charts get a z filter for volumes; `drawn_images.rs` (exported overlay images) per plane or as a maximum projection.
+- [ ] Tiling and RAM: 3D tiles are xy tiles over the full z range; "Preview tiles: Auto" (from the RAM) counts the depth; 3D numbers in the min-RAM estimate.
+- [ ] Remote mode: volumes sent plane by plane / streamed (`wire/pixels.rs`), not as one message.
 
 ### Phase 3 - first 3D algorithm (3D blur)
 Decided 2026-10-25: the existing commands are extended to volumes (as scipy.ndimage / scikit-image / ITK / CellProfiler 3+ - one command, its input's dimensionality picks the path); an own command only where the operation itself differs (e.g. something meaningful only in 3D). Slice by slice stays the project's `ZStackHandling::AllStacks`, no per-command switch.
 - [ ] Each command declares what it supports (2D only / 2D + 3D); module checks reject a volume into a 2D-only command with a clear message - never a silent per-plane fallback.
-- [ ] Gaussian blur in 3D: the existing xy pass per plane + a 1D pass along z (separable); sigma_z from the anisotropy (z spacing / xy pixel size), an optional override (`sigma_z`, default auto - its settings field added in phase 1).
+- [ ] Per command with its 3D path, decide what "whole image" means - e.g. automatic thresholds (Otsu, …) from the histogram of the whole volume (as CellProfiler), not per plane.
+- [ ] Gaussian blur in 3D: the existing xy pass per plane + a 1D pass along z (separable); sigma in z = sigma × xy pixel size / z spacing (the project's pixel sizes, no setting of its own).
 - [ ] Tests against a reference 3D Gaussian (anisotropic and isotropic), benchmark speed + RAM (BENCHMARK.md).
 
 ### Later (after phase 3)
 - 3D object extraction: connected components (6/18/26), stitching across tiles in 3D.
+- Tile merge (`tile_merge.rs`) for objects cut at tile borders in 3D.
+- 4D (volumes over time): no schema change (`t_stack`, `track_id`, `frame_interval_s` exist) - each t is analysed as one volume, as today per plane. Only the tracker (`dataset/tracking/simple_tracker.rs`) changes: it groups by `(image, z_stack)` - for 3D objects (z_stack NULL) by image only; distance on the 3D centroid with z scaled by the anisotropy, a 3D grid; `max_distance` in px = xy px (z converted), in nm unambiguous. RAM: one volume per t in `pipeline/image_cache.rs`. (Check: its doc says "centre of the bounding box", the code uses `centroid_px` - the centre of mass since 2026-10-23.)
+- AI training (pixel / object classifier, `ai_learning_features.rs`): per plane or own 3D features - decide.
+- Docs: parameter descriptions "pixels" -> "pixels/voxels", a 3D section in the user docs.
 - 3D geometry: voxel count, surface area (voxel faces or marching cubes), ellipsoid, 3D feret, 3D convex hull (expensive, optional) - all with anisotropy.
 - 3D filters / morphology / watershed; Relate, Coloc, distances, tracking with 3D masks and centroids.
 - 3D AI models (Cellpose 3D, StarDist 3D) - a track of its own.
 - Annotations stay per plane; a 3D object is edited as its cut on the slice.
+
+
+## Usability
+
+- Allow to open evanalyzer modules using the open dialog

@@ -892,6 +892,10 @@ struct StructMetadata {
     /// `None` keeps deriving it from the struct name; set it before renaming a
     /// struct so saved projects and scripts keep working.
     key: Option<String>,
+    /// The command runs on volumes (3D) too, from #[cmdsmeta(volumes = true)].
+    /// Without it a command works on planes (2D) only - module checks refuse
+    /// it for a z-stack analysed as volume.
+    volumes: bool,
 }
 
 /// Which step trait a command implements.
@@ -1196,6 +1200,9 @@ fn parse_struct_meta(attrs: &[syn::Attribute]) -> StructMetadata {
                 } else if m.path.is_ident("key") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.key = Some(validated_key(&value.value()));
+                } else if m.path.is_ident("volumes") {
+                    let value: syn::LitBool = m.value()?.parse()?;
+                    meta.volumes = value.value();
                 } else if m.path.is_ident("next") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.next = Some(
@@ -3476,6 +3483,25 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         ));
     }
     out.push_str("        }\n    }\n\n");
+
+    // supports_volumes()
+    let volume_commands: Vec<String> = algo_commands
+        .iter()
+        .filter(|cmd| cmd.struct_meta.volumes)
+        .map(|cmd| format!("Self::{}(_)", cmd.struct_name))
+        .collect();
+    out.push_str("    /// Whether this command runs on volumes (3D) too - `#[cmdsmeta(volumes =\n");
+    out.push_str("    /// true)]`. Every other command works on planes (2D) only.\n");
+    out.push_str("    pub fn supports_volumes(&self) -> bool {\n");
+    if volume_commands.is_empty() {
+        out.push_str("        false\n");
+    } else {
+        out.push_str(&format!(
+            "        matches!(self, {})\n",
+            volume_commands.join(" | ")
+        ));
+    }
+    out.push_str("    }\n\n");
 
     // category()
     out.push_str("    pub fn category(&self) -> &CommandCategory {\n");

@@ -127,7 +127,7 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
         pixel_sizes: PixelSizeSettings {
             x: 0.5,
             y: 0.5,
-            z: 1.0,
+            z: Some(1.0),
         },
         z_stack: None,
         t_stack: None,

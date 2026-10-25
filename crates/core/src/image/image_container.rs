@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::image::Point2d;
 use crate::{
     ImagePlane,
@@ -60,6 +61,7 @@ impl ImageTypeMarker for F32Gray {
                 .map_err(|e| InternalErrors::Generic(e.to_string()))?,
             tile_offset,
             plane: Some(plane),
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 
@@ -74,6 +76,7 @@ impl ImageTypeMarker for F32Gray {
             data: img,
             tile_offset,
             plane: Some(plane),
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 
@@ -115,6 +118,7 @@ impl ImageTypeMarker for F32Rgb {
                 .map_err(|e| InternalErrors::Generic(e.to_string()))?,
             tile_offset,
             plane: Some(plane),
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 
@@ -129,6 +133,7 @@ impl ImageTypeMarker for F32Rgb {
             data: img,
             tile_offset,
             plane: Some(plane),
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 
@@ -177,6 +182,7 @@ mod tests {
             data: Image::<u32, 1>::new(size, vec![0u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 

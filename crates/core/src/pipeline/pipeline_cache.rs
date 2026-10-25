@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::image::Point2d;
 use crate::pipeline::pipeline_measure::{
     Measurement, MeasurementRegion, MeasurementValues, ObjectValue, PipelineMeasurements,
@@ -238,6 +239,7 @@ impl GlobalPipelineCache {
                         y: image_tile_info.offset_y,
                     },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 }))),
                 false => Some(Arc::new(ImageContainer::F32Gray(crate::ManagedImage {
                     data: Image::<f32, 1>::new(
@@ -253,6 +255,7 @@ impl GlobalPipelineCache {
                         y: image_tile_info.offset_y,
                     },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 }))),
             },
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
@@ -401,6 +404,7 @@ mod cache_tests {
             data: Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 
@@ -409,6 +413,7 @@ mod cache_tests {
             data: Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 
@@ -417,6 +422,7 @@ mod cache_tests {
             data: Image::<u32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         }))
     }
 

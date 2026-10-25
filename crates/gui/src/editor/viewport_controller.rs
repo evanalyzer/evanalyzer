@@ -1641,6 +1641,7 @@ mod breakpoint_state_tests {
     use crate::editor::test_support::test_ui_state;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
+    use evanalyzer_cfg::core_types::ImageDimensionality;
     use kornia_image::{Image, ImageSize};
 
     fn make_controller() -> ViewportController {
@@ -1662,6 +1663,7 @@ mod breakpoint_state_tests {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 

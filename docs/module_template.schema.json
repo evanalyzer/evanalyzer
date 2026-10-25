@@ -301,14 +301,6 @@
           "$ref": "#/$defs/ObjectClassifyObjectsClassifyMatchHandlingSettings",
           "default": "REMOVE_ALL_CLASSES_IF_NOT_MATCH"
         },
-        "maxArea": {
-          "description": "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).",
-          "type": "number",
-          "format": "float",
-          "default": 2147483648.0,
-          "maximum": 2147483600,
-          "minimum": 0
-        },
         "maxAspectRatio": {
           "description": "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32",
           "type": "number",
@@ -341,20 +333,20 @@
           "maximum": 2147483600,
           "minimum": 0
         },
+        "maxSize": {
+          "description": "Maximum size\n\nMaximum size of the object in the selected unit: its area in 2D\n(px² or nm²), its volume in 3D (px³ or nm³).",
+          "type": "number",
+          "format": "float",
+          "default": 2147483648.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
         "maxSolidity": {
           "description": "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.",
           "type": "number",
           "format": "float",
           "default": 1.0,
           "maximum": 1,
-          "minimum": 0
-        },
-        "minArea": {
-          "description": "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).",
-          "type": "number",
-          "format": "float",
-          "default": 0.0,
-          "maximum": 2147483600,
           "minimum": 0
         },
         "minAspectRatio": {
@@ -389,8 +381,16 @@
           "maximum": 2147483600,
           "minimum": 0
         },
-        "minIntersectionArea": {
-          "description": "Minimum intersection area with an `overlapping_with` object, in `size_unit`\n\nHas no effect while `overlapping_with` is Unset.",
+        "minIntersectionSize": {
+          "description": "Minimum intersection size with an `overlapping_with` object, in `size_unit`\n\nAn area in 2D (px² or nm²), a volume in 3D (px³ or nm³).\nHas no effect while `overlapping_with` is Unset.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "minSize": {
+          "description": "Minimum size\n\nMinimum size of the object in the selected unit: its area in 2D\n(px² or nm²), its volume in 3D (px³ or nm³).",
           "type": "number",
           "format": "float",
           "default": 0.0,
@@ -419,7 +419,7 @@
           "default": "UNSET"
         },
         "overlappingWith": {
-          "description": "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_area`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.",
+          "description": "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_size`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
@@ -478,8 +478,8 @@
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
-        "minColocArea": {
-          "description": "Minimum overlapping area size to count objects as coloc",
+        "minColocSize": {
+          "description": "Minimum overlap to count objects as coloc - an area in 2D, a volume in 3D",
           "type": "number",
           "format": "float",
           "default": 0.0
@@ -490,7 +490,7 @@
           "default": "MANY_TO_MANY"
         },
         "sizeUnit": {
-          "description": "Size unit for the minimum coloc area size",
+          "description": "Size unit for the minimum coloc size",
           "$ref": "#/$defs/SizeUnitsRel",
           "default": "PIXELS"
         }
@@ -2214,8 +2214,8 @@
           "type": "boolean",
           "default": true
         },
-        "minOverlapArea": {
-          "description": "Minimum overlap area before an `other_class` object is treated as a partner\nof an input object; objects overlapping less than this are ignored.",
+        "minOverlapSize": {
+          "description": "Minimum overlap before an `other_class` object is treated as a partner\nof an input object; objects overlapping less than this are ignored.\nAn area in 2D, a volume in 3D.",
           "type": "number",
           "format": "float",
           "default": 2.0
@@ -2244,7 +2244,7 @@
           "default": "UNSET"
         },
         "sizeUnit": {
-          "description": "Size unit for `min_overlap_area`",
+          "description": "Size unit for `min_overlap_size`",
           "$ref": "#/$defs/SizeUnits",
           "default": "PIXELS"
         }

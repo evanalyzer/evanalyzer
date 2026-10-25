@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
@@ -93,6 +94,7 @@ impl ImageAlgorithm for RankFilter {
                     data: out,
                     tile_offset: img.tile_offset,
                     plane: img.plane,
+                    dimensionality: img.dimensionality,
                 }));
                 ctx.swap()?;
                 Ok(())
@@ -103,6 +105,7 @@ impl ImageAlgorithm for RankFilter {
                     data: out,
                     tile_offset: img.tile_offset,
                     plane: img.plane,
+                    dimensionality: img.dimensionality,
                 }));
                 ctx.swap()?;
                 Ok(())

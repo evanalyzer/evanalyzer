@@ -533,7 +533,8 @@ fn generate_job_from_project_settings_intenal(
         Some(data) => Some(PixelSizes {
             px_size_x: data.x,
             px_size_y: data.y,
-            px_size_z: data.z,
+            // 0: unknown, as the image reader's.
+            px_size_z: data.z.unwrap_or(0.0),
         }),
         None => None,
     };
@@ -1206,7 +1207,7 @@ mod tests {
         project.images.settings.pixel_sizes = Some(PixelSizeSettings {
             x: 1.5,
             y: 2.5,
-            z: 3.5,
+            z: Some(3.5),
         });
 
         let (job, _out_objects) =

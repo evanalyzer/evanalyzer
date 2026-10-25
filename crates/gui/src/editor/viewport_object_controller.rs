@@ -767,6 +767,7 @@ mod tests {
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
     use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+    use evanalyzer_cfg::core_types::ImageDimensionality;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -1012,6 +1013,7 @@ mod tests {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         let channel = ImageChannel {
             image: Arc::new(container),

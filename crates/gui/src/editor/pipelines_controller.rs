@@ -2288,7 +2288,7 @@ impl PipelinesController {
                     // re-bind from set_row_data would revert the displayed value to the
                     // pre-change one and dropdown/spinner selections appear "lost").
                     //
-                    // Parameter names are either flat ("kernel_size", "criteria.min_area")
+                    // Parameter names are either flat ("kernel_size", "criteria.min_size")
                     // or group-item paths ("thresholds.0.method") where the middle segment
                     // is a numeric index into the module. We resolve both shapes from the
                     // ParameterDef tree returned by to_parameters().
@@ -8117,7 +8117,7 @@ mod tests {
             def("method", "Li", "Manual", false),
         ]];
         let params = vec![
-            def("min_area", "5", "0", false), // basic: not counted
+            def("min_size", "5", "0", false), // basic: not counted
             def("max_feret", "9", "9", true), // advanced, at default
             def("min_feret", "3", "0", true), // advanced, changed
             def("unknown", "3", "", true),    // no default known: not "changed"
@@ -8145,14 +8145,14 @@ mod tests {
         let ordered = order_by_section(vec![
             in_section("radius", "Detection"),
             in_section("channel", ""),
-            in_section("min_area", "Filtering"),
+            in_section("min_size", "Filtering"),
             in_section("sigma", "Detection"),
             in_section("output", ""),
         ]);
         let names: Vec<&str> = ordered.iter().map(|p| p.name.as_str()).collect();
         // No section first, then each in the order it first appears; the
         // settings of a section keep their order.
-        assert_eq!(names, ["channel", "output", "radius", "sigma", "min_area"]);
+        assert_eq!(names, ["channel", "output", "radius", "sigma", "min_size"]);
         assert_eq!(
             section_headers(&ordered),
             ["", "", "Detection", "", "Filtering"]
@@ -11279,15 +11279,15 @@ mod tests {
         let panel = ui.global::<PipelinesPanelState>();
         let summary_before = panel.get_active_commands().row_data(0).unwrap().summary;
 
-        panel.invoke_param_changed(0, "min_coloc_area".into(), "5".into());
-        assert_eq!(ui_param(&ui, 0, "min_coloc_area").value, "5");
+        panel.invoke_param_changed(0, "min_coloc_size".into(), "5".into());
+        assert_eq!(ui_param(&ui, 0, "min_coloc_size").value, "5");
         let project = ui_state.get_project();
         let PipelineCommand::ColocalizeObjects(settings) =
             project.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected coloc");
         };
-        assert_eq!(settings.min_coloc_area, 5.0);
+        assert_eq!(settings.min_coloc_size, 5.0);
         drop(project);
         assert!(ui_state.is_dirty());
         let _ = summary_before;
@@ -11395,16 +11395,16 @@ mod tests {
     fn param_change_for_an_unknown_step_or_pipeline_is_ignored() {
         let (ui, ui_state, _controller) = selected(vec![step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
-        panel.invoke_param_changed(5, "min_coloc_area".into(), "9".into());
+        panel.invoke_param_changed(5, "min_coloc_size".into(), "9".into());
         panel.set_active_pipeline_id(42);
-        panel.invoke_param_changed(0, "min_coloc_area".into(), "9".into());
+        panel.invoke_param_changed(0, "min_coloc_size".into(), "9".into());
         let project = ui_state.get_project();
         let PipelineCommand::ColocalizeObjects(settings) =
             project.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected coloc");
         };
-        assert_eq!(settings.min_coloc_area, 0.0);
+        assert_eq!(settings.min_coloc_size, 0.0);
     }
 
     #[test]

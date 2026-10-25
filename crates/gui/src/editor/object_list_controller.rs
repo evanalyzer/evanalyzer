@@ -859,7 +859,7 @@ mod tests {
         let unit_px = PixelSizeSettings {
             x: 1.0,
             y: 1.0,
-            z: 1.0,
+            z: None,
         };
         assert_eq!(format_area_nm2(500, &unit_px), "500.0");
         assert_eq!(format_area_nm2(1500, &unit_px), "1.5 k");
@@ -871,7 +871,7 @@ mod tests {
         let px = PixelSizeSettings {
             x: 2.0,
             y: 3.0,
-            z: 1.0,
+            z: None,
         };
         // 100 px * 2.0 * 3.0 = 600.0 nm^2
         assert_eq!(format_area_nm2(100, &px), "600.0");
@@ -882,7 +882,7 @@ mod tests {
         let unit_px = PixelSizeSettings {
             x: 1.0,
             y: 1.0,
-            z: 1.0,
+            z: None,
         };
         assert_eq!(format_area_nm2(1000, &unit_px), "1.0 k");
         assert_eq!(format_area_nm2(1_000_000, &unit_px), "1.00 M");

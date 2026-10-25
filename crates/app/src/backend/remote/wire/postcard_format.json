@@ -1,5 +1,5 @@
 {
-  "protocol_version": 31,
+  "protocol_version": 32,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -328,112 +328,121 @@
           "AreaSizeNm": "UNIT"
         },
         "7": {
-          "PerimeterPx": "UNIT"
+          "VolumePx": "UNIT"
         },
         "8": {
-          "PerimeterNm": "UNIT"
+          "VolumeNm": "UNIT"
         },
         "9": {
-          "Circularity": "UNIT"
+          "SurfaceAreaNm": "UNIT"
         },
         "10": {
-          "Solidity": "UNIT"
+          "PerimeterPx": "UNIT"
         },
         "11": {
-          "Eccentricity": "UNIT"
+          "PerimeterNm": "UNIT"
         },
         "12": {
-          "MaxFeret": "UNIT"
+          "Circularity": "UNIT"
         },
         "13": {
-          "MinFeret": "UNIT"
+          "Solidity": "UNIT"
         },
         "14": {
-          "MajorAxis": "UNIT"
+          "Eccentricity": "UNIT"
         },
         "15": {
-          "MinorAxis": "UNIT"
+          "MaxFeret": "UNIT"
         },
         "16": {
-          "EquivalentDiameter": "UNIT"
+          "MinFeret": "UNIT"
         },
         "17": {
-          "Extent": "UNIT"
+          "MajorAxis": "UNIT"
         },
         "18": {
+          "MinorAxis": "UNIT"
+        },
+        "19": {
+          "EquivalentDiameter": "UNIT"
+        },
+        "20": {
+          "Extent": "UNIT"
+        },
+        "21": {
           "ColocCount": {
             "NEWTYPE": {
               "TYPENAME": "ObjectClass"
             }
           }
         },
-        "19": {
+        "22": {
           "IntensityAvg": {
             "NEWTYPE": "U32"
           }
         },
-        "20": {
+        "23": {
           "IntensitySum": {
             "NEWTYPE": "U32"
           }
         },
-        "21": {
+        "24": {
           "IntensityMin": {
             "NEWTYPE": "U32"
           }
         },
-        "22": {
+        "25": {
           "IntensityMax": {
             "NEWTYPE": "U32"
           }
         },
-        "23": {
+        "26": {
           "IntensityStd": {
             "NEWTYPE": "U32"
           }
         },
-        "24": {
+        "27": {
           "IntensityMedian": {
             "NEWTYPE": "U32"
           }
         },
-        "25": {
+        "28": {
           "IntensityLowerQuartile": {
             "NEWTYPE": "U32"
           }
         },
-        "26": {
+        "29": {
           "IntensityUpperQuartile": {
             "NEWTYPE": "U32"
           }
         },
-        "27": {
+        "30": {
           "IntensityMad": {
             "NEWTYPE": "U32"
           }
         },
-        "28": {
+        "31": {
           "Measurement": {
             "NEWTYPE": {
               "TYPENAME": "MeasurementColumn"
             }
           }
         },
-        "29": {
+        "32": {
           "MeasurementObject": {
             "NEWTYPE": {
               "TYPENAME": "MeasurementColumn"
             }
           }
         },
-        "30": {
+        "33": {
           "Children": {
             "NEWTYPE": {
               "TYPENAME": "ChildColumn"
             }
           }
         },
-        "31": {
+        "34": {
           "Parent": {
             "NEWTYPE": {
               "TYPENAME": "ParentColumn"

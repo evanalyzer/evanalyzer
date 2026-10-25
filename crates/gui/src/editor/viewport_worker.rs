@@ -1277,6 +1277,7 @@ mod tests {
     use evanalyzer_app::global::ViewportMemorySettings;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
+    use evanalyzer_cfg::core_types::ImageDimensionality;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::{Image, ImageSize};
     use slint::Model;
@@ -1376,6 +1377,7 @@ mod tests {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         })
     }
 
@@ -1393,6 +1395,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         assert_eq!(apply_auto_adjust(&labels, false), (0.0, 1.0, 0.0, 1.0));
     }
@@ -2101,6 +2104,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         r.worker.viewport_controller.set_breakpoint_channel(
             gray_container(vec![0.1, 0.5, 0.9, 0.2, 0.3, 0.4, 0.6, 0.7]),
@@ -2139,6 +2143,7 @@ mod tests {
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         let vc = &r.worker.viewport_controller;
         vc.set_breakpoint_channel(

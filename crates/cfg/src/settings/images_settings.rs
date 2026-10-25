@@ -73,6 +73,9 @@ pub enum ZStackHandling {
     AvgIntensity,
     SumIntensity,
     TakeTheMiddle,
+    /// The planes as one volume (3D). Not supported yet: module checks
+    /// reject it until the commands can run on volumes.
+    Volume3d,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
@@ -126,7 +129,11 @@ pub struct ChannelSettings {
 pub struct PixelSizeSettings {
     pub x: f32,
     pub y: f32,
-    pub z: f32,
+    /// The distance between two z-planes - `None` if unknown (the image
+    /// doesn't say and nobody entered it). Never guessed: a volume's
+    /// anisotropy (z / xy) depends on it.
+    #[serde(default)]
+    pub z: Option<f32>,
 }
 
 impl Default for PixelSizeSettings {
@@ -134,7 +141,7 @@ impl Default for PixelSizeSettings {
         Self {
             x: 1.0,
             y: 1.0,
-            z: 1.0,
+            z: None,
         }
     }
 }

@@ -16,6 +16,7 @@
 //! Each Voronoi region is labeled with the configured output class and linked back to its
 //! originating center object.
 //!
+use crate::ImageDimensionality;
 use crate::{
     ImagePlane,
     algos::{ExecutionScope, ImageAlgorithm},
@@ -562,6 +563,7 @@ mod tests {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         };
         PipelineContext::new_from_image(
             PathBuf::default(),
@@ -605,6 +607,7 @@ mod tests {
             data: img,
             tile_offset: Point2d { x: off_x, y: off_y },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         };
         PipelineContext::new_from_image(
             PathBuf::default(),
@@ -706,6 +709,7 @@ mod tests {
                 data: channel_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             CHANNEL,
             ImageTile {
@@ -798,6 +802,7 @@ mod tests {
                 data: channel_img,
                 tile_offset: Point2d { x: off_x, y: off_y },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             CHANNEL,
             ImageTile {

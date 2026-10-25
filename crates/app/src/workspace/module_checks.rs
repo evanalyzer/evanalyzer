@@ -413,6 +413,19 @@ fn analyzes_planes_one_by_one(project: &ProjectSettings) -> bool {
             .any(|series| series.z_stack.as_ref().is_some_and(one_by_one))
 }
 
+/// Whether a run analyzes z-stacks as volumes (3D) - the project's or an
+/// image's z-stack setting.
+fn analyzes_volumes(project: &ProjectSettings) -> bool {
+    let volume = |z: &ZStackSettings| z.z_projection == ZStackHandling::Volume3d;
+    project.images.settings.z_stack.as_ref().is_some_and(volume)
+        || project
+            .images
+            .list
+            .values()
+            .flat_map(|entry| entry.series.values())
+            .any(|series| series.z_stack.as_ref().is_some_and(volume))
+}
+
 /// Names joined for a message: "A", "A and B", "A, B and C".
 fn joined(names: Vec<String>) -> String {
     match names.split_last() {
@@ -458,6 +471,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = Vec::new();
     let channels = image_channels(project);
     let planes_one_by_one = analyzes_planes_one_by_one(project);
+    let volumes = analyzes_volumes(project);
     // Each project class created: by which step (pipeline, step), a label
     // for it, and the step's parameters giving it.
     let mut creators: Vec<(u32, (PipelineId, StepId), String, String)> = Vec::new();
@@ -587,6 +601,26 @@ fn check_steps(project: &ProjectSettings) -> Vec<ModuleProblem> {
                             );
                         }
                     }
+                }
+
+                // Volumes (3D) only go through commands that run on them.
+                if volumes && !command.command.supports_volumes() {
+                    let who = subject(command, &[]);
+                    let who = match who.inside {
+                        true => format!("“{}” has a step that works", who.name),
+                        false => format!("{} works", who.name),
+                    };
+                    problems.push(
+                        ModuleProblem::error(
+                            None,
+                            at,
+                            format!(
+                                "{who} on planes (2D) only, but the project analyzes the \
+                                 z-stacks as volumes (3D) - choose another z-stack setting"
+                            ),
+                        )
+                        .inside(detail(command)),
+                    );
                 }
 
                 // Its own projection while each z-plane is analyzed: the
@@ -1555,6 +1589,38 @@ mod tests {
         instance
             .values
             .insert(ModuleParamKey::from(key), ParamValue::Int(value));
+    }
+
+    /// Z-stacks as volumes (3D): every command that works on planes only is
+    /// an error at its step - for now all of them.
+    #[test]
+    fn volumes_are_refused_by_commands_working_on_planes_only() {
+        use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
+        let mut project = spots_project();
+        let volume_errors = |project: &ProjectSettings| -> Vec<ModuleProblem> {
+            check_project(project)
+                .into_iter()
+                .filter(|p| p.severity == Severity::Error && p.message.contains("volumes (3D)"))
+                .collect()
+        };
+        assert_eq!(volume_errors(&project), [], "planes: no error");
+
+        project.images.settings.z_stack = Some(ZStackSettings {
+            z_projection: ZStackHandling::Volume3d,
+            z_range: None,
+        });
+        let errors = volume_errors(&project);
+        assert!(!errors.is_empty());
+        assert!(
+            errors.iter().all(|e| e.step.is_some()),
+            "{:?}",
+            messages(&errors)
+        );
+        assert!(
+            errors[0].message.contains("on planes (2D) only"),
+            "{}",
+            errors[0].message
+        );
     }
 
     /// A Load Image Channel step with its own projection while the project

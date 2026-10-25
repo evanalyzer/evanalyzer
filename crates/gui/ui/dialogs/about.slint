@@ -28,7 +28,7 @@ struct Person {
 
 global AboutData {
     // The colors of the orbit (the app's class colors).
-    out property <[color]> palette: [#E6C200, #E040E0, #9933FF, #33CFFF, #3CB44B, #FB7185];
+    out property <[color]> palette: [#E6C200, #FB7185, #9933FF, #33CFFF, #3CB44B, #f77bf0];
     out property <[Person]> creators: [
         {
             initials: "JD",
@@ -45,11 +45,11 @@ global AboutData {
     ];
     out property <[Person]> contributors: [
         { initials: "NM", name: "Nicole Meisner Kober", role: "Institue leader", tint: #E6C200 },
-        { initials: "CO", name: "Claude Opus 5.5", role: "Unit-Testing", tint: #E040E0 },
-        { initials: "MJ", name: "Maria Jaritsch", role: "Testing", tint: #3CB44B },
+        { initials: "CO", name: "Claude Opus 5.5", role: "Unit-Testing", tint: #FB7185 },
+        { initials: "MJ", name: "Maria Jaritsch", role: "Testing", tint: #9933FF },
         { initials: "TP", name: "Tanja Plank", role: "Testing", tint: #33CFFF },
-        { initials: "PH", name: "Patricia Hrasnova", role: "Testing", tint: #E6C200 },
-        { initials: "HZ", name: "Hanwen Zangth", role: "Testing", tint: #FB7185 },
+        { initials: "PH", name: "Patricia Hrasnova", role: "Testing", tint: #3CB44B },
+        { initials: "HZ", name: "Hanwen Zangth", role: "Testing", tint: #f77bf0 },
     ];
 }
 
@@ -117,10 +117,9 @@ component Orbit inherits Rectangle {
     Rectangle {
         x: root.c - self.width / 2;
         y: root.c - self.height / 2;
-        width: 64px * root.s;
-        height: 64px * root.s;
+        width: 82px * root.s;
+        height: 82px * root.s;
         border-radius: 16px * root.s;
-        background: Ink.focus.with-alpha(0.12);
         Image {
             source: @image-url("../icons/icon-orange.svg");
             width: parent.width * 0.62;
@@ -131,17 +130,17 @@ component Orbit inherits Rectangle {
     // Outer ring: two testers and three companions.
     for i in 5: outer := Rectangle {
         property <angle> a: root.turn2 + 10deg + i * 72deg;
-        property <length> sz: (i < 2 ? 30px : 14px) * root.s;
+        property <length> sz: (i < 4 ? 30px : 14px) * root.s;
         x: root.c + root.r2 * cos(self.a) - self.sz / 2;
         y: root.c + root.r2 * sin(self.a) - self.sz / 2;
         width: self.sz;
         height: self.sz;
-        if i < 2: Avatar {
+        if i < 4: Avatar {
             size: outer.sz;
             initials: AboutData.contributors[i + 2].initials;
             tint: AboutData.contributors[i + 2].tint;
         }
-        if i >= 2: Rectangle {
+        if i >= 4: Rectangle {
             border-radius: self.width / 2;
             border-width: 1.5px;
             border-color: AboutData.palette[i];

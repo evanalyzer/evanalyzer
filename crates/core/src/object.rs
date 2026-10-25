@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::ImagePlane;
 use crate::ImageTile;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
@@ -128,6 +129,17 @@ pub struct Object {
     // Image plane information
     pub plane: ImagePlane,
 
+    /// One plane (`plane.z`) or a volume of `depth` planes from `plane.z` on -
+    /// then `bbox` is the box of every plane, `mask_data` covers them one
+    /// after the other (z-major) and `area` counts the voxels.
+    pub dimensionality: ImageDimensionality,
+
+    /// z moments of a volume, z counted from `plane.z` (0 for one plane).
+    pub sum_z: u64,
+    pub sum_z2: u64,
+    pub sum_xz: u64,
+    pub sum_yz: u64,
+
     /// The tile this object was extracted from (by `ExtractObjects`)
     pub source_tile: ImageTile,
 
@@ -182,6 +194,11 @@ pub struct ObjectInit {
     pub sum_xy: u64,
     pub intensities: IndexMap<i32, Intensity>,
     pub plane: ImagePlane,
+    pub dimensionality: ImageDimensionality,
+    pub sum_z: u64,
+    pub sum_z2: u64,
+    pub sum_xz: u64,
+    pub sum_yz: u64,
     pub source_tile: ImageTile,
 }
 
@@ -270,6 +287,11 @@ impl Object {
             sum_xy: init.sum_xy,
             intensities: init.intensities,
             plane: init.plane,
+            dimensionality: init.dimensionality,
+            sum_z: init.sum_z,
+            sum_z2: init.sum_z2,
+            sum_xz: init.sum_xz,
+            sum_yz: init.sum_yz,
             source_tile: init.source_tile,
             perimeter: 0.0,
             ellipse: FittingEllipse::default(),
@@ -859,6 +881,11 @@ impl Object {
             z_stack: self.plane.z,
             c_stack: self.plane.c,
             t_stack: self.plane.t,
+            dimensionality: self.dimensionality,
+            sum_z: self.sum_z,
+            sum_z2: self.sum_z2,
+            sum_xz: self.sum_xz,
+            sum_yz: self.sum_yz,
         }
     }
 
@@ -939,6 +966,11 @@ impl Object {
                 c: s.c_stack,
                 t: s.t_stack,
             },
+            dimensionality: s.dimensionality,
+            sum_z: s.sum_z,
+            sum_z2: s.sum_z2,
+            sum_xz: s.sum_xz,
+            sum_yz: s.sum_yz,
             source_tile: ImageTile::default(),
         })
     }
@@ -1949,6 +1981,7 @@ mod tests {
             data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         }));
         // The cache key's `ImageTile` is what `measure_intensities` now matches mask
         // pixels against - it must reflect this channel's *real* tile position/size,
@@ -2017,6 +2050,7 @@ mod tests {
                     .unwrap(),
                     tile_offset: Point2d { x: x0, y: y0 },
                     plane: None,
+                    dimensionality: ImageDimensionality::Planar,
                 });
                 let tile = ImageTile {
                     offset_x: x0,
@@ -2119,6 +2153,7 @@ mod tests {
             data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+            dimensionality: ImageDimensionality::Planar,
         }));
         // The cache key's `ImageTile` is what `measure_intensities` now matches mask
         // pixels against - it must reflect this channel's *real* tile position/size,

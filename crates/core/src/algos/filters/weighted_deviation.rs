@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     image::ImageContainer,
@@ -193,6 +194,7 @@ mod tests {
             data: Image::<f32, 3>::new(size, vec![9.0f32; 48])?,
             tile_offset: ctx.scratch_pad.tile_offset(),
             plane: ctx.scratch_pad.plane(),
+            dimensionality: ctx.scratch_pad.dimensionality(),
         }));
 
         let algo = WeightedDeviation {

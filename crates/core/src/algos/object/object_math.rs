@@ -17,6 +17,7 @@
 //! exactly the one `input_class` object it came from, and only the small bbox window
 //! spanned by the operands is ever touched, regardless of image or tile size.
 //!
+use crate::ImageDimensionality;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::{BooleanOp, Object, ObjectInit},
@@ -80,14 +81,15 @@ pub struct ObjectMath {
     #[cmdsmeta(visibility = Advanced)]
     pub other_filter_classes: Vec<ObjectClass>,
 
-    /// Size unit for `min_overlap_area`
+    /// Size unit for `min_overlap_size`
     #[cmdsmeta(default = SizeUnits::Pixels, visibility = Advanced)]
     pub size_unit: SizeUnits,
 
-    /// Minimum overlap area before an `other_class` object is treated as a partner
+    /// Minimum overlap before an `other_class` object is treated as a partner
     /// of an input object; objects overlapping less than this are ignored.
+    /// An area in 2D, a volume in 3D.
     #[cmdsmeta(default = 2, visibility = Advanced)]
-    pub min_overlap_area: f32,
+    pub min_overlap_size: f32,
 
     /// If unset, the result replaces the input object in place.
     ///
@@ -121,7 +123,7 @@ impl ImageAlgorithm for ObjectMath {
         let pixel_area_nm2 = px_sizes.px_size_x * px_sizes.px_size_y;
         let min_area_px = self
             .size_unit
-            .to_pixel(self.min_overlap_area, pixel_area_nm2);
+            .to_pixel(self.min_overlap_size, pixel_area_nm2);
         let op = BooleanOp::from(&self.operation);
 
         let other_ids: Vec<ObjectId> = cache
@@ -266,6 +268,7 @@ mod tests {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         };
         PipelineContext::new_from_image(
             std::path::PathBuf::default(),
@@ -314,6 +317,7 @@ mod tests {
                 data: img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             0,
             ImageTile {
@@ -353,7 +357,7 @@ mod tests {
             other_class: NUCLEUS,
             other_filter_classes: vec![],
             size_unit: SizeUnits::Pixels,
-            min_overlap_area: 0.0,
+            min_overlap_size: 0.0,
             output_class,
             keep_unmatched: true,
         }

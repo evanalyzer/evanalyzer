@@ -6,6 +6,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ImageDimensionality;
 use std::path::PathBuf;
 
 use evanalyzer_ai::{Detection, Image as AiImage, Request, Response, Task, box_iou};
@@ -638,6 +639,7 @@ mod tests {
             data: Image::<u32, 1>::new(size, vec![1; 4]).unwrap(),
             tile_offset: crate::image::Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         });
         let err = Yolov5::rgb_planes(&labels).unwrap_err();
         assert!(

@@ -15,6 +15,7 @@
 //! keeping its bounding-box center fixed. Depending on the configured output class, the
 //! transformed shape either replaces the input object in place or is added as a new, separate object.
 //!
+use crate::ImageDimensionality;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
@@ -521,6 +522,7 @@ mod tests {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
+            dimensionality: ImageDimensionality::Planar,
         };
         PipelineContext::new_from_image(
             std::path::PathBuf::default(),
@@ -589,6 +591,7 @@ mod tests {
                 data: img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
+                dimensionality: ImageDimensionality::Planar,
             })),
             0,
             ImageTile {

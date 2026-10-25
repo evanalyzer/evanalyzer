@@ -1502,7 +1502,7 @@ pub fn parameter_for_setting(
         .map(|p| p.key.clone())
 }
 
-/// The setting at `path` of `command` - a top-level one ("min_area") or one
+/// The setting at `path` of `command` - a top-level one ("min_size") or one
 /// of a list entry ("thresholds.1.min_threshold") - and a label for it as a
 /// module parameter ("Thresholds 2 · Min Threshold").
 pub fn setting_at(command: &PipelineCommand, path: &str) -> Option<(ParameterDef, String)> {
@@ -2377,7 +2377,7 @@ mod tests {
             match_handling: ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
             output_class: output,
             size_unit: SizeUnits::Pixels,
-            min_area: 50.0,
+            min_size: 50.0,
             ..Default::default()
         })
     }
@@ -3014,11 +3014,11 @@ mod tests {
             .iter_mut()
             .find(|d| d.key == "OUTER")
             .unwrap();
-        // Step 4 (classify) min_area as "Min size", next to "Cells".
+        // Step 4 (classify) min_size as "Min size", next to "Cells".
         assert!(toggle_exposed(
             outer_definition,
             StepId(4),
-            "min_area",
+            "min_size",
             "Min size",
             "50"
         ));
@@ -3033,7 +3033,7 @@ mod tests {
         let after = runs(&project, "OUTER", &values);
         assert_eq!(after, before);
         assert!(
-            after.iter().any(|c| c["minArea"] == 99.0),
+            after.iter().any(|c| c["minSize"] == 99.0),
             "the value reaches the classify step: {after:?}"
         );
         let outer = outer(&project);
@@ -3280,7 +3280,7 @@ mod tests {
             "already set by it"
         );
         assert!(
-            !paths.iter().any(|(_, p)| *p == "min_area"),
+            !paths.iter().any(|(_, p)| *p == "min_size"),
             "a number isn't a class"
         );
 
@@ -3476,7 +3476,7 @@ mod tests {
         assert!(toggle_exposed(
             definition,
             StepId(4),
-            "min_area",
+            "min_size",
             "Minimum size",
             "50"
         ));
@@ -3486,12 +3486,12 @@ mod tests {
             (added.label.as_str(), &added.default),
             ("Minimum size", &ParamValue::Int(50))
         );
-        assert!(exposed_settings(definition, StepId(4)).contains(&"min_area".to_string()));
+        assert!(exposed_settings(definition, StepId(4)).contains(&"min_size".to_string()));
 
         assert!(!toggle_exposed(
             definition,
             StepId(4),
-            "min_area",
+            "min_size",
             "Minimum size",
             "50"
         ));
@@ -3506,7 +3506,7 @@ mod tests {
     fn a_parameter_is_renamed_described_and_moved() {
         let mut project = with_module();
         let definition = &mut project.modules[0];
-        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
+        toggle_exposed(definition, StepId(4), "min_size", "Minimum size", "50");
         let ids = |d: &ModuleDefinition| {
             d.parameters
                 .iter()
@@ -3559,16 +3559,16 @@ mod tests {
     fn a_parameter_is_found_by_its_setting_and_removed() {
         let mut project = with_module();
         let definition = &mut project.modules[0];
-        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
-        let id = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
+        toggle_exposed(definition, StepId(4), "min_size", "Minimum size", "50");
+        let id = parameter_for_setting(definition, StepId(4), "min_size").unwrap();
         assert_eq!(
-            parameter_for_setting(definition, StepId(4), "max_area"),
+            parameter_for_setting(definition, StepId(4), "max_size"),
             None
         );
 
         assert!(remove_parameter(definition, &id));
         assert_eq!(
-            parameter_for_setting(definition, StepId(4), "min_area"),
+            parameter_for_setting(definition, StepId(4), "min_size"),
             None
         );
         assert!(!remove_parameter(definition, &id), "gone already");
@@ -3658,8 +3658,8 @@ mod tests {
     fn editing_a_bound_setting_changes_the_parameters_default() {
         let mut project = with_module();
         let definition = &mut project.modules[0];
-        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
-        let id = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
+        toggle_exposed(definition, StepId(4), "min_size", "Minimum size", "50");
+        let id = parameter_for_setting(definition, StepId(4), "min_size").unwrap();
         let step = definition
             .steps
             .iter_mut()
@@ -3667,9 +3667,9 @@ mod tests {
             .unwrap();
         step.command_mut()
             .unwrap()
-            .apply_param_change("min_area", "80");
+            .apply_param_change("min_size", "80");
 
-        assert!(bound_setting_edited(definition, &[], StepId(4), "min_area"));
+        assert!(bound_setting_edited(definition, &[], StepId(4), "min_size"));
         let parameter = definition.parameters.iter().find(|p| p.key == id).unwrap();
         assert_eq!(parameter.default, ParamValue::Int(80));
         // What runs for a use without values of its own.
@@ -3686,10 +3686,10 @@ mod tests {
         let Some(PipelineCommand::ClassifyObjects(c)) = classify.command() else {
             panic!("classify")
         };
-        assert_eq!(c.min_area, 80.0);
+        assert_eq!(c.min_size, 80.0);
 
         assert!(
-            !bound_setting_edited(definition, &[], StepId(4), "max_area"),
+            !bound_setting_edited(definition, &[], StepId(4), "max_size"),
             "not set by a parameter"
         );
     }
@@ -3707,8 +3707,8 @@ mod tests {
         assert!(keys(&project.modules[0]).contains(&"cells".to_string()));
 
         let definition = &mut project.modules[0];
-        toggle_exposed(definition, StepId(4), "min_area", "Min. Size (px)", "50");
-        toggle_exposed(definition, StepId(4), "max_area", "Min. Size (px)", "500");
+        toggle_exposed(definition, StepId(4), "min_size", "Min. Size (px)", "50");
+        toggle_exposed(definition, StepId(4), "max_size", "Min. Size (px)", "500");
         assert!(keys(definition).ends_with(&["min_size_px".into(), "min_size_px_2".into()]));
 
         let key = ModuleParamKey::from("min_size_px");
@@ -3733,8 +3733,8 @@ mod tests {
     fn values_for_parameters_a_module_no_longer_has_are_dropped() {
         let mut project = with_module();
         let definition = &mut project.modules[0];
-        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
-        let key = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
+        toggle_exposed(definition, StepId(4), "min_size", "Minimum size", "50");
+        let key = parameter_for_setting(definition, StepId(4), "min_size").unwrap();
         let StepContent::Module(instance) = &mut project.pipelines[0].steps[2].content else {
             panic!("module step")
         };
