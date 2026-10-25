@@ -366,6 +366,7 @@ fn two_class_object_settings() -> AiLearningSettings {
         classifier: AiLearningClassifierSettings::Object {
             feature_spec: AiLearningObjectFeatureSettings {
                 metrics: vec![ObjectMetric::Area],
+                ..Default::default()
             },
             class_labels: vec![
                 ObjectClassLabel {
@@ -381,8 +382,8 @@ fn two_class_object_settings() -> AiLearningSettings {
     }
 }
 
-/// Object training reads only already-computed metrics, so no image files
-/// are needed.
+/// Object training with shape features alone reads no image, so no image
+/// files are needed.
 fn project_with_labeled_objects(classes: &[u32]) -> ProjectSettings {
     let mut series = SeriesSettings::default();
     for (i, class) in classes.iter().enumerate() {

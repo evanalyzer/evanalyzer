@@ -957,6 +957,7 @@ mod tests {
         job.settings.classifier = AiLearningClassifierSettings::Object {
             feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings {
                 metrics: vec![],
+                ..Default::default()
             },
             class_labels: vec![],
         };

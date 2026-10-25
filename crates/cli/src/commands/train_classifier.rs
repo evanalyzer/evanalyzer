@@ -190,7 +190,7 @@ mod tests {
             meta: Default::default(),
             backend: AiLearningBackendSettings::RandomForest(Default::default()),
             classifier: AiLearningClassifierSettings::Object {
-                feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                feature_spec: AiLearningObjectFeatureSettings::default(),
                 class_labels: vec![],
             },
         }
@@ -199,7 +199,7 @@ mod tests {
     /// A project with two labeled objects (one per class) in one image -
     /// enough for `gather_labeled_objects`/`ObjectTrainingJob` to have real
     /// data to fit a classifier from, with no image files needed (object-
-    /// classifier training reads only already-computed metrics).
+    /// classifier training with shape features alone reads no image).
     fn project_with_two_labeled_objects() -> ProjectSettings {
         use evanalyzer_cfg::core_types::ObjectClass;
         use evanalyzer_cfg::settings::classification_settings::Class;
@@ -248,6 +248,7 @@ mod tests {
             classifier: AiLearningClassifierSettings::Object {
                 feature_spec: AiLearningObjectFeatureSettings {
                     metrics: vec![ObjectMetric::Area],
+                    ..Default::default()
                 },
                 class_labels: vec![
                     ObjectClassLabel {

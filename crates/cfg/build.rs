@@ -116,6 +116,8 @@ mod settings {
             "/src/settings/project_settings.rs"
         ));
     }
+    // Only the types are needed for the schema, not their helpers.
+    #[allow(dead_code)]
     pub mod ai_learning_object_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

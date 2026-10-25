@@ -8,7 +8,7 @@ use burn::nn::{Linear, LinearConfig};
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::prelude::Backend;
 use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
-use burn::tensor::activation::{relu, sigmoid, tanh};
+use burn::tensor::activation::{relu, sigmoid, softmax, tanh};
 use burn::tensor::{Int, Tensor, TensorData};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{TrainingProgressEvent, TrainingStats};
@@ -104,6 +104,34 @@ pub(crate) fn predict_mlp(
     weights: &[u8],
     features: &[Vec<f32>],
 ) -> Result<Vec<usize>, InternalErrors> {
+    let out = mlp_outputs(architecture, weights, features)?;
+    read_classes(out.argmax(1))
+}
+
+/// Like [`predict_mlp`], plus each row's certainty: the softmax probability
+/// of the predicted class (0..=1).
+pub(crate) fn predict_mlp_with_certainty(
+    architecture: &MlpArchitecture,
+    weights: &[u8],
+    features: &[Vec<f32>],
+) -> Result<(Vec<usize>, Vec<f32>), InternalErrors> {
+    let out = mlp_outputs(architecture, weights, features)?;
+    let classes = read_classes(out.clone().argmax(1))?;
+    let certainty = softmax(out, 1)
+        .max_dim(1)
+        .into_data()
+        .convert::<f32>()
+        .to_vec::<f32>()
+        .map_err(|e| InternalErrors::Internal(format!("failed to read MLP certainty: {e:?}")))?;
+    Ok((classes, certainty))
+}
+
+/// The model's raw class scores, one row per feature row.
+fn mlp_outputs(
+    architecture: &MlpArchitecture,
+    weights: &[u8],
+    features: &[Vec<f32>],
+) -> Result<Tensor<MlpBackend, 2>, InternalErrors> {
     let device = mlp_device();
     let model = Mlp::<MlpBackend>::new(
         &device,
@@ -123,8 +151,10 @@ pub(crate) fn predict_mlp(
     let flat: Vec<f32> = features.iter().flatten().copied().collect();
     let x = Tensor::<MlpBackend, 2>::from_data(TensorData::new(flat, [n_rows, n_in]), &device);
 
-    let out = model.forward(x, architecture.activation);
-    let preds = out.argmax(1);
+    Ok(model.forward(x, architecture.activation))
+}
+
+fn read_classes(preds: Tensor<MlpBackend, 2, Int>) -> Result<Vec<usize>, InternalErrors> {
     let preds_data = preds
         .into_data()
         .convert::<i64>()
@@ -445,6 +475,18 @@ mod tests {
             .predict(&[vec![0.05, 0.05], vec![10.05, 10.05]])
             .unwrap();
         assert_eq!(predictions, vec![0, 1]);
+        let (classes, certainty) = classifier
+            .predict_with_certainty(&[vec![0.05, 0.05], vec![10.05, 10.05]])
+            .unwrap();
+        assert_eq!(
+            classes, predictions,
+            "the same classes as without certainty"
+        );
+        // A softmax probability of the winning class: above a coin toss.
+        assert!(
+            certainty.iter().all(|c| (0.5..=1.0).contains(c)),
+            "{certainty:?}"
+        );
 
         // 30 samples clears MIN_SAMPLES_FOR_VAL_SPLIT, so a validation split
         // must have happened.

@@ -617,6 +617,26 @@ export component AiLearningDialog inherits InkDialog {
                                 color: Ink.text-dim;
                                 wrap: word-wrap;
                             }
+                            if AiLearningState.ring_in_use: HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                FormLabel {
+                                    text: "Ring width";
+                                }
+                                SpinBox {
+                                    width: 80px;
+                                    minimum: 1;
+                                    maximum: 100;
+                                    value <=> AiLearningState.settings.ring_width;
+                                }
+                                Text {
+                                    text: "px around each object";
+                                    font-size: Ink.fs-secondary;
+                                    color: Ink.text-mute;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
                             Text {
                                 text: "Click a channel or statistic to tick its column or row.";
                                 font-size: Ink.fs-secondary;

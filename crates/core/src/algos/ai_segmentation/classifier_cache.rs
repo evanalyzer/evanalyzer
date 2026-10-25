@@ -239,7 +239,7 @@ mod tests {
                 meta: MetaData::default(),
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Object {
-                    feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                    feature_spec: AiLearningObjectFeatureSettings::default(),
                     class_labels: vec![],
                 },
             },

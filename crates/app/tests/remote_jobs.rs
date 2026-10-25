@@ -529,6 +529,7 @@ fn a_training_whose_client_disconnected_saves_its_model_itself() {
         classifier: AiLearningClassifierSettings::Object {
             feature_spec: AiLearningObjectFeatureSettings {
                 metrics: vec![ObjectMetric::Area],
+                ..Default::default()
             },
             class_labels: vec![label(1, "A"), label(2, "B")],
         },

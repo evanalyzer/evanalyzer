@@ -72,6 +72,7 @@ pub use self::morphology::morphological_transformation::MorphologicalCommand;
 pub use self::object::ai_object_classifier::AiClassifyMatchHandling;
 pub use self::object::ai_object_classifier::AiObjectClassifier;
 pub use self::object::ai_object_classifier::ClassificationMapping;
+pub(crate) use self::object::ai_object_classifier::features_of as ai_object_features_of;
 pub use self::object::classify_objects::ClassifyMatchHandling;
 pub use self::object::classify_objects::ClassifyObjects;
 pub use self::object::classify_objects::IntensityComparison;

@@ -33,7 +33,7 @@ impl TrainingJob {
     fn items(&self) -> TrainingItems {
         match self {
             TrainingJob::Pixel(job) => TrainingItems::Images(job.images.len()),
-            TrainingJob::Object(job) => TrainingItems::Objects(job.objects.len()),
+            TrainingJob::Object(job) => TrainingItems::Objects(job.object_count()),
         }
     }
 
@@ -85,9 +85,15 @@ fn build_training_job(
                 z_stack_handling: pixel_params.z_stack_handling,
             }))
         }
-        AiLearningClassifierSettings::Object { .. } => {
-            let objects = gather_labeled_objects(project);
-            Ok(TrainingJob::Object(ObjectTrainingJob { settings, objects }))
+        AiLearningClassifierSettings::Object { feature_spec, .. } => {
+            let images = gather_labeled_objects(project);
+            let needs_images = feature_spec.metrics.iter().any(|m| m.channel().is_some());
+            if needs_images && !images.is_empty() && project.images.root.is_none() {
+                return Err(InternalErrors::InvalidArgument(
+                    "Project has labeled objects but no image folder is set - set the project's image folder before training with intensity features".into(),
+                ));
+            }
+            Ok(TrainingJob::Object(ObjectTrainingJob { settings, images }))
         }
     }
 }
@@ -170,19 +176,34 @@ fn gather_pixel_training_images(
     Ok(images)
 }
 
-fn gather_labeled_objects(project: &ProjectSettings) -> Vec<ObjectMetricSettings> {
+/// The labeled objects of each image, with the image's path (joined to the
+/// image folder, see [`gather_pixel_training_images`]) - the object job reads
+/// the images for its intensity features.
+fn gather_labeled_objects(project: &ProjectSettings) -> Vec<TrainingImage> {
     project
         .images
         .list
-        .values()
-        .filter_map(|entry| {
-            entry
+        .iter()
+        .filter_map(|(rel_path, entry)| {
+            let active = entry.active_series(&project.images.settings);
+            let labeled_objects: Vec<ObjectMetricSettings> = entry
                 .series
-                .get(&entry.active_series(&project.images.settings))
+                .get(&active)?
+                .objects
+                .iter()
+                .filter(|object| !object.object_class.is_empty() && !object.exclude_from_training)
+                .cloned()
+                .collect();
+            (!labeled_objects.is_empty()).then(|| TrainingImage {
+                path: project
+                    .images
+                    .root
+                    .as_ref()
+                    .map_or_else(|| rel_path.clone(), |root| root.join(rel_path)),
+                series: active,
+                labeled_objects,
+            })
         })
-        .flat_map(|series| series.objects.iter())
-        .filter(|object| !object.object_class.is_empty() && !object.exclude_from_training)
-        .cloned()
         .collect()
 }
 
@@ -250,6 +271,7 @@ mod tests {
             classifier: AiLearningClassifierSettings::Object {
                 feature_spec: AiLearningObjectFeatureSettings {
                     metrics: vec![ObjectMetric::Area],
+                    ..Default::default()
                 },
                 class_labels: vec![
                     ObjectClassLabel {
@@ -265,8 +287,8 @@ mod tests {
         }
     }
 
-    /// Object training reads only already-computed metrics, so no image
-    /// files are needed.
+    /// Object training with shape features alone reads no image, so no
+    /// image files are needed.
     fn project_with_labeled_objects(classes: &[u32]) -> ProjectSettings {
         let mut series = SeriesSettings::default();
         for (i, class) in classes.iter().enumerate() {
@@ -417,9 +439,10 @@ mod tests {
             },
         );
 
-        let objects = gather_labeled_objects(&project);
-        assert_eq!(objects.len(), 1);
-        assert_eq!(objects[0].id, ObjectId(1));
+        let images = gather_labeled_objects(&project);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].labeled_objects.len(), 1);
+        assert_eq!(images[0].labeled_objects[0].id, ObjectId(1));
     }
 
     #[test]
@@ -444,10 +467,10 @@ mod tests {
             },
         );
 
-        let objects = gather_labeled_objects(&project);
+        let images = gather_labeled_objects(&project);
 
-        assert_eq!(objects.len(), 1);
-        assert_eq!(objects[0].id, ObjectId(2));
+        assert_eq!(images[0].labeled_objects.len(), 1);
+        assert_eq!(images[0].labeled_objects[0].id, ObjectId(2));
     }
 
     #[test]

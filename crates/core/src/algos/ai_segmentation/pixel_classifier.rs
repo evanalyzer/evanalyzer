@@ -55,6 +55,18 @@ pub struct PixelClassifier {
 
     /// Maps the model's predicted classes to this project's segmentation classes.
     pub segmentation_mapping: Vec<SegmentationMapping>,
+
+    /// Pixels the model is less sure about than this become background (0 = off).
+    /// The certainty is the share of trees (random forest) or neighbours (KNN) voting for the class, or the probability of the class (MLP).
+    #[cmdsmeta(
+        default = 0.0,
+        min = 0.0,
+        max = 1.0,
+        step = 0.05,
+        optional = true,
+        summary = true
+    )]
+    pub min_certainty: f32,
 }
 
 impl ImageAlgorithm for PixelClassifier {
@@ -116,7 +128,17 @@ impl ImageAlgorithm for PixelClassifier {
                 rows.push(bank.feature_vector_at(x, y));
             }
         }
-        let predicted = saved.classifier.predict(&rows)?;
+        let predicted = if self.min_certainty > 0.0 {
+            let (mut predicted, certainty) = saved.classifier.predict_with_certainty(&rows)?;
+            for (class, certainty) in predicted.iter_mut().zip(certainty) {
+                if certainty < self.min_certainty {
+                    *class = usize::MAX;
+                }
+            }
+            predicted
+        } else {
+            saved.classifier.predict(&rows)?
+        };
 
         let mapping: HashMap<SegmentationClass, u32> = self
             .segmentation_mapping
@@ -178,7 +200,8 @@ fn check_input_color(
 /// Remaps each pixel's predicted class index (into `class_labels`) through
 /// `mapping` into this project's segmentation classes, writing the result
 /// into `seg_slice`. Unmapped or out-of-range predictions fall back to
-/// `SegmentationClass::BACKGROUND` - see [`PixelClassifier`]'s doc comment.
+/// `SegmentationClass::BACKGROUND` - see [`PixelClassifier`]'s doc comment;
+/// `usize::MAX` marks a pixel below the minimum certainty.
 fn write_predictions(
     predicted: &[usize],
     class_labels: &[evanalyzer_cfg::settings::ai_learning_settings::PixelClassLabel],
@@ -282,7 +305,7 @@ mod tests {
                 meta: MetaData::default(),
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Object {
-                    feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                    feature_spec: AiLearningObjectFeatureSettings::default(),
                     class_labels: vec![],
                 },
             },
@@ -295,6 +318,7 @@ mod tests {
         let cmd = PixelClassifier {
             model_path: dir.path().join("missing.evamodel"),
             segmentation_mapping: vec![],
+            min_certainty: 0.0,
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
         let mut cache = GlobalPipelineCache::default();
@@ -311,6 +335,7 @@ mod tests {
         let cmd = PixelClassifier {
             model_path: path,
             segmentation_mapping: vec![],
+            min_certainty: 0.0,
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
         let mut cache = GlobalPipelineCache::default();
@@ -348,6 +373,7 @@ mod tests {
                 model_class: SegmentationClass(6),
                 segmentation_class: SegmentationClass(42),
             }],
+            min_certainty: 0.0,
         };
 
         // Pixel values chosen to fall squarely in each training cluster.
@@ -379,6 +405,7 @@ mod tests {
                 model_class: SegmentationClass(6),
                 segmentation_class: SegmentationClass(42),
             }],
+            min_certainty: 0.0,
         };
 
         let mut ctx = gray_ctx(2, 1, vec![10.05, 0.05]);
@@ -399,11 +426,66 @@ mod tests {
         assert!(err.to_string().contains("image channel 1"), "{err}");
     }
 
+    /// Pixels the forest is unsure about become background once a minimum
+    /// certainty is set; clear pixels (every tree agrees) stay.
+    #[test]
+    fn pixels_below_the_minimum_certainty_become_background() {
+        let mut rows = Vec::new();
+        let mut row_classes = Vec::new();
+        for i in 0..15 {
+            let jitter = (i % 3) as f32 * 0.1;
+            rows.push(vec![0.0 + jitter]);
+            row_classes.push(0);
+            rows.push(vec![10.0 + jitter]);
+            row_classes.push(1);
+            // The middle is both classes, so the trees disagree near it.
+            rows.push(vec![5.0]);
+            row_classes.push(i % 2);
+        }
+        let mut saved = saved_pixel_classifier(labels());
+        saved.classifier = fit_random_forest(&rows, &row_classes, &reliable_rf_settings()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let run = |min_certainty: f32| {
+            let cmd = PixelClassifier {
+                min_certainty,
+                ..command_for(&saved, &dir)
+            };
+            let mut ctx = gray_ctx(3, 1, vec![0.05, 5.0, 10.05]);
+            cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+                .unwrap();
+            ctx.get_segmentation_map().unwrap().as_slice().to_vec()
+        };
+        let x = crate::ai_learning::utils::to_dense_matrix(&[vec![0.05], vec![5.0], vec![10.05]])
+            .unwrap();
+        let crate::ai_learning::model::Classifier::RandomForest(forest) = &saved.classifier else {
+            unreachable!()
+        };
+        let share = forest.vote_share(&x).unwrap();
+        assert_eq!(share[0], 1.0, "a clear pixel: every tree agrees");
+        assert!(share[1] < 1.0 || share[2] < 1.0, "{share:?}");
+
+        let off = run(0.0);
+        assert_eq!(off[0], 41);
+        assert!(
+            off.iter().all(|&c| c != 0),
+            "without a minimum every pixel gets a class"
+        );
+        for min in [0.85, 0.95, 1.0] {
+            let expected: Vec<u32> = off
+                .iter()
+                .zip(&share)
+                .map(|(&class, &share)| if share < min { 0 } else { class })
+                .collect();
+            assert_eq!(run(min), expected, "minimum {min}, shares {share:?}");
+        }
+    }
+
     #[test]
     fn name_returns_pixel_classifier() {
         let cmd = PixelClassifier {
             model_path: PathBuf::new(),
             segmentation_mapping: vec![],
+            min_certainty: 0.0,
         };
         assert_eq!(cmd.name(), "Pixel Classifier");
     }
@@ -518,6 +600,7 @@ mod tests {
                     segmentation_class: SegmentationClass(42),
                 },
             ],
+            min_certainty: 0.0,
         }
     }
 

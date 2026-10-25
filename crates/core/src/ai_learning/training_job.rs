@@ -200,7 +200,7 @@ mod tests {
             },
             backend,
             classifier: AiLearningClassifierSettings::Object {
-                feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                feature_spec: AiLearningObjectFeatureSettings::default(),
                 class_labels: vec![],
             },
         };
@@ -235,7 +235,7 @@ mod tests {
                         RandomForestSettings::default(),
                     ),
                     classifier: AiLearningClassifierSettings::Object {
-                        feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                        feature_spec: AiLearningObjectFeatureSettings::default(),
                         class_labels: vec![],
                     },
                 },

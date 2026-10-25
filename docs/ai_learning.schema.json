@@ -143,6 +143,13 @@
           "items": {
             "$ref": "#/$defs/ObjectMetric"
           }
+        },
+        "ring_width": {
+          "description": "Width in px of the ring around each object the ring features are\nmeasured in (every pixel at most this far from the object).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 5,
+          "minimum": 0
         }
       },
       "required": [
@@ -633,7 +640,7 @@
       ]
     },
     "ObjectMetric": {
-      "description": "One selectable object-classifier feature, mapped directly onto `Object`'s\nown measurement methods (`crates/core/src/object.rs`) — no filter chain\nconcept here, unlike pixel features, since these are already-computed\nscalar measurements, not something composed from image filters.\n\nDeliberately excludes `object_class` (the training label itself — including\nit would be data leakage) and centroid/position (teaches location instead\nof shape, a classic overfitting trap for this kind of tool).\n\nSERIALIZATION-CRITICAL: this type is stored inside every saved object\nclassifier model. Once any model has been saved, existing variants must\nnever be renamed, removed, or have their meaning changed - treat this the\nsame as a database migration, not a normal refactor. Adding a new variant\nis safe.",
+      "description": "One selectable object-classifier feature, mapped directly onto `Object`'s\nown measurement methods (`crates/core/src/object.rs`) — no filter chain\nconcept here, unlike pixel features, since these are plain\nscalar measurements, not something composed from image filters.\n\nDeliberately excludes `object_class` (the training label itself — including\nit would be data leakage) and centroid/position (teaches location instead\nof shape, a classic overfitting trap for this kind of tool).\n\nSERIALIZATION-CRITICAL: this type is stored inside every saved object\nclassifier model. Once any model has been saved, existing variants must\nnever be renamed, removed, or have their meaning changed - treat this the\nsame as a database migration, not a normal refactor. Adding a new variant\nis safe.",
       "oneOf": [
         {
           "type": "string",
@@ -771,6 +778,34 @@
           "additionalProperties": false,
           "required": [
             "INTENSITY_MAD"
+          ]
+        },
+        {
+          "description": "Mean intensity in the ring around the object (`ring_width` px wide,\nneighbours included) - how bright its surroundings are.",
+          "type": "object",
+          "properties": {
+            "RING_INTENSITY_AVG": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "RING_INTENSITY_AVG"
+          ]
+        },
+        {
+          "description": "The object's mean intensity minus its ring's: how much it stands out\nfrom its surroundings.",
+          "type": "object",
+          "properties": {
+            "RING_CONTRAST": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "RING_CONTRAST"
           ]
         }
       ]

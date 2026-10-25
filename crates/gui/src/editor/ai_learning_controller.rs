@@ -389,6 +389,7 @@ impl AiLearningController {
             state.set_shape_metrics(ModelRc::new(VecModel::from(shape)));
             state.set_brightness_rows(ModelRc::new(VecModel::from(brightness)));
             state.set_object_preset(preset_index(object_preset));
+            state.set_ring_in_use(object.to_metrics().iter().any(ObjectMetric::uses_ring));
             state.set_feature_count(count.into());
             let legend: Vec<String> = channels
                 .iter()
@@ -626,6 +627,7 @@ impl AiLearningController {
                     f.object = ObjectFeatureTable::from_metrics(&feature_spec.metrics, channels);
                     f.object_preset = None;
                 }
+                settings.ring_width = feature_spec.ring_width as i32;
 
                 let project = self.app_state.get_project();
                 let classes = project.classification.classes().clone();
@@ -1379,6 +1381,7 @@ fn build_ai_learning_settings(
         AiLearningClassifierSettings::Object {
             feature_spec: AiLearningObjectFeatureSettings {
                 metrics: object_metrics,
+                ring_width: settings.ring_width.max(1) as u32,
             },
             class_labels: evanalyzer_app::ai_learning::object_class_labels_from_project(
                 project,

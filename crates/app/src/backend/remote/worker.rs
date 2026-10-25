@@ -1306,7 +1306,7 @@ mod session_tests {
                     meta: Default::default(),
                     backend: AiLearningBackendSettings::RandomForest(Default::default()),
                     classifier: AiLearningClassifierSettings::Object {
-                        feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings { metrics: Vec::new() },
+                        feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings::default(),
                         class_labels: Vec::new(),
                     },
                 },

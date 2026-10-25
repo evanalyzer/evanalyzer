@@ -10,7 +10,8 @@ use std::sync::mpsc::Receiver;
 
 /// Extra parameters `PixelTrainingJob` needs that aren't part of the portable
 /// `AiLearningSettings` model descriptor - object training needs none of
-/// these, since it reads no images (see `ObjectTrainingJob`'s doc comment).
+/// these: it measures each object on its own channel, z and t plane (see
+/// `ObjectTrainingJob`'s doc comment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PixelTrainingParams {
     pub channel: i32,

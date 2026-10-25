@@ -16,6 +16,7 @@ use std::collections::HashSet;
 /// An object's (or annotation's) intensities over its mask - one
 /// implementation for the pipeline and stored annotations.
 pub mod intensities;
+pub mod regions;
 /// Shape measurements computed on demand (Feret, convex area, Euler number,
 /// radii).
 pub mod shape;

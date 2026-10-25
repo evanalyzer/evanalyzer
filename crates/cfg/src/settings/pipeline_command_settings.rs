@@ -1700,6 +1700,9 @@ impl Default for CellposeSettings {
     }
 }
 
+fn _serde_default_pixelclassifier_min_certainty() -> f32 {
+    0.0f32
+}
 /// Segments the image with a pixel classifier trained in the AI training dialog.
 ///
 /// [Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
@@ -1710,13 +1713,29 @@ impl Default for CellposeSettings {
 ///
 /// Use a pixel classifier in place of a threshold step.
 /// Like a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelClassifierSettings {
     /// Path to a trained pixel classifier model, saved from the AI training dialog.
     pub model_path: PathBuf,
     /// Maps the model's predicted classes to this project's segmentation classes.
     pub segmentation_mapping: Vec<SegmentationMappingSettings>,
+    /// Pixels the model is less sure about than this become background (0 = off).
+    /// The certainty is the share of trees (random forest) or neighbours (KNN) voting for the class, or the probability of the class (MLP).
+    #[schemars(range(min = 0, max = 1))]
+    #[serde(default = "_serde_default_pixelclassifier_min_certainty")]
+    pub min_certainty: f32,
+}
+
+impl Default for PixelClassifierSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            segmentation_mapping: vec![],
+            min_certainty: 0.0f32,
+        }
+    }
 }
 
 /// Maps one class the model was trained to predict to a class ID meaningful
@@ -2216,7 +2235,8 @@ pub struct FillObjectHolesSettings {}
 /// `.evamodel` file).
 ///
 /// Every object found so far that matches the input classes is scored on
-/// its own, with the same features as in training. The predicted class is
+/// its own, with the same features as in training - for the ring features
+/// the ring around the object is measured here, as in training. The predicted class is
 /// mapped to one of this project's classes and applied as set under
 /// **Match handling** - the same input selection as **Classify Objects**,
 /// but the class comes from the model's prediction instead of a fixed rule.

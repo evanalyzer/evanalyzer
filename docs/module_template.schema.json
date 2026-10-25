@@ -69,7 +69,7 @@
   ],
   "$defs": {
     "AiObjectClassifierSettings": {
-      "description": "Classifies objects with a model trained in the AI training dialog (an\n`.evamodel` file).\n\nEvery object found so far that matches the input classes is scored on\nits own, with the same features as in training. The predicted class is\nmapped to one of this project's classes and applied as set under\n**Match handling** - the same input selection as **Classify Objects**,\nbut the class comes from the model's prediction instead of a fixed rule.\n\nA predicted class without a mapping leaves the object untouched (like\nunmapped classes of the pixel classifier stay background): map only the\nclasses you care about.",
+      "description": "Classifies objects with a model trained in the AI training dialog (an\n`.evamodel` file).\n\nEvery object found so far that matches the input classes is scored on\nits own, with the same features as in training - for the ring features\nthe ring around the object is measured here, as in training. The predicted class is\nmapped to one of this project's classes and applied as set under\n**Match handling** - the same input selection as **Classify Objects**,\nbut the class comes from the model's prediction instead of a fixed rule.\n\nA predicted class without a mapping leaves the object untouched (like\nunmapped classes of the pixel classifier stay background): map only the\nclasses you care about.",
       "type": "object",
       "properties": {
         "inputClasses": {
@@ -3192,22 +3192,28 @@
       "description": "Segments the image with a pixel classifier trained in the AI training dialog.\n\n[Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nTrain a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.\nThe classifier assigns every pixel of the image to a class, producing a segmented image.\nThe segmentation mapping translates the model's classes into this project's segmentation classes.\n\nUse a pixel classifier in place of a threshold step.\nLike a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.",
       "type": "object",
       "properties": {
+        "minCertainty": {
+          "description": "Pixels the model is less sure about than this become background (0 = off).\nThe certainty is the share of trees (random forest) or neighbours (KNN) voting for the class, or the probability of the class (MLP).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
+        },
         "modelPath": {
           "description": "Path to a trained pixel classifier model, saved from the AI training dialog.",
-          "type": "string"
+          "type": "string",
+          "default": ""
         },
         "segmentationMapping": {
           "description": "Maps the model's predicted classes to this project's segmentation classes.",
           "type": "array",
+          "default": [],
           "items": {
             "$ref": "#/$defs/SegmentationMappingSettings"
           }
         }
-      },
-      "required": [
-        "modelPath",
-        "segmentationMapping"
-      ]
+      }
     },
     "PixelUnits": {
       "type": "string",

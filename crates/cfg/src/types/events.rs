@@ -9,9 +9,10 @@ use std::path::PathBuf;
 
 /// Progress reported by both `evanalyzer_core::PixelTrainingJob::run` and
 /// `evanalyzer_core::ObjectTrainingJob::run`. The pixel job is the only one
-/// that reads images tile-by-tile, hence the `Image*`/`Tile*` variants; the
-/// object job (already-computed metrics, no image I/O) only ever reports
-/// `Started`, `ItemCompleted`, `ObjectSkipped`, `Training` and `Finished`.
+/// that reads images tile-by-tile, hence the `ImageTilesScheduled`/`Tile*`
+/// variants; the object job (reading only the regions under its objects)
+/// reports `Started`, `ImageFailed`, `ItemCompleted`, `ObjectSkipped`,
+/// `Training` and `Finished`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TrainingProgressEvent {
     Started {

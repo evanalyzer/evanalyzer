@@ -122,6 +122,10 @@ export struct AiTrainingSettingsSlint {
 
     // -- Training data source --
     use_other_images: bool,
+
+    // -- Object features --
+    // Width in px of the ring around each object for the ring features.
+    ring_width: int,
 }
 
 export global AiLearningState {
@@ -163,6 +167,7 @@ export global AiLearningState {
         mlp_batch_size: 32,
         mlp_seed: 0,
         normalize_features: true,
+        ring_width: 5,
         balance_classes: true,
         validation_split: 0.2,
         use_other_images: false,
@@ -181,6 +186,8 @@ export global AiLearningState {
     in property <[BrightnessRowSlint]> brightness_rows: [];
     // 0 Shape only, 1 Recommended, 2 All, -1 none.
     in property <int> object_preset: 1;
+    // A ring feature is ticked: the ring width setting shows.
+    in property <bool> ring_in_use: false;
     // "10 × 2 ch = 20", "16" - the features the model gets.
     in property <string> feature_count: "";
     // "0 DAPI · 1 FITC · ..." - under the brightness table when its

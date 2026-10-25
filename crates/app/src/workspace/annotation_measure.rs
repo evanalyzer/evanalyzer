@@ -1,53 +1,13 @@
 //! Measuring manual annotations on their image - drawn, copied or imported
 //! ones alike: every channel under each mask, at full resolution, through
 //! the backend's [`ImageSource`] (this computer's files or the server's).
-//! The pixel math is core's ([`MaskIntensities`], the same as for pipeline
-//! objects); here only which regions to read, and reading them.
+//! What to read and the pixel math are core's ([`measure_on_planes`], the
+//! same as for training an object classifier); here only reading them.
 
 use crate::api::{ImageSource, TileRequest};
-use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
+use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
-use evanalyzer_core::{
-    ChannelTile, IntensityAccumulator, MaskIntensities, bbox_overlaps_tile, tile_grid,
-};
-use std::collections::BTreeMap;
-
-/// Side of the cells the reads are planned in: a cell with annotations is
-/// read cut to them - small reads also when the image is on a server.
-const CELL: usize = 1024;
-
-/// The regions to read for `members` (indices into `objects`) of an image
-/// of `full_width` x `full_height`: each grid cell with annotations, cut to
-/// the bounding box of the annotation pixels in it.
-fn plan_reads(
-    objects: &[ObjectMetricSettings],
-    members: &[usize],
-    full_width: usize,
-    full_height: usize,
-) -> Vec<ImageTile> {
-    tile_grid(full_width, full_height, CELL)
-        .into_iter()
-        .filter_map(|cell| {
-            let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
-            for &i in members {
-                let b = objects[i].bbox;
-                if !bbox_overlaps_tile(b, &cell) {
-                    continue;
-                }
-                x0 = x0.min((b[0] as usize).max(cell.offset_x));
-                y0 = y0.min((b[1] as usize).max(cell.offset_y));
-                x1 = x1.max((b[2] as usize).min(cell.offset_x + cell.width - 1));
-                y1 = y1.max((b[3] as usize).min(cell.offset_y + cell.height - 1));
-            }
-            (x0 <= x1 && y0 <= y1).then(|| ImageTile {
-                offset_x: x0,
-                offset_y: y0,
-                width: x1 - x0 + 1,
-                height: y1 - y0 + 1,
-            })
-        })
-        .collect()
-}
+use evanalyzer_core::measure_on_planes;
 
 /// Measures `objects` (annotations of `series`) on `source`, on each one's
 /// own z and t plane: replaces their intensities. Reads only the regions
@@ -66,38 +26,21 @@ pub fn measure_on_source(
         .get(&series)
         .and_then(|s| s.resolutions.get(&0))
         .ok_or_else(|| InternalErrors::Generic(format!("The image has no series {series}")))?;
-    let (width, height) = (full.width as usize, full.height as usize);
-
-    // The objects of each plane together: one read per region and plane.
-    let mut by_plane: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
-    for (i, object) in objects.iter().enumerate() {
-        by_plane
-            .entry((object.z_stack.max(0), object.t_stack.max(0)))
-            .or_default()
-            .push(i);
-    }
-    let mut sums = vec![IntensityAccumulator::default(); objects.len()];
-    for ((z, t), members) in &by_plane {
-        for region in plan_reads(objects, members, width, height) {
-            let channels = source.read_tile(&TileRequest {
+    let sums = measure_on_planes(
+        objects,
+        full.width as usize,
+        full.height as usize,
+        |z, t, tile| {
+            source.read_tile(&TileRequest {
                 series,
                 resolution_idx: 0,
                 z_projection: ZProjection::None,
-                z_range: Some(*z..=*z),
-                t_stack: *t,
-                tile: region,
-            })?;
-            let tiles: Vec<ChannelTile<'_>> = channels
-                .iter()
-                .filter_map(|c| ChannelTile::from_container(c.c_stack, region, &c.image))
-                .collect();
-            for &i in members {
-                if bbox_overlaps_tile(objects[i].bbox, &region) {
-                    objects[i].add_intensities(&tiles, &mut sums[i]);
-                }
-            }
-        }
-    }
+                z_range: Some(z..=z),
+                t_stack: t,
+                tile,
+            })
+        },
+    )?;
     for (object, sum) in objects.iter_mut().zip(sums) {
         object.intensities = sum.finish_settings();
     }
@@ -110,6 +53,8 @@ mod tests {
     use crate::backend::local::image_reader::ReaderPool;
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::ImagePlane;
+    use evanalyzer_cfg::core_types::ImageTile;
+    use evanalyzer_core::ChannelTile;
     use kornia_image::ImageSize;
     use std::collections::HashSet;
     use std::path::PathBuf;
@@ -216,41 +161,6 @@ mod tests {
             measure_on_source(&source, 7, &mut annotations).is_err(),
             "no series 7"
         );
-    }
-
-    #[test]
-    fn only_the_regions_with_annotations_are_read() {
-        let object = |bbox: [u32; 4]| ObjectMetricSettings {
-            bbox,
-            ..Default::default()
-        };
-        let objects = vec![
-            object([10, 20, 30, 40]),
-            object([50, 25, 60, 30]),
-            object([1500, 10, 1510, 12]),
-        ];
-        let tiles = plan_reads(&objects, &[0, 1, 2], 4000, 3000);
-        assert_eq!(
-            tiles,
-            vec![
-                ImageTile {
-                    offset_x: 10,
-                    offset_y: 20,
-                    width: 51,
-                    height: 21
-                },
-                ImageTile {
-                    offset_x: 1500,
-                    offset_y: 10,
-                    width: 11,
-                    height: 3
-                },
-            ]
-        );
-        // An object over a cell border: read in both cells, each part once.
-        let tiles = plan_reads(&[object([1000, 0, 1100, 5])], &[0], 4000, 3000);
-        assert_eq!(tiles.len(), 2);
-        assert_eq!(tiles.iter().map(|t| t.width).sum::<usize>(), 101);
     }
 
     /// What measuring a drawn annotation costs on a large image: time per

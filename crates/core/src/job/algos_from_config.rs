@@ -954,6 +954,7 @@ impl From<PixelClassifierSettings> for PixelClassifier {
                 .into_iter()
                 .map(|v| v.into())
                 .collect(),
+            min_certainty: _s.min_certainty.clamp(0.0, 1.0),
         }
     }
 }

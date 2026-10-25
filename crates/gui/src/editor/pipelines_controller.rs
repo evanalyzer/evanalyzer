@@ -7324,6 +7324,7 @@ mod tests {
                 model_class: SegmentationClass(1),
                 segmentation_class: SegmentationClass(2),
             }],
+            min_certainty: 0.0,
         };
 
         reconcile_pixel_classifier_mapping(&LocalFileSystem::default(), &mut settings);
@@ -7342,6 +7343,7 @@ mod tests {
                 model_class: SegmentationClass(1),
                 segmentation_class: SegmentationClass(2),
             }],
+            min_certainty: 0.0,
         };
 
         reconcile_pixel_classifier_mapping(&LocalFileSystem::default(), &mut settings);
@@ -7447,6 +7449,7 @@ mod tests {
             AiLearningClassifierSettings::Object {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings {
                     metrics: vec![],
+                    ..Default::default()
                 },
                 class_labels: vec![ObjectClassLabel {
                     class: ObjectClass::Unset,

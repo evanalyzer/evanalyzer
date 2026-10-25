@@ -125,6 +125,36 @@ mod tests {
         assert_eq!(predictions, vec![0, 1]);
     }
 
+    /// The certainty is the neighbours' share of the class: all 3 for a
+    /// point inside a cluster, 2 of 3 for one between them.
+    #[test]
+    fn the_certainty_is_the_share_of_neighbours() {
+        let rows = vec![
+            vec![0.0],
+            vec![1.0],
+            vec![2.0],
+            vec![10.0],
+            vec![11.0],
+            vec![12.0],
+        ];
+        let settings = KnnSettings {
+            k: 3,
+            algorithm: CfgKNNAlgorithmName::LinearSearch,
+            weight: CfgKNNWeightFunction::Uniform,
+            distance: KNNDistanceMetric::Euclidean,
+        };
+        let classifier = fit_knn(&rows, &[0, 0, 0, 1, 1, 1], &settings).unwrap();
+
+        let (classes, certainty) = classifier
+            .predict_with_certainty(&[vec![1.0], vec![6.4]])
+            .unwrap();
+
+        // 6.4: nearest are 10 and 11 (class 1), then 2 (class 0).
+        assert_eq!(classes, vec![0, 1]);
+        assert_eq!(certainty[0], 1.0);
+        assert!((certainty[1] - 2.0 / 3.0).abs() < 1e-6, "{certainty:?}");
+    }
+
     #[test]
     fn fit_knn_rejects_zero_samples() {
         let settings = KnnSettings {

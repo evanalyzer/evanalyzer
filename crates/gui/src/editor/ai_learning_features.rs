@@ -387,7 +387,7 @@ const RECOMMENDED_SHAPE: [usize; 7] = [0, 1, 2, 3, 4, 6, 8];
 
 /// A row of the brightness table: (name, hint, the metrics of a channel it
 /// stands for).
-pub(crate) const BRIGHTNESS_STATS: [(&str, &str, fn(i32) -> Vec<ObjectMetric>); 7] = [
+pub(crate) const BRIGHTNESS_STATS: [(&str, &str, fn(i32) -> Vec<ObjectMetric>); 9] = [
     ("Mean", "", |c| vec![ObjectMetric::IntensityAvg(c)]),
     ("Median", "", |c| vec![ObjectMetric::IntensityMedian(c)]),
     ("Std dev", "how uneven", |c| {
@@ -407,6 +407,12 @@ pub(crate) const BRIGHTNESS_STATS: [(&str, &str, fn(i32) -> Vec<ObjectMetric>); 
     }),
     ("Sum", "grows with size", |c| {
         vec![ObjectMetric::IntensitySum(c)]
+    }),
+    ("Ring mean", "the surroundings", |c| {
+        vec![ObjectMetric::RingIntensityAvg(c)]
+    }),
+    ("Contrast to ring", "stands out", |c| {
+        vec![ObjectMetric::RingContrast(c)]
     }),
 ];
 
@@ -607,5 +613,29 @@ mod tests {
         let wider = table.with_channels(3);
         assert_eq!(wider.brightness[0], [true, true, true]);
         assert_eq!(wider.brightness[6], [false, false, false]);
+    }
+
+    #[test]
+    fn the_ring_rows_tick_the_ring_features() {
+        let ring = |label| {
+            BRIGHTNESS_STATS
+                .iter()
+                .position(|(l, _, _)| *l == label)
+                .unwrap()
+        };
+        let mut table = ObjectFeatureTable::preset(Preset::Simple, 2);
+        table.brightness[ring("Ring mean")][0] = true;
+        table.brightness[ring("Contrast to ring")][1] = true;
+        let metrics = table.to_metrics();
+        assert!(metrics.contains(&ObjectMetric::RingIntensityAvg(0)));
+        assert!(metrics.contains(&ObjectMetric::RingContrast(1)));
+        assert_eq!(ObjectFeatureTable::from_metrics(&metrics, 2), table);
+        assert!(
+            !ObjectFeatureTable::preset(Preset::Recommended, 2)
+                .to_metrics()
+                .iter()
+                .any(ObjectMetric::uses_ring),
+            "Recommended stays without the ring"
+        );
     }
 }

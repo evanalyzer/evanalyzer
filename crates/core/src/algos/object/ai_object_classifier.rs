@@ -5,7 +5,12 @@ use std::path::PathBuf;
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ModelClass, ObjectClass, ObjectId, SegmentationClass,
 };
+use evanalyzer_cfg::settings::ai_learning_object_settings::{
+    AiLearningObjectFeatureSettings, ObjectMetric,
+};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
+use indexmap::IndexMap;
+use kornia_image::ImageSize;
 use macros::CommandsMeta;
 
 use crate::{
@@ -14,7 +19,7 @@ use crate::{
     algos::{
         ExecutionScope, ImageAlgorithm, ai_segmentation::classifier_cache::load_cached_classifier,
     },
-    object::Object,
+    object::{Intensity, Object, ObjectInit, regions::ring_mask},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -48,7 +53,8 @@ pub enum AiClassifyMatchHandling {
 /// `.evamodel` file).
 ///
 /// Every object found so far that matches the input classes is scored on
-/// its own, with the same features as in training. The predicted class is
+/// its own, with the same features as in training - for the ring features
+/// the ring around the object is measured here, as in training. The predicted class is
 /// mapped to one of this project's classes and applied as set under
 /// **Match handling** - the same input selection as **Classify Objects**,
 /// but the class comes from the model's prediction instead of a fixed rule.
@@ -123,17 +129,18 @@ impl ImageAlgorithm for AiObjectClassifier {
         // Immutable pass: pick the objects to classify and compute their feature
         // vectors, up front - `cache.object_cache` can't be read (to compute
         // features) and written (to apply predictions) at the same time.
-        let (ids, rows): (Vec<ObjectId>, Vec<Vec<f32>>) = cache
+        let chosen: Vec<&Object> = cache
             .object_cache
             .values()
             .filter(|object| self.matches_input(object, ctx.scope))
-            .map(|object| {
-                (
-                    object.id.clone(),
-                    compute_object_features(object, feature_spec),
-                )
-            })
-            .unzip();
+            .collect();
+        let ids: Vec<ObjectId> = chosen.iter().map(|object| object.id.clone()).collect();
+        let rows = features_of(
+            &chosen,
+            feature_spec,
+            &ctx.image_meta.full_image_width,
+            cache,
+        );
 
         if ids.is_empty() {
             return Ok(());
@@ -179,6 +186,47 @@ impl ImageAlgorithm for AiObjectClassifier {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::WholeImage
     }
+}
+
+/// The feature rows of `objects` (of an image of `size`), as in training:
+/// the objects' own intensities plus, for the ring features, the rings
+/// around them measured from the channel images in `cache` like the
+/// objects themselves.
+pub(crate) fn features_of(
+    objects: &[&Object],
+    spec: &AiLearningObjectFeatureSettings,
+    size: &ImageSize,
+    cache: &GlobalPipelineCache,
+) -> Vec<Vec<f32>> {
+    let rings: Vec<IndexMap<i32, Intensity>> = if spec.metrics.iter().any(ObjectMetric::uses_ring) {
+        let mut rings: Vec<Object> = objects
+            .iter()
+            .map(|object| {
+                let (mask_data, bbox) = ring_mask(
+                    &object.mask_data,
+                    object.bbox,
+                    spec.ring_width,
+                    size.width,
+                    size.height,
+                );
+                Object::new(ObjectInit {
+                    bbox,
+                    mask_data,
+                    ..Default::default()
+                })
+            })
+            .collect();
+        Object::measure_intensities_of(&mut rings, cache);
+        rings.into_iter().map(|ring| ring.intensities).collect()
+    } else {
+        Vec::new()
+    };
+    let no_ring = IndexMap::new();
+    objects
+        .iter()
+        .enumerate()
+        .map(|(i, object)| compute_object_features(object, rings.get(i).unwrap_or(&no_ring), spec))
+        .collect()
 }
 
 /// Guards against `zip`ing `ids` with a `predicted` vector of a different
@@ -270,6 +318,7 @@ mod tests {
                 classifier: AiLearningClassifierSettings::Object {
                     feature_spec: AiLearningObjectFeatureSettings {
                         metrics: vec![evanalyzer_cfg::settings::ai_learning_object_settings::ObjectMetric::Area],
+                        ..Default::default()
                     },
                     class_labels,
                 },

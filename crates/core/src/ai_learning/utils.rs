@@ -1,5 +1,8 @@
 use crate::ZProjection;
-use crate::ai_learning::model::{Classifier, KnnModel, mlp::predict_mlp};
+use crate::ai_learning::model::{
+    Classifier, KnnModel,
+    mlp::{predict_mlp, predict_mlp_with_certainty},
+};
 use crate::image::ImageTile;
 use crate::object::Object;
 use bitvec::prelude::{BitVec, Lsb0};
@@ -50,6 +53,7 @@ impl Classifier {
             Classifier::RandomForest(model) => {
                 let x = to_dense_matrix(features)?;
                 model
+                    .model
                     .predict(&x)
                     .map_err(|e| InternalErrors::Internal(e.to_string()))
             }
@@ -70,10 +74,66 @@ impl Classifier {
             } => predict_mlp(architecture, weights, features),
         }
     }
+
+    /// Like [`Classifier::predict`], plus each row's certainty (0..=1): the
+    /// share of trees voting for the class (random forest), the share of
+    /// neighbours (KNN, weighted like the prediction) or the softmax
+    /// probability (MLP). Always the most likely class's value, so it needs
+    /// no mapping to the class labels.
+    pub fn predict_with_certainty(
+        &self,
+        features: &[Vec<f32>],
+    ) -> Result<(Vec<usize>, Vec<f32>), InternalErrors> {
+        if features.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let most_likely = |proba: Vec<Vec<f64>>| -> Vec<f32> {
+            proba
+                .iter()
+                .map(|row| row.iter().copied().fold(0.0, f64::max) as f32)
+                .collect()
+        };
+        match self {
+            Classifier::RandomForest(forest) => {
+                let x = to_dense_matrix(features)?;
+                let classes = forest
+                    .model
+                    .predict(&x)
+                    .map_err(|e| InternalErrors::Internal(e.to_string()))?;
+                Ok((classes, forest.vote_share(&x)?))
+            }
+            Classifier::Knn(model) => {
+                let x = to_dense_matrix(features)?;
+                let (classes, proba) = match model {
+                    KnnModel::Euclidean(model) => model
+                        .predict(&x)
+                        .and_then(|c| Ok((c, model.predict_proba(&x)?))),
+                    KnnModel::Manhattan(model) => model
+                        .predict(&x)
+                        .and_then(|c| Ok((c, model.predict_proba(&x)?))),
+                    KnnModel::Cosine(model) => model
+                        .predict(&x)
+                        .and_then(|c| Ok((c, model.predict_proba(&x)?))),
+                    KnnModel::Hamming(model) => model
+                        .predict(&x)
+                        .and_then(|c| Ok((c, model.predict_proba(&x)?))),
+                    KnnModel::Minkowski(model) => model
+                        .predict(&x)
+                        .and_then(|c| Ok((c, model.predict_proba(&x)?))),
+                }
+                .map_err(|e| InternalErrors::Internal(e.to_string()))?;
+                Ok((classes, most_likely(proba)))
+            }
+            Classifier::Mlp {
+                architecture,
+                weights,
+            } => predict_mlp_with_certainty(architecture, weights, features),
+        }
+    }
 }
 
-// -- Tiling / z-stack helpers, shared by pixel training (object training
-// needs neither - object metrics are already computed, no image I/O) -----
+// -- Tiling / z-stack helpers, shared by pixel training (and the tile grid
+// by the object measuring in `object::regions`) ----------------------------
 
 pub fn tile_grid(full_width: usize, full_height: usize, tile_size: usize) -> Vec<ImageTile> {
     let x_steps = full_width.div_ceil(tile_size);

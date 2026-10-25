@@ -6,7 +6,6 @@ use crate::ai_learning::model::mlp::MlpArchitecture;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use serde::{Deserialize, Serialize};
-use smartcore::ensemble::random_forest_classifier::RandomForestClassifier;
 use smartcore::linalg::basic::matrix::DenseMatrix;
 use smartcore::metrics::distance::cosine::Cosine;
 use smartcore::metrics::distance::euclidian::Euclidian;
@@ -46,7 +45,7 @@ pub enum KnnModel {
 /// SERIALIZATION-CRITICAL: stored inside every saved classifier model.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Classifier {
-    RandomForest(RandomForestClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>>),
+    RandomForest(random_forest::Forest),
     Knn(KnnModel),
     Mlp {
         architecture: MlpArchitecture,
@@ -132,7 +131,7 @@ mod tests {
                 },
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Object {
-                    feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                    feature_spec: AiLearningObjectFeatureSettings::default(),
                     class_labels: vec![],
                 },
             },
