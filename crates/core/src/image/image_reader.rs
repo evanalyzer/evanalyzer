@@ -1361,14 +1361,11 @@ mod tests {
     /// Fiji's "Fly Brain" sample (RGB, 57 planes), downloaded by hand to
     /// `tests/3D/` (gitignored, licence unchecked): read as one RGB volume.
     #[test]
-    #[ignore = "needs tests/3D/flybrain.tif (local only); fails until scopeio reads RGB \
-                ImageJ stacks' z-planes"]
+    #[ignore = "needs tests/3D/flybrain.tif (local only)"]
     fn the_fly_brain_sample_reads_as_an_rgb_volume() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/3D/flybrain.tif");
         let reader = ImageReader::new(&path.into(), ReadMode::Default).unwrap();
         let series = &reader.get_image_meta().series[&0];
-        // Fails with scopeio 0.0.0-alpha.2: it applies an ImageJ stack's
-        // `slices=` only to gray stacks - an RGB one reads as 57 time points.
         assert_eq!(series.nr_z_stacks, 57, "{series:?}");
         let started = std::time::Instant::now();
         let volume = reader

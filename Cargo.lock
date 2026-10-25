@@ -6663,7 +6663,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scopeio"
 version = "0.1.0"
-source = "git+https://github.com/evanalyzer/scopeio?tag=0.0.0-alpha.2#0ebdea0d94a6d6e90c79d08b5bb3e0ccc5d33529"
+source = "git+https://github.com/evanalyzer/scopeio?tag=0.0.0-alpha.3#d9ad3206a305654160dc79fb806229bb2b619015"
 dependencies = [
  "flate2",
  "hayro-jpeg2000",

@@ -22,7 +22,7 @@ evanalyzer_app = { path = "crates/app" }
 evanalyzer_gui    = { path = "crates/gui" }
 evanalyzer_cli    = { path = "crates/cli" }
 evanalyzer_server = { path = "crates/server" }
-scopeio = { git = "https://github.com/evanalyzer/scopeio", tag = "0.0.0-alpha.2" }
+scopeio = { git = "https://github.com/evanalyzer/scopeio", tag = "0.0.0-alpha.3" }
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 tungstenite = "0.30.0"
 rustls = { version = "0.23.45", default-features = false, features = ["std", "ring", "logging"] }
