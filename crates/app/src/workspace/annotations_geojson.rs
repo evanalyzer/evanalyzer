@@ -1094,7 +1094,7 @@ mod tests {
         let files = crate::backend::LocalFileSystem::default();
         let mut pending = read_image_geojson(project, &files, file, Path::new(rel), 0).unwrap();
         measure_pending(&mut pending, |path, series, objects| {
-            let source = crate::backend::local::image_reader::ReaderPool::open(path)
+            let source = crate::backend::local::image_reader::open_image_source(path)
                 .map_err(|e| e.to_string())?;
             crate::workspace::annotation_measure::measure_on_source(&source, series, objects)
                 .map_err(|e| e.to_string())

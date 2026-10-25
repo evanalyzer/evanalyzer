@@ -2,7 +2,16 @@ use schemars::schema_for;
 use std::path::Path;
 
 fn write_schema<T: schemars::JsonSchema>(out_file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let schema = schema_for!(T);
+    let mut schema = schema_for!(T);
+    // Maps in alphabetical order, so the schema files don't change when
+    // fields or types are only reordered in code (serde_json's
+    // `preserve_order` would otherwise keep declaration order). schemars
+    // still puts its main keywords (title, type, properties, ...) first.
+    if let Some(map) = schema.as_object_mut() {
+        map.sort_keys();
+        map.values_mut()
+            .for_each(serde_json::Value::sort_all_objects);
+    }
     let schema_json = serde_json::to_string_pretty(&schema)?;
     let out_path = Path::new("../../docs").join(out_file);
     std::fs::create_dir_all(out_path.parent().unwrap())?;

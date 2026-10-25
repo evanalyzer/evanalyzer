@@ -1,44 +1,25 @@
 use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
-use crate::image::image_ome_parser::{build_image_meta, effective_size_c};
+use crate::image::image_ome_parser::{build_image_meta, channel_select, scopeio_err};
 use crate::utils::converters::wavelength_to_rgb_float;
-use bioformats::common::reader::FormatReader;
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use kornia_image::{Image, ImageSize};
 use log::debug;
 use rayon::prelude::*;
+use scopeio::{OutputSpec, PixelBuf, Region, RegionRequest};
 use std::ops::RangeInclusive;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
-/// File extensions `ImageReader` can open - reflects whichever bioformats
-/// readers are actually compiled in, so this shrinks when the workspace is
-/// built without the `bioformats-gpl` feature (see the `evanalyzer_core`
-/// comment in the root Cargo.toml). Two full `#[cfg]`-gated definitions
-/// rather than one list with per-element `#[cfg]`, since attributes on
-/// individual array-literal elements aren't stable Rust.
-///
-/// The extensions after the `//` split below are ones bioformats only
-/// handles via its GPL-2.0-or-later readers (per bioformats-rs' README
-/// "License" columns and its `src/formats/gpl/` module split) - best-effort
-/// classification, not verified against every registry dispatch path. The
-/// ones before the split are either handled by an always-available
-/// BSD-2-Clause reader, or ("btif", "btiff", "std") not currently registered
-/// by bioformats-rs at all, kept for backwards compatibility either way.
-#[cfg(feature = "bioformats-gpl")]
+/// File extensions `ImageReader` can open - the formats scopeio reads (see
+/// its README). Companion files that are opened through their main file
+/// (VSI's `.ets`) are left out.
 pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
-    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5", "std",
-    "avi", "cif", "arf", "sld", //
-    "vsi", "czi", "nd2", "lif", "lei", "fli", "scn", "sxm", "lim", "oir", "stk", "nd", "bip",
-    "msr", "dm3", "dm4", "cr2", "dib", "ims", "pic", "1sc", "spc", "sif", "aim", "svs",
-];
-
-#[cfg(not(feature = "bioformats-gpl"))]
-pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
-    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5", "std",
-    "avi", "cif", "arf", "sld",
+    "tif", "tiff", "tf2", "tf8", "btf", "jpg", "jpeg", "png", "bmp", "jp2", "j2k", "vsi", "czi",
+    "nd2", "lif", "lof", "xlef", "xlcf", "xlif", "svs", "ndpi", "ndpis", "mrxs", "lsm", "qptiff",
+    "scn", "bif", "ims", "oib", "oif", "oir", "dcm", "dicom", "zvi", "dv", "r3d", "stk", "nd",
 ];
 
 #[derive(Clone)]
@@ -197,11 +178,11 @@ pub struct ImageChannel {
 
 /// Computes the byte size of a `width x height` tile buffer, checking for
 /// overflow along the way. A pre-flight sanity check before asking
-/// `bioformats` to actually allocate and fill a region this size.
+/// scopeio to actually allocate and fill a region this size.
 ///
 /// `width`/`height`/`color_channels` ultimately come from file-declared
 /// metadata (`PyramidInfo`'s fields are read straight from whatever
-/// `bioformats` reports) - a corrupted or malicious file can claim
+/// scopeio reports) - a corrupted or malicious file can claim
 /// dimensions large enough to overflow a plain `width * height * channels *
 /// bytes_per_pixel` multiplication, silently wrapping to a tiny buffer size
 /// instead of erroring - so every step is checked and any overflow is turned
@@ -226,13 +207,9 @@ fn checked_tile_buffer_size(
 }
 
 pub struct ImageReader {
-    // `bioformats::FormatReader` implementations are not thread-safe (they
-    // hold mutable internal state - current series, resolution, file
-    // position) - the same constraint the old JNI wrapper's
-    // `synchronized(formatReader)` block worked around on the Java side.
-    // Wrapped in `ReadMode::SplitChannels`'s `bioformats::ChannelSeparator`
-    // when the caller asked for split RGB channels.
-    inner: Mutex<Box<dyn FormatReader>>,
+    // scopeio readers are stateless and `Send + Sync`: reads from many
+    // threads at once share this one handle without locking.
+    inner: Arc<dyn scopeio::ImageReader>,
     pub(crate) read_mode: ReadMode,
     pub image_meta: Arc<ImageMeta>,
     pub(crate) current_path: PathBuf,
@@ -244,24 +221,19 @@ pub enum ReadMode {
     SplitChannels, // Split RGB channels of an image to three individual channels
 }
 
-/// A high-performance image reader that interfaces with Bio-Formats via JNI.
-///
-/// `ImageReader` manages the lifecycle of a `bioformats` format reader
-/// instance (auto-detected from the file's content/extension via
-/// `bioformats::registry::ImageReader`'s two-phase construct/configure/
-/// `set_id` calling convention, mirroring Java `IFormatReader`).
+/// Image reader on top of scopeio (format auto-detected from the file's
+/// content and extension).
 impl ImageReader {
     /// Creates a new `ImageReader` instance and opens the underlying file.
     ///
     /// # Arguments
     /// * `path` - The filesystem path to the image to be opened.
-    /// * `mode` - `SplitChannels` wraps the reader in a
-    ///   `bioformats::ChannelSeparator`, so an RGB image is exposed as three
-    ///   individual grayscale channels instead of one packed RGB channel.
+    /// * `mode` - `SplitChannels` exposes an RGB image as three individual
+    ///   grayscale channels instead of one packed RGB channel.
     ///
     /// # Errors
-    /// Returns an error if the path doesn't exist, no registered reader
-    /// recognizes the file, or the format's own parsing fails.
+    /// Returns an error if the path doesn't exist, scopeio doesn't recognize
+    /// the file, or the format's own parsing fails.
     pub fn new(path: &PathBuf, mode: ReadMode) -> Result<Self, InternalErrors> {
         if !path.exists() {
             return Err(InternalErrors::Io(format!(
@@ -275,37 +247,13 @@ impl ImageReader {
         // The real per-format parse (TIFF IFD walk, OME-XML, proprietary
         // tile-table parsing, etc.) happens in here - for most formats this
         // dominates `ImageReader::new`'s total cost, not the metadata walk
-        // below, so it's timed separately rather than folded into one
-        // combined number that would hide which half is actually slow.
+        // below, so it's timed separately.
         let open_start = Instant::now();
-        // Java `IFormatReader`'s `setFlattenedResolutions(false)` equivalent:
-        // pyramid levels stay grouped as one series' resolutions instead of
-        // being flattened into separate series - see
-        // docs/bioformats_rs_missing_flattened_resolutions_toggle.md. Must be
-        // set before `set_id`, hence the two-phase construct/configure/set_id
-        // calling convention instead of the old one-shot `open_reader_boxed`.
-        let mut detector = bioformats::registry::ImageReader::new();
-        detector
-            .set_flattened_resolutions(false)
-            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
-        detector
-            .set_id(path)
-            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
-        let raw = detector
-            .into_inner()
-            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
-        let mut inner: Box<dyn FormatReader> = match mode {
-            ReadMode::Default => raw,
-            // `ChannelSeparator::set_series` (called below while building
-            // `image_meta`) is what actually rebuilds its adjusted,
-            // channels-split metadata - wrapping alone doesn't split
-            // anything until then.
-            ReadMode::SplitChannels => Box::new(bioformats::ChannelSeparator::new(raw)),
-        };
+        let inner = scopeio::open(path).map_err(scopeio_err)?;
         let open_duration = open_start.elapsed();
 
         let meta_start = Instant::now();
-        let image_meta = build_image_meta(inner.as_mut(), path, mode)?;
+        let image_meta = build_image_meta(inner.as_ref(), path, mode)?;
         let meta_duration = meta_start.elapsed();
 
         let total_duration = total_start.elapsed();
@@ -318,7 +266,7 @@ impl ImageReader {
         );
 
         Ok(Self {
-            inner: Mutex::new(inner),
+            inner,
             read_mode: mode,
             image_meta: Arc::new(image_meta),
             current_path: path.clone(),
@@ -398,7 +346,6 @@ impl ImageReader {
         resolution_idx: i32,
         image_plane: &ImagePlane,
         image_tile: &ImageTile,
-        byte_scratch: &mut Vec<u8>,
     ) -> Result<ImageContainer, InternalErrors> {
         // 1. Get the series or return error
         let series_info = self.image_meta.series.get(&series).ok_or_else(|| {
@@ -432,11 +379,9 @@ impl ImageReader {
         }
 
         // Bail before doing any buffer allocation or read call at all if the
-        // metadata declares an implausible bit depth (see the matching guard
-        // in `decode_image`, which this also protects against reaching).
-        // `0` means BitsPerPixel was never set; anything above 32 is outside
-        // every real scientific image format and would make
-        // `(1u64 << nr_bits) - 1` (in `decode_image`) a shift-by-too-large,
+        // metadata declares an implausible bit depth: anything above 32 is
+        // outside every real scientific image format (and refuses f64 data)
+        // and would make `(1u64 << nr_bits) - 1` below a shift-by-too-large,
         // silently wrong in a release build rather than an error.
         if !(1..=32).contains(&pyramid_info.nr_bits) {
             return Err(InternalErrors::ImageReadError(format!(
@@ -451,63 +396,85 @@ impl ImageReader {
         let nr_bytes = (pyramid_info.nr_bits as f32 / 8.0).ceil() as usize;
         checked_tile_buffer_size(width, height, pyramid_info.color_channels, nr_bytes)?;
 
-        let mut reader = self.inner.lock().expect("ImageReader mutex poisoned");
-        reader
-            .set_series(series as usize)
-            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
-        let resolution_count = reader.resolution_count();
-        // Mirrors the old Java wrapper's own clamp: an out-of-range
-        // resolution level (e.g. a viewport asking for a deeper zoom level
-        // than a small pyramid actually has) falls back to the coarsest
-        // level that exists, rather than erroring.
-        let clamped_resolution = (resolution_idx as usize).min(resolution_count.saturating_sub(1));
-        reader
-            .set_resolution(clamped_resolution)
-            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
+        let series_meta = self
+            .inner
+            .series_meta(series as usize)
+            .map_err(scopeio_err)?;
+        // An out-of-range resolution level falls back to the coarsest level
+        // that exists, rather than erroring.
+        let level = (resolution_idx as usize).min(series_meta.levels.len().saturating_sub(1));
+        let request = RegionRequest {
+            series: series as usize,
+            level,
+            z: image_plane.z.max(0) as u32,
+            t: image_plane.t.max(0) as u32,
+            channels: channel_select(series_meta, self.read_mode, image_plane.c.max(0) as u32),
+            region: Region::new(
+                image_tile.offset_x as u64,
+                image_tile.offset_y as u64,
+                width as u64,
+                height as u64,
+            ),
+            // Interleaved RGB (alpha dropped) or gray, stored sample type.
+            output: OutputSpec::default(),
+        };
+        let image = self.inner.read_region(&request).map_err(scopeio_err)?;
+        let channels = image.channels;
 
-        let meta = reader.metadata();
-        let plane_index = zct_to_plane_index(
-            meta.dimension_order,
-            meta.size_z.max(1),
-            effective_size_c(meta),
-            meta.size_t.max(1),
-            image_plane.z.max(0) as u32,
-            image_plane.c.max(0) as u32,
-            image_plane.t.max(0) as u32,
-        );
+        // Integer samples are normalized by the bit depth (the largest value
+        // becomes 1.0). Signed samples are shifted by the type's minimum
+        // first, as ImageJ does (int8: -128 -> 0.0, 0 -> 0.502, 127 -> 1.0).
+        // Float samples are kept as stored.
+        let inv = 1.0 / ((1u64 << pyramid_info.nr_bits) - 1) as f32;
+        let shift = (1u64 << (pyramid_info.nr_bits - 1)) as f64;
+        let signed = |x: f64| ((x + shift) * inv as f64) as f32;
+        let data: Vec<f32> = match image.data {
+            PixelBuf::U8(v) => v.par_iter().map(|&x| x as f32 * inv).collect(),
+            PixelBuf::I8(v) => v.par_iter().map(|&x| signed(x as f64)).collect(),
+            PixelBuf::U16(v) => v.par_iter().map(|&x| x as f32 * inv).collect(),
+            PixelBuf::I16(v) => v.par_iter().map(|&x| signed(x as f64)).collect(),
+            PixelBuf::U32(v) => v.par_iter().map(|&x| x as f32 * inv).collect(),
+            PixelBuf::I32(v) => v.par_iter().map(|&x| signed(x as f64)).collect(),
+            PixelBuf::F32(v) => v,
+            PixelBuf::F64(v) => v.par_iter().map(|&x| x as f32).collect(),
+            other => {
+                return Err(InternalErrors::ImageReadError(format!(
+                    "Unsupported sample type {:?}",
+                    other.pixel_type()
+                )));
+            }
+        };
 
-        let data = reader
-            .open_bytes_region(
-                plane_index,
-                image_tile.offset_x as u32,
-                image_tile.offset_y as u32,
-                width as u32,
-                height as u32,
-            )
-            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
-        drop(reader);
-
-        *byte_scratch = data;
-
-        decode_image(
-            byte_scratch.as_slice(),
-            pyramid_info.is_interleaved,
-            pyramid_info.is_little_endian,
-            ImageSize { width, height },
-            pyramid_info.nr_bits,
-            pyramid_info.color_channels,
-            image_tile.clone(),
-            image_plane.clone(),
-        )
+        let image_size = ImageSize { width, height };
+        let tile_offset = Point2d {
+            x: image_tile.offset_x,
+            y: image_tile.offset_y,
+        };
+        let plane = Some(image_plane.clone());
+        if channels == 3 {
+            let data =
+                Image::<f32, 3>::new(image_size, data).map_err(InternalErrors::from_kornia)?;
+            Ok(ImageContainer::F32Rgb(ManagedImage {
+                data,
+                tile_offset,
+                plane,
+            }))
+        } else {
+            let data =
+                Image::<f32, 1>::new(image_size, data).map_err(InternalErrors::from_kornia)?;
+            Ok(ImageContainer::F32Gray(ManagedImage {
+                data,
+                tile_offset,
+                plane,
+            }))
+        }
     }
 
     /// Reads every requested channel's (possibly Z-projected) tile using
-    /// `self` alone - every channel shares the one reader, serialized
-    /// through its `Mutex` (see `ImageReader::inner`). Used by callers that
+    /// `self` alone, one channel after the other. Used by callers that
     /// already parallelize at a coarser level (e.g. `job_executor.rs`
     /// parallelizes across tiles), where adding a second layer of
-    /// parallelism here would just contend rayon workers against that same
-    /// lock for no gain.
+    /// parallelism here would just add rayon dispatch for no gain.
     pub fn read_image_tile_combined(
         &self,
         series: i32,
@@ -518,8 +485,7 @@ impl ImageReader {
         c_stacks_in: Option<&Vec<i32>>,
         image_tile: &ImageTile,
     ) -> Result<Vec<ImageChannel>, InternalErrors> {
-        Self::read_image_tile_combined_impl(
-            std::slice::from_ref(&self),
+        self.read_image_tile_combined_impl(
             series,
             resolution_idx,
             z_projection,
@@ -531,19 +497,11 @@ impl ImageReader {
         )
     }
 
-    /// Same as [`Self::read_image_tile_combined`], but distributes the
-    /// independent (channel, Z-slice) reads across `pool` in parallel
-    /// instead of running them one at a time on a single reader.
-    ///
-    /// Each `ImageReader` wraps its own `bioformats` format reader object,
-    /// which is not safe to call from multiple threads at once - `inner`'s
-    /// `Mutex` only guarantees no corruption, not concurrency. `pool` must
-    /// contain genuinely distinct `ImageReader` instances opened on the same
-    /// path, not clones of the same one - each channel's
-    /// reads are pinned to one pool member (`pool[i % pool.len()]`), so two
-    /// channels never share a reader concurrently.
-    pub fn read_image_tile_combined_pooled(
-        pool: &[Arc<ImageReader>],
+    /// Same as [`Self::read_image_tile_combined`], but reads the channels in
+    /// parallel (the reader is thread-safe). For callers that read one tile
+    /// at a time, e.g. the viewer.
+    pub fn read_image_tile_combined_parallel(
+        &self,
         series: i32,
         resolution_idx: i32,
         z_projection: ZProjection,
@@ -552,12 +510,7 @@ impl ImageReader {
         c_stacks_in: Option<&Vec<i32>>,
         image_tile: &ImageTile,
     ) -> Result<Vec<ImageChannel>, InternalErrors> {
-        if pool.is_empty() {
-            return Err(InternalErrors::Internal("Reader pool is empty".into()));
-        }
-        let refs: Vec<&ImageReader> = pool.iter().map(Arc::as_ref).collect();
-        Self::read_image_tile_combined_impl(
-            &refs,
+        self.read_image_tile_combined_impl(
             series,
             resolution_idx,
             z_projection,
@@ -570,14 +523,12 @@ impl ImageReader {
     }
 
     /// Shared implementation behind [`Self::read_image_tile_combined`] and
-    /// [`Self::read_image_tile_combined_pooled`]. `pool[0]` is used for
-    /// metadata lookups (every pool member was opened on the same path, so
-    /// their metadata is equivalent); each channel's reads are pinned to
-    /// `pool[i % pool.len()]`. `parallel` selects rayon's work-stealing
-    /// iteration over the channel list vs. a plain sequential one - see the
-    /// two public wrappers for why that choice is per-caller, not automatic.
+    /// [`Self::read_image_tile_combined_parallel`]. `parallel` selects
+    /// rayon's work-stealing iteration over the channel list vs. a plain
+    /// sequential one - see the two public wrappers for why that choice is
+    /// per-caller, not automatic.
     fn read_image_tile_combined_impl(
-        pool: &[&ImageReader],
+        &self,
         series: i32,
         resolution_idx: i32,
         z_projection: ZProjection,
@@ -587,8 +538,7 @@ impl ImageReader {
         image_tile: &ImageTile,
         parallel: bool,
     ) -> Result<Vec<ImageChannel>, InternalErrors> {
-        let primary = pool[0];
-        let series_info = primary.image_meta.series.get(&series).ok_or_else(|| {
+        let series_info = self.image_meta.series.get(&series).ok_or_else(|| {
             InternalErrors::ImageReadError(format!("Series {} does not exist", series))
         })?;
 
@@ -654,13 +604,13 @@ impl ImageReader {
                     log::warn!(
                         "Channel {c_stack_to_read} was requested, but {} has only {} \
                          channel(s) (0-{}) - skipped, a pipeline reading it gets no image",
-                        primary.current_path.display(),
+                        self.current_path.display(),
                         series_info.nr_c_stacks,
                         series_info.nr_c_stacks - 1
                     );
                     return None;
                 }
-                if primary.read_mode == ReadMode::Default
+                if self.read_mode == ReadMode::Default
                     && pyramid_info.is_rgb
                     && c_stack_to_read > &0
                 {
@@ -670,414 +620,101 @@ impl ImageReader {
             })
             .collect();
 
-        // Reads one channel's (possibly Z-projected) tile from
-        // `pool[i % pool.len()]`. Each channel gets its own scratch buffer
-        // and pinned reader, so this is safe to call concurrently across
-        // channels - two channels never share a reader.
-        let read_channel =
-            |i: usize, c_stack_to_read: &i32| -> Result<ImageChannel, InternalErrors> {
-                let reader = pool[i % pool.len()];
+        // Reads one channel's (possibly Z-projected) tile; safe to call
+        // concurrently across channels.
+        let read_channel = |c_stack_to_read: &i32| -> Result<ImageChannel, InternalErrors> {
+            // --- PREP READ PARAMETERS ---
+            let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
+            let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
 
-                // --- PREP READ PARAMETERS ---
-                let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
-                let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
+            // --- INITIAL IMAGE LOAD ---
+            let mut image = self.read_image_tile(
+                series,
+                resolution_idx,
+                &ImagePlane {
+                    z: z_stack_range.start().clone(),
+                    c: c_read,
+                    t: t_read,
+                },
+                image_tile,
+            )?;
 
-                // Reused for every read below (the initial load and every
-                // Z-slice): width/height/bit depth/channel count are constant
-                // across a single channel's Z-stack, so this scratch buffer
-                // only ever grows once instead of reallocating per slice.
-                let mut byte_scratch: Vec<u8> = Vec::new();
+            // --- Z-PROJECTION LOGIC ---
+            if z_projection != ZProjection::None && !pyramid_info.is_rgb {
+                if let ImageContainer::F32Gray(mut gray_image) = image {
+                    for z in (z_stack_range.start() + 1)..=z_stack_range.end().clone() {
+                        let image_tmp = self.read_image_tile(
+                            series,
+                            resolution_idx,
+                            &ImagePlane {
+                                z,
+                                c: c_read,
+                                t: t_read,
+                            },
+                            image_tile,
+                        )?;
 
-                // --- INITIAL IMAGE LOAD ---
-                let mut image = reader.read_image_tile(
-                    series,
-                    resolution_idx,
-                    &ImagePlane {
-                        z: z_stack_range.start().clone(),
-                        c: c_read,
-                        t: t_read,
-                    },
-                    image_tile,
-                    &mut byte_scratch,
-                )?;
+                        if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
+                            let src = image_tmp_gray.as_slice();
+                            let dst = gray_image.as_slice_mut();
 
-                // --- Z-PROJECTION LOGIC ---
-                if z_projection != ZProjection::None && !pyramid_info.is_rgb {
-                    if let ImageContainer::F32Gray(mut gray_image) = image {
-                        for z in (z_stack_range.start() + 1)..=z_stack_range.end().clone() {
-                            let image_tmp = reader.read_image_tile(
-                                series,
-                                resolution_idx,
-                                &ImagePlane {
-                                    z,
-                                    c: c_read,
-                                    t: t_read,
-                                },
-                                image_tile,
-                                &mut byte_scratch,
-                            )?;
-
-                            if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
-                                let src = image_tmp_gray.as_slice();
-                                let dst = gray_image.as_slice_mut();
-
-                                match z_projection {
-                                    ZProjection::MaxIntensity => max_proj(dst, src),
-                                    ZProjection::MinIntensity => min_proj(dst, src),
-                                    ZProjection::AvgIntensity | ZProjection::SumIntensity => {
-                                        sum_proj(dst, src)
-                                    }
-                                    ZProjection::TakeTheMiddle => {
-                                        if z == z_stack_mid {
-                                            dst.copy_from_slice(src);
-                                        }
-                                    }
-                                    ZProjection::None => {}
+                            match z_projection {
+                                ZProjection::MaxIntensity => max_proj(dst, src),
+                                ZProjection::MinIntensity => min_proj(dst, src),
+                                ZProjection::AvgIntensity | ZProjection::SumIntensity => {
+                                    sum_proj(dst, src)
                                 }
+                                ZProjection::TakeTheMiddle => {
+                                    if z == z_stack_mid {
+                                        dst.copy_from_slice(src);
+                                    }
+                                }
+                                ZProjection::None => {}
                             }
                         }
-
-                        if z_projection == ZProjection::AvgIntensity {
-                            let n_inv = 1.0 / (series_info.nr_z_stacks) as f32;
-                            gray_image
-                                .as_slice_mut()
-                                .iter_mut()
-                                .for_each(|p| *p *= n_inv);
-                        }
-                        image = ImageContainer::F32Gray(gray_image);
                     }
+
+                    if z_projection == ZProjection::AvgIntensity {
+                        let n_inv = 1.0 / (series_info.nr_z_stacks) as f32;
+                        gray_image
+                            .as_slice_mut()
+                            .iter_mut()
+                            .for_each(|p| *p *= n_inv);
+                    }
+                    image = ImageContainer::F32Gray(gray_image);
                 }
+            }
 
-                // --- METADATA & FINAL OBJECT ---
-                let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
-                    InternalErrors::ImageReadError(format!("Series {} does not exist", series))
-                })?;
+            // --- METADATA & FINAL OBJECT ---
+            let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
+                InternalErrors::ImageReadError(format!("Series {} does not exist", series))
+            })?;
 
-                Ok(ImageChannel {
-                    image: Arc::new(image),
-                    color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
-                    is_visible: true,
-                    c_stack: *c_stack_to_read,
-                    name: channel_meta.name.clone(),
-                    is_rgb: pyramid_info.is_rgb,
-                })
-            };
+            Ok(ImageChannel {
+                image: Arc::new(image),
+                color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
+                is_visible: true,
+                c_stack: *c_stack_to_read,
+                name: channel_meta.name.clone(),
+                is_rgb: pyramid_info.is_rgb,
+            })
+        };
 
         let resulting_images: Vec<ImageChannel> = if parallel {
             selected_channels
                 .into_par_iter()
-                .enumerate()
-                .map(|(i, c)| read_channel(i, c))
+                .map(read_channel)
                 .collect::<Result<Vec<_>, InternalErrors>>()?
         } else {
-            // `bioformats` readers are NOT thread-safe: they hold mutable
-            // internal state (current series, resolution, file position).
-            // With a single-element pool this loop always hits the same
-            // reader, so it stays sequential rather than paying rayon
-            // dispatch overhead for tasks that would just serialize on that
-            // reader's `Mutex` anyway.
+            // The caller parallelizes at a coarser level already (see
+            // `read_image_tile_combined`).
             selected_channels
                 .into_iter()
-                .enumerate()
-                .map(|(i, c)| read_channel(i, c))
+                .map(read_channel)
                 .collect::<Result<Vec<_>, InternalErrors>>()?
         };
 
         Ok(resulting_images)
-    }
-}
-
-/// Encodes a (z, c, t) coordinate into the flat plane index
-/// `open_bytes_region`/`open_bytes` expect - the inverse of Java Bio-Formats'
-/// `getIndex(z, c, t)` (and of the `bioformats` crate's own private
-/// `zct_coords_from_order`, which decodes a plane index back into z/c/t).
-/// `c` must already be the *effective* channel index (see
-/// [`effective_size_c`]) - the plane index for an RGB series addresses one
-/// packed-RGB plane per c/z/t combination, not one plane per raw sample.
-fn zct_to_plane_index(
-    order: bioformats::DimensionOrder,
-    size_z: u32,
-    size_c: u32,
-    size_t: u32,
-    z: u32,
-    c: u32,
-    t: u32,
-) -> u32 {
-    use bioformats::DimensionOrder::*;
-    let axes = match order {
-        XYZCT => ['Z', 'C', 'T'],
-        XYZTC => ['Z', 'T', 'C'],
-        XYCZT => ['C', 'Z', 'T'],
-        XYCTZ => ['C', 'T', 'Z'],
-        XYTCZ => ['T', 'C', 'Z'],
-        XYTZC => ['T', 'Z', 'C'],
-    };
-    let mut index = 0u32;
-    for axis in axes.iter().rev() {
-        let (coord, size) = match axis {
-            'Z' => (z, size_z.max(1)),
-            'C' => (c, size_c.max(1)),
-            'T' => (t, size_t.max(1)),
-            _ => unreachable!(),
-        };
-        index = index * size + coord;
-    }
-    index
-}
-
-/// Decode the image based on the image meta data
-///
-/// # Arguments
-///
-/// - `buffer` (`&[u8]`) - Describe this parameter.
-///
-/// # Returns
-///
-/// - `Result<ImageContainer, InternalErrors>` - Describe the return value.
-///
-/// # Errors
-///
-/// Describe possible errors.
-///
-/// # Examples
-///
-/// ```
-/// use crate::...;
-///
-/// let _ = decode_image();
-/// ```
-fn decode_image(
-    buffer: &[u8],
-    is_interleaved: bool,
-    is_little_endian: bool,
-    image_size: ImageSize,
-    nr_bits: u16,
-    color_channels: u8,
-    image_tile: ImageTile,
-    plane: ImagePlane,
-) -> Result<ImageContainer, InternalErrors> {
-    // `nr_bits == 0` means the source metadata never declared a bit depth
-    // (e.g. a pyramid sub-resolution omitting `BitsPerPixel` - plausible for
-    // real-world files, not just corrupt ones). Every decode path below
-    // divides by or chunks on a byte-per-sample count derived from `nr_bits`,
-    // which is zero in that case: `par_chunks_exact(0)` panics unconditionally
-    // and `buffer.len() / (bytes_per_sample * source_planes)` divides by zero.
-    // The upper bound matters too: `(1u64 << nr_bits) - 1` below is a
-    // shift-by-too-large for anything beyond 63 (undefined in principle, and
-    // in a release build - no `overflow-checks` - silently wrong rather than
-    // a panic), and `read_le`/`read_be` panic outright once
-    // `bytes_per_sample = (nr_bits + 7) / 8` exceeds 8. No real image format
-    // needs more than 32 bits per sample, so reject anything past that here
-    // rather than let a corrupt/implausible value reach either failure mode.
-    if !(1..=32).contains(&nr_bits) {
-        return Err(InternalErrors::ImageReadError(format!(
-            "Image reports an implausible bit depth of {nr_bits} (expected 1-32, missing or \
-             corrupt BitsPerPixel metadata) - cannot decode"
-        )));
-    }
-
-    let max_val = (1u64 << nr_bits) - 1;
-    let inv_divisor = 1.0 / (max_val as f32);
-
-    let final_data = match (color_channels, is_interleaved) {
-        // Grayscale pass through
-        (1, _) => decode_samples_parallel(buffer, nr_bits, is_little_endian, inv_divisor),
-
-        // RGB interleaved (still correct layout: RGBRGB...)
-        (3, true) => decode_samples_parallel(buffer, nr_bits, is_little_endian, inv_divisor),
-
-        // RGB interleaved with alpha channel -> Remove alpha channel
-        (4, true) => {
-            let raw_f32 = decode_samples_parallel(buffer, nr_bits, is_little_endian, inv_divisor);
-            raw_f32
-                .chunks_exact(4)
-                .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]]) // Nimm nur R, G, B
-                .collect()
-        }
-
-        // RGB planar (RRR...GGG...BBB...) -> interleaved (RGBRGB...), decoded
-        // directly from the source bytes: no full-size intermediate buffer is
-        // ever materialized (unlike the interleaved paths above, which can
-        // reuse the parallel decode as-is since no reordering is needed).
-        (3, false) => {
-            decode_planar_to_interleaved(buffer, nr_bits, is_little_endian, inv_divisor, 3)
-        }
-
-        // RGBA planar with alpha channel -> RGB interleaved, alpha plane bytes
-        // are never even read.
-        (4, false) => {
-            decode_planar_to_interleaved(buffer, nr_bits, is_little_endian, inv_divisor, 4)
-        }
-
-        _ => return Err(InternalErrors::ImageReadError("".to_string())),
-    };
-
-    // Convert to korina-rs image tensor
-    if color_channels >= 3 {
-        let img =
-            Image::<f32, 3>::new(image_size, final_data).map_err(InternalErrors::from_kornia)?;
-        Ok(ImageContainer::F32Rgb(ManagedImage {
-            data: img,
-            tile_offset: Point2d {
-                x: image_tile.offset_x,
-                y: image_tile.offset_y,
-            },
-            plane: Some(plane),
-        }))
-    } else {
-        let img =
-            Image::<f32, 1>::new(image_size, final_data).map_err(InternalErrors::from_kornia)?;
-        Ok(ImageContainer::F32Gray(ManagedImage {
-            data: img,
-            tile_offset: Point2d {
-                x: image_tile.offset_x,
-                y: image_tile.offset_y,
-            },
-            plane: Some(plane),
-        }))
-    }
-}
-
-/// Converts a raw byte buffer into normalized `f32` samples in parallel, one
-/// sample per pixel-channel, preserving the buffer's original sample order.
-/// Use direct integer constructors for the two most common bit depths to
-/// avoid the 8-byte stack-buffer allocation that read_le/read_be would do.
-fn decode_samples_parallel(
-    buffer: &[u8],
-    nr_bits: u16,
-    is_little_endian: bool,
-    inv_divisor: f32,
-) -> Vec<f32> {
-    match nr_bits {
-        8 => buffer.par_iter().map(|&b| b as f32 * inv_divisor).collect(),
-        16 => buffer
-            .par_chunks_exact(2)
-            .map(|c| {
-                let v = if is_little_endian {
-                    u16::from_le_bytes([c[0], c[1]])
-                } else {
-                    u16::from_be_bytes([c[0], c[1]])
-                };
-                v as f32 * inv_divisor
-            })
-            .collect(),
-        _ => {
-            let bytes_per_sample = (nr_bits as usize + 7) / 8;
-            buffer
-                .par_chunks_exact(bytes_per_sample)
-                .map(|chunk| {
-                    let val = if is_little_endian {
-                        read_le(chunk)
-                    } else {
-                        read_be(chunk)
-                    };
-                    val as f32 * inv_divisor
-                })
-                .collect()
-        }
-    }
-}
-
-/// Reads and normalizes a single sample at `byte_offset`, matching
-/// [`decode_samples_parallel`]'s per-bit-depth semantics exactly.
-fn sample_f32(
-    buffer: &[u8],
-    byte_offset: usize,
-    nr_bits: u16,
-    is_little_endian: bool,
-    inv_divisor: f32,
-) -> f32 {
-    match nr_bits {
-        8 => buffer[byte_offset] as f32 * inv_divisor,
-        16 => {
-            let v = if is_little_endian {
-                u16::from_le_bytes([buffer[byte_offset], buffer[byte_offset + 1]])
-            } else {
-                u16::from_be_bytes([buffer[byte_offset], buffer[byte_offset + 1]])
-            };
-            v as f32 * inv_divisor
-        }
-        _ => {
-            let bytes_per_sample = (nr_bits as usize + 7) / 8;
-            let chunk = &buffer[byte_offset..byte_offset + bytes_per_sample];
-            let val = if is_little_endian {
-                read_le(chunk)
-            } else {
-                read_be(chunk)
-            };
-            val as f32 * inv_divisor
-        }
-    }
-}
-
-/// Decodes a planar (RRR...GGG...BBB...[AAA...]) byte buffer directly into an
-/// interleaved RGB `f32` buffer. `source_planes` is 3 for RGB or 4 for RGBA
-/// source data; only the first three planes are ever read, so an alpha plane
-/// (if present) is dropped without its bytes ever being touched. Unlike the
-/// interleaved decode path, this never materializes a full-size normalized
-/// copy of the source planes before reordering them. The per-pixel work is
-/// independent, so it's parallelized the same way the byte decode it
-/// replaces already was.
-fn decode_planar_to_interleaved(
-    buffer: &[u8],
-    nr_bits: u16,
-    is_little_endian: bool,
-    inv_divisor: f32,
-    source_planes: usize,
-) -> Vec<f32> {
-    let bytes_per_sample = (nr_bits as usize + 7) / 8;
-    let n = buffer.len() / (bytes_per_sample * source_planes);
-    let plane_stride = n * bytes_per_sample;
-
-    let mut interleaved = vec![0f32; n * 3];
-    interleaved
-        .par_chunks_mut(3)
-        .enumerate()
-        .for_each(|(i, px)| {
-            let base = i * bytes_per_sample;
-            px[0] = sample_f32(buffer, base, nr_bits, is_little_endian, inv_divisor);
-            px[1] = sample_f32(
-                buffer,
-                plane_stride + base,
-                nr_bits,
-                is_little_endian,
-                inv_divisor,
-            );
-            px[2] = sample_f32(
-                buffer,
-                plane_stride * 2 + base,
-                nr_bits,
-                is_little_endian,
-                inv_divisor,
-            );
-        });
-    interleaved
-}
-
-// Helper functions for byte read
-fn read_le(chunk: &[u8]) -> u64 {
-    let mut buf = [0u8; 8];
-    buf[..chunk.len()].copy_from_slice(chunk);
-    u64::from_le_bytes(buf)
-}
-
-fn read_be(chunk: &[u8]) -> u64 {
-    let mut buf = [0u8; 8];
-    let start = 8 - chunk.len();
-    buf[start..].copy_from_slice(chunk);
-    u64::from_be_bytes(buf)
-}
-
-impl Drop for ImageReader {
-    fn drop(&mut self) {
-        // Best-effort: some readers hold resources beyond a plain file
-        // handle (e.g. temp files, external decoder handles) that `close()`
-        // releases explicitly - a `Drop` impl must never panic, so a poisoned
-        // mutex or a `close()` error is simply ignored rather than
-        // propagated (nothing downstream could act on it here anyway).
-        if let Ok(mut reader) = self.inner.lock() {
-            let _ = reader.close();
-        }
     }
 }
 
@@ -1314,24 +951,6 @@ mod tests {
     }
 
     #[test]
-    fn read_image_tile_combined_pooled_errors_on_an_empty_pool() {
-        let err = ImageReader::read_image_tile_combined_pooled(
-            &[],
-            0,
-            0,
-            ZProjection::None,
-            &None,
-            0,
-            None,
-            &full_tile(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, InternalErrors::Internal(msg) if msg.contains("Reader pool is empty"))
-        );
-    }
-
-    #[test]
     fn a_nonexistent_channel_is_skipped_not_an_error() {
         // `read_image_tile_combined_impl` filters requested channels the image
         // doesn't have (as it filters channels > 0 of an RGB image): the
@@ -1369,34 +988,6 @@ mod tests {
             matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("implausible bit depth")),
             "{err:?}"
         );
-    }
-
-    #[test]
-    fn per_sample_and_parallel_decoding_agree_for_every_bit_depth() {
-        for (bits, bytes) in [(8u16, 1usize), (12, 2), (16, 2), (24, 3), (32, 4)] {
-            let max = ((1u64 << bits) - 1) as f32;
-            let inv = 1.0 / max;
-            let buffer: Vec<u8> = (0..bytes * 5).map(|i| (i * 37 + 11) as u8).collect();
-            for little_endian in [true, false] {
-                let parallel = decode_samples_parallel(&buffer, bits, little_endian, inv);
-                assert_eq!(parallel.len(), 5, "{bits} bit");
-                for (i, &value) in parallel.iter().enumerate() {
-                    let single = sample_f32(&buffer, i * bytes, bits, little_endian, inv);
-                    assert_eq!(single, value, "{bits} bit, LE {little_endian}, sample {i}");
-                }
-            }
-            // The largest value of the bit depth normalizes to exactly 1.
-            let full: Vec<u8> = if bits == 12 {
-                vec![0xFF, 0x0F]
-            } else {
-                vec![0xFF; bytes]
-            };
-            assert_eq!(
-                decode_samples_parallel(&full, bits, true, inv),
-                vec![1.0],
-                "{bits} bit"
-            );
-        }
     }
 
     #[test]
@@ -1580,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn pooled_parallel_read_matches_sequential_read() {
+    fn parallel_read_matches_sequential_read() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/multi-channel-4D-series.ome.tif"
@@ -1592,30 +1183,22 @@ mod tests {
             height: 0,
         };
 
-        // Sequential baseline: one reader, every channel's Z-stack read one
-        // (z, c) plane at a time, exactly as read_image_tile_combined always has.
-        let sequential_reader = ImageReader::new(&path.into(), ReadMode::SplitChannels).unwrap();
-        let mut sequential = sequential_reader
+        // One reader, read sequentially and with every channel in parallel.
+        let reader = ImageReader::new(&path.into(), ReadMode::SplitChannels).unwrap();
+        let mut sequential = reader
             .read_image_tile_combined(0, 0, ZProjection::MaxIntensity, &None, 0, None, &tile)
             .unwrap();
-
-        // Pooled: independent readers (not clones - each opened separately,
-        // same as ReaderPool does), channels distributed round-robin across
-        // them and read concurrently.
-        let pool: Vec<Arc<ImageReader>> = (0..3)
-            .map(|_| Arc::new(ImageReader::new(&path.into(), ReadMode::SplitChannels).unwrap()))
-            .collect();
-        let mut pooled = ImageReader::read_image_tile_combined_pooled(
-            &pool,
-            0,
-            0,
-            ZProjection::MaxIntensity,
-            &None,
-            0,
-            None,
-            &tile,
-        )
-        .unwrap();
+        let mut pooled = reader
+            .read_image_tile_combined_parallel(
+                0,
+                0,
+                ZProjection::MaxIntensity,
+                &None,
+                0,
+                None,
+                &tile,
+            )
+            .unwrap();
 
         assert_eq!(
             sequential.len(),
@@ -1638,7 +1221,7 @@ mod tests {
                     assert_eq!(
                         a.as_slice(),
                         b.as_slice(),
-                        "channel {} pixels differ between sequential and pooled reads",
+                        "channel {} pixels differ between sequential and parallel reads",
                         seq_ch.c_stack
                     );
                 }
@@ -1741,293 +1324,6 @@ mod tests {
                 ImageContainer::U32(_) => todo!(),
             }
         }
-    }
-
-    #[test]
-    fn decode_image_planar_rgb_8bit_interleaves_correctly() {
-        // 2x2 image, 8-bit planar RGB: R plane, then G plane, then B plane.
-        let buffer: Vec<u8> = vec![
-            10, 20, 30, 40, // R
-            50, 60, 70, 80, // G
-            90, 100, 110, 120, // B
-        ];
-
-        let result = decode_image(
-            &buffer,
-            false,
-            true,
-            ImageSize {
-                width: 2,
-                height: 2,
-            },
-            8,
-            3,
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        )
-        .unwrap();
-
-        match result {
-            ImageContainer::F32Rgb(img) => {
-                let expected: Vec<f32> = [10, 50, 90, 20, 60, 100, 30, 70, 110, 40, 80, 120]
-                    .iter()
-                    .map(|&v| v as f32 / 255.0)
-                    .collect();
-                compare_data(&expected, img.as_slice(), 1e-6);
-            }
-            other => panic!("expected F32Rgb, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_image_planar_rgba_16bit_drops_alpha_and_interleaves() {
-        // 2x1 image, 16-bit little-endian planar RGBA: R, G, B, A planes.
-        let samples: [u16; 8] = [
-            1000, 2000, // R
-            3000, 4000, // G
-            5000, 6000, // B
-            9999, 9999, // A (must be dropped)
-        ];
-        let mut buffer = Vec::with_capacity(samples.len() * 2);
-        for s in samples {
-            buffer.extend_from_slice(&s.to_le_bytes());
-        }
-
-        let result = decode_image(
-            &buffer,
-            false,
-            true,
-            ImageSize {
-                width: 2,
-                height: 1,
-            },
-            16,
-            4,
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        )
-        .unwrap();
-
-        match result {
-            ImageContainer::F32Rgb(img) => {
-                let inv = 1.0 / 65535.0;
-                let expected: Vec<f32> = [1000, 3000, 5000, 2000, 4000, 6000]
-                    .iter()
-                    .map(|&v| v as f32 * inv)
-                    .collect();
-                compare_data(&expected, img.as_slice(), 1e-6);
-            }
-            other => panic!("expected F32Rgb, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_image_grayscale_8bit_normalizes_samples() {
-        let buffer: Vec<u8> = vec![0, 128, 255, 64];
-
-        let result = decode_image(
-            &buffer,
-            true,
-            true,
-            ImageSize {
-                width: 2,
-                height: 2,
-            },
-            8,
-            1,
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        )
-        .unwrap();
-
-        match result {
-            ImageContainer::F32Gray(img) => {
-                let expected: Vec<f32> = buffer.iter().map(|&v| v as f32 / 255.0).collect();
-                compare_data(&expected, img.as_slice(), 1e-6);
-            }
-            other => panic!("expected F32Gray, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_image_interleaved_rgb_16bit_little_endian_preserves_order() {
-        // 1x2 image, 16-bit little-endian interleaved RGB: already RGBRGB..., so
-        // decoding must preserve sample order (unlike the planar paths, which
-        // reorder).
-        let samples: [u16; 6] = [1000, 2000, 3000, 4000, 5000, 6000];
-        let mut buffer = Vec::with_capacity(samples.len() * 2);
-        for s in samples {
-            buffer.extend_from_slice(&s.to_le_bytes());
-        }
-
-        let result = decode_image(
-            &buffer,
-            true,
-            true,
-            ImageSize {
-                width: 2,
-                height: 1,
-            },
-            16,
-            3,
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        )
-        .unwrap();
-
-        match result {
-            ImageContainer::F32Rgb(img) => {
-                let inv = 1.0 / 65535.0;
-                let expected: Vec<f32> = samples.iter().map(|&v| v as f32 * inv).collect();
-                compare_data(&expected, img.as_slice(), 1e-6);
-            }
-            other => panic!("expected F32Rgb, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_image_interleaved_rgba_8bit_drops_alpha_channel() {
-        // 1x2 image, 8-bit interleaved RGBA: RGBA RGBA.
-        let buffer: Vec<u8> = vec![
-            10, 20, 30, 255, // pixel 0 RGBA
-            40, 50, 60, 128, // pixel 1 RGBA
-        ];
-
-        let result = decode_image(
-            &buffer,
-            true,
-            true,
-            ImageSize {
-                width: 2,
-                height: 1,
-            },
-            8,
-            4,
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        )
-        .unwrap();
-
-        match result {
-            ImageContainer::F32Rgb(img) => {
-                let expected: Vec<f32> = [10, 20, 30, 40, 50, 60]
-                    .iter()
-                    .map(|&v| v as f32 / 255.0)
-                    .collect();
-                compare_data(&expected, img.as_slice(), 1e-6);
-            }
-            other => panic!("expected F32Rgb, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_image_unsupported_channel_count_returns_error() {
-        let buffer: Vec<u8> = vec![0, 0, 0, 0];
-        let result = decode_image(
-            &buffer,
-            true,
-            true,
-            ImageSize {
-                width: 2,
-                height: 1,
-            },
-            8,
-            2, // neither grayscale (1) nor RGB(A) (3/4)
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn decode_image_zero_bit_depth_returns_error_instead_of_panicking() {
-        // Regression test: metadata that omits `BitsPerPixel` (plausible for
-        // pyramid sub-resolutions in real, non-corrupt files - see
-        // image_ome_parser.rs) surfaces as `nr_bits == 0`. Before this guard,
-        // the grayscale/RGB-interleaved path panicked unconditionally on
-        // `buffer.par_chunks_exact(0)` and the planar path divided by zero -
-        // both a hard crash on opening a legitimate file.
-        let buffer: Vec<u8> = vec![0, 0, 0, 0];
-        let result = decode_image(
-            &buffer,
-            true,
-            true,
-            ImageSize {
-                width: 2,
-                height: 1,
-            },
-            0, // nr_bits
-            1,
-            ImageTile::default(),
-            ImagePlane { z: 0, c: 0, t: 0 },
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn decode_image_implausible_bit_depth_returns_error_instead_of_silently_wrong_output() {
-        // Regression test: a corrupt/implausible `BitsPerPixel` (e.g. 200,
-        // parsed straight from XML with no range check) previously made
-        // `(1u64 << nr_bits) - 1` a shift-by-too-large - undefined in
-        // principle, and silently wrong (not an error) in a release build
-        // since this crate doesn't enable `overflow-checks`. Values above 64
-        // additionally panic outright in `read_le`/`read_be`. Both must now
-        // be rejected up front instead.
-        let buffer: Vec<u8> = vec![0, 0, 0, 0];
-        for nr_bits in [64, 200, 255] {
-            let result = decode_image(
-                &buffer,
-                true,
-                true,
-                ImageSize {
-                    width: 2,
-                    height: 1,
-                },
-                nr_bits,
-                1,
-                ImageTile::default(),
-                ImagePlane { z: 0, c: 0, t: 0 },
-            );
-            assert!(
-                result.is_err(),
-                "nr_bits={nr_bits} should be rejected, not silently produce wrong output"
-            );
-        }
-    }
-
-    #[test]
-    fn decode_samples_parallel_generic_bit_depth_matches_16bit_semantics() {
-        // nr_bits = 12 falls through to the generic (non-8/16) branch, which
-        // reads via read_le/read_be into a u64 instead of u16::from_le_bytes -
-        // for a 2-byte chunk both must normalize to the same value.
-        let buffer: Vec<u8> = vec![0xFF, 0x00, 0x00, 0x10]; // LE: 0x00FF, 0x1000
-        let inv_divisor = 1.0 / 4095.0;
-
-        let little_endian = decode_samples_parallel(&buffer, 12, true, inv_divisor);
-        assert_eq!(
-            little_endian,
-            vec![0x00FF as f32 * inv_divisor, 0x1000 as f32 * inv_divisor]
-        );
-
-        let big_endian = decode_samples_parallel(&buffer, 12, false, inv_divisor);
-        assert_eq!(
-            big_endian,
-            vec![0xFF00 as f32 * inv_divisor, 0x0010 as f32 * inv_divisor]
-        );
-    }
-
-    #[test]
-    fn read_le_reconstructs_value_from_a_partial_byte_chunk() {
-        assert_eq!(read_le(&[0x01, 0x02]), 0x0201);
-        assert_eq!(read_le(&[0xFF]), 0xFF);
-        assert_eq!(read_le(&[0x00, 0x00, 0x01]), 0x010000);
-    }
-
-    #[test]
-    fn read_be_reconstructs_value_from_a_partial_byte_chunk() {
-        assert_eq!(read_be(&[0x01, 0x02]), 0x0102);
-        assert_eq!(read_be(&[0xFF]), 0xFF);
-        assert_eq!(read_be(&[0x01, 0x00, 0x00]), 0x010000);
     }
 
     #[test]
@@ -2364,10 +1660,9 @@ mod tests {
     fn read_image_tile_errors_for_a_nonexistent_series_channel_or_resolution() {
         let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
         let plane = |c| ImagePlane { z: 0, c, t: 0 };
-        let mut scratch = Vec::new();
 
         let err = reader
-            .read_image_tile(99, 0, &plane(0), &full_tile(), &mut scratch)
+            .read_image_tile(99, 0, &plane(0), &full_tile())
             .unwrap_err();
         assert!(
             matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Series 99 does not exist")),
@@ -2375,7 +1670,7 @@ mod tests {
         );
 
         let err = reader
-            .read_image_tile(0, 0, &plane(99), &full_tile(), &mut scratch)
+            .read_image_tile(0, 0, &plane(99), &full_tile())
             .unwrap_err();
         assert!(
             matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Channel 99 does not exist in series 0")),
@@ -2383,39 +1678,12 @@ mod tests {
         );
 
         let err = reader
-            .read_image_tile(0, 99, &plane(0), &full_tile(), &mut scratch)
+            .read_image_tile(0, 99, &plane(0), &full_tile())
             .unwrap_err();
         assert!(
             matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Pyramid 99 does not exist in series 0")),
             "{err:?}"
         );
-    }
-
-    /// The plane index is the inverse of Bio-Formats' `getIndex`: the first
-    /// axis after XY varies fastest. Coordinates are chosen so every order
-    /// yields a different index.
-    #[test]
-    fn zct_to_plane_index_lets_the_first_axis_vary_fastest_for_every_dimension_order() {
-        use bioformats::DimensionOrder::*;
-        let (size_z, size_c, size_t) = (2, 3, 4);
-        let (z, c, t) = (1, 0, 2);
-        let cases = [
-            (XYZCT, z + size_z * (c + size_c * t)),
-            (XYZTC, z + size_z * (t + size_t * c)),
-            (XYCZT, c + size_c * (z + size_z * t)),
-            (XYCTZ, c + size_c * (t + size_t * z)),
-            (XYTCZ, t + size_t * (c + size_c * z)),
-            (XYTZC, t + size_t * (z + size_z * c)),
-        ];
-        let mut seen = std::collections::HashSet::new();
-        for (order, expected) in cases {
-            let index = zct_to_plane_index(order, size_z, size_c, size_t, z, c, t);
-            assert_eq!(index, expected, "{order:?}");
-            assert!(seen.insert(index), "{order:?} collides with another order");
-        }
-        // A size of 0 counts as 1, so a missing axis never zeroes the index.
-        assert_eq!(zct_to_plane_index(XYZCT, 0, 0, 0, 0, 0, 0), 0);
-        assert_eq!(zct_to_plane_index(XYCZT, 0, 3, 0, 0, 2, 0), 2);
     }
 
     /// An RGB series in `ReadMode::Default` exposes one packed channel:

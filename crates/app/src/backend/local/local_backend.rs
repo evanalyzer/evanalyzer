@@ -13,7 +13,7 @@ use crate::api::SystemInfo;
 use crate::api::TemplateFolders;
 use crate::api::TrainingRequest;
 use crate::backend::LocalFileSystem;
-use crate::backend::local::image_reader::ReaderPool;
+use crate::backend::local::image_reader::open_image_source;
 use crate::backend::local::results::LocalResults;
 use crate::workspace::settings::{self, AppSettings};
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -143,7 +143,7 @@ impl Backend for LocalBackend {
 
     fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
         let path = self.files.check(path)?;
-        Ok(Arc::new(ReaderPool::open(&path)?))
+        Ok(Arc::new(open_image_source(&path)?))
     }
 
     fn open_results(&self, path: &Path) -> Result<Arc<dyn ResultsSource>, InternalErrors> {
@@ -260,13 +260,10 @@ mod home_tests {
 mod format_tests {
     use super::*;
 
-    /// The workspace builds core with the GPL Bio-Formats readers
-    /// (`bioformats-gpl` in the workspace Cargo.toml); their file extensions
-    /// must then be offered too, or the file dialog and folder scans silently
-    /// skip every VSI/CZI/ND2/LIF image. If the GPL readers are switched off
-    /// on purpose, this test goes with them.
+    /// The vendor formats' file extensions must be offered, or the file
+    /// dialog and folder scans silently skip every VSI/CZI/ND2/LIF image.
     #[test]
-    fn the_gpl_reader_formats_are_offered() {
+    fn the_vendor_formats_are_offered() {
         let formats = LocalBackend::default().image_formats();
         for format in ["tif", "vsi", "czi", "nd2", "lif"] {
             assert!(

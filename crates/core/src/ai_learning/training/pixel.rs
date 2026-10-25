@@ -1063,7 +1063,7 @@ mod tests {
     //
     // Everything above deliberately avoids touching the filesystem (see
     // this section's sibling above). This one real end-to-end run - reading
-    // an actual fixture through Bio-Formats, tiling it, computing features,
+    // an actual fixture through scopeio, tiling it, computing features,
     // and fitting a classifier - is what exercises the rest of `run`'s body
     // (the tile grid / z-stack / `ImageReader` machinery around line
     // 197 onward) that no amount of synthetic-data unit testing reaches.

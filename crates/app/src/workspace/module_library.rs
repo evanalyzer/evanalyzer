@@ -80,8 +80,9 @@ fn content_of(definition: &ModuleDefinition) -> serde_json::Value {
 /// A fingerprint of what `definition` does - its steps, parameters and
 /// classes, and those of the modules it uses inside (found in
 /// `definitions`), at any depth; not names or where they came from. Stable
-/// across runs and versions (FNV-1a over the file form), as it's saved in the
-/// project. A module using none has the fingerprint it always had.
+/// across runs and versions (FNV-1a over the file form with its keys
+/// sorted, so reordering fields in code doesn't change it), as it's saved in
+/// the project.
 pub fn content_hash(definition: &ModuleDefinition, definitions: &[ModuleDefinition]) -> String {
     let mut content = content_of(definition);
     let mut keys = Vec::new();
@@ -94,6 +95,12 @@ pub fn content_hash(definition: &ModuleDefinition, definitions: &[ModuleDefiniti
     if !uses.is_empty() {
         content["uses"] = serde_json::Value::Array(uses);
     }
+    fingerprint(content)
+}
+
+/// FNV-1a over `content`'s JSON text with every object's keys sorted.
+fn fingerprint(mut content: serde_json::Value) -> String {
+    content.sort_all_objects();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in content.to_string().bytes() {
         hash ^= byte as u64;
@@ -395,6 +402,15 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
     use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+
+    #[test]
+    fn the_fingerprint_does_not_depend_on_key_order() {
+        let a = serde_json::json!({ "steps": [{ "x": 1, "y": 2 }], "classes": [] });
+        let b = serde_json::json!({ "classes": [], "steps": [{ "y": 2, "x": 1 }] });
+        assert_eq!(fingerprint(a.clone()), fingerprint(b));
+        let c = serde_json::json!({ "steps": [{ "x": 1, "y": 3 }], "classes": [] });
+        assert_ne!(fingerprint(a), fingerprint(c), "other content");
+    }
 
     fn blur(id: u32, kernel_size: usize) -> PipelineStepSettings {
         PipelineStepSettings {

@@ -30,7 +30,7 @@ EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/joda01/im
 
 | | |
 |---|---|
-| **40+ file formats** | CZI, ND2, LIF, VSI, OME-TIFF, SLD, SCN, and more via [Bio-Formats](https://www.openmicroscopy.org/bio-formats/) |
+| **30+ file formats** | CZI, ND2, LIF, VSI, OME-TIFF, SVS, NDPI, MRXS, SCN, and more via [scopeio](https://github.com/evanalyzer/scopeio) |
 | **Multi-channel viewer** | Per-channel brightness/contrast, visibility toggles, and colour assignment |
 | **Z-stack support** | Single-plane selection or intensity projections (Max, Min, Average, Sum, Middle) |
 | **Time-lapse support** | Playback through T-stack sequences at configurable frame rates |
@@ -100,7 +100,7 @@ The workspace is organised into focused crates:
 
 | Crate | Description |
 |---|---|
-| `evanalyzer_core` | Image I/O (Bio-Formats, native Rust), processing algorithms, object model, pipeline execution |
+| `evanalyzer_core` | Image I/O (scopeio, native Rust), processing algorithms, object model, pipeline execution |
 | `evanalyzer_cfg` | Project settings, serialisation to JSON, pipeline command configuration |
 | `evanalyzer_app` | Application handle, shared project state |
 | `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, object tools, classification panel |
@@ -455,20 +455,22 @@ cargo build-mac
 
 ## Supported Image Formats
 
-EVAnalyzer reads files through Bio-Formats and supports all formats it provides. Common formats include:
+EVAnalyzer reads files through [scopeio](https://github.com/evanalyzer/scopeio), a pure-Rust reader for microscopy and whole-slide images:
 
 | Format | Extension(s) |
 |---|---|
-| TIFF / BigTIFF | `.tif` `.tiff` `.btif` `.btf` |
-| Zeiss CZI | `.czi` |
+| TIFF / BigTIFF / OME-TIFF | `.tif` `.tiff` `.tf2` `.tf8` `.btf` |
+| Zeiss CZI / LSM / ZVI | `.czi` `.lsm` `.zvi` |
 | Nikon ND2 | `.nd2` |
-| Leica LIF | `.lif` `.lei` |
-| Olympus VSI | `.vsi` |
-| OME-TIFF | `.ome.tiff` |
-| Slidebook | `.sld` |
-| Leica SCN | `.scn` |
-| JPEG | `.jpg` `.jpeg` |
-| And many more | `.ics` `.fli` `.sxm` `.lim` `.oir` `.stk` `.msr` `.dm3` `.dm4` `.svs` … |
+| Leica LIF / LOF / XLEF / SCN | `.lif` `.lof` `.xlef` `.xlcf` `.xlif` `.scn` |
+| Olympus VSI / OIB / OIF / OIR | `.vsi` `.oib` `.oif` `.oir` |
+| Aperio SVS | `.svs` |
+| Hamamatsu NDPI | `.ndpi` `.ndpis` |
+| 3DHistech MIRAX | `.mrxs` |
+| Ventana BIF, Akoya QPTIFF | `.bif` `.qptiff` |
+| Imaris, DeltaVision, MetaMorph | `.ims` `.dv` `.r3d` `.stk` `.nd` |
+| DICOM | `.dcm` `.dicom` |
+| PNG, JPEG, JPEG 2000, BMP | `.png` `.jpg` `.jpeg` `.jp2` `.j2k` `.bmp` |
 
 ---
 
@@ -663,8 +665,6 @@ For commercial licensing enquiries, please open an issue or contact the maintain
 
 ## Acknowledgements
 
-- [Bio-Formats](https://www.openmicroscopy.org/bio-formats/) — Open Microscopy Environment
-- [Bio-Formats-Rust](https://www.henlab.org/) — Johan Henriksson and his lab for porting Bioformats to Rust
 - [Slint](https://slint.dev/) — cross-platform UI toolkit for Rust
 - [Kornia-rs](https://github.com/kornia/kornia-rs) — computer vision primitives in Rust
 - [Skia](https://skia.org/) — 2D graphics renderer

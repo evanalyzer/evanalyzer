@@ -27,8 +27,6 @@ pub struct PyramidInfo {
     pub height: u64,
     pub tile_width: u64,
     pub tile_height: u64,
-    pub is_interleaved: bool,
-    pub is_little_endian: bool,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]

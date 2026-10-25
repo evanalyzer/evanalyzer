@@ -19,7 +19,7 @@ kornia-imgproc = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-bioformats = { workspace = true }
+scopeio = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }
 rustfft = { workspace = true }
@@ -51,7 +51,6 @@ libtorch = ["evanalyzer_ai_engine/torch-plugin"]
 # libtorch linked into the process instead of the plugin - for the model
 # steps' tests (`cargo test -p evanalyzer_core --features libtorch-in-process`).
 libtorch-in-process = ["evanalyzer_ai_engine/test-support"]
-bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 duckdb = { workspace = true, features = ["bundled"] }

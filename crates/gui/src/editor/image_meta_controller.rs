@@ -877,8 +877,9 @@ mod tests {
 
         let channels = ui.global::<ChannelState>().get_channels();
         assert_eq!(channels.row_count(), series.channels.len());
-        // The fixture is an RGB image: three channels named Red/Green/Blue.
-        assert!(meta_ui.get_is_rgb());
+        // The fixture is a 3-channel fluorescence image, not RGB.
+        assert_eq!(series.nr_c_stacks, 3);
+        assert!(!meta_ui.get_is_rgb());
         assert_eq!(
             ui.global::<ChannelState>().get_intensity_projection(),
             IntensityProjection::SingleStack
@@ -944,13 +945,14 @@ mod tests {
             channels().iter().filter(|c| c.active).count(),
             "the counter shows the visible channels"
         );
-        let white = slint::Color::from_rgb_u8(255, 255, 255);
+        let colors = || channels().iter().map(|c| c.color).collect::<Vec<_>>();
+        let colored = colors();
 
         ui.global::<ChannelState>().invoke_grayscale_toggled(true);
         drain_ui_queue();
         assert!(ui.global::<ChannelState>().get_grayscale());
-        // The switches should still stay in color
-        assert!(channels().iter().all(|c| c.color != white));
+        // The switches keep their channel colours
+        assert_eq!(colors(), colored);
         assert_eq!(channels().iter().filter(|c| c.active).count(), 1);
         assert_eq!(state().get_active_count(), 1);
         assert!(ui_state.get_project().images.settings.grayscale);
@@ -959,7 +961,7 @@ mod tests {
         ui.global::<ChannelState>().invoke_grayscale_toggled(false);
         drain_ui_queue();
         assert!(!ui.global::<ChannelState>().get_grayscale());
-        assert!(channels().iter().any(|c| c.color != white), "colours again");
+        assert_eq!(colors(), colored, "colours again");
     }
 
     #[test]

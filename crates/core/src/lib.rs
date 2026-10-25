@@ -18,7 +18,6 @@ pub use crate::storage::mask_codec::{decode_mask, encode_mask};
 pub use crate::utils::resources::SystemDiagnostics;
 pub use crate::utils::resources::cpu_ram_diagnostics;
 pub use crate::utils::resources::recommended_parallelism;
-pub use crate::utils::resources::recommended_reader_pool_size;
 pub use crate::utils::resources::system_diagnostics;
 pub use evanalyzer_ai_engine::cuda_is_available;
 

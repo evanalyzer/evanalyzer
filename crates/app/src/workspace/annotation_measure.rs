@@ -50,7 +50,7 @@ pub fn measure_on_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::local::image_reader::ReaderPool;
+    use crate::backend::local::image_reader::open_image_source;
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::ImagePlane;
     use evanalyzer_cfg::core_types::ImageTile;
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn an_annotation_is_measured_on_its_own_pixels_of_the_image() {
-        let source = ReaderPool::open(&fixture()).unwrap();
+        let source = open_image_source(&fixture()).unwrap();
         let full = source.meta().series[&0].resolutions[&0].clone();
         let (w, h) = (full.width as usize, full.height as usize);
         // The whole image at once, for the expected values.
@@ -173,7 +173,7 @@ mod tests {
     fn bench_measure_drawn() {
         use std::time::Instant;
         let path = PathBuf::from(std::env::var("EVANALYZER_BENCH_SLIDE").unwrap());
-        let source = ReaderPool::open(&path).unwrap();
+        let source = open_image_source(&path).unwrap();
         let full = source.meta().series[&0].resolutions[&0].clone();
         let (w, h) = (full.width as usize, full.height as usize);
         let rss = || {

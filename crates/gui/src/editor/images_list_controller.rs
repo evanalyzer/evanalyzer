@@ -144,10 +144,9 @@ impl ImagesListController {
                 // `trigger_new_image_redraw` only enqueues worker tasks
                 // (`dispatch_worker_task`) and returns immediately, it
                 // doesn't block on the reads themselves. Those worker
-                // threads call `get_or_create_reader_pool`, which now reuses
-                // the same single-reader cache `sync_image_meta_to_slint`
-                // below is about to populate (see `ReaderPool`'s doc comment
-                // in `project_owner.rs`) - calling it first lets that reader
+                // threads open the image through the same cached reader
+                // `sync_image_meta_to_slint` below is about to populate -
+                // calling it first lets that reader
                 // open race for the shared cache concurrently with metadata
                 // sync instead of only starting once metadata sync (and the
                 // two calls after it) have already finished.

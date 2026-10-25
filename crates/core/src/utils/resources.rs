@@ -145,21 +145,6 @@ pub fn format_binary_bytes(bytes: u64) -> String {
     }
 }
 
-/// Rough estimate of the peak RAM one pooled reader can hold: parsed
-/// metadata/tile index and headroom for one in-flight tile buffer. Much
-/// lighter than a pipeline worker (see [`estimate_ram_per_worker_bytes`]) -
-/// a reader has no pipeline scratch buffers or object masks - so
-/// reader-pool sizing is a separate, smaller budget from
-/// [`recommended_parallelism`]. Heuristic guardrail, not a measured bound.
-const ESTIMATED_RAM_PER_READER_BYTES: u64 = 150_000_000;
-
-/// Ceiling on reader-pool size regardless of cores/RAM available. Some
-/// multiplexed formats have dozens of channels; there's no benefit to a
-/// pool bigger than a handful of readers even on a large, idle machine, and
-/// every extra reader is another format reader's worth of held metadata plus
-/// another potential in-flight tile buffer.
-const MAX_READER_POOL_SIZE: usize = 8;
-
 /// Currently available system RAM, in bytes (free memory plus easily
 /// reclaimable caches/buffers - what the OS would actually hand out to a new
 /// allocation right now).
@@ -188,28 +173,9 @@ pub fn recommended_parallelism(ram_per_worker_bytes: u64) -> usize {
     cores.min(ram_capped).max(1)
 }
 
-/// Recommended number of independent format readers to keep pooled for one
-/// open image, so multiple channels/Z-slices can be read in parallel instead
-/// of serializing through a single reader's `Mutex` (see `ReaderPool` in
-/// `evanalyzer_app`).
-///
-/// Same shape as [`recommended_parallelism`] - cores (minus one, for the
-/// UI thread, since this pool backs interactive viewport rendering) capped
-/// by however many readers available RAM can comfortably hold - but against
-/// [`ESTIMATED_RAM_PER_READER_BYTES`] instead, since a reader is far
-/// lighter than a full pipeline worker, and additionally bounded by
-/// [`MAX_READER_POOL_SIZE`].
-pub fn recommended_reader_pool_size() -> usize {
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).max(1))
-        .unwrap_or(1);
-    let ram_capped = (available_memory_bytes() / ESTIMATED_RAM_PER_READER_BYTES).max(1) as usize;
-    cores.min(ram_capped).min(MAX_READER_POOL_SIZE).max(1)
-}
-
 /// Snapshot of host machine capabilities, surfaced read-only (e.g. in the
 /// About dialog's System tab). Not used for any sizing decision - see
-/// [`recommended_parallelism`]/[`recommended_jvm_heap_bytes`] for that.
+/// [`recommended_parallelism`] for that.
 pub struct SystemDiagnostics {
     pub cpu_cores: usize,
     pub total_ram_bytes: u64,
@@ -371,24 +337,6 @@ mod tests {
             few_workers >= many_workers,
             "fewer concurrent workers must never result in a smaller per-worker cache"
         );
-    }
-
-    #[test]
-    fn recommended_reader_pool_size_is_never_zero() {
-        assert!(recommended_reader_pool_size() >= 1);
-    }
-
-    #[test]
-    fn recommended_reader_pool_size_never_exceeds_available_cores() {
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        assert!(recommended_reader_pool_size() <= cores);
-    }
-
-    #[test]
-    fn recommended_reader_pool_size_never_exceeds_the_hard_cap() {
-        assert!(recommended_reader_pool_size() <= MAX_READER_POOL_SIZE);
     }
 
     #[test]

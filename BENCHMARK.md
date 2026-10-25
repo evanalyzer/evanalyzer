@@ -772,9 +772,9 @@ Per tile (new debug line "tile (x, y): read … s, all … s"): a full 4096²
 tile takes ~55 s with 21 tiles at once, 35-41 s of it reading. The 5-channel
 series is 5 z-planes × 5 channels of JPEG 2000 tiles (512², 25,650 at full
 resolution, max projection over z): ~1,600 decoded per 4096² tile, ~8 ms
-each on one core (bioformats-rs' openjpeg2-pure-rs) - 13-14 s per tile
+each on one core (the image reader's JPEG 2000 decoder) - 13-14 s per tile
 alone, 35-41 s when 21 tiles share this laptop CPU (Core Ultra 9 185H: 6 P +
-10 E cores). Reading is bioformats-rs' part (not changed here).
+10 E cores). Reading is the image reader's part (not changed here).
 
 Median Subtract was the biggest step: 174-183 s CPU per run (42 calls,
 4.8 s per 4096² tile, radius 3: 37 values ranked per pixel). Now a sliding
@@ -792,6 +792,25 @@ against ranking every window, NaN/ties/RGB/-0.0 fallback). Rows in parallel.
 
 Exported objects: 0 rows differ from before, whole slide and 81 images.
 (The machine had load 4-9 from outside during these runs.)
+
+## One shared image reader (2026-10-25)
+
+The image reader (scopeio) is thread-safe: one reader per image now serves
+every tile of a pipeline run (before: a fresh reader per tile) and the viewer
+(before: a pool of up to 8 readers, one per channel). Opening takes
+0.2-1.2 ms (`.vsi`, `.nd2`, OME-TIFF in `tests/`), so the per-tile reopen
+cost ~1 ms - the change is mostly simpler code. Old / new builds alternated,
+10 s apart:
+
+| | before | after |
+|---|---|---|
+| Pipeline, 6 images 12288² (9 tiles each), 8 threads | 3.87 / 3.94 / 4.23 s | 4.03 / 4.05 / 4.12 s |
+| Its peak RSS | 3.9-4.6 GB | 4.5-4.6 GB |
+| Viewer read, 3-channel ND2 2424², max of 23 z (3 readers / 1) | 610-760 ms | 660-940 ms |
+| Its peak RSS | 285-398 MB | 375-386 MB |
+| Opening for the viewer | 2.2-2.7 ms | 0.8-1.0 ms |
+
+Same objects (112,941, same area sum). Within noise, no speed or RAM change.
 
 ## Peak RAM overview - for the system requirements
 
@@ -826,6 +845,8 @@ graphics driver).
 | Measure Texture, 8192² image + 74,529 objects | 603 MB (test process, ~520 MB of it the test image) | 2026-10-24 | Measure Texture |
 | Results views, 5.6M objects, measurement columns (plate, per image, list, histogram) | 113-228 MB (query process) | 2026-10-24 | Measurement storage and object intensity spread |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
+| Running a pipeline: 6 images 12288² (54 tiles), 8 threads | 4.5-4.6 GB | 2026-10-25 | One shared image reader |
+| Reading a 3-channel ND2 2424² with a max projection of 23 z | ~390 MB (test process) | 2026-10-25 | One shared image reader |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

@@ -580,10 +580,16 @@ impl<'a> JobExecutor {
             None => MAX_TILE_SIZE,
         };
 
-        // Extract everything needed from the reader in a scoped block so the
-        // borrow ends before tiles are processed in parallel - each tile work
-        // item below opens its own reader so concurrent threads never share
-        // mutable file-handle state.
+        // One reader for the whole image: it is thread-safe, every tile
+        // below reads through it in parallel.
+        let start = Instant::now();
+        let reader = ImageReader::new(image_path, ReadMode::Default)?;
+        log::debug!(
+            "Prepare image reader {:?} {:?}",
+            image_rel_path,
+            start.elapsed()
+        );
+
         let (
             full_size,
             z_proj,
@@ -598,11 +604,6 @@ impl<'a> JobExecutor {
             nr_t_stacks,
             frame_interval_s,
         ) = {
-            let start = Instant::now();
-            let reader = ImageReader::new(image_path, ReadMode::Default)?;
-            let duration = start.elapsed();
-            log::debug!("Prepare image reader {:?} {:?}", image_rel_path, duration);
-
             let series_info = reader
                 .image_meta
                 .series
@@ -828,14 +829,7 @@ impl<'a> JobExecutor {
 
                     let is_bp_target = breakpoint_targets.contains(&(tile.offset_x, tile.offset_y));
 
-                    // A fresh reader per tile, not pooled: measured to be
-                    // faster in practice than sharing a small mutex-guarded
-                    // pool across many concurrent tiles (see
-                    // `prepare_pipeline_cache`'s doc comment) - the pool's
-                    // per-tile lock contention cost more wall-clock time
-                    // than the reader construction it was meant to save.
                     let tile_start = Instant::now();
-                    let reader = ImageReader::new(image_path, ReadMode::Default)?;
 
                     let mut cache = self.prepare_pipeline_cache(
                         global_cache.clone(),

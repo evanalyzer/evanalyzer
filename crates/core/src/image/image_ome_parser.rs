@@ -2,110 +2,71 @@ use crate::image::image_meta::{
     ChannelInfo, ImageInfo, ImageMeta, Objective, PixelSizes, PyramidInfo,
 };
 use crate::image::image_reader::ReadMode;
-use bioformats::common::metadata::{ImageMetadata, MetadataValue};
-use bioformats::common::reader::FormatReader;
 use evanalyzer_cfg::core_types::InternalErrors;
-use std::collections::HashMap;
+use scopeio::{ChannelSelect, Plane, SeriesMeta};
 use std::path::Path;
 
-/// Physical pixel sizes on [`bioformats::common::ome_metadata::OmeImage`] are
-/// always reported in micrometres (see that struct's doc comments); the rest
-/// of this app stores lengths in nanometres.
-const MICROMETER_TO_NANOMETER: f32 = 1_000.0;
-
-fn bf_err(e: bioformats::common::error::BioFormatsError) -> InternalErrors {
+pub(crate) fn scopeio_err(e: scopeio::Error) -> InternalErrors {
     InternalErrors::ImageReadError(e.to_string())
 }
 
-/// Samples packed into one pixel of the *current* series/resolution - 1 for
-/// a plain (grayscale or multi-channel) series, otherwise however many
-/// samples `is_rgb` packs together (almost always 3). Mirrors Java
-/// Bio-Formats' `IFormatReader.getRGBChannelCount()`; the `bioformats` crate
-/// computes the same value internally (see `wrappers::ChannelSeparator`) but
-/// doesn't expose it publicly, so it's re-derived here from the documented
-/// `ImageMetadata` fields.
-fn rgb_channel_count(meta: &ImageMetadata) -> u32 {
-    if !meta.is_rgb {
-        return 1;
-    }
-    let zt = meta.size_z.max(1).saturating_mul(meta.size_t.max(1));
-    if zt > 0 && meta.image_count >= zt {
-        let effective_c = (meta.image_count / zt).max(1);
-        if effective_c > 0 && meta.size_c >= effective_c && meta.size_c % effective_c == 0 {
-            return (meta.size_c / effective_c).max(1);
-        }
-    }
-    meta.size_c.max(1)
-}
-
-/// The number of *distinct* channel planes/stacks, excluding RGB-packed
-/// samples that live inside one plane together. Mirrors Java's
-/// `getEffectiveSizeC()` - see [`rgb_channel_count`]. `pub(crate)` since
-/// `image_reader.rs` needs the same value to compute a plane index for
-/// `open_bytes_region`.
-pub(crate) fn effective_size_c(meta: &ImageMetadata) -> u32 {
-    if meta.is_rgb {
-        (meta.size_c / rgb_channel_count(meta)).max(1)
+/// Channels one scopeio channel becomes in this app: an RGB channel is split
+/// into its red, green and blue samples in [`ReadMode::SplitChannels`]
+/// (alpha dropped), everything else stays one channel.
+fn channels_per_source(series: &SeriesMeta, read_mode: ReadMode) -> u32 {
+    if read_mode == ReadMode::SplitChannels && series.samples_per_pixel >= 3 {
+        3
     } else {
-        meta.size_c.max(1)
+        1
     }
 }
 
-/// Reads `key` from `series_metadata` as a display string, regardless of
-/// which [`MetadataValue`] variant it was stored as.
-fn metadata_string(series_metadata: &HashMap<String, MetadataValue>, key: &str) -> Option<String> {
-    Some(series_metadata.get(key)?.to_string())
-}
-
-/// Reads `key` from `series_metadata` as an `f64`, regardless of whether the
-/// reader stored it as a genuine float or (as some readers do for
-/// less-common tags) a plain string.
-fn metadata_f64(series_metadata: &HashMap<String, MetadataValue>, key: &str) -> Option<f64> {
-    match series_metadata.get(key)? {
-        MetadataValue::Float(f) => Some(*f),
-        MetadataValue::Int(i) => Some(*i as f64),
-        MetadataValue::String(s) => s.parse().ok(),
-        MetadataValue::Bool(_) | MetadataValue::Bytes(_) => None,
+/// What scopeio reads for this app's channel index `c`.
+pub(crate) fn channel_select(series: &SeriesMeta, read_mode: ReadMode, c: u32) -> ChannelSelect {
+    match channels_per_source(series, read_mode) {
+        1 => ChannelSelect::Channel(c),
+        n => ChannelSelect::Sample {
+            channel: c / n,
+            sample: (c % n) as u8,
+        },
     }
 }
 
-/// Builds this app's [`ImageMeta`] by walking every series/resolution of an
-/// already-opened `bioformats` reader (`reader.set_id`/`ImageReader::open`
-/// must have already run - this only reads state, it never opens a file).
-///
-/// Replaces the old hand-rolled OME-XML string parser: `bioformats` already
-/// parses every supported format's metadata into typed Rust structs
-/// (`ImageMetadata`/`OmeMetadata`), so there is no XML left to parse here -
-/// this is now a straight field-by-field mapping from the crate's model to
-/// this app's own `ImageMeta`/`ImageInfo`/`PyramidInfo` shape.
-/// The time between two frames [s]: the image's `TimeIncrement`, else
-/// derived from its planes' time stamps (`DeltaT`) - the mean step between
-/// the first and the last frame of channel 0, z 0. `None` without either,
-/// or for a single frame.
+/// Bits per sample: the significant bits if the file declares them (e.g. 12
+/// for 12-bit data stored as u16), else the full width of the sample type.
+fn bit_depth(series: &SeriesMeta) -> u16 {
+    series
+        .significant_bits
+        .filter(|&bits| bits > 0)
+        .map(u16::from)
+        .unwrap_or(series.pixel_type.bytes() as u16 * 8)
+}
+
+/// The time between two frames [s]: the series' time increment, else
+/// derived from the planes' time stamps - the mean step between the first
+/// and the last frame of channel 0, z 0 (`delta_t(t)`). `None` without
+/// either, or for a single frame.
 fn frame_interval(
-    image: &bioformats::common::ome_metadata::OmeImage,
+    time_increment_s: Option<f64>,
     nr_t_stacks: i32,
+    delta_t: impl Fn(u32) -> Option<f64>,
 ) -> Option<f32> {
     let positive = |v: f64| (v.is_finite() && v > 0.0).then_some(v as f32);
-    if let Some(v) = image.time_increment.and_then(positive) {
+    if let Some(v) = time_increment_s.and_then(positive) {
         return Some(v);
     }
     if nr_t_stacks < 2 {
         return None;
     }
-    let stamp = |t: u32| {
-        image
-            .planes
-            .iter()
-            .find(|p| p.the_c == 0 && p.the_z == 0 && p.the_t == t)
-            .and_then(|p| p.delta_t)
-    };
     let last = (nr_t_stacks - 1) as u32;
-    positive((stamp(last)? - stamp(0)?) / last as f64)
+    positive((delta_t(last)? - delta_t(0)?) / last as f64)
 }
 
+/// Builds this app's [`ImageMeta`] from an opened scopeio reader: a
+/// field-by-field mapping of each series' [`SeriesMeta`] (scopeio already
+/// reports lengths and wavelengths in nanometres, like this app).
 pub(crate) fn build_image_meta(
-    reader: &mut dyn FormatReader,
+    reader: &dyn scopeio::ImageReader,
     path: &Path,
     read_mode: ReadMode,
 ) -> Result<ImageMeta, InternalErrors> {
@@ -119,166 +80,81 @@ pub(crate) fn build_image_meta(
     };
 
     let mut objective_set = false;
-    let series_count = reader.series_count();
+    for series_idx in 0..reader.series_count() {
+        let series = reader.series_meta(series_idx).map_err(scopeio_err)?;
+        let split = channels_per_source(series, read_mode);
+        let is_rgb = series.samples_per_pixel >= 3;
 
-    for series_idx in 0..series_count {
-        reader.set_series(series_idx).map_err(bf_err)?;
-
-        let ome = reader.ome_metadata();
-
-        let (mut info, series_metadata) = {
-            let base = reader.metadata();
-            (
-                ImageInfo {
-                    nr_c_stacks: effective_size_c(base) as i32,
-                    nr_z_stacks: base.size_z.max(1) as i32,
-                    nr_t_stacks: base.size_t.max(1) as i32,
-                    ..Default::default()
-                },
-                base.series_metadata.clone(),
-            )
+        let mut info = ImageInfo {
+            nr_c_stacks: (series.size_c.max(1) * split) as i32,
+            nr_z_stacks: series.size_z.max(1) as i32,
+            nr_t_stacks: series.size_t.max(1) as i32,
+            pixel_sizes: PixelSizes {
+                px_size_x: series.physical_size.x_nm.unwrap_or(0.0) as f32,
+                px_size_y: series.physical_size.y_nm.unwrap_or(0.0) as f32,
+                px_size_z: series.physical_size.z_nm.unwrap_or(0.0) as f32,
+            },
+            ..Default::default()
         };
 
-        let ome_image = ome.as_ref().and_then(|o| o.images.get(series_idx));
-
-        // Populated from `0..nr_c_stacks` (the already-computed real channel
-        // count), not from `ome_image.channels.len()` - some readers (e.g.
-        // VSI) report a `size_c`/`image_count` that implies N real channels
-        // but only populate the OME channel list with 1 entry. Trusting the
-        // OME list's own length there silently drops every channel above
-        // the first, which then fails downstream with "Channel <i> does not
-        // exist" the moment anything asks to read it.
+        const RGB_NAMES: [&str; 3] = ["Red", "Green", "Blue"];
+        const RGB_EMISSION_NM: [f32; 3] = [635.0, 532.0, 450.0];
         for i in 0..info.nr_c_stacks {
-            let channel = ome_image.and_then(|img| img.channels.get(i as usize));
-
-            // The Olympus CellSens/VSI reader doesn't populate the standard
-            // OME channel fields at all (unlike e.g. its own FV1000/OIF
-            // reader, which does) - the same data is there, just under its
-            // own vendor-prefixed `series_metadata` keys instead. Only
-            // consulted when the OME channel itself didn't already have an
-            // answer, so a reader that *does* populate the standard fields
-            // is never second-guessed.
-            let name = channel
-                .and_then(|c| c.name.clone())
-                .or_else(|| {
-                    metadata_string(&series_metadata, &format!("cellsens.ets.channel_name.{i}"))
-                })
-                .unwrap_or_default();
-            let emission_wave_length = channel
-                .and_then(|c| c.emission_wavelength)
-                .or_else(|| {
-                    metadata_f64(
-                        &series_metadata,
-                        &format!("cellsens.ets.channel_wavelength.{i}"),
-                    )
-                })
-                .unwrap_or(0.0) as f32;
-
+            let source = series.channels.get(i as usize / split as usize);
+            let (name, emission_wave_length) = if split == 3 {
+                let sample = i as usize % 3;
+                (RGB_NAMES[sample].to_string(), RGB_EMISSION_NM[sample])
+            } else {
+                (
+                    source.and_then(|c| c.name.clone()).unwrap_or_default(),
+                    source.and_then(|c| c.emission_wavelength_nm).unwrap_or(0.0) as f32,
+                )
+            };
             info.channels.insert(
                 i,
                 ChannelInfo {
                     id: format!("Channel:{series_idx}:{i}"),
                     name,
                     emission_wave_length,
-                    contrast_method: channel
+                    contrast_method: source
                         .and_then(|c| c.contrast_method.clone())
                         .unwrap_or_default(),
                 },
             );
         }
 
-        info.frame_interval = ome_image.and_then(|img| frame_interval(img, info.nr_t_stacks));
+        info.frame_interval = frame_interval(series.time_increment_s, info.nr_t_stacks, |t| {
+            reader
+                .plane_meta(series_idx, Plane::new(0, 0, t))
+                .ok()
+                .and_then(|p| p.delta_t_s)
+        });
 
-        if let Some(ome_image) = ome_image {
-            info.pixel_sizes = PixelSizes {
-                px_size_x: ome_image.physical_size_x.unwrap_or(0.0) as f32
-                    * MICROMETER_TO_NANOMETER,
-                px_size_y: ome_image.physical_size_y.unwrap_or(0.0) as f32
-                    * MICROMETER_TO_NANOMETER,
-                px_size_z: ome_image.physical_size_z.unwrap_or(0.0) as f32
-                    * MICROMETER_TO_NANOMETER,
+        if !objective_set && let Some(objective) = &series.objective {
+            meta.objective = Objective {
+                manufacturer: objective.manufacturer.clone().unwrap_or_default(),
+                model: objective.model.clone().unwrap_or_default(),
+                magnification: objective.magnification.unwrap_or(0.0) as f32,
             };
-
-            if !objective_set
-                && let Some(ome_full) = ome.as_ref()
-                && let Some(instrument_idx) = ome_image.instrument_ref
-                && let Some(objective_idx) = ome_image.objective_ref
-                && let Some(instrument) = ome_full.instruments.get(instrument_idx)
-                && let Some(objective) = instrument.objectives.get(objective_idx)
-            {
-                meta.objective = Objective {
-                    manufacturer: objective.manufacturer.clone().unwrap_or_default(),
-                    model: objective.model.clone().unwrap_or_default(),
-                    magnification: objective.nominal_magnification.unwrap_or(0.0) as f32,
-                };
-                objective_set = true;
-            }
+            objective_set = true;
         }
 
-        let resolution_count = reader.resolution_count();
-        for res in 0..resolution_count {
-            reader.set_resolution(res).map_err(bf_err)?;
-            let m = reader.metadata();
-            let mut pyramid_info = PyramidInfo {
-                nr_bits: m.bits_per_pixel as u16,
-                color_channels: rgb_channel_count(m) as u8,
-                is_rgb: m.is_rgb,
-                width: m.size_x as u64,
-                height: m.size_y as u64,
-                // `bioformats` handles its own internal tiling
-                // transparently (`open_bytes_region` accepts an
-                // arbitrary region, not a fixed native tile) - unlike
-                // the old Java wrapper's `getOptimalTileWidth/Height`,
-                // there is no native tile size to report here, and
-                // nothing downstream reads it as more than a display
-                // value, so it's just the resolution's own dimensions.
-                tile_width: m.size_x as u64,
-                tile_height: m.size_y as u64,
-                is_interleaved: m.is_interleaved,
-                is_little_endian: m.is_little_endian,
-            };
-
-            // `ReadMode::SplitChannels` reports each RGB sample as its own
-            // single-component channel, so `is_rgb` reads `false` by the
-            // time it gets here - Bio-Formats' `ChannelSeparator` has the
-            // identical limitation in Java, which the old Java-backed
-            // version of this parser worked around with this exact
-            // signature (see git history, pre-port `image_ome_parser.rs`:
-            // "TODO: This is a trick to find RGB images if we use split
-            // channel"). Ported as-is for parity, imprecision included -
-            // it can't perfectly distinguish a split RGB image from a
-            // genuine 3-channel 8-bit non-interleaved fluorescence image,
-            // same as the Java-era heuristic couldn't - which is exactly
-            // why the old code (and this) only ever applies it in
-            // `SplitChannels` mode: a plain `ReadMode::Default` open of a
-            // genuine 3-channel fluorescence file must never be
-            // reclassified as RGB just because it happens to match this
-            // shape (see `build_image_meta_reads_series_channel_and_resolution_shape_from_a_real_file`,
-            // a real non-RGB 3-channel 8-bit fixture that does).
-            if read_mode == ReadMode::SplitChannels
-                && pyramid_info.color_channels == 1
-                && !pyramid_info.is_interleaved
-                && info.nr_c_stacks == 3
-                && pyramid_info.nr_bits == 8
-            {
-                pyramid_info.is_rgb = true;
-                const RGB_NAMES: [&str; 3] = ["Red", "Green", "Blue"];
-                const RGB_EMISSION_NM: [f32; 3] = [635.0, 532.0, 450.0];
-                for i in 0..3 {
-                    if let Some(channel) = info.channels.get_mut(&i) {
-                        channel.name = RGB_NAMES[i as usize].to_string();
-                        channel.emission_wave_length = RGB_EMISSION_NM[i as usize];
-                    }
-                }
-            }
-
-            info.resolutions.insert(res as i32, pyramid_info);
+        for (res, level) in series.levels.iter().enumerate() {
+            info.resolutions.insert(
+                res as i32,
+                PyramidInfo {
+                    nr_bits: bit_depth(series),
+                    // Alpha is dropped on read; split RGB samples are gray.
+                    color_channels: if is_rgb && split == 1 { 3 } else { 1 },
+                    is_rgb,
+                    width: level.size_x,
+                    height: level.size_y,
+                    // Reads take any region, so the level itself is the tile.
+                    tile_width: level.size_x,
+                    tile_height: level.size_y,
+                },
+            );
         }
-        // `set_series` always resets the active resolution back to 0 (see
-        // e.g. the TIFF reader), but reset explicitly here too so a series
-        // with zero resolutions (shouldn't happen, but not guaranteed by
-        // the trait) can't leave a later series reading at a stale level.
-        reader.set_resolution(0).map_err(bf_err)?;
 
         meta.series.insert(series_idx as i32, info);
     }
@@ -288,75 +164,61 @@ pub(crate) fn build_image_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scopeio::PixelType;
     use std::path::PathBuf;
 
-    fn meta(overrides: impl FnOnce(&mut ImageMetadata)) -> ImageMetadata {
-        let mut m = ImageMetadata::default();
-        overrides(&mut m);
-        m
+    fn series(samples_per_pixel: u8, size_c: u32) -> SeriesMeta {
+        // `SeriesMeta` is `#[non_exhaustive]`: built from its default.
+        let mut s = SeriesMeta::default();
+        s.samples_per_pixel = samples_per_pixel;
+        s.size_c = size_c;
+        s.size_z = 1;
+        s.size_t = 1;
+        s
     }
 
-    // -- rgb_channel_count / effective_size_c ------------------------------------
+    // -- channel_select / bit_depth ---------------------------------------------
 
     #[test]
-    fn rgb_channel_count_is_always_one_for_a_non_rgb_series() {
-        let m = meta(|m| {
-            m.is_rgb = false;
-            m.size_c = 5;
-        });
-        assert_eq!(rgb_channel_count(&m), 1);
-        assert_eq!(effective_size_c(&m), 5);
-    }
-
-    #[test]
-    fn rgb_channel_count_derives_the_split_factor_from_image_count_when_available() {
-        // A single-timepoint, single-Z RGB image: 1 real plane on disk
-        // (image_count=1) holding all 3 samples together, reported as
-        // size_c=3 in Bio-Formats' convention.
-        let m = meta(|m| {
-            m.is_rgb = true;
-            m.size_c = 3;
-            m.size_z = 1;
-            m.size_t = 1;
-            m.image_count = 1;
-        });
-        assert_eq!(rgb_channel_count(&m), 3);
+    fn only_split_mode_splits_an_rgb_channel_into_its_samples() {
+        let rgb = series(3, 1);
         assert_eq!(
-            effective_size_c(&m),
-            1,
-            "one packed-RGB plane is one effective channel"
+            channel_select(&rgb, ReadMode::Default, 0),
+            ChannelSelect::Channel(0)
+        );
+        assert_eq!(
+            channel_select(&rgb, ReadMode::SplitChannels, 2),
+            ChannelSelect::Sample {
+                channel: 0,
+                sample: 2
+            }
+        );
+        // Two RGB channels: channel 4 is the green sample of the second.
+        let two_rgb = series(4, 2);
+        assert_eq!(
+            channel_select(&two_rgb, ReadMode::SplitChannels, 4),
+            ChannelSelect::Sample {
+                channel: 1,
+                sample: 1
+            }
+        );
+        // A gray image is never split.
+        let gray = series(1, 3);
+        assert_eq!(
+            channel_select(&gray, ReadMode::SplitChannels, 2),
+            ChannelSelect::Channel(2)
         );
     }
 
     #[test]
-    fn rgb_channel_count_supports_multiple_effective_channels_of_packed_rgb() {
-        // Two real fluorescence-like channels, each itself RGB: size_c=6,
-        // image_count=2 (one plane per effective channel).
-        let m = meta(|m| {
-            m.is_rgb = true;
-            m.size_c = 6;
-            m.size_z = 1;
-            m.size_t = 1;
-            m.image_count = 2;
-        });
-        assert_eq!(rgb_channel_count(&m), 3);
-        assert_eq!(effective_size_c(&m), 2);
-    }
-
-    #[test]
-    fn rgb_channel_count_falls_back_to_raw_size_c_when_image_count_is_inconsistent() {
-        // image_count doesn't cleanly divide by z*t, or size_c isn't a
-        // multiple of the derived effective channel count - falls back to
-        // treating size_c itself as the split factor rather than panicking
-        // or dividing unevenly.
-        let m = meta(|m| {
-            m.is_rgb = true;
-            m.size_c = 3;
-            m.size_z = 1;
-            m.size_t = 1;
-            m.image_count = 0;
-        });
-        assert_eq!(rgb_channel_count(&m), 3);
+    fn the_bit_depth_is_the_significant_bits_else_the_sample_width() {
+        let mut s = series(1, 1);
+        s.pixel_type = PixelType::U16;
+        assert_eq!(bit_depth(&s), 16);
+        s.significant_bits = Some(12);
+        assert_eq!(bit_depth(&s), 12);
+        s.significant_bits = Some(0);
+        assert_eq!(bit_depth(&s), 16, "0 means not declared");
     }
 
     // -- build_image_meta (real fixture) -----------------------------------------
@@ -374,10 +236,9 @@ mod tests {
     #[test]
     fn build_image_meta_reads_series_channel_and_resolution_shape_from_a_real_file() {
         let path = fixture_path();
-        let mut reader =
-            bioformats::registry::open_reader_boxed(&path).expect("real fixture must open");
+        let reader = scopeio::open(&path).expect("real fixture must open");
 
-        let image_meta = build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
+        let image_meta = build_image_meta(reader.as_ref(), &path, ReadMode::Default).unwrap();
 
         assert_eq!(image_meta.name, "multi-channel-4D-series.ome.tif");
         assert_eq!(image_meta.series.len(), 1);
@@ -404,28 +265,23 @@ mod tests {
             "a plain (non-RGB) 3-channel series packs one sample per pixel"
         );
         assert!(!res.is_rgb);
-        assert!(!res.is_interleaved);
-        assert!(!res.is_little_endian);
         assert_eq!(
             (res.tile_width, res.tile_height),
             (res.width, res.height),
-            "no native tile size is exposed - tile dims fall back to the resolution's own"
+            "reads take any region - tile dims are the resolution's own"
         );
+
+        // A genuine 3-channel 8-bit fluorescence image must not be taken
+        // for a split RGB image.
+        let split = build_image_meta(reader.as_ref(), &path, ReadMode::SplitChannels).unwrap();
+        let split_series = &split.series[&0];
+        assert_eq!(split_series.nr_c_stacks, 3);
+        assert!(!split_series.resolutions[&0].is_rgb);
     }
 
-    /// Regression test for two real-world gaps found in `G7_03.vsi`'s
-    /// Olympus CellSens/VSI reader:
-    ///
-    /// 1. it declares `size_c=3`/`image_count=3` (3 real channels, non-RGB)
-    ///    but only populates 1 entry in its own OME channel list - trusting
-    ///    that list's length to decide how many `ChannelInfo` entries to
-    ///    create silently dropped channels 1 and 2, which then failed with
-    ///    "Channel 1 does not exist in series 0" the moment anything tried
-    ///    to read them;
-    /// 2. it never populates the OME channel's `name`/`emission_wavelength`
-    ///    fields at all, even for the one channel it does list - the same
-    ///    data is present, just under its own `cellsens.ets.channel_name.N`/
-    ///    `cellsens.ets.channel_wavelength.N` `series_metadata` keys.
+    /// Regression test for `G7_03.vsi` (Olympus CellSens/VSI): it declares
+    /// 3 real channels, each of which must get an entry with its name and
+    /// emission wavelength.
     #[test]
     #[ignore = "requires tests/G7_03.vsi, a real VSI fixture too large to commit to git \
                 (see .gitignore) - run locally with `cargo test -- --ignored` when present"]
@@ -434,29 +290,18 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/G7_03.vsi"
         ));
-        let mut reader =
-            bioformats::registry::open_reader_boxed(&path).expect("real fixture must open");
+        let reader = scopeio::open(&path).expect("real fixture must open");
 
-        let image_meta = build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
+        let image_meta = build_image_meta(reader.as_ref(), &path, ReadMode::Default).unwrap();
 
         let series = image_meta.series.get(&0).expect("series 0 must exist");
         assert_eq!(series.nr_c_stacks, 3);
         assert_eq!(
             series.channels.len(),
             3,
-            "every declared channel must get an entry, not just the ones the \
-             OME metadata happened to describe"
+            "every declared channel must get an entry"
         );
-        for c in 0..3 {
-            assert!(
-                series.channels.contains_key(&c),
-                "channel {c} must be present"
-            );
-        }
 
-        // Names/wavelengths recovered from the vendor-prefixed
-        // `series_metadata` keys, since the OME channel list itself never
-        // carries them for this reader.
         let expected = [("CY7", 767.0_f32), ("CY5", 670.0), ("FITC", 518.0)];
         for (c, (name, wavelength)) in expected.into_iter().enumerate() {
             let channel = &series.channels[&(c as i32)];
@@ -466,46 +311,18 @@ mod tests {
     }
 
     #[test]
-    fn build_image_meta_leaves_the_reader_at_resolution_zero_of_the_last_series() {
-        let path = fixture_path();
-        let mut reader =
-            bioformats::registry::open_reader_boxed(&path).expect("real fixture must open");
-
-        build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
-
-        assert_eq!(reader.resolution(), 0);
-    }
-
-    #[test]
     fn the_frame_interval_comes_from_the_time_increment_else_the_plane_time_stamps() {
-        use bioformats::common::ome_metadata::{OmeImage, OmePlane};
-        let plane = |t: u32, c: u32, delta_t: f64| OmePlane {
-            the_t: t,
-            the_c: c,
-            delta_t: Some(delta_t),
-            ..Default::default()
-        };
-        let mut image = OmeImage {
-            time_increment: Some(2.5),
-            ..Default::default()
-        };
-        assert_eq!(frame_interval(&image, 3), Some(2.5));
+        // 0, 4.1, 7.9 s: 3.95 s on average.
+        let stamps = |t: u32| [0.0, 4.1, 7.9].get(t as usize).copied();
+        assert_eq!(frame_interval(Some(2.5), 3, stamps), Some(2.5));
+        assert_eq!(frame_interval(None, 3, stamps), Some(3.95));
 
-        // 0, 4.1, 7.9 s: 4 s on average; another channel's stamps are ignored.
-        image.time_increment = None;
-        image.planes = vec![
-            plane(0, 0, 0.0),
-            plane(0, 1, 0.3),
-            plane(1, 0, 4.1),
-            plane(2, 0, 7.9),
-            plane(2, 1, 99.0),
-        ];
-        assert_eq!(frame_interval(&image, 3), Some(3.95));
-
-        assert_eq!(frame_interval(&image, 1), None, "a single frame");
-        image.planes.clear();
-        assert_eq!(frame_interval(&image, 3), None, "no metadata");
-        image.time_increment = Some(0.0);
-        assert_eq!(frame_interval(&image, 3), None, "zero means unknown");
+        assert_eq!(frame_interval(None, 1, stamps), None, "a single frame");
+        assert_eq!(frame_interval(None, 3, |_| None), None, "no metadata");
+        assert_eq!(
+            frame_interval(Some(0.0), 3, |_| None),
+            None,
+            "zero means unknown"
+        );
     }
 }

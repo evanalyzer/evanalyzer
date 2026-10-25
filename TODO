@@ -15,6 +15,7 @@
 
 - [ ] Later (2026-10-17): Images › Plate - a custom grouping regex is compiled by the Rust `regex` crate (plate in the images panel) and by DuckDB/RE2 (results); the usual patterns agree, unusual ones may not - one engine for both.
 - [ ] Later (2026-10-17): Images - "+ Add images" (single images; today the images are the folder's content).
+- [ ] Later (2026-10-25): Images - load a slide's associated images (label, macro/overview, thumbnail). scopeio reports them apart from the series (`associated_images()` / `read_associated()`, e.g. `tests/haut/*.vsi`: 1 series + Label, Macro, Thumbnail), so EVA lists only the series today; the old reader showed them as extra series. Offer them as extra read-only single-plane entries (e.g. the overview for orientation), kept out of pipeline runs.
 - [ ] Later (2026-10-17): Compare two previews (board C) - a setting before and after a change ("Before · 200 / After · 240"), reusing the breakpoint compare's second render.
 - [ ] Later (2026-10-17): Own title bar (design boards: the window controls in our top bar, ~30 px more for the image). Options, decided later:
   A. keep the system bar, coloured to Light/Dark/Dim (winit theme; Windows/macOS) - low risk, ~½ day;
@@ -81,7 +82,6 @@
 
 - [x] Add open recent files - the start page's list and RECENT in the EVA menu (2026-10-17)
 - [ ] **Log file for end users** — the log goes to stderr only (lost when started by double-click); only panics reach `<user folder>/crash.log`, which the GUI never mentions. Write a (size-limited) log file to the user folder and add "Help > Open log folder" so users can attach both to bug reports. (Default log level is `info` now, was `debug`.)
-- [ ] **Security: bump `quick-xml` to >= 0.41 in bioformats-rs** (RUSTSEC-2026-0194/0195: quadratic time / unbounded allocation on crafted XML - every opened image's metadata goes through it). Same fork: `lru` via `zarrs` is flagged unsound (RUSTSEC-2026-0253).
 - [x] **Image decoder can panic on real files, not just corrupt ones** — fixed: `nr_bits == 0` is rejected with a clean error before the decode path (`image_reader.rs`) — [`crates/core/src/image/image_reader.rs:970-984,1034-1036`](crates/core/src/image/image_reader.rs#L970-L1036)
   If per-resolution metadata omits `BitsPerPixel` (plausible for pyramid sub-levels in real-world files), `nr_bits` defaults to 0 (`image_meta.rs:13` / `image_ome_parser.rs:251-254`). The decode path then calls `buffer.par_chunks_exact(0)` (panics unconditionally) or divides by `bytes_per_sample * source_planes` (divide-by-zero) — hard panic on open.
   *Fix:* validate `nr_bits != 0` after metadata parsing, fall back or return a clean `InternalErrors` instead of reaching the decode path.
@@ -105,7 +105,6 @@
 - [ ] **Hessian wastes half its compute and is unparallelized** — [`hessian.rs:113-164`](crates/core/src/algos/filters/hessian.rs#L113)
   Calls the gradient function 4 times; 3 outputs are discarded immediately (~half the convolution work wasted). Final eigenvalue loop is sequential, unlike the near-identical code in `structure_tensor.rs` which already uses `par_iter_mut`.
 
-- [ ] RGBA→RGB strip allocates a second full buffer via `flat_map`/`collect` instead of in-place compaction — [`image_reader.rs:823-828`](crates/core/src/image/image_reader.rs#L823).
 - [ ] `sync_channel::<PipelineCache>(4)` in job executor is a flat buffer count, not scaled to tile size — could hold several hundred MB extra in flight for large tiles. [`job_executor.rs:502,757`](crates/core/src/job/job_executor.rs#L502)
 - [ ] `pipeline_cache.rs` `Scratchpad` allocates a fresh zero-filled buffer on every request instead of reusing one — [`pipeline_cache.rs:76-119`](crates/core/src/pipeline/pipeline_cache.rs#L76)
 - [ ] Sequential per-pixel passes not using rayon, unlike sibling filters that already do:
@@ -378,7 +377,7 @@ Order:
   - [ ] Several scales in one step (CellProfiler allows a list); today one step per scale.
 - [x] Reproducible results + whole-slide speed (2026-10-24, from the performance-check project): ties in Coloc (best partner), Voronoi (equidistant pixels) and Relate went by `ObjectId` (UUID v7, random within a ms) - now by position (`Object::position_cmp`, first pixel in reading order = CellProfiler's label order); runs give identical objects (before: 9-15 / 1,657 rows differed). Whole slide 131 → 76 s, 9.2 → 8 GB: Tile Merge and Voronoi measure tile by tile (`Object::measure_intensities_of`); the median/quartile histogram now works on raw gray values. Debug-level timings per step/phase. BENCHMARK.md.
   - [ ] The other whole-image steps that measure one object at a time (Object Math, Transform Objects, Coloc overlap regions, Propagation, Load Annotated Objects): `measure_intensities_of` too.
-  - [x] Whole slide's tile phase (2026-10-24): reading is 35-41 of ~55 s per tile - JPEG 2000 (5 z × 5 channels, ~8 ms per 512² tile in bioformats-rs; its part, not EVAnalyzer's). Median Subtract 174-183 → 33 s CPU (sliding histogram, bit-identical); whole slide 76 → 68 s.
+  - [x] Whole slide's tile phase (2026-10-24): reading is 35-41 of ~55 s per tile - JPEG 2000 (5 z × 5 channels, ~8 ms per 512² tile in the image reader; its part, not EVAnalyzer's). Median Subtract 174-183 → 33 s CPU (sliding histogram, bit-identical); whole slide 76 → 68 s.
   - [ ] Rolling Ball is now the biggest step (69 s CPU, 3.3 s per tile).
   - [x] A test that runs a project twice and with 1 / 4 / 8 threads and expects identical objects (`a_run_gives_the_same_objects_every_time_and_with_any_number_of_threads`: Voronoi, Coloc and Relate ties; fails without the tie-break fixes).
   - [ ] performance-check: its "Commit" column is that repo's commit, not EVAnalyzer's.
