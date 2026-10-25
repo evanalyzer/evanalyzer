@@ -1199,8 +1199,8 @@ impl ProjectController {
             project.pipelines.first().map(|p| p.id)
         };
         self.app_state.mark_dirty();
-        // A template's pipelines: shown.
-        start_page::set_active(&self.ui, false, Some(crate::WorkspaceMode::Pipelines));
+        // Images first, as for any project: where its images come in.
+        start_page::set_active(&self.ui, false, Some(crate::WorkspaceMode::Images));
 
         self.project_settings_controller
             .sync_project_settings_to_slint();
@@ -2317,6 +2317,11 @@ pub(crate) mod tests {
             4
         );
         assert!(w.ui_state.is_dirty());
+        assert_eq!(
+            w.ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Images,
+            "Images first, as for any project"
+        );
 
         // Broken template file (project clean, so no unsaved-changes prompt).
         w.ui_state.clear_dirty();

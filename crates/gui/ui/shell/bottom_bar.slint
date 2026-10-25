@@ -42,23 +42,24 @@ export component BottomBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 2px;
-                // The start page: nothing open - Pipelines still opens
-                // (an empty project), Images and Results need one.
+                // The start page: nothing open - Images still opens (an
+                // empty project, Images first as for any project),
+                // Pipelines and Results need one.
                 InkModeTab {
                     text: "Images";
-                    enabled: !StartState.active;
                     active: !StartState.active && LayoutState.mode == WorkspaceMode.images;
                     clicked => {
+                        if StartState.active {
+                            StartState.empty-project();
+                        }
                         LayoutState.mode = WorkspaceMode.images;
                     }
                 }
                 InkModeTab {
                     text: "Pipelines";
+                    enabled: !StartState.active;
                     active: !StartState.active && LayoutState.mode == WorkspaceMode.pipelines;
                     clicked => {
-                        if StartState.active {
-                            StartState.empty-project();
-                        }
                         LayoutState.mode = WorkspaceMode.pipelines;
                     }
                 }
