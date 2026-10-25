@@ -5,7 +5,7 @@
 //
 // ## License
 // Copyright 2026 Joachim Danmayr.
-// Licensed under the **AGPL-3.0**.
+// Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::types::{
     classes::{ObjectClass, SegmentationClass},

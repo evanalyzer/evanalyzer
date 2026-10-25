@@ -1,6 +1,15 @@
+//! # plate_layout
+//!
 //! The project's images on a plate - which well each image belongs to, by
 //! the project's plate settings, before anything is analysed (the images
 //! panel's plate view). The same grouping the results queries use.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::backend::local::results::{
     AUTO_GROUPING_PATTERNS, FOLDER_GROUPING_REGEX, best_matching_dimensions, col_number_to_index,

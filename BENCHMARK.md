@@ -32,9 +32,7 @@ EVANALYZER_BENCH_SLIDE=/tmp/slide.tif BENCH_TRIM=1 \
 ```
 
 Other settings: `BENCH_COMPARE=1` (a 4096 × 4096 breakpoint tile at the
-centre, compared), `BENCH_VIEWPORT=WxH`, `BENCH_PAN_STEPS`, `BENCH_SERIES`
-(has no effect on `tests/Slide1_distal_zoom_40x.vsi` yet - it stays on the
-512 × 375 series).
+centre, compared), `BENCH_VIEWPORT=WxH`, `BENCH_PAN_STEPS`, `BENCH_SERIES`.
 
 **Results views and split view** - opens a results file, shows List,
 Plate and Charts, then the split view's work: one image's objects read
@@ -67,9 +65,6 @@ without a usable GPU.
 
 Between re-renders the image follows the mouse right away (the last render
 is moved and scaled); the times above are when it is sharp again.
-
-The real VSI (`tests/Slide1_distal_zoom_40x.vsi`, label series 512 × 375):
-open 22 ms, every other step under 6 ms, about 50 MB.
 
 ### Breakpoint compare (2026-10-18)
 

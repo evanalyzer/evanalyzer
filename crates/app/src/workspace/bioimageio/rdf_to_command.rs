@@ -1,5 +1,14 @@
+//! # rdf_to_command
+//!
 //! Turns a parsed bioimage.io [`RdfModel`] into a ready-to-use AI segmentation
 //! [`PipelineCommand`], filling parameters from the model card where possible.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use std::fmt;
 use std::path::{Path, PathBuf};

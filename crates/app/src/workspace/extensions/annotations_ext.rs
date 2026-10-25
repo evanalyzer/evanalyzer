@@ -1,3 +1,5 @@
+//! # annotations_ext
+//!
 //! Manual annotations (the hand-drawn objects saved per image) next to the
 //! pipeline's preview objects: copying preview objects into the manual
 //! annotations - a pipeline's result as the starting point of classifier
@@ -5,6 +7,13 @@
 //!
 //! Preview objects stay read-only; a copy is an ordinary manual annotation
 //! (editable, used for training). The original stays in the preview.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::extensions::project_ext::ProjectExt;
 use crate::workspace::project_owner::ProjectWithRuntime;

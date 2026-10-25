@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
@@ -417,17 +417,15 @@ mod tests {
     }
 
     /// Golden-data regression for the `edges_are_background` port bug: a disc
-    /// (r=4) flush against the LEFT image border. Expected values are the exact
-    /// output of the reference `Edm::makeFloatEDM(binary8, 0, /*edgesAreBackground=*/false)`
-    /// (`docs/watershed/edm.cpp`), run through a standalone harness built against
-    /// that file. `Watershed::execute` in the C++ reference
-    /// (`docs/watershed/watershed.hpp:56`) always passes `edgesAreBackground=false`
+    /// (r=4) flush against the LEFT image border. Expected values are recorded
+    /// reference output of ImageJ's `EDM.makeFloatEDM(ip, 0,
+    /// /*edgesAreBackground=*/false)`, which the watershed always uses
     /// - the image edge is not an implicit background wall. With
     /// `edges_are_background: true` (the bug this test caught), the whole left
     /// half of the disc collapses to ~1.0 instead of growing up to ~4.12 at its
     /// centre.
     #[test]
-    fn test_distance_transform_matches_cpp_reference_border_touching_disc()
+    fn test_distance_transform_matches_reference_border_touching_disc()
     -> Result<(), Box<dyn std::error::Error>> {
         const MASK: &[&str] = &[
             "............",
@@ -481,7 +479,7 @@ mod tests {
         for (i, (&a, &e)) in actual.iter().zip(EXPECTED.iter()).enumerate() {
             assert!(
                 (a - e).abs() < 1e-4,
-                "pixel {} (x={}, y={}): got {a}, expected {e} (C++ reference)",
+                "pixel {} (x={}, y={}): got {a}, expected {e} (reference)",
                 i,
                 i % width,
                 i / width

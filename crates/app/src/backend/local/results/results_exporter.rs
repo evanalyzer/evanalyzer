@@ -1,3 +1,12 @@
+//! # results_exporter
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use super::results_generator::{ResultsGenerator, class_display_label, sql_string_in_list};
 use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
 use super::results_tracks::{TrackSummaryHead, TrackSummaryQuery};

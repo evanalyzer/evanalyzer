@@ -1,3 +1,5 @@
+//! # view_channel
+//!
 //! The image data the viewport keeps per channel: at the smallest sample type
 //! that holds it exactly.
 //!
@@ -8,6 +10,13 @@
 //! when every sample converts back to exactly the same `f32` the reader made,
 //! so rendering, histograms and pixel values stay bit-identical. Anything else
 //! (other bit depths, float data, interleaved RGB, label maps) stays as read.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, Point2d};
 use evanalyzer_cfg::core_types::InternalErrors;

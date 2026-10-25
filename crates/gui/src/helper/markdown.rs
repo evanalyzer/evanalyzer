@@ -1,6 +1,15 @@
+//! # markdown
+//!
 //! The help texts' markdown (see `ui/ink/markdown.slint`): the window's
 //! `InkMarkdown` converts them here, as Slint's `@markdown` only reads
 //! string literals.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-22
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{AppWindow, InkMarkdown};
 use slint::{ComponentHandle, StyledText};

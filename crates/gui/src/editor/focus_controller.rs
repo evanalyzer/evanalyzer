@@ -1,3 +1,5 @@
+//! # focus_controller
+//!
 //! Pipeline focus: shows only the selected pipeline's image channel and
 //! object classes.
 //!
@@ -13,6 +15,13 @@
 //! The focus itself is a runtime overlay in the project (see
 //! `ProjectExt::focus_pipeline`): the user's own visibility settings are never
 //! changed by it, so leaving the focus brings them back exactly.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::UiState;
 use crate::editor::classification_controller::ClassificationController;

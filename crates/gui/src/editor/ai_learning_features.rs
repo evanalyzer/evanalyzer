@@ -1,7 +1,16 @@
+//! # ai_learning_features
+//!
 //! The AI training panel's feature tables, apart from Slint: the pixel
 //! classifier's features (what a feature sees × its size) and the object
 //! classifier's (shape metrics, brightness statistics × channels), their
 //! presets, and the conversion to and from what a model stores.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-24
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::settings::ai_learning_object_settings::ObjectMetric;
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::PreprocessingSteps;

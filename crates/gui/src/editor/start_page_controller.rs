@@ -1,9 +1,18 @@
+//! # start_page_controller
+//!
 //! The start page (board AA): shown while nothing is open - at startup
 //! (unless the last project opens right away) and after File › New. Its
 //! ways in are the existing ones (File › Open, the images folder, a
 //! template, connect). The controller answers the page; the functions
 //! below keep the recent projects and say when the page shows - the
 //! project and image controllers call them as projects open and save.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::editor::project_controller::ProjectController;
 use crate::{AppWindow, LayoutState, RecentProjectRow, StartState, UiState, WorkspaceMode};

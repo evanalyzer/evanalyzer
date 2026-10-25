@@ -1,5 +1,14 @@
+//! # measurement
+//!
 //! What a measurement step measures - the description of its values,
 //! shared by the steps (core), the results database and the results views.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-22
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::types::classes::ObjectClass;
 use crate::types::ids::ObjectId;

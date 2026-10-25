@@ -20,7 +20,7 @@ accepted = [
 # evanalyzer's own workspace crates are all `publish = false` (see the
 # `[workspace.package]` entry in the root Cargo.toml) - they're internal
 # application crates, not published anywhere. This listing is meant to cover
-# third-party dependencies only, so keep our own AGPL-3.0 crates out of it.
+# third-party dependencies only, so keep our own crates (PolyForm Noncommercial) out of it.
 # Rebuild about: cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 [private]
 ignore = true
@@ -63,6 +63,7 @@ accepted = ["GPL-3.0-only"]
 accepted = ["GPL-3.0-only"]
 
 # scopeio (image reading) is AGPL-3.0-only with an additional permission for
-# EVAnalyzer (its LICENSE-EXCEPTION), by the same author as evanalyzer.
+# EVAnalyzer (its LICENSE-EXCEPTION): combined with EVAnalyzer it may be
+# conveyed under EVAnalyzer's license terms. Same author as evanalyzer.
 [scopeio]
 accepted = ["AGPL-3.0-only"]

@@ -1,3 +1,12 @@
+//! # template_controller
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-11
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::AppWindow;
 use crate::DialogType;
 use crate::FileRequest;

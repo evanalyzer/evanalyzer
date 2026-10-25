@@ -1,3 +1,12 @@
+// # classification_settings
+//
+// **Author:** Joachim Danmayr
+// **Date:** 2026-06-05
+//
+// ## License
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::types::classes::ObjectClass;
 use crate::utils::hex_colors::hex_to_u32;
 use schemars::JsonSchema;

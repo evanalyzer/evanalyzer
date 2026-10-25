@@ -1,3 +1,5 @@
+//! # tile_merge
+//!
 //! Cross-tile object merging: reassembles an object that a tiled analysis
 //! run split across an internal tile boundary (e.g. a whole organ/tissue
 //! region on a whole-slide image) into one correct object.
@@ -28,6 +30,13 @@
 //! labeled independently, then object identity is reconciled across tile
 //! boundaries via the same union-find idea, just run as one end-of-image
 //! batch pass instead of incrementally online.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-03
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::ImageTile;
 use crate::algos::libs::spatial_grid::BboxGrid;

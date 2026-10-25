@@ -1,3 +1,12 @@
+//! # image_reader
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::image_ome_parser::{build_image_meta, channel_select, scopeio_err};
@@ -1457,46 +1466,6 @@ mod tests {
             }
         }
     }
-
-    /*
-    #[test]
-    fn test_sum_intensity_projection() {
-
-        let reader =
-            ImageReader::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif"))
-                .unwrap();
-        let result = reader
-            .read_image_tile_combined(
-                0,
-                ZProjection::SumIntensity,
-                0,
-                0,
-                vec![0],
-                ImageTile {
-                    offset_x: 0,
-                    offset_y: 0,
-                    width: 0,
-                    height: 0,
-                },
-            )
-            .unwrap();
-
-        let reference_data_f32 = read_raw_data(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_sum_intensity.raw"),
-            32,
-        );
-
-        for image_channel in result {
-            match image_channel.image {
-                ImageContainer::F32Gray(image) => {
-                    let slice = image.as_slice();
-                    compare_data(&reference_data_f32, &slice, 1e-1);
-                }
-                ImageContainer::F32Rgb(_) => todo!(),
-                ImageContainer::U32(_) => todo!(),
-            }
-        }
-    }*/
 
     /// Resident set size of this process, in bytes, or `None` if it can't be
     /// determined on this platform.

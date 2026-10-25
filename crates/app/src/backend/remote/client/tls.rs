@@ -1,3 +1,5 @@
+//! # tls
+//!
 //! The client side of `wss://`: TLS to an `evanalyzer server`.
 //!
 //! Which server certificate is trusted is the user's choice, [`TlsTrust`]:
@@ -9,6 +11,13 @@
 //! An untrusted certificate fails the connection with its fingerprint in the
 //! message, so the user can compare it with the one the server logs at
 //! startup and pass it.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::ConnectionSecurity;
 use crate::backend::remote::wire::conn::Socket;

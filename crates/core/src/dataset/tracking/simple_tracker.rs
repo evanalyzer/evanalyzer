@@ -9,7 +9,14 @@
 //! greedy nearest neighbour: all pairs within `max_distance` (centre of the
 //! bounding box), closest first, each object used once. An object without a
 //! partner starts a new track; a frame without objects ends every track. No
-//! gap closing, no divisions - see TRACKING.md for what may follow.
+//! gap closing, no divisions.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::dataset::{DatasetAlgorithm, DatasetContext};
 use crate::storage::stored_object::{ObjectFilter, StoredObject};

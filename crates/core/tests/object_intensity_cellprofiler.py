@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes object_intensity_cellprofiler.json: CellProfiler's per-object
 intensity statistics (MeasureObjectIntensity: integrated, mean, std, min,
 max, lower quartile, median, upper quartile, MAD - the label-wise code of

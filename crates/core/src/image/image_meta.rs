@@ -1,3 +1,12 @@
+//! # image_meta
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 pub use evanalyzer_cfg::core_types::{ImagePlane, ImageTile};
 
 /// Pixel position in an image - e.g. a tile's top-left corner within the

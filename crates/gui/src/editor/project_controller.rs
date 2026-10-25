@@ -1,3 +1,12 @@
+//! # project_controller
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::AnalysisRunningCloseState;
 use crate::AppWindow;
 use crate::DialogType;
@@ -25,7 +34,6 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::SaveProjectActions;
 use evanalyzer_app::templates::load_project_template_from_file;
 use evanalyzer_app::templates::load_project_templates;
-use evanalyzer_cfg::LEGACY_PROJECT_FILE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::PROJECT_FILE_TEMPLATE_EXTENSIONS;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
@@ -57,7 +65,6 @@ struct TemplateFilter {
 enum PendingAction {
     New,
     OpenProject(PathBuf),
-    ImportLegacy(PathBuf),
     OpenProjectTemplate(PathBuf),
     Quit,
     /// Show the "Connect to server" dialog (connecting closes the project).
@@ -237,86 +244,6 @@ impl ProjectController {
         info!("Project opened!")
     }
 
-    /// Imports an old (`.icproj`) project into a brand-new, unsaved project.
-    ///
-    /// Unlike [`Self::open_new_project`], the converted project has no recorded
-    /// image list yet (the old format only stored an image *folder*, discovered
-    /// at runtime) - if the old project's image folder resolves to a real
-    /// directory next to the `.icproj` file, it is scanned immediately so the
-    /// imported project is usable right away. Any commands or fields the old
-    /// project used with no equivalent in this format are reported to the user
-    /// as a non-blocking warning, listing what was skipped or approximated.
-    pub fn import_legacy_project_file(self: Arc<Self>, legacy_path: &PathBuf) {
-        let (warnings, legacy_image_folder) =
-            match self.app_state.import_legacy_project(legacy_path) {
-                Ok(result) => result,
-                Err(e) => {
-                    warn!("Could not import legacy project {:?}: {}", legacy_path, e);
-                    self.show_warning(
-                        "Cannot import legacy project",
-                        &format!("Failed to import '{}': {e}", legacy_path.display()),
-                    );
-                    return;
-                }
-            };
-
-        self.app_state.mark_dirty();
-
-        let image_root_dir = legacy_image_folder
-            .filter(|folder| !folder.is_empty())
-            .and_then(|folder| {
-                let resolved = legacy_path.parent().unwrap_or(legacy_path).join(&folder);
-                resolved.is_dir().then_some(resolved)
-            });
-
-        if let Some(root) = &image_root_dir {
-            // Scan off-lock (see `images_list_controller::scan_image_root_for_images`
-            // for why) - only the fast in-memory apply below needs the write guard.
-            let found_images = evanalyzer_app::project::collect_images_at_root(
-                self.app_state.backend().as_ref(),
-                root,
-            );
-            let mut project = self.app_state.get_project_write();
-            project.images.root = Some(root.clone());
-            project.apply_scanned_images(found_images);
-        }
-
-        // Do all the project load tasks here, mirroring `open_new_project`.
-        self.image_list_controller.sync_image_list_to_slint();
-        self.project_settings_controller
-            .sync_project_settings_to_slint();
-        self.classification_controller
-            .sync_classification_to_slint();
-        // Another project: nothing of the last one shown.
-        self.pipelines_controller.project_switched();
-        self.image_list_controller.clear_shown_image();
-        self.results_list_controller.project_switched();
-
-        if let Some(root) = image_root_dir {
-            let ui_weak = self.ui.clone();
-            let image_root_dir_str = root.to_string_lossy().into_owned();
-            crate::helper::ui_thread::invoke_from_event_loop(move || {
-                if let Some(ui_ready) = ui_weak.upgrade() {
-                    ui_ready
-                        .global::<ImagesListState>()
-                        .set_act_image_root_dir(image_root_dir_str.into());
-                }
-            })
-            .ok();
-        }
-
-        info!("Legacy project imported ({} warning(s))", warnings.len());
-        start_page::set_active(&self.ui, false, Some(crate::WorkspaceMode::Images));
-        if !warnings.is_empty() {
-            let message = format!(
-                "The project imported successfully, but {} item(s) from the old format had no exact equivalent and were skipped or approximated:\n\n- {}\n\nReview the affected pipeline steps before running this project. Use \"Save As\" to keep this project in the new format.",
-                warnings.len(),
-                warnings.join("\n- ")
-            );
-            self.show_warning_info("Legacy project imported with caveats", &message);
-        }
-    }
-
     /// Loads a `ProjectTemplate` from an arbitrary path (picked via the
     /// generic "Open" dialog, unlike [`Self::apply_project_template`] which
     /// picks from the bundled/user templates folders) and applies it to the
@@ -345,22 +272,13 @@ impl ProjectController {
 
     /// Shows the generic warning dialog (error style) with `title`/`message`.
     fn show_warning(&self, title: &str, message: &str) {
-        self.show_warning_with_style(title, message, false);
-    }
-
-    /// Shows the generic warning dialog (informational style) with `title`/`message`.
-    fn show_warning_info(&self, title: &str, message: &str) {
-        self.show_warning_with_style(title, message, true);
-    }
-
-    fn show_warning_with_style(&self, title: &str, message: &str, info: bool) {
         let title = title.to_owned();
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let warning = ui.global::<WarningState>();
-                warning.set_info(info);
+                warning.set_info(false);
                 warning.set_title(title.into());
                 warning.set_message(message.into());
                 ui.global::<GlobalAppState>()
@@ -630,14 +548,12 @@ impl ProjectController {
         let image_formats: Vec<&str> = image_formats.iter().map(String::as_str).collect();
         let mut allowed_files = image_formats.clone();
         allowed_files.push(PROJECT_FILE_EXTENSIONS);
-        allowed_files.push(LEGACY_PROJECT_FILE_EXTENSION);
         allowed_files.push(PROJECT_FILE_TEMPLATE_EXTENSIONS);
 
         let request = FileRequest::open_file("Open")
             .filter("Supported files", &allowed_files)
             .filter("Image files", &image_formats)
             .filter("Project files", &[PROJECT_FILE_EXTENSIONS])
-            .filter("Legacy project files", &[LEGACY_PROJECT_FILE_EXTENSION])
             .filter(
                 "Project template files",
                 &[PROJECT_FILE_TEMPLATE_EXTENSIONS],
@@ -652,8 +568,6 @@ impl ProjectController {
 
                 if ext == Some(PROJECT_FILE_EXTENSIONS) {
                     manager.guard_discard(PendingAction::OpenProject(path));
-                } else if ext == Some(LEGACY_PROJECT_FILE_EXTENSION) {
-                    manager.guard_discard(PendingAction::ImportLegacy(path));
                 } else if ext == Some(PROJECT_FILE_TEMPLATE_EXTENSIONS) {
                     manager.guard_discard(PendingAction::OpenProjectTemplate(path));
                 } else {
@@ -858,7 +772,6 @@ impl ProjectController {
             action,
             PendingAction::New
                 | PendingAction::OpenProject(_)
-                | PendingAction::ImportLegacy(_)
                 | PendingAction::OpenProjectTemplate(_)
         );
         if switches_project
@@ -1012,10 +925,6 @@ impl ProjectController {
             PendingAction::OpenProject(path) => {
                 let manager = self.clone();
                 crate::helper::ui_thread::spawn(move || manager.open_new_project(&path));
-            }
-            PendingAction::ImportLegacy(path) => {
-                let manager = self.clone();
-                crate::helper::ui_thread::spawn(move || manager.import_legacy_project_file(&path));
             }
             PendingAction::OpenProjectTemplate(path) => {
                 let manager = self.clone();
@@ -1868,31 +1777,6 @@ pub(crate) mod tests {
         );
     }
 
-    // -- import_legacy_project_file ----------------------------------------------
-
-    #[test]
-    fn import_legacy_project_file_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched()
-     {
-        let (ui_state, controller) = make_controller();
-        {
-            let mut project = ui_state.get_project_write();
-            project.meta.name = "should not be overwritten".to_string();
-        }
-
-        controller
-            .clone()
-            .import_legacy_project_file(&PathBuf::from("/nonexistent/does_not_exist.icproj"));
-
-        assert_eq!(
-            ui_state.get_project().meta.name,
-            "should not be overwritten"
-        );
-        assert!(
-            !ui_state.is_dirty(),
-            "a failed import must not mark the project dirty"
-        );
-    }
-
     // -- save_project_then --------------------------------------------------------
 
     fn temp_dir_for(name: &str) -> PathBuf {
@@ -2298,55 +2182,6 @@ pub(crate) mod tests {
         assert_eq!(w.pipeline_names(), ["Mine"]);
     }
 
-    #[test]
-    fn opening_a_legacy_project_imports_it_and_reports_caveats() {
-        let w = with_window(ProjectWithRuntime::default());
-        let path = w
-            .dir
-            .path()
-            .join(format!("old.{LEGACY_PROJECT_FILE_EXTENSION}"));
-        std::fs::write(
-            &path,
-            r#"{
-                "meta": { "name": "X" },
-                "projectSettings": { "classification": { "classes": [] }, "plate": {} },
-                "imageSetup": {},
-                "pipelines": [ {
-                    "meta": { "name": "Legacy pipeline" },
-                    "pipelineSetup": { "source": "FromMemory", "defaultClassId": "1" },
-                    "pipelineSteps": [
-                        { "$blur": { "mode": "GaussianBlur", "kernelSize": 7, "repeat": 1 } }
-                    ]
-                } ]
-            }"#,
-        )
-        .unwrap();
-        w.toolbar().invoke_open_file_clicked();
-        choose_file(&w.ui, &path);
-        assert_eq!(w.pipeline_names(), ["Legacy pipeline"]);
-        assert!(w.ui_state.is_dirty(), "imported, not yet saved");
-        assert_eq!(w.dialog(), DialogType::Warning);
-        let warning = w.ui.global::<WarningState>();
-        assert!(warning.get_info());
-        assert!(warning.get_message().contains("estimated sigma"));
-    }
-
-    #[test]
-    fn opening_a_broken_legacy_project_shows_a_warning() {
-        let w = with_window(ProjectWithRuntime::default());
-        let path = w
-            .dir
-            .path()
-            .join(format!("old.{LEGACY_PROJECT_FILE_EXTENSION}"));
-        std::fs::write(&path, "{").unwrap();
-        w.toolbar().invoke_open_file_clicked();
-        choose_file(&w.ui, &path);
-        assert_eq!(
-            w.ui.global::<WarningState>().get_title(),
-            "Cannot import legacy project"
-        );
-    }
-
     fn template(
         name: &str,
         category: &str,
@@ -2509,40 +2344,6 @@ pub(crate) mod tests {
             .window()
             .dispatch_event(slint::platform::WindowEvent::CloseRequested);
         assert_eq!(clean.dialog(), DialogType::None);
-    }
-
-    #[test]
-    fn importing_a_legacy_project_uses_the_image_folder_next_to_it() {
-        let w = with_window(ProjectWithRuntime::default());
-        let images = w.dir.path().join("images");
-        std::fs::create_dir_all(&images).unwrap();
-        let path = w
-            .dir
-            .path()
-            .join(format!("old.{LEGACY_PROJECT_FILE_EXTENSION}"));
-        std::fs::write(
-            &path,
-            r#"{
-                "meta": { "name": "X" },
-                "projectSettings": {
-                    "classification": { "classes": [] },
-                    "plate": { "imageFolder": "images" }
-                },
-                "imageSetup": {},
-                "pipelines": []
-            }"#,
-        )
-        .unwrap();
-
-        Arc::clone(&w.controller).import_legacy_project_file(&path);
-        drain_ui_queue();
-
-        assert_eq!(w.ui_state.get_project().images.root, Some(images.clone()));
-        assert_eq!(
-            w.ui.global::<ImagesListState>().get_act_image_root_dir(),
-            images.to_string_lossy().as_ref()
-        );
-        assert!(w.ui_state.is_dirty());
     }
 
     #[test]

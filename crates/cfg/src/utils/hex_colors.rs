@@ -1,3 +1,12 @@
+// # hex_colors
+//
+// **Author:** Joachim Danmayr
+// **Date:** 2026-06-05
+//
+// ## License
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 pub mod hex_to_u32 {
     use serde::{self, Deserialize, Deserializer, Serializer};
 

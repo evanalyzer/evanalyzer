@@ -3,483 +3,133 @@
 
 <div align="center">
 
-[![Author: Joachim Danmayr](https://img.shields.io/badge/author-Joachim_Danmayr-009933)](https://evanalyzer.org/about/)
-[![EVAnalyzer Docs](https://img.shields.io/badge/docs-available-brightgreen?style=flat&color=009933)](https://evanalyzer.org)
+[![Documentation](https://img.shields.io/badge/docs-evanalyzer.org-009933)](https://evanalyzer.org)
 [![Image.sc forum](https://img.shields.io/badge/dynamic/json.svg?label=forum&url=https%3A%2F%2Fforum.image.sc%2Ftags%2Fevanalyzer.json&query=%24.topic_list.tags.0.topic_count&colorB=brightgreen&suffix=%20topics&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAABPklEQVR42m3SyyqFURTA8Y2BER0TDyExZ+aSPIKUlPIITFzKeQWXwhBlQrmFgUzMMFLKZeguBu5y+//17dP3nc5vuPdee6299gohUYYaDGOyyACq4JmQVoFujOMR77hNfOAGM+hBOQqB9TjHD36xhAa04RCuuXeKOvwHVWIKL9jCK2bRiV284QgL8MwEjAneeo9VNOEaBhzALGtoRy02cIcWhE34jj5YxgW+E5Z4iTPkMYpPLCNY3hdOYEfNbKYdmNngZ1jyEzw7h7AIb3fRTQ95OAZ6yQpGYHMMtOTgouktYwxuXsHgWLLl+4x++Kx1FJrjLTagA77bTPvYgw1rRqY56e+w7GNYsqX6JfPwi7aR+Y5SA+BXtKIRfkfJAYgj14tpOF6+I46c4/cAM3UhM3JxyKsxiOIhH0IO6SH/A1Kb1WBeUjbkAAAAAElFTkSuQmCC&style=flat&color=009933)](https://forum.image.sc/tag/evanalyzer)
-[![Build & Package](https://github.com/evanalyzer/evanalyzer/actions/workflows/release.yml/badge.svg)](https://github.com/evanalyzer/evanalyzer/actions/workflows/release.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/evanalyzer/evanalyzer?include_prereleases)](https://github.com/evanalyzer/evanalyzer/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/evanalyzer/evanalyzer/total)](https://github.com/evanalyzer/evanalyzer/releases)
 [![CI](https://github.com/evanalyzer/evanalyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/evanalyzer/evanalyzer/actions/workflows/ci.yml)
 [![Coverage](docs/coverage-badge.svg)](docs/coverage-history.csv)
 [![Dependency audit](docs/audit-badge.svg)](docs/audit-history.csv)
-[![GitHub Release](https://img.shields.io/github/v/release/evanalyzer/evanalyzer?include_prereleases)](https://github.com/evanalyzer/evanalyzer/releases/latest)
-[![License: AGPL-3.0 for non-commercial | Commercial license available](https://img.shields.io/badge/License-AGPL--3.0_%7C_Commercial-blue)](#license)
-[![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#installing-a-release)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm_Noncommercial-blue)](#license)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](https://github.com/evanalyzer/evanalyzer/releases/latest)
 <a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-light.svg#gh-light-mode-only" height="40" alt="Made with Slint"></a>
 
-**A high-performance bioimage analysis desktop application written in Rust.**
+**Find, classify and measure objects in microscopy images - reproducibly, on ordinary computers.**
 
-EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/joda01/imagec) and the successor of the [EVAnalyzer ImageJ plugin](https://github.com/evanalyzer/evanalyzer-ij), combining a high-performance image viewer with a configurable analysis pipeline for fluorescence microscopy and high-content screening data.
-
-![Screenshot](docs/screenshot.png)
+![EVAnalyzer](docs/screenshot.png)
 
 </div>
 
----
-
-## Features
-
-| | |
-|---|---|
-| **30+ file formats** | CZI, ND2, LIF, VSI, OME-TIFF, SVS, NDPI, MRXS, SCN, and more via [scopeio](https://github.com/evanalyzer/scopeio) |
-| **Multi-channel viewer** | Per-channel brightness/contrast, visibility toggles, and colour assignment |
-| **Z-stack support** | Single-plane selection or intensity projections (Max, Min, Average, Sum, Middle) |
-| **Time-lapse support** | Playback through T-stack sequences at configurable frame rates |
-| **object annotation** | Rectangle, oval, and polygon regions of interest drawn directly on the image |
-| **object classification** | Object classes with custom colours, names, and measurement criteria |
-| **Analysis pipeline** | Composable processing steps from a library of algorithms (see below) |
-| **Multi-well plate layout** | Group images by well/plate for high-content screening experiments |
-| **CSV export** | Pipeline results exported per image and per well |
-| **Whole slide images** | Native support for whole slide image formats |
-| **Navigator minimap** | Thumbnail overview with visible viewport indicator |
-| **Scale bar** | Physical scale bar with configurable units (nm, µm, mm) |
-| **Cross-platform** | Linux (Skia renderer) and Windows (software renderer) |
-
-### Analysis Pipeline Algorithms
-
-| Category | Algorithms |
-|---|---|
-| **Filters** | Gaussian blur, rank filter (min/median/max), rolling-ball background subtraction, enhance contrast, colour filter, intensity transform, Canny/Sobel edge detection, Hessian, Laplacian, structure tensor, weighted deviation |
-| **Segmentation** | Manual & automatic thresholding, connected components, watershed, AI segmentation (Cellpose, StarDist, U-Net, YOLOv5 — through the libtorch plugin, see below) |
-| **Morphology** | Dilation, erosion, opening, closing |
-| **Classification** | Rule-based object classification with configurable measurements |
-
-### AI Segmentation
-
-AI models run on libtorch (via [tch-rs](https://github.com/LaurentMazare/tch-rs)), which lives in a separate **plugin library** loaded on the first AI step — the app starts without libtorch's ~280 MB and half second of start-up work, and works (without AI models) where the plugin is missing. Trained classifiers (random forest, MLP, … — `PixelClassifier`, `AiObjectClassifier`) need no plugin.
-
-Two of the AI segmentation algorithms:
-
-| Algorithm | What the model predicts | What you get |
-|---|---|---|
-| **Stardist** | Star-convex polygon parameters per grid cell | Separated object instances directly — no further steps needed |
-| **UNet** | Per-pixel semantic mask | A single foreground mask — touching objects are **not** separated yet |
-
-#### Using `UNet` correctly
-
-`UNet` only produces a semantic mask (foreground vs. background); it has no notion of individual object instances. Getting good results requires two things:
-
-1. **Match `output_mode`/`foreground_channel` to your model's export.**
-   - **Plain background/foreground classifier** (a mutually-exclusive softmax head): use `output_mode: SoftmaxClasses` and set `foreground_channel` to the foreground class index (usually `1` for a 2-class head — this is the default).
-   - **Boundary-aware model** (e.g. bioimage.io nucleus-boundary models, which export an independent mask channel *and* a separate boundary channel — these are two unrelated probabilities, not softmax classes): use `output_mode: IndependentChannels` and set `foreground_channel` to the mask channel's index (commonly `0`; check the model's `rdf.yaml` if unsure). Running softmax across mask+boundary, or picking the boundary channel by mistake, is the most common cause of "I get outlines, not filled objects".
-
-2. **Separate touching objects.** `UNet` emits one shared class for "foreground", so two touching nuclei become one connected blob. How you split them depends on the model:
-
-   - **Boundary-aware models — use the boundary channel (recommended).** Models like bioimage.io's [`affable-shark`](https://bioimage.io/#/?id=affable-shark) (*NucleiSegmentationBoundaryModel* — a U-Net, **not** StarDist) predict an explicit boundary in a second channel **specifically so you can separate touching nuclei**. Set `boundary_channel` to that channel (commonly `1`) and `boundary_threshold` (~`0.5`): a pixel is foreground only where the mask is high *and* the boundary is low, carving thin gaps between objects. Then a plain `ConnectedComponents` separates them — no watershed needed:
-
-     ```
-     UNet (foreground_channel: 0, boundary_channel: 1) → ConnectedComponents → ExtractObjects
-     ```
-
-     Discarding the boundary channel and relying on watershed instead is the most common reason touching nuclei "won't split": a distance-map watershed can't separate a blob that has no waist, and the waist information lives in the boundary channel you didn't use.
-
-   - **Mask-only models — distance-map watershed.** If the model gives only a foreground mask (no boundary), chain a watershed:
-
-     ```
-     UNet → ConnectedComponents → Watershed → ExtractObjects
-     ```
-
-     `ConnectedComponents` labels each blob; `Watershed` re-splits any blob with more than one object. It's a faithful port of ImageJ's `Process > Binary > Watershed` (the `MaximumFinder` distance-map algorithm), so the default `maximum_finder_tolerance` of `0.5` works for most nuclei. Note this only works when touching nuclei actually form a pinched "peanut"; heavily overlapping nuclei with no waist cannot be split from the mask alone.
-
-These patterns (boundary-carving, and distance-map declumping) are the standard approaches for U-Net-style models — the same ideas used by CellProfiler and ilastik. `Stardist`, by contrast, predicts per-object instances directly and skips all of this — but only genuine StarDist exports (object probability + radial distances) work with the `Stardist` command; a boundary U-Net like `affable-shark` will **not**.
-
----
-
-## Architecture
-
-The workspace is organised into focused crates:
-
-| Crate | Description |
-|---|---|
-| `evanalyzer_core` | Image I/O (scopeio, native Rust), processing algorithms, object model, pipeline execution |
-| `evanalyzer_cfg` | Project settings, serialisation to JSON, pipeline command configuration |
-| `evanalyzer_app` | Application handle, shared project state |
-| `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, object tools, classification panel |
-| `evanalyzer_cli` | Headless CLI: analyze projects, export/view results databases (see [Command-Line Interface](#command-line-interface-cli)) |
-| `evanalyzer_bin` | Binary entry point — launches GUI or CLI depending on arguments |
-| `evanalyzer_ai_engine` | Runs AI models: the engine-neutral interface (`api`), the engines (`torch`, …) and the plugin loader. Built as a cdylib with `torch`, it is the libtorch plugin (`ai/cpu`, `ai/cuda`) |
-
-### Pipeline Flow
-
-```
-[ Image ]
-    │
-    ▼
-[ Preprocessing ]   Gaussian blur, background subtraction, edge detection, …
-    │
-    ▼
-[ Threshold ]       Manual or automatic → binary mask
-    │
-    ▼
-[ Connected Components ]   Label each foreground region
-    │
-    ▼
-[ Watershed ]       Split touching objects
-    │
-    ▼
-[ Extract ROIs ]    Assign segmentation class as the first object class
-    │
-    ▼
-[ Classify ROIs ]   Rule-based measurement and classification (optional)
-    │
-    ▼
-[ Export ]          CSV per image / per well
-```
-
----
-
-## Requirements
-
-- **Rust** 1.80 or later (2024 edition)
-- **Linux** system libraries (for the GUI):
-  ```sh
-  apt-get install libinput10 libxkbcommon0 libfontconfig1 libgbm1
-  ```
-
----
-
-## System Requirements
-
-| Resource | Minimum | Recommended |
-|---|---|---|
-| RAM | 4 GB | 16 GB+ (whole slide images, large batches) |
-| CPU | 2 cores | 4+ cores |
-| GPU | — (CPU-only build works) | NVIDIA GPU + CUDA 12.x (for the `cuda` build, AI segmentation) |
-| Disk | Enough for the results database (`.evadb`) per run, plus the input images | — |
-
-EVAnalyzer checks how much RAM is actually free at startup and scales itself
-to fit: the number of images/tiles analyzed in parallel is capped
-accordingly — so on a constrained machine it automatically falls back
-to fewer parallel workers instead of running out of memory. More RAM and CPU
-cores let it analyze more images/tiles concurrently, but there's no manual
-tuning required to stay within what the machine actually has available.
-
----
-
-## Installing a release
-
-Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies ship **inside the archive**: DuckDB next to the binary, the AI plugin with its libtorch in `ai/cpu` (`ai/cuda` in the CUDA builds), so there is nothing else to install.
-
-### Linux x86-64 — `evanalyzer-linux-x86_64.tar.gz`
-
-```sh
-tar xzf evanalyzer-linux-x86_64.tar.gz
-./evanalyzer
-```
-
-### Windows x86-64 — `evanalyzer-windows-x86_64.zip`
-
-Unzip the archive and run `evanalyzer.exe` (keep the `.dll` files and the `ai` folder next to it).
-
-### macOS, Apple Silicon — `evanalyzer-macos-arm64.tar.gz`
-
-```sh
-tar xzf evanalyzer-macos-arm64.tar.gz
-# The build is ad-hoc signed but not notarized, so macOS Gatekeeper quarantines
-# it after download. Clear the quarantine flag once, then launch it:
-xattr -dr com.apple.quarantine evanalyzer
-./evanalyzer
-```
-
-> Keep every file from the archive together — the bundled `.dylib` libraries
-> (and the AI plugin in `ai/cpu`) are resolved relative to the `evanalyzer` binary.
-
-### GPU (CUDA) builds — Linux / Windows
-
-The CUDA builds bundle the (multi-GB) NVIDIA runtime, so they are published as
-**split 7-Zip archives** (`…-cuda.7z.001`, `.002`, …) to stay under GitHub's
-per-file limit. Download **all** volumes into one folder and extract with
-[7-Zip](https://www.7-zip.org/) pointed at the first part:
-
-```sh
-7z x evanalyzer-linux-x86_64-cuda.7z.001     # finds .002, .003, … automatically
-```
-
-Then run the `evanalyzer` binary as for the CPU build. A matching NVIDIA driver
-(CUDA 12.x) is needed to run models on the GPU; without one (or with
-`--ai-devices cpu`) the CUDA plugin runs them on the CPU.
-
----
-
-## Running an EVAnalyzer server
-
-`evanalyzer server` lets EVAnalyzer on other computers log in and work on this
-machine: projects, images and results stay here, and the analysis runs here
-(e.g. on a GPU workstation). Each user gets their own worker process, confined
-to the folders they may use. Connections are encrypted (TLS) out of the box.
-Users, folders, encryption and limits are configured in one TOML file - see
-[docs/server.md](docs/server.md) and the commented example
-[docs/server.toml](docs/server.toml).
-
-Clients connect with
-
-```sh
-evanalyzer --remote wss://<server>:7400 --user <name> --remote-fingerprint <SHA256>
-```
-
-where the fingerprint is the one the server logs at startup
-(`Clients connect with wss:// - certificate fingerprint …`).
-
-### As a systemd service (Linux)
-
-1. **Install** the release archive, e.g. to `/opt/evanalyzer` (the bundled
-   libraries must stay next to the binary):
-
-   ```sh
-   sudo mkdir -p /opt/evanalyzer
-   sudo tar xzf evanalyzer-linux-x86_64.tar.gz -C /opt/evanalyzer
-   ```
-
-2. **Configure** `/etc/evanalyzer/server.toml` - start from
-   [docs/server.toml](docs/server.toml). Set at least `listen = "0.0.0.0:7400"`
-   and the users (`[users]`). For the paths used by the unit below, also set
-
-   ```toml
-   session_store = "/run/evanalyzer/sessions.json"
-
-   [tls]
-   self_signed_dir = "/var/lib/evanalyzer/tls"
-   ```
-
-   Create password hashes with `/opt/evanalyzer/evanalyzer hash-password`.
-
-3. **Create** `/etc/systemd/system/evanalyzer.service`:
-
-   ```ini
-   [Unit]
-   Description=EVAnalyzer server
-   Wants=network-online.target
-   After=network-online.target
-
-   [Service]
-   ExecStart=/opt/evanalyzer/evanalyzer server --config /etc/evanalyzer/server.toml
-   # Runs as its own account - right for users.source = "single" or "file".
-   # For users.source = "linux" (log in with system accounts, each worker
-   # running as its user) remove these two lines: that needs root.
-   User=evanalyzer
-   Group=evanalyzer
-   # /run/evanalyzer (session file) and /var/lib/evanalyzer (TLS certificate),
-   # owned by the service account.
-   RuntimeDirectory=evanalyzer
-   RuntimeDirectoryMode=0700
-   StateDirectory=evanalyzer
-   StateDirectoryMode=0700
-   # Workers - and the analyses running in them - must survive a restart of
-   # the server: stop only the server process, and keep the session file the
-   # restarted server finds them by (/run is emptied on reboot anyway).
-   KillMode=process
-   RuntimeDirectoryPreserve=yes
-   Restart=on-failure
-   RestartSec=5
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-4. **Start** it:
-
-   ```sh
-   sudo useradd --system --no-create-home --shell /usr/sbin/nologin evanalyzer  # not for "linux" users
-   sudo chown -R root:evanalyzer /etc/evanalyzer && sudo chmod 640 /etc/evanalyzer/*.toml
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now evanalyzer
-   journalctl -u evanalyzer -f        # the log - including the TLS fingerprint
-   ```
-
-   Open port 7400/tcp in the firewall (e.g. `sudo ufw allow 7400/tcp`).
-
-**Notes**
-
-- With `User=evanalyzer`, workers run as that account: it needs read/write
-  access to the users' home folders and `allowed_dirs`.
-- `systemctl restart evanalyzer` (or stop + start) keeps running workers and
-  analyses (`KillMode=process`): the server finds them again. Idle workers end
-  by themselves after `workers.idle_timeout_minutes`. To stop everything at
-  once, e.g. before an update of the binary:
-  `sudo systemctl kill --signal=SIGTERM evanalyzer` (stops workers too, and
-  with them any running analysis).
-- On a reboot `/run` is emptied and all workers are gone anyway; users simply
-  log in again.
-
----
-
-## Command-Line Interface (CLI)
-
-Besides the GUI, the `evanalyzer` binary has a headless batch mode for scripting,
-servers, and CI pipelines: `evanalyzer cli <command>`. Run `evanalyzer cli --help`
-or `evanalyzer cli <command> --help` for the full flag reference — this section
-covers the common workflows.
-
-### Analyze a project
-
-```sh
-evanalyzer cli analyze --project my_project.evaproj --images /data/plate1 --threads 8
-```
-
-- `--project` — the `.evaproj` file to run (required).
-- `--images` — point the project at a folder and (re-)scan it for images before
-  running. Omit this to use the image list the project already has saved.
-- `--threads` — images processed in parallel (default: number of CPUs minus one).
-
-Progress is printed as `[i/total] <image>` while it runs. A new results database
-(`.evadb`) is written under `results/<timestamp>__<job-name>/` next to the
-project file — the same layout the GUI uses. Press **Ctrl+C** to cancel; the
-in-flight image finishes, no more are started, and the process exits with code
-`130`.
-
-### Inspect a project before running it
-
-```sh
-evanalyzer cli project-info --project my_project.evaproj   # images, classes, pipelines
-evanalyzer cli validate --project my_project.evaproj        # do all referenced images exist on disk?
-```
-
-Both also accept `--json` (on `project-info`) for scripting — see below.
-
-### View a results database
-
-```sh
-evanalyzer cli view --db results/.../job.evadb --limit 50 --page 0
-evanalyzer cli view --db results/.../job.evadb --image sample01.tif --class Nucleus
-evanalyzer cli columns --db results/.../job.evadb   # column ids for --group-by / chart axes
-```
-
-`view` prints a quick summary (image/class counts, T/Z range) plus a page of object
-rows — enough to sanity-check a run without opening the GUI. `columns` lists every
-column id (including per-channel and colocalization-partner columns) available
-for grouping and charting.
-
-`view`, `columns`, and `project-info` all accept `--json` for machine-readable
-output, e.g.:
-
-```sh
-evanalyzer cli view --db job.evadb --json --limit 100 | jq '.rows[].area_px'
-```
-
-### Export results
-
-```sh
-# CSV / XLSX, optionally grouped and aggregated
-evanalyzer cli export csv  --db job.evadb --out results.csv
-evanalyzer cli export xlsx --db job.evadb --out results.xlsx \
-  --group-by image --agg avg,median --class Nucleus
-
-# Charts (PNG), rendered with the same code path as the GUI's chart view
-evanalyzer cli export chart histogram --db job.evadb --out area.png \
-  --column area_px --buckets 30 --log-scale
-evanalyzer cli export chart scatter   --db job.evadb --out scatter.png \
-  --x area_px --y circularity --color-by class
-evanalyzer cli export chart heatmap   --db job.evadb --out heatmap.png \
-  --metric count --cell-size 256
-```
-
-All `export` and `view` subcommands accept `--image <name>` and `--class <name>`
-(repeatable) to filter rows first.
-
-### Command summary
-
-| Command | Purpose |
-|---|---|
-| `analyze` | Run a project's enabled pipelines over its images, writing a new `.evadb` |
-| `project-info` | Print a project's images/classes/pipelines without running anything |
-| `validate` | Check that every image a project references can be found on disk |
-| `export csv` / `export xlsx` | Export a results database to a spreadsheet, optionally grouped/aggregated |
-| `export chart histogram/scatter/heatmap` | Render a results database to a chart PNG |
-| `view` | Print a quick summary and a page of rows from a results database |
-| `columns` | List the column ids available for `--group-by` / chart axes |
-| `jobs` | List the analyses on the `--remote` server (running and recently ended) |
-| `attach` | Follow an analysis on the `--remote` server again, e.g. after the connection dropped |
-
----
-
-## Building
-
-The app and the AI plugin are built in separate commands — only the plugin
-links libtorch (`LIBTORCH`, see `.cargo/config.toml`). The plugin is the
-`evanalyzer_ai_engine` crate built as a cdylib with its `torch` feature:
-
-```sh
-cargo build                              # the app (and the plugin loader)
-cargo build-ai-plugin                    # the libtorch plugin (alias, see .cargo/config.toml)
-cargo build --no-default-features        # the app without AI model support
-```
-
-A plugin next to the binary (as in `target/debug`) is found first;
-`EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai_engine.so` points at another
-one. Packages put it in `ai/cpu` or `ai/cuda` with its libtorch (see
-`.github/workflows/release.yml`).
-
-### Linux x86-64
-
-```sh
-cargo build-linux
-cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
-```
-
-### Windows x86-64 (cross-compile from Linux)
-
-```sh
-cargo build-win
-```
-
-> Requires [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin): `cargo install cargo-xwin`
-
-### Linux ARM64
-
-```sh
-cargo build-linux-arm
-```
-
-> Requires the cross-toolchain: `apt install gcc-aarch64-linux-gnu` and `rustup target add aarch64-unknown-linux-gnu`
-
-### macOS, Apple Silicon
-
-```sh
-cargo build-mac
-```
-
-> Build natively on an Apple-Silicon Mac. DuckDB is not bundled on macOS, so set
-> `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` to a prebuilt libduckdb (see
-> `libs/download.sh mac-cpu` and the `build-macos` CI job).
-
----
-
-## Supported Image Formats
-
-EVAnalyzer reads files through [scopeio](https://github.com/evanalyzer/scopeio), a pure-Rust reader for microscopy and whole-slide images:
-
-| Format | Extension(s) |
-|---|---|
-| TIFF / BigTIFF / OME-TIFF | `.tif` `.tiff` `.tf2` `.tf8` `.btf` |
-| Zeiss CZI / LSM / ZVI | `.czi` `.lsm` `.zvi` |
-| Nikon ND2 | `.nd2` |
-| Leica LIF / LOF / XLEF / SCN | `.lif` `.lof` `.xlef` `.xlcf` `.xlif` `.scn` |
-| Olympus VSI / OIB / OIF / OIR | `.vsi` `.oib` `.oif` `.oir` |
-| Aperio SVS | `.svs` |
-| Hamamatsu NDPI | `.ndpi` `.ndpis` |
-| 3DHistech MIRAX | `.mrxs` |
-| Ventana BIF, Akoya QPTIFF | `.bif` `.qptiff` |
-| Imaris, DeltaVision, MetaMorph | `.ims` `.dv` `.r3d` `.stk` `.nd` |
-| DICOM | `.dcm` `.dicom` |
-| PNG, JPEG, JPEG 2000, BMP | `.png` `.jpg` `.jpeg` `.jp2` `.j2k` `.bmp` |
+EVAnalyzer is a desktop application for bioimage analysis. You build a pipeline
+of steps, tune it live on the image, and run it over thousands of images or
+whole slides. Results go into one database you can explore, chart and export.
+
+- **Reads microscopy and whole-slide formats directly** - CZI, ND2, LIF, VSI,
+  OME-TIFF, SVS, NDPI, MRXS and more, with pyramids, z-stacks, time series and
+  multi-well plates.
+- **Pipelines you tune on the image** - filters, thresholds, watershed, AI
+  segmentation (Cellpose, StarDist, U-Net, YOLOv5), trained pixel and object
+  classifiers; every change is previewed right away.
+- **Measurements that match the reference tools** - intensity, shape, texture,
+  colocalization, neighbours and parent/child relations, checked against
+  CellProfiler and ImageJ.
+- **Results in one place** - tables, plate heat maps and charts; export to CSV
+  and Excel.
+- **Runs where your data is** - on your computer, from the command line, or on
+  a shared workstation or server that others log in to.
+
+## Download
+
+Get the latest version for Linux, Windows or macOS from the
+[releases page](https://github.com/evanalyzer/evanalyzer/releases/latest).
+Unpack the archive and start `evanalyzer` - everything it needs is included.
+GPU (CUDA) builds for AI models are available for Linux and Windows.
+
+## Documentation and help
+
+- **User guide:** [evanalyzer.org](https://evanalyzer.org) - getting started,
+  every pipeline step, the command line and running a server.
+- **Questions:** ask on the [image.sc forum](https://forum.image.sc/tag/evanalyzer)
+  with the tag `evanalyzer`.
+- **Bugs and feature requests:** open an
+  [issue](https://github.com/evanalyzer/evanalyzer/issues).
 
 ---
 
 ## Development Setup
 
-### Adding a new pipeline command
+### Prerequisites
 
-Pipeline commands (`Blur`, `Threshold`, `Cellpose`, …) are declared once, in
-`evanalyzer_core`, and generated everywhere else. To add one:
+- **Rust** 1.85 or later (2024 edition): `rustup update`
+- **Native libraries** (libtorch for the AI plugin, DuckDB on Windows/macOS),
+  downloaded once into `libs/`:
+
+  ```sh
+  libs/download.sh linux-cpu      # or linux-cuda | win-cpu | win-cuda | mac-cpu
+  ```
+
+- **Linux system libraries** for the GUI:
+
+  ```sh
+  apt-get install libinput10 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libgbm1
+  ```
+
+### Workspace
+
+| Crate | What it does |
+|---|---|
+| `evanalyzer_core` | Image reading ([scopeio](https://github.com/evanalyzer/scopeio)), algorithms, objects, pipeline execution |
+| `evanalyzer_cfg` | Project files and settings, generated pipeline command types |
+| `evanalyzer_app` | Shared project state, local and remote backends |
+| `evanalyzer_gui` | Slint desktop GUI |
+| `evanalyzer_cli` | Headless command line (`evanalyzer cli ...`) |
+| `evanalyzer_server` | Multi-user server (`evanalyzer server`, see [docs/server.md](docs/server.md)) |
+| `evanalyzer_ai_engine` | AI model interface and the libtorch plugin |
+| `evanalyzer_bin` | The `evanalyzer` binary: GUI, CLI or server |
+
+### Building
+
+The app and the AI plugin are built separately - only the plugin links
+libtorch:
+
+```sh
+cargo build                          # the app
+cargo build-ai-plugin                # the libtorch plugin (alias in .cargo/config.toml)
+cargo build --no-default-features    # the app without AI model support
+cargo run -p evanalyzer_bin -- --project my.evaproj   # start the GUI with a project
+```
+
+A plugin next to the binary (as in `target/debug`) is found first;
+`EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai_engine.so` points at another
+one. Release packages put it in `ai/cpu` or `ai/cuda` with its libtorch (see
+`.github/workflows/release.yml`).
+
+Release builds per platform (aliases in `.cargo/config.toml`):
+
+| Target | Command | Notes |
+|---|---|---|
+| Linux x86-64 | `cargo build-linux` | plugin: `cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu` |
+| Linux ARM64 | `cargo build-linux-arm` | `apt install gcc-aarch64-linux-gnu`, `rustup target add aarch64-unknown-linux-gnu` |
+| Windows x86-64 / ARM64 | `cargo build-win` / `cargo build-win-arm` | cross-compiled with [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) |
+| macOS Apple Silicon | `cargo build-mac` | native; set `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (see `libs/download.sh mac-cpu`) |
+
+### Testing
+
+```sh
+cargo test                           # everything except the AI model steps
+LD_LIBRARY_PATH=$PWD/libs/libtorch/lib \
+  cargo test --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
+```
+
+`libtorch-in-process` links libtorch into the test process for the AI model
+steps' tests; `libtorch` adds the plugin loader, whose test builds and loads
+the real plugin. Benchmarks and how to compare runs are in
+[BENCHMARK.md](BENCHMARK.md).
+
+### Adding a pipeline command
+
+Pipeline commands (`Blur`, `Threshold`, `Cellpose`, ...) are declared once, in
+`evanalyzer_core`, and generated everywhere else:
 
 1. Write a plain struct in `crates/core/src/algos/<category>/<name>.rs`:
 
@@ -503,169 +153,107 @@ Pipeline commands (`Blur`, `Threshold`, `Cellpose`, …) are declared once, in
    }
    ```
 
-2. Build. `crates/cfg/build/pipeline_commands_generator.rs` re-scans every
-   `#[derive(CommandsMeta)]` struct in the workspace and (re)generates
-   `crates/cfg/src/modules/pipeline_command.rs`,
-   `pipeline_command_settings.rs`, and `crates/core/src/job/algos_from_config.rs`
-   (all `// @generated - do not edit by hand`) - a settings mirror, the
-   `PipelineCommand` enum variant, `to_parameters()`/`apply_param_change()`
-   for the pipeline editor UI, and the `From<...Settings> for MyCommand`
-   conversion all come from this one struct definition. Nothing to wire up
-   by hand.
+2. Build. `crates/cfg/build/pipeline_commands_generator.rs` finds every
+   `#[derive(CommandsMeta)]` struct and regenerates
+   `crates/cfg/src/settings/pipeline_command.rs`,
+   `crates/cfg/src/settings/pipeline_command_settings.rs` and
+   `crates/core/src/job/algos_from_config.rs` (all `// @generated`): the
+   settings type, the `PipelineCommand` variant, the editor parameters and the
+   conversion to `MyCommand`. Nothing to wire up by hand.
 
-Field types drive their own UI/behavior generically, purely from the Rust
-type - no per-field opt-in needed:
+Field types bring their own UI and behaviour:
 
-- `PathBuf` → a "Browse…" file picker (`ParamType::FilePath`) **and**
-  automatic project-relative storage: `evanalyzer_app::extensions::utils::
-  relativize_file_paths`/`resolve_file_paths` rewrite *every* `FilePath`
-  field on save/load (keyed off `ParamType`, not a per-command list), so a
-  `PathBuf` field on a brand-new command is already portable across moved/
-  copied project folders with nothing added here. `#[cmdsmeta(file_extensions
-  = "...")]` (comma-separated, no dots) only narrows the file picker's
-  filter - it does not opt the field into `FilePath` handling, that's
-  automatic. See the doc comment on `commands_meta_derive` in
-  `crates/core/macros/src/lib.rs` for the full list of field-level
-  `#[cmdsmeta(...)]` keys (`min`/`max`/`step`/`default`/`unit`/`regex`/
-  `optional`/`visibility`/`file_extensions`/`section`). `#[cmdsmeta(section
-  = "Detection")]` puts a setting in a section of its own: settings of the
-  same section are listed together under its header on the step card and
-  get their own page in the step's settings dialog.
-- `ObjectClass` / `SegmentationClass` (also in `Vec`/`Option`, group
-  structs and enum variants) → a class picker **and** an entry in the
-  generated `PipelineCommand::object_classes()`, which pipeline focus mode
-  and script steps' declared-class check use. A field holding a trained
-  model's *own* class ID (not a project class) is typed `ModelClass` /
-  `ModelSegmentationClass` instead - same picker, but left out.
+- `PathBuf` - a file picker, stored relative to the project so projects can be
+  moved. `file_extensions` only narrows the picker's filter.
+- `ObjectClass` / `SegmentationClass` (also in `Vec`/`Option`) - a class
+  picker, and listed in `PipelineCommand::object_classes()`. A trained model's
+  own class ids use `ModelClass` / `ModelSegmentationClass` instead.
+- `#[cmdsmeta(section = "Detection")]` groups settings under a header on the
+  step card and on a page of their own in the step's settings dialog.
 
-One thing that *isn't* generated and needs a manual touch: `#[derive(...)]`
-assigns each `PipelineCommand` variant a numeric id in **alphabetical order
-by struct name**, contiguous from 0. Inserting a new command shifts every
-alphabetically-later command's id by one. `crates/cfg/tests/pipeline_command_
-coverage.rs` is a hand-written test file (kept separate because the generated
-file it tests can't carry inline tests) that hardcodes some of these ids to
-target specific commands - after adding a command, run
-`cargo test -p evanalyzer_cfg --test pipeline_command_coverage` and fix
-any id that shifted; a failure there means the test table is stale, not that
-the new command broke something.
+All field keys (`min`, `max`, `step`, `default`, `unit`, `regex`, `optional`,
+`visibility`, `file_extensions`, `section`) are documented on
+`commands_meta_derive` in `crates/core/macros/src/lib.rs`.
 
-### Toolchain
+`PipelineCommand` variants are numbered alphabetically, so a new command
+shifts the numbers of the ones after it. Run
+`cargo test -p evanalyzer_cfg --test pipeline_command_coverage` and update
+any number the test reports as shifted.
+
+### File headers
+
+Every source file starts with a license header. For Rust, the VS Code snippet
+`comm-file-header-open` (`.vscode/comments.code-snippets`) writes it:
+
+```rust
+//! # my_file
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-25
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+```
+
+Files that `crates/cfg/build.rs` pulls in with `include!()` use `//` instead
+of `//!`. Slint and Python files use a two-line comment:
+`Copyright <year> Joachim Danmayr.` / `Licensed under the PolyForm
+Noncommercial License 1.0.0.`
+
+### Tools
 
 ```sh
 rustup component add rustfmt
-cargo install slint-lsp      # Language server for .slint files
-cargo install slint-viewer   # Live preview of .slint files
+cargo install slint-lsp       # language server for .slint files
+cargo install slint-viewer    # live preview of .slint files
 ```
 
-### Previewing the UI inside a container
+To show the GUI from inside a dev container, allow X11 forwarding on the host
+first: `xhost +local:docker`.
 
-Allow X11 forwarding on the host before starting the container:
+### Coverage, audit, SBOM and licenses
 
-```sh
-xhost +local:docker
-```
-
-### Code Coverage
-
-```sh
-cargo install cargo-llvm-cov
-rustup component add llvm-tools-preview
-
-cargo llvm-cov                                    # terminal report
-cargo llvm-cov --html                             # HTML report → target/llvm-cov/
-cargo llvm-cov --lcov --output-path lcov.info    # lcov format (e.g. VS Code Coverage Gutters)
-```
-
-CI (`.github/workflows/ci.yml`) runs the same `cargo llvm-cov` on every push to `main` and every pull request. The full lcov/HTML report is uploaded as a workflow artifact and a text summary is posted to the run's Job Summary; on `main` it also regenerates the badge above and appends a row to [`docs/coverage-history.csv`](docs/coverage-history.csv) (line coverage per commit) - both committed straight to the repo, no external coverage service involved.
-
-### SBOM
-
-```sh
-cargo install cargo-cyclonedx
-cargo cyclonedx --format json
-```
-
-A CycloneDX SBOM for the shipped `evanalyzer` binary (covering its full dependency graph, workspace and third-party alike) is generated by `.github/workflows/release.yml` and attached to every [GitHub Release](https://github.com/evanalyzer/evanalyzer/releases/latest) as `evanalyzer-<version>-sbom.cdx.json`.
-
-### Dependency Audit
-
-```sh
-cargo install cargo-audit
-cargo audit
-```
-
-CI (`.github/workflows/ci.yml`) runs `cargo audit` against the [RustSec advisory database](https://rustsec.org/) on every push to `main` and every pull request, same split as coverage: a summary posted to the run's Job Summary on every run, and on `main` it also regenerates the badge above and appends a row to [`docs/audit-history.csv`](docs/audit-history.csv). Informational rather than a merge gate for now - it doesn't fail the job on findings.
-
-### Third-Party Licenses
-
-The About dialog's "Licenses" tab lists every third-party crate and its license text, read from `crates/gui/src/generated/third_party_licenses.json` - a file committed to the repo, **not** regenerated automatically by CI or at build time. After adding/upgrading a dependency, regenerate and commit it by hand:
-
-```sh
-cargo install cargo-about --features cli
-cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
-```
-
-Config is in `about.toml` at the repo root (accepted SPDX licenses); the workspace's own crates are excluded via `publish = false` + `about.toml`'s `[private]` section, so the listing only ever covers actual third-party dependencies.
-
----
-
-## Testing
-
-```sh
-export LD_LIBRARY_PATH=$PWD/libs/libtorch/lib
-cargo test --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
-```
-
-`libtorch-in-process` links libtorch into the test process for the AI model
-steps' tests; `libtorch` adds the plugin loader, whose test builds and loads
-the real plugin. A plain `cargo test` runs everything else.
-
----
-
-## UI Performance Targets
-
-| Action | Target | Rationale |
+| What | Locally | In CI |
 |---|---|---|
-| Pan / drag | < 10 ms | Must feel attached to the cursor |
-| Zoom | < 16 ms | Prevents motion sickness |
-| Channel toggle | < 100 ms | Perceived as instant |
-| Auto-adjust | < 200 ms | Acceptable for a complex calculation |
+| Coverage | `cargo llvm-cov --html` (`cargo install cargo-llvm-cov`, `rustup component add llvm-tools-preview`) | `ci.yml` on `main` updates `docs/coverage-badge.svg` and `docs/coverage-history.csv` |
+| Dependency audit | `cargo audit` (`cargo install cargo-audit`) | `ci.yml` on `main` updates `docs/audit-badge.svg` and `docs/audit-history.csv`; informational, not a gate |
+| SBOM | `cargo cyclonedx --format json` (`cargo install cargo-cyclonedx`) | `release.yml` attaches `evanalyzer-<version>-sbom.cdx.json` to every release |
+| Third-party licenses | `cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json` (`cargo install cargo-about --features cli`) | not regenerated by CI - run it and commit after changing dependencies |
+
+`about.toml` lists the accepted licenses. Copyleft licenses are rejected unless
+reviewed and listed per crate there.
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Please open an issue before submitting large changes so the direction can be agreed on first.
+Contributions are welcome. Please open an issue first for larger changes, so
+we can agree on the direction. Then fork the repository, work on a branch and
+open a pull request.
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feat/my-feature`
-3. Commit your changes
-4. Open a pull request
-
-## Support
-
-- For questions please visit our forum on [image.sc](https://forum.image.sc/tag/evanalyzer/)
-- For bug reports please create an issue here on github
-
----
+Before your first pull request can be merged, you need to accept the
+[Contributor License Agreement](CLA.md). It transfers the rights in your
+contribution to the maintainer, so EVAnalyzer can stay available under both
+non-commercial and commercial licenses.
 
 ## License
 
-EVAnalyzer's source code is licensed under the AGPL-3.0. However, the copyright owner grants free use only for academic and non-commercial purposes; commercial use requires a separate commercial license.
+EVAnalyzer is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE): free for personal, academic,
+research and other non-commercial use. Commercial use - in a company, in a
+commercial product or service - needs a separate license; please
+[open an issue](https://github.com/evanalyzer/evanalyzer/issues) or contact the
+maintainer.
 
-| Use case                                   | License |
-|---                                         |---|
-| Personal, academic, and non-commercial use | [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) — free, source must remain open                      |
-| Commercial use                             | [PolyForm Commercial License](LICENSE-COMMERCIAL) — contact us for terms |
-
-If you integrate EVAnalyzer into a commercial product or service, or distribute it as part of a commercial offering, a commercial license is required.  
-For commercial licensing enquiries, please open an issue or contact the maintainer directly.
-
----
+Third-party components keep their own licenses (listed in the About dialog).
+The image reader [scopeio](https://github.com/evanalyzer/scopeio) is AGPL-3.0
+with an exception that lets it be distributed with EVAnalyzer under
+EVAnalyzer's license.
 
 ## Acknowledgements
 
-- [Slint](https://slint.dev/) — cross-platform UI toolkit for Rust
-- [Kornia-rs](https://github.com/kornia/kornia-rs) — computer vision primitives in Rust
-- [Skia](https://skia.org/) — 2D graphics renderer
-- [DuckDB](https://duckdb.org/) — in-process analytical database
+- [Slint](https://slint.dev/) - cross-platform UI toolkit
+- [kornia-rs](https://github.com/kornia/kornia-rs) - computer vision primitives in Rust
+- [DuckDB](https://duckdb.org/) - in-process analytical database
+- [ImageJ](https://imagej.net/) and [CellProfiler](https://cellprofiler.org/) - algorithms ported to EVAnalyzer and reference values for its tests

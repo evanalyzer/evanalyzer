@@ -1013,19 +1013,6 @@ impl Default for BlurSettings {
 ///
 /// Pixels falling outside the HSV range are masked
 /// out by setting to black.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::{ColorFilterCommand, HsvRange};
-/// let range = HsvRange {
-/// min_h: 0.0,   max_h: 30.0, // Red tones
-/// min_s: 0.5,   max_s: 1.0,
-/// min_v: 0.5,   max_v: 1.0,
-/// };
-///
-/// let command = ColorFilterCommand { range };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorFilterCommandSettings {

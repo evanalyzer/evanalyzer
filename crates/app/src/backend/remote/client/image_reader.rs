@@ -1,5 +1,14 @@
+//! # image_reader
+//!
 //! [`RemoteImageSource`]: an image opened on the worker; tiles are fetched
 //! on demand. Survives a reconnect: opened again on the new connection.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::link::{Link, Reopen};
 use super::session::{Session, unexpected_reply};

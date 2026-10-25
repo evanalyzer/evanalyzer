@@ -1,5 +1,14 @@
+//! # results
+//!
 //! [`RemoteResults`]: a results database opened on the worker; every query
 //! is one request. Survives a reconnect: opened again on the new connection.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::link::{Link, Reopen};
 use super::session::{Session, unexpected_reply};

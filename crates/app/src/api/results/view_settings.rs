@@ -1,3 +1,5 @@
+//! # view_settings
+//!
 //! A results view's settings (`ProjectSettings::results_views[].settings`):
 //! what the GUI's List, Plate and Charts show - classes by id, columns by
 //! key (`Column::as_key`). Kept out of the project schema: the project
@@ -5,6 +7,13 @@
 //! migration. Read leniently (`ViewSettings::read`): a part that can't be
 //! read takes its defaults. The GUI shows views with them, the CLI exports
 //! one (`export --view`).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-23
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::{
     Aggregation, BoxplotGroup, ChildColumn, ChildValue, ColorSchema, Column, ColumnEntry,

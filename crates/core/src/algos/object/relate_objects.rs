@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! ## Overview
 //! Links each child object (e.g. a spot) to the parent object it belongs to

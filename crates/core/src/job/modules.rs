@@ -1,3 +1,5 @@
+//! # modules
+//!
 //! Expanding modules into plain commands before a job runs.
 //!
 //! A pipeline step is a command or an instance of a module (see
@@ -5,6 +7,13 @@
 //! commands, so the job generator replaces each module instance by its
 //! definition's commands, with the instance's parameter values written into
 //! the inner parameters they're bound to.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::pipeline::scope::{Scope, ScopeId};
 use evanalyzer_cfg::{

@@ -1,3 +1,12 @@
+//! # bench_time_course
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Benchmark (not part of the test suite) of the time course - the "Over
 // time" chart's query and its export - against a time series results
 // database (make one with core's `make_time_series` example). Each query is

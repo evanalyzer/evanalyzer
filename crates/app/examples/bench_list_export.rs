@@ -1,3 +1,12 @@
+//! # bench_list_export
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-14
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Throwaway benchmark: one image with a large object count, to check
 // List-XLSX/CSV export time and peak RSS when a single image has "millions
 // of rows" - the scenario `stream_list_pages`'s per-page fetch bounds on

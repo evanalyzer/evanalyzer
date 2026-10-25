@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use std::f32::consts::E;
 use std::sync::Arc;
@@ -120,11 +120,10 @@ impl Blur {
     /// `kornia_imgproc::filter::box_blur` always zero-pads at the image
     /// border instead ("NOTE: This function uses a constant border type",
     /// confirmed empirically: a single bright corner pixel blurs to `1/9`,
-    /// not the `4/9` edge-replicate gives). The reference (`docs/blur/blur.cpp`,
-    /// `filter3x3`'s default `BLUR_MORE` mode, which is what a bare `{"type":
-    /// "blur"}` step actually runs - `docs/blur/blur_settings.hpp` defaults
-    /// `mode` to `BLUR_MORE`, not `GAUSSIAN`) replicates edge pixels instead,
-    /// which is what the clamped window below matches.
+    /// not the `4/9` edge-replicate gives). ImageJ's `Process > Smooth`
+    /// (`filter3x3`, `BLUR_MORE` - what a bare `{"type": "blur"}` step runs)
+    /// replicates edge pixels instead, which is what the clamped window below
+    /// matches.
     fn box_blur_edge_replicate<const C: usize>(
         src: &Image<f32, C>,
         kernel_size: usize,
@@ -294,10 +293,9 @@ mod tests {
         }
     }
 
-    /// The reference (`docs/blur/blur.cpp`, `filter3x3`) replicates edge
-    /// pixels at the image border - a bare `{"type": "blur"}` step actually
-    /// runs this path, since `docs/blur/blur_settings.hpp` defaults `mode`
-    /// to `BLUR_MORE`, not `GAUSSIAN`. `kornia_imgproc::filter::box_blur`
+    /// ImageJ's `Process > Smooth` (`filter3x3`, `BLUR_MORE`) replicates edge
+    /// pixels at the image border - a bare `{"type": "blur"}` step runs this
+    /// path. `kornia_imgproc::filter::box_blur`
     /// always zero-pads instead ("NOTE: This function uses a constant
     /// border type"), which would make every border pixel - and, for tiled
     /// processing, every tile seam - systematically darker than the

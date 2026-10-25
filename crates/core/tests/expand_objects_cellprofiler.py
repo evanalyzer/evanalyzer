@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes expand_objects_cellprofiler.json: the labels CellProfiler's
 ExpandOrShrinkObjects gives when expanding objects by a number of pixels
 (`expand` in cellprofiler/library/functions/object_processing.py,

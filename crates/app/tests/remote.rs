@@ -1,6 +1,15 @@
+//! # remote
+//!
 //! End-to-end: a real server on a local port running `LocalBackend`, and a
 //! `RemoteBackend` client talking to it over WebSocket. Remote results must
 //! match what the local backend produces for the same request.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_app::ai_learning::PixelTrainingParams;
 use evanalyzer_app::ai_learning::StartTrainingError;

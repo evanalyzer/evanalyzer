@@ -1,6 +1,15 @@
+//! # jobs
+//!
 //! Analysis and preview runs as front ends see them: what to ask for, and
 //! the handle to a running job (events, cancel, result) - the same whether
 //! it runs in this process or on a server.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::{
     core_types::{BreakpointSettings, InternalErrors},

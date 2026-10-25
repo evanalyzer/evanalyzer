@@ -1,4 +1,13 @@
+//! # rdf_parser
+//!
 //! Parsing of bioimage.io `rdf.yaml` files into an [`RdfModel`].
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use std::fmt;
 use std::path::Path;

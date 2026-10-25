@@ -1,6 +1,15 @@
+//! # backend
+//!
 //! The backend interface itself: what a front end can ask for, and the
 //! requests it sends. Implemented by `backend::local::LocalBackend` (this
 //! process) and `backend::remote::RemoteBackend` (a server).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, FileSystem, GroupedByImageFilter,

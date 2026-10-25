@@ -1,3 +1,6 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
 // dialogs/about.slint — About EVAnalyzer (board Y): a dark hero on the
 // left (name, version, platform), on the right About (the people as an
 // orbit, the creators, the license), System (where the work runs) and
@@ -245,7 +248,8 @@ component Fact inherits VerticalLayout {
         font-weight: 500;
         font-family: root.mono ? Ink.font-mono : Ink.font-sans;
         color: Ink.text;
-        overflow: elide;
+        // Wraps rather than hides part of a fact in a narrow window.
+        wrap: word-wrap;
     }
 }
 
@@ -277,12 +281,14 @@ component PersonCard inherits Card {
                 font-size: Ink.fs-body;
                 font-weight: 600;
                 color: Ink.text;
+                overflow: elide;
             }
 
             Text {
                 text: root.who.role;
                 font-size: Ink.fs-secondary;
                 color: Ink.text-dim;
+                overflow: elide;
             }
         }
     }
@@ -660,7 +666,7 @@ export component AboutDialog inherits Rectangle {
 
                                     Fact {
                                         label: "License";
-                                        value: "AGPL-3.0";
+                                        value: "PolyForm Noncommercial 1.0.0";
                                     }
                                 }
                             }
@@ -738,14 +744,14 @@ export component AboutDialog inherits Rectangle {
                                 alignment: center;
                                 spacing: 2px;
                                 Text {
-                                    text: "Free and open source";
+                                    text: "Free for non-commercial use";
                                     font-size: Ink.fs-heading;
                                     font-weight: 600;
                                     color: Ink.text;
                                 }
 
                                 Text {
-                                    text: "AGPL-3.0: use, study, share and change it - what you share or offer as a service stays open.";
+                                    text: "PolyForm Noncommercial 1.0.0 - companies need a license.";
                                     font-size: Ink.fs-secondary;
                                     color: Ink.text-dim;
                                     overflow: elide;
@@ -978,9 +984,9 @@ export component AboutDialog inherits Rectangle {
                             VerticalLayout {
                                 alignment: start;
                                 spacing: 0px;
-                                if root.found("EVAnalyzer AGPL-3.0"): LicenseRow {
+                                if root.found("EVAnalyzer PolyForm Noncommercial 1.0.0"): LicenseRow {
                                     title: "EVAnalyzer";
-                                    badge: "AGPL-3.0";
+                                    badge: "PolyForm Noncommercial 1.0.0";
                                     subtitle: "This application";
                                     expanded: root.open-license == -2;
                                     toggled => {

@@ -1,3 +1,12 @@
+//! # common
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::args::{AggKind, GroupArgs, GroupByKind, LayoutKind, NormalizeKind};
 use evanalyzer_app::results::Cell;
 use evanalyzer_app::results::CellValue;

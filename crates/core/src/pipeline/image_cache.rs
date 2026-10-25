@@ -1,3 +1,12 @@
+//! # image_cache
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-03
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use clru::{CLruCache, CLruCacheConfig, WeightScale};
 use log::{debug, warn};
 

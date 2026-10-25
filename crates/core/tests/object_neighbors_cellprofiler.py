@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes object_neighbors_cellprofiler.json: CellProfiler's
 MeasureObjectNeighbors values per object - number of neighbors, percent
 touching, first/second closest object and distance, angle between

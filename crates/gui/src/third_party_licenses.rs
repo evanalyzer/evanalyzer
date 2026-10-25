@@ -1,3 +1,5 @@
+//! # third_party_licenses
+//!
 //! Third-party dependency license data for the About dialog.
 //!
 //! `generated/third_party_licenses.json` is produced by
@@ -9,6 +11,13 @@
 //! Grouped by exact license *text*, not just SPDX id: copyright lines differ
 //! crate to crate, so e.g. "MIT" covers many distinct text variants, each
 //! listed separately here with the crates that use that exact text.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-07
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use serde::Deserialize;
 

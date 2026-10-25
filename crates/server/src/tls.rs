@@ -1,3 +1,5 @@
+//! # tls
+//!
 //! TLS for client connections (`wss://`), configured in `[tls]` (see
 //! [`TlsConfig`]).
 //!
@@ -8,6 +10,13 @@
 //!
 //! Only the client side is encrypted; workers listen on 127.0.0.1 and are
 //! reached in plain text.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::config::TlsConfig;
 use log::info;

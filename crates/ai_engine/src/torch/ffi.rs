@@ -1,6 +1,15 @@
+//! # ffi
+//!
 //! The C functions of the plugin library ([`crate::api::ffi`]): one
 //! [`TorchEngine`] per process, set up by `eva_ai_init`. No panic crosses
 //! into the app - each one becomes an error message.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::TorchEngine;
 use crate::api::{

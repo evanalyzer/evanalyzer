@@ -1,3 +1,12 @@
+//! # user_management
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 pub mod file_users;
 pub mod linux_users;
 pub(crate) mod password;

@@ -1,7 +1,16 @@
+//! # measurement_choices
+//!
 //! Measurement settings in the editor (`ParamType::Measurement`, e.g. an
 //! "Exclude Image" rule's measurement): picked from the measurements the
 //! project's steps make (each step's `measurement_outputs`), shown by label
 //! ("quality_01 · Focus score (channel 0)"), stored by key.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-22
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::ProjectWithRuntime;
 use crate::workspace::module_insights::resolved_commands;

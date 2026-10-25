@@ -1,3 +1,5 @@
+//! # migration_v1_to_v2
+//!
 //! Migrates a [`ProjectSettings`](crate::settings::project_settings::ProjectSettings)
 //! document from schema version 1 to version 2.
 //!
@@ -19,6 +21,13 @@
 //!
 //! Both walk the whole document rather than a fixed path, since either kind
 //! of value can appear at any depth (nested inside pipelines/steps/commands).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-23
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use serde_json::Value;
 

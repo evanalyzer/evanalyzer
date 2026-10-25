@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes object_shape_cellprofiler.json: CellProfiler's MeasureObjectSizeShape
 values per object (MeasureObjectSizeShape.analyze_objects in
 cellprofiler/modules/measureobjectsizeshape.py, CellProfiler 4.2.8, copied

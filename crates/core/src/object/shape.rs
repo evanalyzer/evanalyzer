@@ -1,8 +1,17 @@
+//! # shape
+//!
 //! An object's shape measurements as CellProfiler's MeasureObjectSizeShape
 //! gives them (cellprofiler/modules/measureobjectsizeshape.py, CellProfiler
 //! 4.2.8, with scikit-image's `regionprops` and centrosome): the Feret
 //! diameters, the convex area, the Euler number and the radii - computed
 //! from the mask when asked for (at export), not kept on the object.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-24
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::Object;
 

@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes image_quality_cellprofiler.json: CellProfiler's image quality
 values (MeasureImageQuality: focus score, power log-log slope, percent
 maximal/minimal - the code of cellprofiler_library/functions/measurement.py

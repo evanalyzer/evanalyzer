@@ -1,3 +1,12 @@
+//! # bench_empty_groups
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Throwaway benchmark (not part of the test suite), run against a real,
 // large `.evadb` file before and after a change to how the results queries
 // treat images without objects (Count/Sum 0 for analysed images, empty for

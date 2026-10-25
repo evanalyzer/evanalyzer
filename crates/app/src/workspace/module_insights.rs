@@ -1,8 +1,17 @@
+//! # module_insights
+//!
 //! What a project's steps and modules do, worked out from their settings:
 //! the commands a pipeline step runs with its values applied, the classes a
 //! command creates and the channels it reads, what a module parameter
 //! sets - for the checks (`module_checks`) and the editor's "Sets …"
 //! lines - and the parameter keys that follow section and label.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-16
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::module_editing::step_setting;
 use evanalyzer_cfg::{

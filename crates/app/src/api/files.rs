@@ -1,6 +1,15 @@
+//! # files
+//!
 //! File access on the machine the backend runs on - the file browser, and
 //! every project/template/model file the UI reads or writes, goes through
 //! this instead of `std::fs`, so it works the same against a remote server.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde::{Deserialize, Serialize};

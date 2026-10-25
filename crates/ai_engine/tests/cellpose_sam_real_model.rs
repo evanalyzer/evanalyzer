@@ -1,3 +1,5 @@
+//! # cellpose_sam_real_model
+//!
 //! Smoke test against a real Cellpose-SAM export (`tests/models/cellpose_sam.pt`).
 //!
 //! Not checked into git - at ~1.2GB it's too large to commit (see
@@ -9,6 +11,13 @@
 //! and running a forward pass takes real time and isn't something every
 //! `cargo test` invocation should pay for. Run explicitly with:
 //!   cargo test -p evanalyzer_ai_engine --features torch --test cellpose_sam_real_model -- --ignored
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 #![cfg(feature = "torch")]
 

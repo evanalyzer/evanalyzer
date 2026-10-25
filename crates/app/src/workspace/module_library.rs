@@ -1,3 +1,5 @@
+//! # module_library
+//!
 //! The module library: modules saved to `.evamodule` files (in the
 //! templates folders, like project templates), inserted into a
 //! project as a copy that lives on its own from then on.
@@ -6,6 +8,13 @@
 //! version, and a fingerprint of the definition as inserted), so a newer
 //! version of the file shows as an update - and an update knows whether the
 //! project changed the module since.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::FileSystem;
 use chrono::Utc;

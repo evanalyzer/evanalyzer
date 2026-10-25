@@ -1,3 +1,5 @@
+//! # load_config
+//!
 //! Shared machinery for loading versioned, on-disk JSON documents (project
 //! files, AI training settings, ...) and migrating older schema versions
 //! forward before the final typed deserialize.
@@ -12,6 +14,13 @@
 //! Deliberately not `include!()`-d by `build.rs` (unlike `settings::*`) - it
 //! only needs to exist in the real library build, not the build-script's
 //! schema-generation copy.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::core_types::InternalErrors;
 use crate::migration::migration_v1_to_v2::migrate_from_v1_to_v2;

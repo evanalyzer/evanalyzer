@@ -1,6 +1,15 @@
+//! # dataset
+//!
 //! Dataset steps: run once after every image has been analysed, on the
 //! objects of all images, frames and wells - without pixels (e.g. tracking,
 //! per-plate normalisation). Image steps live in `algos`.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod dataset_context;
 pub mod tracking;

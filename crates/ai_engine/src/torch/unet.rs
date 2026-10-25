@@ -4,7 +4,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! U-Net inference: the tile padded to the model's needs, the prediction
 //! cropped back and reduced to the foreground (and boundary) probability.

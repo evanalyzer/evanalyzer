@@ -1,3 +1,5 @@
+//! # script_params
+//!
 //! A script's `param`s: values the script gets from its step's settings (or a
 //! module parameter) instead of from its code.
 //!
@@ -17,6 +19,13 @@
 //! differ from the defaults, by name (`ScriptSettings::values`); the editor
 //! shows one setting `values.<name>` per `param` ([`script_parameters`]),
 //! which module parameters bind to like any other setting.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectClass};
 use evanalyzer_cfg::settings::modules::ParamValue;

@@ -1,6 +1,15 @@
+//! # ai_learning
+//!
 //! Training-related project logic the UI needs: which classes have data,
 //! building class-label lists from the project, and saving/reading model
 //! files through the backend.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::TrainedClassifier;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;

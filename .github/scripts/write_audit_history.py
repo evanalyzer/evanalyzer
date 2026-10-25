@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Appends per-finding rows to docs/audit-history.csv from a
 `cargo audit --json` report.
 

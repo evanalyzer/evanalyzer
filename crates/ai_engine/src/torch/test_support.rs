@@ -1,3 +1,5 @@
+//! # test_support
+//!
 //! Test helpers for exercising the real TorchScript model-loading and
 //! inference path - in this crate's tests and, through the `test-support`
 //! feature, in the analysis' `execute()` tests of its AI steps - without
@@ -23,6 +25,13 @@
 //! of the trace. Build constant outputs from the input with plain numbers
 //! instead (`x.mean(..) * 0.0 + v`), which the trace keeps (see
 //! `yolov5`'s `centre_box_model`).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use tch::{CModule, Device, Kind, Tensor};
 

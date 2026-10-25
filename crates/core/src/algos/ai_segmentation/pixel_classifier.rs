@@ -1,3 +1,12 @@
+//! # pixel_classifier
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-01
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ModelSegmentationClass, SegmentationClass,
 };

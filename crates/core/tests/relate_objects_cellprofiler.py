@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes relate_objects_cellprofiler.json: which parent CellProfiler's
 RelateObjects gives each child (cellprofiler_core Objects.relate_labels -
 the largest overlap, ties to the lower label, no overlap: no parent), for a

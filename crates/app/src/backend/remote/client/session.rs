@@ -1,7 +1,16 @@
+//! # session
+//!
 //! The connection to a worker: opening it (directly with a token, or through
 //! an `evanalyzer server` login), the protocol handshake, and matching each
 //! request with its replies. Everything else in the client is a thin adapter
 //! that turns API calls into requests on a [`Session`].
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::tls::{self, NetStream, TlsTrust};
 use crate::api::CancelHandle;

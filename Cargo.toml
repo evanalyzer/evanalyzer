@@ -10,7 +10,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 authors = ["Joachim Danmayr"]
-license = "AGPL-3.0"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 

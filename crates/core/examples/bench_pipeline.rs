@@ -1,3 +1,12 @@
+//! # bench_pipeline
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // TEMPORARY benchmark for the performance review: synthetic 16-bit images
 // with cell-like spots, pipeline Gaussian blur -> threshold -> extract
 // objects, run through the real job generator + JobExecutor.

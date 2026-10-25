@@ -26,10 +26,10 @@
             "//! ",
             "//! ## License",
             "//! Copyright $CURRENT_YEAR Joachim Danmayr.",
-            "//! Licensed under the **AGPL-3.0**.",
+            "//! Licensed under the **PolyForm Noncommercial License 1.0.0**.",
             ""
         ],
-        "description": "Idiomatic Rust file-level header (Open Source)"
+        "description": "Idiomatic Rust file-level header"
     },
     "Method Header": {
         "prefix": "comm-method-header",

@@ -1,6 +1,15 @@
+//! # results_time_course
+//!
 //! The time course: per time point (and z-plane), statistics of values over
 //! each line's objects - a class's, an image's, a well's, a group's or a
 //! track's. What the "Over time" chart draws and its export writes.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::results_generator::{
     ResultsGenerator, class_blocks, class_filter_sql, column_aggregate_expr, objects_per_class_sql,

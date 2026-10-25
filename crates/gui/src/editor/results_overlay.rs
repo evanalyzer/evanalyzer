@@ -1,3 +1,5 @@
+//! # results_overlay
+//!
 //! The results' split view on the image: the analysis' objects on the
 //! shown image, drawn and picked by the editor's code (`object_render`) -
 //! in their class's color or the value's heatmap color, from the masks
@@ -5,6 +7,13 @@
 //! (Results › Tracks) each track's path up to the time point shown goes
 //! under them as a trail, fading into the past. Drawn instead of the
 //! project's objects (see `ViewportController::sync_objects_to_slint_viewport`).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::editor::object_render::{
     Canvas, Link, ObjectDrawInstance, draw_objects, mask_holds, pick,

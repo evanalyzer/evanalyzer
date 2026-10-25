@@ -1,3 +1,5 @@
+//! # intensities
+//!
 //! An object's intensities: per channel, sum / min / max / mean and how the
 //! values spread (std, median, quartiles, MAD) over the pixels of its mask
 //! that loaded image regions cover - one implementation for pipeline
@@ -9,6 +11,13 @@
 //! it; RGB counts as luminance ([`sample_channel_pixel`]). The mean is over
 //! the covered pixels - a part of the mask no region covers is missing
 //! data, not dark.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::{Intensity, Object};
 use crate::ImageContainer;

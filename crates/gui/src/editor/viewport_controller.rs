@@ -1,3 +1,12 @@
+//! # viewport_controller
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::ViewportState as ViewportSlintState;
 use crate::editor::object_render::{
     CHILD_RGB, DIMMED_RGB, ObjectDrawInstance, PARENT_RGB, SELECTED_RGB, ZOrder, draw_objects,

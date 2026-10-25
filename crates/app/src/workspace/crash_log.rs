@@ -1,3 +1,5 @@
+//! # crash_log
+//!
 //! Crash visibility for the packaged app.
 //!
 //! Logging today (see the binary's `main.rs`) goes to stderr via
@@ -7,6 +9,13 @@
 //! bug report. [`install_panic_hook`] appends every panic's message,
 //! location, and backtrace to a log file in the user's per-app data
 //! directory instead.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-08
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::settings::get_user_folder;
 use std::fs::OpenOptions;

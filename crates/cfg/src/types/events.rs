@@ -1,8 +1,17 @@
+//! # events
+//!
 //! Progress events streamed by `evanalyzer_core`'s classifier training jobs.
 //!
 //! Lives here rather than in core so front ends (GUI/CLI, and later a remote
 //! client) can consume them through `evanalyzer_app` without depending on the
 //! engine crate, and so they can be serialized across a transport.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

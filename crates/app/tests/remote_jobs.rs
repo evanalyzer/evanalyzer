@@ -1,9 +1,18 @@
+//! # remote_jobs
+//!
 //! Analyses on a worker outlive the client connection that started them:
 //! a dropped connection doesn't cancel them, and another connection can list
 //! them and attach again. The worker runs a backend whose analysis waits at
 //! a gate the test opens, so "still running while the client is gone" is
 //! deterministic; the network drop is a proxy between client and worker
 //! that the test cuts.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_app::analysis::{AnalysisRequest, JobState, ProgressEvent, RunningJob};
 use evanalyzer_app::backends::Backend;

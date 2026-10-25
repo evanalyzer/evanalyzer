@@ -1,3 +1,12 @@
+//! # results_charts
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-14
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::api::*;
 
 use super::results_generator::{

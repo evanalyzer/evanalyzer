@@ -10,6 +10,13 @@
 //! whichever image tiles it covers. Only annotations of the plane being
 //! processed are loaded (the executor fills `GlobalPipelineCache::annotated_objects`
 //! accordingly).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::Object,

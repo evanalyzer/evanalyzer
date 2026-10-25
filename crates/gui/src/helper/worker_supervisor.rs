@@ -1,3 +1,12 @@
+//! # worker_supervisor
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-07-13
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::Duration;

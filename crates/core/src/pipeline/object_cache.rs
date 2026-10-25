@@ -1,3 +1,12 @@
+//! # object_cache
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-03
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::object::Object;
 use evanalyzer_cfg::core_types::ObjectId;
 use std::collections::BTreeMap;

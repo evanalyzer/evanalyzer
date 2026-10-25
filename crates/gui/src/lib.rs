@@ -1,3 +1,12 @@
+//! # evanalyzer_gui
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // gui/src/lib.rs
 
 pub use evanalyzer_gui_slint::*;
@@ -570,18 +579,6 @@ impl UiState {
         self.app.new_project();
         self.clear_undo_history();
         self.clear_image_states();
-    }
-
-    /// Imports an old (`.icproj`) project, replacing the current project.
-    /// Returns conversion warnings and the legacy project's image folder, if any.
-    pub fn import_legacy_project(
-        &self,
-        path: &PathBuf,
-    ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
-        let imported = self.app.import_legacy_project(path)?;
-        self.clear_undo_history();
-        self.clear_image_states();
-        Ok(imported)
     }
 
     /// Marks the project as having unsaved changes.

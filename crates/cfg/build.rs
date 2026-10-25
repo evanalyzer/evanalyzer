@@ -1,3 +1,12 @@
+//! # build
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Module tree mirroring src/ so `crate::` references inside include!()-d
 // source files resolve correctly against the build-script crate root.
 // We use include!(concat!(env!("CARGO_MANIFEST_DIR"), ...)) to produce

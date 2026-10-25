@@ -1,7 +1,16 @@
+//! # measurements_panel
+//!
 //! The Measurements panel (`ui/editor/measurements_panel.slint`): every
 //! measurement the preview made - all pipelines, steps inside modules too -
 //! by step. The preview brings them back like its objects
 //! (`ProjectTmpSettings::preview_measurements`); synced with them.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-22
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{AppWindow, MeasurementRow, MeasurementsState, UiState};
 use evanalyzer_app::project::ProjectWithRuntime;

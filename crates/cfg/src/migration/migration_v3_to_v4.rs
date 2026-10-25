@@ -1,3 +1,5 @@
+//! # migration_v3_to_v4
+//!
 //! Migrates a [`ProjectSettings`](crate::settings::project_settings::ProjectSettings)
 //! document from schema version 3 to version 4. (Project templates hold
 //! the same `classification` but aren't migrated - they may break.)
@@ -22,6 +24,13 @@
 //! An annotated object's `parentId` and `children` go: links are `parents`
 //! now (parent class -> parent, set by Relate Objects), and annotations
 //! never had any.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use serde_json::{Map, Value, json};
 

@@ -1,3 +1,12 @@
+// # ai_learning_pixel_settings
+//
+// **Author:** Joachim Danmayr
+// **Date:** 2026-07-31
+//
+// ## License
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::settings::pipeline_command_settings::{
     EdgeDetectionSobelSettings, GaussianBlurSettings, HessianSettings, LaplacianSettings,
     RankFilterSettings, StructureTensorSettings,

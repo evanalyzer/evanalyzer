@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::ImageContainer;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
@@ -98,7 +98,7 @@ impl ImageAlgorithm for RollingBall {
         if self.ball_type == BallType::Paraboloid {
             // ImageJ's "Sliding Paraboloid" is NOT the ball-rolling opening
             // with a parabolic height profile - it's a different algorithm
-            // entirely (`docs/rolling_ball/rolling_ball_sliding_paraboloid.cpp`,
+            // entirely (ImageJ's `BackgroundSubtracter`,
             // `slidingParaboloidFloatBackground`): a 1D parabola is slid along
             // every row, column, and both diagonals of the full-resolution
             // image directly (no shrink/ball/enlarge at all).
@@ -186,8 +186,7 @@ impl ImageAlgorithm for RollingBall {
 
         // 3. Roll Ball (Sequential cache-localized multi-pass morphology filter)
         //
-        // The reference implementation (`docs/rolling_ball/rolling_ball.cpp`,
-        // `rollBall`) lets the ball's centre roll to positions up to
+        // ImageJ (`BackgroundSubtracter.rollBall`) lets the ball's centre roll to positions up to
         // `radius_in` pixels OUTSIDE the image (`for (y = -radiusIn; y <
         // height + radiusIn; y++)`); only the erosion at those off-image
         // centres is clamped to the pixels that actually exist. Restricting
@@ -273,13 +272,11 @@ impl ImageAlgorithm for RollingBall {
 
         // 4. Enlarge and Subtract (Fixed Bilinear Interpolation Weights)
         //
-        // This deliberately does NOT port the reference `enlargeImage`'s
-        // row-caching structure (`docs/rolling_ball/rolling_ball.cpp`): that
-        // function tries to swap two row buffers via
-        // `memcpy(line0, line1, width)`, copying `width` *bytes* instead of
-        // `width * sizeof(float)` bytes. For any non-trivial image that
-        // leaves most of each row stale, corrupting the interpolated
-        // background into a blocky pattern whenever `shrink_factor > 1`
+        // This deliberately does NOT port the row-caching structure of
+        // ImageJ's `enlargeImage` (two swapped row buffers) - an earlier port
+        // of that structure copied too few bytes per row, which left most of
+        // each row stale and corrupted the interpolated background into a
+        // blocky pattern whenever `shrink_factor > 1`
         // (`radius > 10`). That's an unrelated defect in the reference, not
         // an intentional behavior to preserve - indexing `bg_dilated`
         // directly below is mathematically equivalent to what the reference
@@ -459,8 +456,7 @@ impl RollingBall {
 
     /// ImageJ's "Sliding Paraboloid" background (`BallType::Paraboloid`).
     ///
-    /// Port of `RollingBall::slidingParaboloidFloatBackground`
-    /// (`docs/rolling_ball/rolling_ball_sliding_paraboloid.cpp`): a 1D
+    /// Port of ImageJ's `BackgroundSubtracter.slidingParaboloidFloatBackground`: a 1D
     /// parabola is slid along every row, column, and both diagonals of the
     /// full-resolution image (no ball, no shrink/enlarge). Returns the
     /// computed background envelope, the same size as `data`; `data` itself
@@ -1461,8 +1457,8 @@ mod tests {
         Ok(())
     }
 
-    /// Golden-data regression for the border bug: the reference `rollBall`
-    /// (`docs/rolling_ball/rolling_ball.cpp`) lets the ball's centre roll to
+    /// Golden-data regression for the border bug: ImageJ's `rollBall`
+    /// lets the ball's centre roll to
     /// positions up to `radius_in` pixels OUTSIDE the image
     /// (`for (y = -radiusIn; y < height + radiusIn; y++)`). Before this fix,
     /// the Rust port only ever centred the ball strictly inside the image,
@@ -1476,7 +1472,7 @@ mod tests {
     /// `enlargeImage` - see the comment above the "Enlarge and Subtract"
     /// step in `execute` - and is a clean ground truth for `rollBall` itself.
     #[test]
-    fn test_rolling_ball_matches_cpp_reference_border_touching_peak()
+    fn test_rolling_ball_matches_reference_border_touching_peak()
     -> Result<(), Box<dyn std::error::Error>> {
         let width = 20;
         let height = 15;
@@ -1501,8 +1497,8 @@ mod tests {
                 full_image_width: ImageSize { width, height },
                 is_rgb: false,
                 // nr_of_bits: 0 -> scale_factor 1, so the ball height stays in
-                // raw pixel units, matching the C++ reference (which never
-                // normalizes at all).
+                // raw pixel units, like the recorded reference output (which
+                // was never normalized).
                 nr_of_bits: 0,
                 pixel_sizes: PixelSizes {
                     px_size_x: 1.0,
@@ -1541,7 +1537,7 @@ mod tests {
             let got = bg(x, y);
             assert!(
                 (got - want).abs() < 1e-3,
-                "background at ({x},{y}): got {got}, expected {want} (C++ reference)"
+                "background at ({x},{y}): got {got}, expected {want} (reference)"
             );
         }
 
@@ -1550,13 +1546,13 @@ mod tests {
 
     /// Golden-data regression for `BallType::Ball` with `shrink_factor > 1` -
     /// the one part of the algorithm the two tests above never exercise
-    /// (`test_rolling_ball_matches_cpp_reference_border_touching_peak` uses
+    /// (`test_rolling_ball_matches_reference_border_touching_peak` uses
     /// radius 10, which keeps `shrinkFactor == 1`), specifically covering
     /// `build_ball`'s shrink-factor selection, the min-pooling `shrinkImage`
     /// downsample, and the bilinear `enlargeImage`/`makeInterpolationArrays`
     /// upsample - the step this file's own "Enlarge and Subtract" comment
-    /// flags as deliberately *not* a literal port of the C++ reference
-    /// (which has an unrelated `memcpy` byte-count bug there), making this
+    /// flags as deliberately *not* a literal port of ImageJ's row caching,
+    /// making this
     /// exactly the path most likely to have quietly diverged from ImageJ.
     ///
     /// ImageJ itself ships no unit tests for `BackgroundSubtracter`
@@ -1569,9 +1565,8 @@ mod tests {
     /// current `ij.plugin.filter.BackgroundSubtracter.java`
     /// (`https://raw.githubusercontent.com/imagej/ImageJ/master/ij/plugin/filter/BackgroundSubtracter.java`)
     /// into a standalone Python reference (not derived from - or shared
-    /// with - this crate's Rust implementation or the `docs/rolling_ball`
-    /// C++ port, so a bug shared between the Rust port and its own C++
-    /// reference can't hide from this one), then run on the fixture below
+    /// with - this crate's Rust implementation, so a bug in the port can't
+    /// hide from this one), then run on the fixture below
     /// (radius 15.0 -> `shrinkFactor == 2`, 17x13 so neither dimension is a
     /// multiple of the shrink factor, `preSmooth = false`, `nrOfBits = 0` so
     /// `scaleFactor == 1` and the ball heights stay in the same raw units
@@ -1687,8 +1682,8 @@ mod tests {
     /// `ballType: PARABOLOID` used to run the ball-rolling erosion/dilation
     /// pipeline with a parabolic *height profile* swapped in - a fundamentally
     /// different (and wrong) algorithm from ImageJ's actual "Sliding
-    /// Paraboloid" (`docs/rolling_ball/rolling_ball_sliding_paraboloid.cpp`,
-    /// `slidingParaboloidFloatBackground`), which slides a 1D parabola along
+    /// Paraboloid" (`BackgroundSubtracter.slidingParaboloidFloatBackground`),
+    /// which slides a 1D parabola along
     /// rows, columns, and both diagonals instead. That mismatch is what
     /// produced "a lot of small artifacts" reported against real nuclei
     /// masks - the wrong algorithm doesn't just differ subtly, it's a
@@ -1701,8 +1696,7 @@ mod tests {
     /// `{"type": "rollingBall", "radius": 4.0, "ballType": "PARABOLOID",
     /// "preSmooth": false}`).
     #[test]
-    fn test_rolling_ball_paraboloid_matches_cpp_reference() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn test_rolling_ball_paraboloid_matches_reference() -> Result<(), Box<dyn std::error::Error>> {
         const WIDTH: usize = 16;
         const HEIGHT: usize = 12;
 
@@ -1759,7 +1753,7 @@ mod tests {
                     height: HEIGHT,
                 },
                 is_rgb: false,
-                // nr_of_bits: 0 -> scale_factor 1, raw units matching C++.
+                // nr_of_bits: 0 -> scale_factor 1, raw units like the reference.
                 nr_of_bits: 0,
                 pixel_sizes: PixelSizes {
                     px_size_x: 1.0,
@@ -1787,7 +1781,7 @@ mod tests {
             let got_bg = input - out[i];
             assert!(
                 (got_bg - want_bg).abs() < 1e-2,
-                "pixel {} (x={}, y={}): background {got_bg}, expected {want_bg} (C++ reference)",
+                "pixel {} (x={}, y={}): background {got_bg}, expected {want_bg} (reference)",
                 i,
                 i % WIDTH,
                 i / WIDTH

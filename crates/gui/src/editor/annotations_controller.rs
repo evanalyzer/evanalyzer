@@ -1,6 +1,15 @@
+//! # annotations_controller
+//!
 //! The manual-annotation actions (`AnnotationState`): copying pipeline
 //! (preview) objects into the manual annotations, deleting manual
 //! annotations in bulk, GeoJSON export and import.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::UiState;
 use crate::editor::classification_controller::ClassificationController;

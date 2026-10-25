@@ -1,3 +1,5 @@
+//! # step_model_patch
+//!
 //! The steps panel's models, updated in place.
 //!
 //! A sync after each change and each preview builds the steps' rows anew.
@@ -7,6 +9,13 @@
 //! is unchanged stays as it is, a changed one is updated in place (its
 //! field keeps the focus), and only rows added, removed or moved replace a
 //! model.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{
     CardTable, CardTableRow, CommandParameter, GroupItem, LeafParam,

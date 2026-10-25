@@ -1,3 +1,5 @@
+//! # frame
+//!
 //! One WebSocket binary message = a JSON header plus raw binary blobs.
 //!
 //! ```text
@@ -7,6 +9,13 @@
 //! Structured data goes through JSON - the same format the project files use,
 //! so every settings type round-trips exactly. Pixel data travels as blobs so
 //! millions of samples aren't encoded as individual JSON numbers.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde::Serialize;

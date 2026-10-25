@@ -1,3 +1,12 @@
+//! # view
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::args::{ColumnsArgs, ViewArgs};
 use crate::commands::common::{
     cell_text, resolve_image_rel_paths, resolve_object_classes, shown_planes,

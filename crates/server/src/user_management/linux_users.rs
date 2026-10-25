@@ -1,3 +1,5 @@
+//! # linux_users
+//!
 //! Authenticates against the local Linux user database: the password hash
 //! comes from `/etc/shadow`, uid, gid and home folder from `/etc/passwd`.
 //!
@@ -5,6 +7,13 @@
 //! Debian/Ubuntu/Fedora), sha512-crypt `$6$` and sha256-crypt `$5$`.
 //!
 //! Reading `/etc/shadow` requires root or membership in the `shadow` group.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::user_management::password::verify_password;
 use crate::user_management::{

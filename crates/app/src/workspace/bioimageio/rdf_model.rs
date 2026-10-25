@@ -1,3 +1,5 @@
+//! # rdf_model
+//!
 //! Data model for a bioimage.io model description (`rdf.yaml`).
 //!
 //! This captures only the parts EVAnalyzer needs to auto-configure an AI
@@ -6,6 +8,13 @@
 //! ignoring everything else. Deserialization is intentionally lenient: missing
 //! fields fall back to defaults rather than failing, since model cards in the
 //! wild vary widely.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use std::collections::BTreeMap;
 

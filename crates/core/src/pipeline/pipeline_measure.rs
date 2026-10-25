@@ -1,5 +1,14 @@
+//! # pipeline_measure
+//!
 //! The measurements of a plane: the types live in `evanalyzer_cfg` (they
 //! travel to the app and over the server connection, like the objects).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-22
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub use evanalyzer_cfg::core_types::{
     Measurement, MeasurementRegion, MeasurementValues, ObjectValue, PipelineMeasurements,

@@ -1,3 +1,12 @@
+//! # project_owner
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // app/src/project_owner.rs
 
 use crate::api::Backend;
@@ -289,27 +298,6 @@ impl AppHandle {
     /// "File > New".
     pub fn new_project(&self) {
         *lock_project_write(&self.project) = ProjectWithRuntime::default();
-    }
-
-    /// Imports an old (`.icproj`) project, replacing the current project.
-    ///
-    /// Returns the conversion warnings and the legacy project's configured
-    /// image folder (if any), so the caller can surface the warnings and decide
-    /// whether to scan that folder for images.
-    pub fn import_legacy_project(
-        &self,
-        path: &PathBuf,
-    ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
-        let (project, warnings, legacy_image_folder) =
-            crate::workspace::extensions::project_ext::import_legacy_project(
-                self.backend().files(),
-                path,
-            )
-            .map_err(|e| {
-                InternalErrors::Internal(format!("Could not import legacy project: {e}"))
-            })?;
-        *lock_project_write(&self.project) = project;
-        Ok((warnings, legacy_image_folder))
     }
 
     /// Where analysis/preview/training runs and image reads happen - local

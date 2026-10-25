@@ -1,3 +1,12 @@
+//! # running_job
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::api::{CancelHandle, JobCompletion, JobOutput, RunningJob};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::{JobExecutor, PreviewOutput};

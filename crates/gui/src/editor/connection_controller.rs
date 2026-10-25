@@ -1,3 +1,5 @@
+//! # connection_controller
+//!
 //! "File > Connect to server": the dialog that logs in to an `evanalyzer
 //! server` and moves the window there (see
 //! [`ProjectController::switch_backend`]).
@@ -7,6 +9,13 @@
 //! self-signed one is shown for the user to confirm on the first
 //! connection, then remembered (on this computer, with the recent servers)
 //! - and a different one later gets a warning, like SSH does.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::editor::project_controller::ProjectController;
 use crate::{AppWindow, ConnectState, DialogType, GlobalAppState, RecentServerRow, UiState};

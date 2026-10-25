@@ -1,3 +1,5 @@
+//! # api
+//!
 //! The contract between front ends (GUI, CLI) and backends: the
 //! [`Backend`] traits and every type a request or result carries. Front ends
 //! only use this - whether the backend runs in this process or on a server
@@ -6,6 +8,13 @@
 //! Meant to become its own crate for a WebAssembly client; the few `core`
 //! re-exports left here (images, `ProgressEvent`, `TrainedClassifier`'s
 //! inner model) are what still stands in the way.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod backend;
 mod files;

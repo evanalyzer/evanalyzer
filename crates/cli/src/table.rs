@@ -1,5 +1,14 @@
+//! # table
+//!
 //! Minimal ASCII table printer for the `view` command - no extra dependency
 //! for what is just a quick terminal preview (full data goes through `export`).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use crate::commands::common::cell_text;
 use evanalyzer_app::results::DatabaseResult;
 use std::io::Write;

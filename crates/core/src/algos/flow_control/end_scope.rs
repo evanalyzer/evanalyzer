@@ -1,5 +1,14 @@
+//! # end_scope
+//!
 //! Ends a module use: its scope, or - nested in another module - its
 //! own classes and memory slots in that one's scope.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::job::modules::UseEnd;

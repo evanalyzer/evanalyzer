@@ -1,3 +1,12 @@
+//! # training_job
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-07-31
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::ai_learning::model::{
     self, CURRENT_SAVED_CLASSIFIER_VERSION, Classifier, SavedClassifier,
 };

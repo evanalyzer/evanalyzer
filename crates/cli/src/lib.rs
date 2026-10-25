@@ -1,7 +1,16 @@
+//! # evanalyzer_cli
+//!
 //! Batch CLI commands: analyze a project, export results, and peek at a
 //! results database. Unlike the GUI, the CLI doesn't run an event loop - each
 //! command loads what it needs, does the work, prints a result and returns,
 //! so it has no `Frontend` impl (that trait models a long-running UI loop).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 mod args;
 mod commands;
 mod table;

@@ -1,3 +1,12 @@
+//! # image_entry_ext
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use evanalyzer_cfg::settings::images_settings::{GlobalImageSettings, ImageEntry};
 
 /// Extension methods for [`ImageEntry`]: which of the image's series counts.

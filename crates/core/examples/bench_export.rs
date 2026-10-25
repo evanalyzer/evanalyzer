@@ -1,3 +1,12 @@
+//! # bench_export
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Benchmark (not part of the test suite) for writing results: drives the
 // real `DuckDbExporter` with synthetic objects the way an analysis does -
 // one `export()` + `finalize_image()` per image - and reports wall time,

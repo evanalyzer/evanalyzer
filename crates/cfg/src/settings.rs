@@ -1,3 +1,12 @@
+//! # settings
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 pub mod ai_learning_object_settings;
 pub mod ai_learning_pixel_settings;
 pub mod ai_learning_settings;

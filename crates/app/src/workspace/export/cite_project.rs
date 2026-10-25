@@ -1,3 +1,12 @@
+//! # cite_project
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-23
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;

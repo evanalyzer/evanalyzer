@@ -1,3 +1,5 @@
+//! # password
+//!
 //! Stored passwords - what `/etc/shadow`, the server config and the users
 //! file hold. Supported formats:
 //!
@@ -12,6 +14,13 @@
 //! Plain text needs its explicit prefix so that a mistyped or truncated hash
 //! is rejected instead of silently becoming the password; it can't occur in
 //! `/etc/shadow`, whose fields never contain `:`.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use sha_crypt::{PasswordVerifier, ShaCrypt};
 use yescrypt::Yescrypt;

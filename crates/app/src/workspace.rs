@@ -1,6 +1,15 @@
+//! # workspace
+//!
 //! The UI side: the open project and everything the user does with it -
 //! editing, undo, templates, settings. Reaches files and compute only
 //! through `crate::api::Backend`, so it works the same against a server.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod ai_learning;
 pub mod annotation_measure;

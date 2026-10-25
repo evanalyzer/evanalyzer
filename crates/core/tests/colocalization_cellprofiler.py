@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes colocalization_cellprofiler.json: CellProfiler's MeasureColocalization
 values - over the whole image and per object: correlation, slope, Manders,
 overlap, K, RWC and Manders with Costes' thresholds (the arithmetic of

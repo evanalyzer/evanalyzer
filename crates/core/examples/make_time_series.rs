@@ -1,3 +1,12 @@
+//! # make_time_series
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Writes a large time series results database for benchmarks (not part of
 // the test suite) - through the real `DuckDbExporter`, the way an analysis
 // writes one: per image, each time point's objects, then the image with its

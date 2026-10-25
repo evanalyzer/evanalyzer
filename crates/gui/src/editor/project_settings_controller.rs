@@ -1,3 +1,12 @@
+//! # project_settings_controller
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::UiState;
 use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState};
 use evanalyzer_app::global::UserInformation;

@@ -1,3 +1,12 @@
+//! # preview
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use super::spawn_job;
 use crate::api::{PreviewRequest, RunningJob, StartPreviewError, WHOLE_IMAGE_PREVIEW_MAX_TILES};
 use crate::workspace::settings::ViewportMemorySettings;

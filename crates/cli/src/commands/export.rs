@@ -1,3 +1,12 @@
+//! # export
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, SpeedUnitKind, TableExportArgs};
 use crate::commands::common::{
     ResolvedGrouping, resolve_grouping, resolve_image_rel_paths, resolve_object_classes,

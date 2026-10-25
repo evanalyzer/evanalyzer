@@ -1,3 +1,5 @@
+//! # script_bridge
+//!
 //! Lets a script run the regular pipeline commands:
 //!
 //! ```rhai
@@ -18,6 +20,13 @@
 //! and a step behave the same. Every parameter is checked before it is
 //! applied: `apply_param_change` silently ignores unknown names and values
 //! it can't parse, which in a script would hide typos.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::algos::ExecutionScope;
 use crate::image::ImageContainer;

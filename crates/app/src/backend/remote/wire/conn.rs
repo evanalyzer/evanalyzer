@@ -1,9 +1,18 @@
+//! # conn
+//!
 //! The socket loop shared by client and server.
 //!
 //! A `tungstenite` WebSocket can't be split into independent read and write
 //! halves, so one thread owns it: it alternates between flushing queued
 //! outgoing frames and reading with a short timeout. Every other thread only
 //! talks to it through a channel.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;

@@ -1,3 +1,5 @@
+//! # test_support
+//!
 //! Shared test-only fixtures for controller unit tests.
 //!
 //! Controllers hold a `slint::Weak<AppWindow>` and talk to the live UI
@@ -11,6 +13,13 @@
 //! afterwards. The Slint-sync half of the method still runs - it just
 //! becomes a no-op, exactly like it does in production when the window is
 //! gone.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-07-31
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use crate::{AppWindow, UiState};
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectOwner;

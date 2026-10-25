@@ -1,3 +1,5 @@
+//! # script_editor_controller
+//!
 //! Backs the script editor dialog (`editor/script_editor_panel.slint`):
 //! syntax highlighting, formatting, syntax check and the Tab/Enter/closing
 //! bracket editing helpers for Rhai scripts.
@@ -5,6 +7,13 @@
 //! Everything here is a pure function of the text, so the Slint callbacks are
 //! `pure` and re-run whenever the editor text changes. Cursor positions are
 //! UTF-8 byte offsets, as Slint's `TextInput` reports them.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{
     AppWindow, ScriptCommandDoc, ScriptDiagnostic, ScriptEdit, ScriptEditorState, ScriptHighlight,

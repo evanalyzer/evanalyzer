@@ -1,3 +1,12 @@
+//! # size_formater
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 /// Bytes in one MB, in the binary sense (1024 x 1024) the formatters
 /// below use too - what memory settings given in MB mean.
 pub const BYTES_PER_MB: u64 = 1024 * 1024;

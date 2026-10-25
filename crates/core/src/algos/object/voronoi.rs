@@ -7,7 +7,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! ## Overview
 //! This module computes a Voronoi diagram from a set of seed objects (centers), dividing the
@@ -272,7 +272,7 @@ impl ImageAlgorithm for Voronoi {
         };
 
         // --- Phase 1: Collect filtered center objects and their seed coordinates ---
-        // Seed point is the bounding-box centre, matching the C++ reference implementation.
+        // Seed point is the bounding-box centre.
         // In image order: a pixel equally far from two centres goes to the first
         // (`Object::position_cmp`) - the same in every run, unlike the ids.
         let mut center_objects: Vec<&Object> = cache
@@ -352,8 +352,8 @@ impl ImageAlgorithm for Voronoi {
                         continue;
                     }
 
-                    // Apply max_radius separately with <= so boundary pixels are included,
-                    // matching the filled-ellipse behaviour of the C++ reference.
+                    // Apply max_radius separately with <= so boundary pixels are included
+                    // (a filled disc).
                     if let Some((nearest, dist_sq)) =
                         kdtree.nearest(&centers, x as f64, y as f64, max_dist_sq)
                         && dist_sq <= max_dist_sq

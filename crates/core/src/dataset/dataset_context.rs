@@ -1,3 +1,12 @@
+//! # dataset_context
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::job::job_executor::ProgressEvent;
 use crate::storage::DatasetStore;
 use std::sync::{

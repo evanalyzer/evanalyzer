@@ -1,7 +1,16 @@
+//! # wire
+//!
 //! The transport [`RemoteBackend`](super::RemoteBackend) (client) and
 //! [`Worker`](super::Worker) (server side) share: the WebSocket connection,
 //! the framing of requests and answers on it, the messages themselves, and
 //! the binary encoding of images inside them.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub(super) mod conn;
 pub(super) mod frame;

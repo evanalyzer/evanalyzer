@@ -4,14 +4,12 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! Faithful Rust port of ImageJ's `MaximumFinder` watershed segmentation
 //! (`ij/plugin/filter/MaximumFinder.java`), restricted to the EDM-watershed use
 //! case (`outputType = SEGMENTED`, `isEDM = true`, `strict = false`,
 //! `excludeOnEdges = false`, no intensity threshold).
-//!
-//! The reference C++ port this is derived from lives in `docs/watershed/`.
 //!
 //! The algorithm:
 //! 1. Find every local maximum of the (float) Euclidean distance map, using a
@@ -911,17 +909,15 @@ fn make_fate_table() -> [i32; 256] {
     table
 }
 
-/// Golden-data regression tests comparing this port against the reference C++
-/// implementation in `docs/watershed/` (`maximum_finder.cpp` + `edm.cpp`), run
-/// through a small standalone harness (`Edm::makeFloatEDM` -> `MaximumFinder::
-/// findMaxima(..., SEGMENTED, false, true)`), exactly mirroring what
-/// `Watershed::execute` does in `docs/watershed/watershed.hpp`.
+/// Golden-data regression tests against recorded reference output of ImageJ's
+/// algorithm (`EDM.makeFloatEDM` -> `MaximumFinder.findMaxima(..., SEGMENTED,
+/// false, true)`), the same steps `Watershed::execute` runs.
 ///
-/// Each expected mask below is the *exact* stdout of that harness for the given
-/// input mask and tolerance - not hand-derived. `'#'` is foreground/particle,
+/// Each expected mask below is recorded output for the given input mask and
+/// tolerance - not hand-derived. `'#'` is foreground/particle,
 /// `'.'` is background/watershed line.
 #[cfg(test)]
-mod cpp_reference_tests {
+mod reference_tests {
     use super::*;
     use crate::algos::ImageAlgorithm;
     use crate::algos::spartial_transform::edm::DistanceTransform;
@@ -983,8 +979,8 @@ mod cpp_reference_tests {
                 .join("\n")
         };
         panic!(
-            "{case}: watershed_segment_edm output does not match the C++ reference.\n\
-             --- actual (Rust) ---\n{}\n--- expected (C++ reference) ---\n{}",
+            "{case}: watershed_segment_edm output does not match the reference.\n\
+             --- actual ---\n{}\n--- expected (reference) ---\n{}",
             render(actual),
             render(expected)
         );
@@ -1025,7 +1021,7 @@ mod cpp_reference_tests {
     ];
 
     #[test]
-    fn watershed_matches_cpp_reference_two_touching_discs() {
+    fn watershed_matches_reference_two_touching_discs() {
         let (mask, w, h) = parse_mask(TWO_DISCS_MASK);
         let expected = parse_expected(TWO_DISCS_EXPECTED);
         let actual = run_pipeline(&mask, w, h, 0.5);
@@ -1034,8 +1030,8 @@ mod cpp_reference_tests {
 
     // Regression for the `edges_are_background` bug: a small r=2 lobe flush
     // against the LEFT image border, touching a larger r=4 interior lobe.
-    // `Edm::makeFloatEDM(binary8, 0, false)` (docs/watershed/watershed.hpp:56)
-    // does NOT treat the image edge as background; the C++ reference splits the
+    // `EDM.makeFloatEDM(ip, 0, false)` does NOT treat the image edge as
+    // background; the reference splits the
     // two lobes at (2, 8) - a real neck, not a border artifact. Running the
     // exact same mask with `edgesAreBackground=true` (the bug this locks in)
     // collapses the small lobe's EDM peak near the border and fills that neck
@@ -1080,7 +1076,7 @@ mod cpp_reference_tests {
     ];
 
     #[test]
-    fn watershed_matches_cpp_reference_border_touching_lobe() {
+    fn watershed_matches_reference_border_touching_lobe() {
         let (mask, w, h) = parse_mask(BORDER_SPLIT_MASK);
         let expected = parse_expected(BORDER_SPLIT_EXPECTED);
         let actual = run_pipeline(&mask, w, h, 1.0);
@@ -1175,7 +1171,7 @@ mod cpp_reference_tests {
     ];
 
     #[test]
-    fn watershed_matches_cpp_reference_peanut() {
+    fn watershed_matches_reference_peanut() {
         let (mask, w, h) = parse_mask(PEANUT_MASK);
         let expected = parse_expected(PEANUT_EXPECTED);
         let actual = run_pipeline(&mask, w, h, 0.5);

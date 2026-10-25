@@ -1,3 +1,12 @@
+//! # converters
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use evanalyzer_cfg::core_types::InternalErrors;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Convert Cellpose-SAM weights into a TorchScript model EVAnalyzer can load.
 
 EVAnalyzer's "AI Cellpose Segmentation" command runs models through libtorch,

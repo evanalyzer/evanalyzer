@@ -1,3 +1,12 @@
+//! # viewport_cache
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::UiState;
 use crate::editor::view_channel::{Samples, ViewChannel};
 use crate::editor::viewport_controller::ViewportState;

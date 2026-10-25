@@ -1,3 +1,5 @@
+//! # migration
+//!
 //! Version-to-version migrations for on-disk documents (see the
 //! `versioning` module for the overall load/migrate/deserialize mechanism).
 //!
@@ -10,6 +12,13 @@
 //! free of migration-specific logic, and means an old migration can be
 //! dropped later by deleting its file plus the one line wiring it into the
 //! step list, without touching anything else.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-23
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod migration_v1_to_v2;
 pub mod migration_v2_to_v3;

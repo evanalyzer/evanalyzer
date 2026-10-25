@@ -1,7 +1,16 @@
+//! # evanalyzer_app
+//!
 //! - [`api`]: the contract between front ends and backends.
 //! - [`backend`]: where the work runs - [`backend::local`] (this process,
 //!   the only module calling `evanalyzer_core`) or [`backend::remote`].
 //! - [`workspace`]: the UI side - the open project, editing, undo.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod api;
 mod backend;

@@ -1,3 +1,12 @@
+//! # bench_open_results
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Replays what the results window does against a real `.evadb`, timing
 // every step: opening the database (`open_database` in
 // results_state_controller.rs - metadata, the first list page, the plate

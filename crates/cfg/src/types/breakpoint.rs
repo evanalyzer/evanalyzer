@@ -1,6 +1,15 @@
+//! # breakpoint
+//!
 //! Breakpoint request for a preview run - part of what a front end sends to
 //! `evanalyzer_app::job::start_preview`, so it lives here rather than in core
 //! (see `events.rs` for the same reasoning on the response side).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::types::ids::{PipelineId, StepId};
 use serde::{Deserialize, Serialize};

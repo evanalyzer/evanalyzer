@@ -1,5 +1,14 @@
+//! # results
+//!
 //! Results databases in this process: DuckDB queries, charts and exports,
 //! served through [`LocalResults`] as the `ResultsSource` for front ends.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod drawn_images;
 pub use drawn_images::{colorize, colorize_thumbnail};

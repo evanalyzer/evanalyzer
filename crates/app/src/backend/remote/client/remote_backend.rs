@@ -1,5 +1,14 @@
+//! # remote_backend
+//!
 //! [`RemoteBackend`] itself: connecting, and the `Backend` calls that start
 //! work on the worker (analysis, preview, training) or open something there.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::filesystem::RemoteFiles;
 use super::image_reader::RemoteImageSource;

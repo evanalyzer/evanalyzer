@@ -1,9 +1,18 @@
+//! # drawn_images
+//!
 //! "Images with objects drawn" (export): each exported image as a PNG, its
 //! channels in their colors (auto-scaled, 0.5 % / 99.5 %) and every object
 //! of the analysis as a box in its class's color. Read from the pyramid
 //! level that fits `DrawnImages::max_side` - a whole slide stays a
 //! viewable picture. The results database keeps each object's box, not its
 //! outline, so objects are boxes.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::results_generator::ResultsGenerator;
 use crate::api::{DrawnImages, ExportProgress};

@@ -1,4 +1,13 @@
+//! # images
+//!
 //! Image work the UI does on pixels it already has.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use bitvec::prelude::{BitVec, Lsb0};
 use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass};

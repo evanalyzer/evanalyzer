@@ -1,7 +1,16 @@
+//! # object_classes
+//!
 //! Tests for the generated `PipelineCommand::object_classes()` (see
 //! `build/pipeline_commands_generator.rs`). A pipeline's classes (also
 //! inside modules) are `evanalyzer_core::pipeline_classes`.
 //! The generated file can't carry inline tests, so they live here.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;

@@ -4,7 +4,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! Cellpose(-SAM) inference: the image (resized to the size the model runs
 //! at, its channels filled up) run in overlapping 256 x 256 tiles, blended

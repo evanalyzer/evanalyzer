@@ -1,3 +1,12 @@
+//! # job_executor
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::pipeline::scope::Scope;
 use crate::{
     ImageContainer, ImageInfo, ZProjection,

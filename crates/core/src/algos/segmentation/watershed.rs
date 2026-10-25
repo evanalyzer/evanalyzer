@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{
     algos::{
@@ -158,9 +158,8 @@ impl ImageAlgorithm for Watershed {
 
         // Run the transform
         //
-        // `edges_are_background: false` matches ImageJ / the reference C++ port
-        // (`Edm::makeFloatEDM(binary8, 0, false)` in docs/watershed/watershed.hpp),
-        // which treats the image border as ordinary space rather than an implicit
+        // `edges_are_background: false` matches ImageJ
+        // (`EDM.makeFloatEDM(ip, 0, false)`), which treats the image border as ordinary space rather than an implicit
         // background wall. Setting this to `true` would artificially clamp the EDM
         // near the image edges, changing peak shapes (and therefore watershed
         // splits) for any object that touches or is close to the border.
@@ -1363,15 +1362,14 @@ mod tests {
     /// End-to-end regression for the `edges_are_background` bug through the
     /// actual `Watershed::execute` entry point (not just the lower-level
     /// `watershed_segment_edm`): a small lobe flush against the LEFT image
-    /// border, touching a larger interior lobe. The reference C++
-    /// implementation (`docs/watershed/watershed.hpp:56`,
-    /// `Edm::makeFloatEDM(binary8, 0, /*edgesAreBackground=*/false)`) splits
+    /// border, touching a larger interior lobe. ImageJ
+    /// (`EDM.makeFloatEDM(ip, 0, /*edgesAreBackground=*/false)`) splits
     /// this into two instances at this tolerance. Before the fix, `watershed.rs`
     /// built its `DistanceTransform` with `edges_are_background: true`, which
     /// collapses the border lobe's EDM peak and merges the whole shape into a
     /// single instance instead.
     #[test]
-    fn test_watershed_splits_border_touching_lobe_matching_cpp_reference() {
+    fn test_watershed_splits_border_touching_lobe_matching_reference() {
         const MASK: &[&str] = &[
             "..........................",
             "..........................",
@@ -1416,7 +1414,7 @@ mod tests {
 
         // The border lobe's centre (6, 8) and the dominant lobe's centre
         // (13, 8) must end up as two distinct, non-zero instances - matching
-        // the C++ reference, which places a watershed line at (2, 8).
+        // the reference, which places a watershed line at (2, 8).
         let border_lobe = out[8 * width + 1];
         let dominant_lobe = out[8 * width + 6];
         assert_ne!(border_lobe, 0, "border lobe centre should be labeled");
@@ -1424,7 +1422,7 @@ mod tests {
         assert_ne!(
             border_lobe, dominant_lobe,
             "the border-touching lobe must be split from the dominant lobe, \
-             matching the C++ reference (edges_are_background=false); got the \
+             matching the reference (edges_are_background=false); got the \
              same instance for both, indicating edges_are_background regressed \
              back to true"
         );

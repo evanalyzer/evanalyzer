@@ -1,3 +1,5 @@
+//! # file_users
+//!
 //! Accounts listed in a users file (`users.source = "file"`), independent of
 //! the machine's system users. A TOML file with one `[[user]]` table per
 //! account - `docs/server-users.toml` is a complete example:
@@ -18,6 +20,13 @@
 //! Read and checked once when the server starts; restart it after editing.
 //! Workers run as the server's own account (there's no system account to
 //! switch to), confined to their user's allowed folders.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::user_management::{
     AuthenticationStatus, User, UserManagement, expand_dirs,

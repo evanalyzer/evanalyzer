@@ -1,3 +1,12 @@
+//! # bench_plate_count
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Times the plate-view queries (`get_group_by_plate`, `get_group_by_plate_multi`)
 // per column kind - Count (aggregated over per-image counts), a plain
 // per-object column and an intensity - against a real `.evadb` file.

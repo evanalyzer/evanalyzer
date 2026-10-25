@@ -1,3 +1,12 @@
+//! # bench_measurements
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-24
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Throwaway benchmark (not part of the test suite): how fast the results
 // read per-object measurement values (the `measurements` table, one row
 // per value) compared with a plain `objects` column (Area) - plate, per

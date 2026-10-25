@@ -4,7 +4,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! AI inference with libtorch (feature `torch`) - the only module that
 //! links it. Built into the plugin library the app loads on the first AI

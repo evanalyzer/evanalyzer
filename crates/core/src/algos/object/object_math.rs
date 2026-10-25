@@ -7,7 +7,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! ## Overview
 //! This module computes a boolean set operation between each `input_class` object ("A")

@@ -1,3 +1,5 @@
+//! # views
+//!
 //! The project's results views (`ProjectSettings::results_views`): each a
 //! List, Plate, Charts or Tracks with its own settings, the same for every
 //! analysis of the project. The view shown saves itself: after each refresh
@@ -8,6 +10,13 @@
 //! they fit any analysis of the project. What an analysis lacks (a column of
 //! a step it didn't have) is left out of the table and said so - and stays
 //! in the view for the next analysis.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-23
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::*;
 use evanalyzer_app::results::view_settings::{ChartView, ListView, PlateView, ViewSettings};

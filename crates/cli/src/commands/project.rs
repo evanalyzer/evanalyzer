@@ -1,3 +1,12 @@
+//! # project
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::args::{ProjectInfoArgs, ValidateArgs};
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::project::{ProjectExt, load_project};

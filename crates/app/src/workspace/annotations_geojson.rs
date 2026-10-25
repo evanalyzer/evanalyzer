@@ -1,3 +1,5 @@
+//! # annotations_geojson
+//!
 //! Manual annotations as GeoJSON - one image at a time, read and written
 //! through the backend's [`FileSystem`] (this computer, or the server the
 //! project is on): a `FeatureCollection` of `Polygon`/`MultiPolygon`
@@ -18,6 +20,13 @@
 //! tools are filled by pixel centre (a pixel belongs to the shape when its
 //! centre lies inside). Imported annotations are measured on their image
 //! (every channel), as drawn ones are.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::FileSystem;
 use crate::workspace::extensions::annotations_ext::same_shape;

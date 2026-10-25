@@ -1,3 +1,5 @@
+//! # link
+//!
 //! [`Link`]: the client's current connection to the worker, replaceable
 //! by a new one when it drops ([`Link::reconnect`]).
 //!
@@ -6,6 +8,13 @@
 //! connection. Images and results databases opened on the worker are tied
 //! to the connection that opened them; [`Reopen`] opens them again on the
 //! new one, by path, the first time they're used after a reconnect.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::session::Session;
 use evanalyzer_cfg::core_types::InternalErrors;

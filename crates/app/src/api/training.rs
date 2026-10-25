@@ -1,5 +1,14 @@
+//! # training
+//!
 //! Classifier training as front ends see it: the request parameters and the
 //! handle to a running training (events, cancel, trained model).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::CancelHandle;
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};

@@ -1,3 +1,5 @@
+//! # test_support
+//!
 //! Shared test-only fixtures for `results_generator`/`results_exporter`/
 //! `results_charts` tests — a schema kept in sync with evanalyzer_core's
 //! `duckdb.rs` `CREATE_TABLES`, plus a small builder for objects carrying
@@ -7,6 +9,13 @@
 //! and `results_exporter.rs`'s own earlier fixture both did) so the three
 //! sibling `results_*` test suites can't quietly drift onto different
 //! schemas.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-07-11
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 #![cfg(test)]
 
 use duckdb::Connection;

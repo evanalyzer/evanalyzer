@@ -1,8 +1,17 @@
+//! # split
+//!
 //! Results, split with the image (board Z): the results left, the image
 //! right. A List row or an object on the image selects it - the other one
 //! follows; Plate shows a well's images, one at a time, with a filmstrip.
 //! The image is the one viewer; its objects here are the analysis' (see
 //! [`ResultsOverlay`]), not the project's.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::*;
 use crate::editor::object_render::{CHILD_RGB, DIMMED_RGB, PARENT_RGB, SELECTED_RGB, ZOrder};

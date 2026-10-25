@@ -1,6 +1,15 @@
+//! # training
+//!
 //! Bridges `evanalyzer_core`'s AI classifier training jobs (backend-agnostic,
 //! no notion of a "project") to `ProjectSettings`: turns a project's labeled
 //! objects/images into training data and starts the job.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::{
     CancelHandle, PixelTrainingParams, RunningTraining, StartTrainingError, TrainedClassifier,

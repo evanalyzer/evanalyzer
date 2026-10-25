@@ -1,3 +1,5 @@
+//! # worker
+//!
 //! `evanalyzer worker`: accepts clients and executes their requests on a
 //! [`Backend`] (normally `LocalBackend`) in this process - the server side of
 //! a [`RemoteBackend`](super::RemoteBackend) connection. Started per
@@ -13,6 +15,13 @@
 //! an SSH tunnel or VPN. An authenticated client can make the worker read
 //! any image and write results anywhere this process may (within its
 //! `--root` folders), so the token must be treated like a password.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::job_registry::{JobEntry, JobRegistry};
 use super::wire::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};

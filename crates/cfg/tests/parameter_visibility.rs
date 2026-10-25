@@ -1,5 +1,14 @@
+//! # parameter_visibility
+//!
 //! `ParameterDef::default_value` / `advanced` / `option_advanced` as generated from
 //! `#[cmdsmeta(visibility = ...)]`.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::settings::parameter_def::ParameterDef;
 use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};

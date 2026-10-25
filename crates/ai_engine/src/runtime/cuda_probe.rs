@@ -1,6 +1,15 @@
+//! # cuda_probe
+//!
 //! How many CUDA GPUs the NVIDIA driver sees - asked of the driver itself
 //! (`libcuda.so.1` / `nvcuda.dll`), so the CPU plugin can be chosen without
 //! loading libtorch, and the CUDA one only where it can work.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use std::sync::OnceLock;
 

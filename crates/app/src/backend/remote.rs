@@ -1,3 +1,5 @@
+//! # remote
+//!
 //! Remote compute over WebSocket.
 //!
 //! - [`RemoteBackend`] (client): implements `crate::api::Backend`
@@ -20,6 +22,13 @@
 //! into the project's results folder. A dropped connection cancels the
 //! client's previews, trainings and exports; analyses keep running on the
 //! worker and can be attached to again ([`job_registry`]).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod client;
 mod job_registry;

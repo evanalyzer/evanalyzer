@@ -1,3 +1,5 @@
+//! # job_registry
+//!
 //! The worker's analyses, independent of client connections.
 //!
 //! An analysis belongs to the worker, not to the connection that started it:
@@ -16,6 +18,13 @@
 //! Only one analysis runs at a time per worker (= per user): a second would
 //! claim the same cores and RAM, and reattaching would need the user to
 //! pick one.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::wire::frame;
 use super::wire::protocol::{Reply, ServerMsg, WireError, event_to_wire};

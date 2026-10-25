@@ -1,8 +1,17 @@
+//! # tracks
+//!
 //! Results › Tracks (with tracked objects): one image's tracks as a table
 //! beside the image (the split pane), their paths as trails on it up to
 //! the time point shown. A row selects its track - its object on the image
 //! (at the track's first time point when it isn't there now) - and a click
 //! on an object selects its track.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::*;
 use crate::editor::results_overlay::TrailsOverlay;

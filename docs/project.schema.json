@@ -606,7 +606,7 @@
       }
     },
     "ColorFilterCommandSettings": {
-      "description": "A command that filters an image based on a specific HSV color range.\n\nPixels falling outside the HSV range are masked\nout by setting to black.\n\n# Examples\n\n```\n# use imagec::backend::algos::{ColorFilterCommand, HsvRange};\nlet range = HsvRange {\nmin_h: 0.0,   max_h: 30.0, // Red tones\nmin_s: 0.5,   max_s: 1.0,\nmin_v: 0.5,   max_v: 1.0,\n};\n\nlet command = ColorFilterCommand { range };\n```",
+      "description": "A command that filters an image based on a specific HSV color range.\n\nPixels falling outside the HSV range are masked\nout by setting to black.",
       "type": "object",
       "properties": {
         "range": {

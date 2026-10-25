@@ -1,6 +1,15 @@
+//! # pixels
+//!
 //! Wire format for pixels: an `ImageContainer` split into a small
 //! serializable description and its samples as raw little-endian bytes, so a
 //! transport sends one binary blob instead of millions of encoded numbers.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::{ImageContainer, ManagedImage, Point2d};
 use evanalyzer_cfg::core_types::{ImagePlane, InternalErrors};

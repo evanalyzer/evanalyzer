@@ -1,3 +1,12 @@
+//! # project_ext
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::api::Backend;
 use crate::api::FileSystem;
 use crate::api::ImageMeta;
@@ -1868,37 +1877,6 @@ pub fn load_project(
     };
     project.tmp_settings.current_project = Some(path.clone());
     Ok(project)
-}
-
-/// Imports an old (`.icproj`) project, converting it to the current format.
-///
-/// Unlike [`load_project`], the result has no `current_project` path set - the
-/// imported project doesn't exist as a `.evaproj` file yet, so saving it goes
-/// through the normal "please select a file" flow rather than silently
-/// overwriting the legacy file.
-///
-/// Returns the converted project, a list of conversion warnings (commands or
-/// fields the old project used that have no equivalent and were skipped or
-/// approximated), and the old project's configured image folder, if any - the
-/// caller is responsible for resolving that folder (e.g. relative to `path`'s
-/// parent) and scanning it for images, mirroring whatever flow already adds
-/// images to a new project; this function only converts settings.
-pub fn import_legacy_project(
-    files: &dyn FileSystem,
-    path: &PathBuf,
-) -> Result<(ProjectWithRuntime, Vec<String>, Option<String>), InternalErrors> {
-    let data = read_text(files, path)?;
-    let mut outcome = evanalyzer_cfg::import_legacy_project(&data)
-        .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-    for pipeline in &mut outcome.project.pipelines {
-        super::utils::assign_step_ids(&mut pipeline.steps);
-    }
-    super::utils::assign_measurement_ids(&mut outcome.project);
-    let project = ProjectWithRuntime {
-        settings: outcome.project,
-        tmp_settings: ProjectTmpSettings::default(),
-    };
-    Ok((project, outcome.warnings, outcome.legacy_image_folder))
 }
 
 fn read_text(files: &dyn FileSystem, path: &Path) -> Result<String, InternalErrors> {
@@ -3922,48 +3900,5 @@ mod tests {
             Err(err) => assert!(err.to_string().contains("newer version")),
             Ok(_) => panic!("a newer schema version must be rejected"),
         }
-    }
-
-    // -- import_legacy_project (module-level wrapper) -------------------------
-
-    fn minimal_legacy_project_json() -> String {
-        r##"{
-            "meta": { "name": "Legacy Demo" },
-            "projectSettings": {
-                "classification": { "classes": [] },
-                "plate": { "imageFolder": "images" }
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##
-        .to_string()
-    }
-
-    #[test]
-    fn import_legacy_project_converts_a_valid_file_and_leaves_current_project_path_unset() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("legacy.icproj");
-        std::fs::write(&path, minimal_legacy_project_json()).unwrap();
-
-        let (project, _warnings, legacy_image_folder) =
-            import_legacy_project(&fs(), &path).expect("should parse");
-        assert_eq!(project.meta.name, "Legacy Demo");
-        assert_eq!(legacy_image_folder, Some("images".to_string()));
-        assert!(project.tmp_settings.current_project.is_none());
-    }
-
-    #[test]
-    fn import_legacy_project_errors_for_malformed_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.icproj");
-        std::fs::write(&path, "{ not json").unwrap();
-
-        assert!(import_legacy_project(&fs(), &path).is_err());
-    }
-
-    #[test]
-    fn import_legacy_project_errors_for_a_missing_file() {
-        let result = import_legacy_project(&fs(), &PathBuf::from("/does/not/exist.icproj"));
-        assert!(result.is_err());
     }
 }

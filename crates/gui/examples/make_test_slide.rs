@@ -1,3 +1,12 @@
+//! # make_test_slide
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Writes a synthetic whole slide image for the viewport benchmarks
 // (`bench_viewport_*` tests in `viewport_worker.rs`): an 8-bit RGB,
 // brightfield-like slide stored like a real scanner file - a tiled BigTIFF,

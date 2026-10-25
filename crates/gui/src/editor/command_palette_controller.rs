@@ -1,7 +1,16 @@
+//! # command_palette_controller
+//!
 //! The command palette (Ctrl+K): finds what was typed among the app's
 //! actions, the steps of the shown pipeline, the commands, the images and
 //! the classes, and runs the chosen entry - through the same callbacks the
 //! buttons and menus use.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-16
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::AppWindow;
 use crate::{

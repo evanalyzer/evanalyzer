@@ -1,3 +1,5 @@
+//! # config
+//!
 //! `evanalyzer server --config <file>`: the server's configuration as a TOML
 //! file. Every setting has a default (see the `Default` impls), so a config
 //! file only needs what differs; command-line arguments override the file
@@ -8,6 +10,13 @@
 //! and `docs/server-users.toml` are complete, commented examples (parsed by
 //! this module's tests, so they can't drift from the code), and
 //! `docs/server.md` explains how the pieces fit together.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::user_management::{
     UserManagement,

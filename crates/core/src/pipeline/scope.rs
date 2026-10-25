@@ -1,3 +1,5 @@
+//! # scope
+//!
 //! Scopes: which objects a command sees.
 //!
 //! Like variables in a programming language, objects live in a scope: the
@@ -5,6 +7,13 @@
 //! local classes (`ObjectClass::Local`) only name objects of the instance
 //! the command runs in, so two instances of one module never see each
 //! other's objects. Scopes exist only while a job runs - nothing is saved.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::ObjectClass;
 use serde::{Deserialize, Serialize};

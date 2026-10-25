@@ -1,3 +1,12 @@
+//! # utils
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-01
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::ZProjection;
 use crate::ai_learning::model::{
     Classifier, KnnModel,

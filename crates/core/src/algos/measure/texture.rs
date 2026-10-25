@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! Haralick's texture features - CellProfiler's MeasureTexture
 //! (cellprofiler/modules/measuretexture.py, CellProfiler 4.2.8, which calls

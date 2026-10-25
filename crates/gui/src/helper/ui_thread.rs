@@ -1,3 +1,5 @@
+//! # ui_thread
+//!
 //! The one place the GUI hands work to the Slint event loop, and starts the
 //! short-lived background tasks whose results come back through it.
 //!
@@ -17,6 +19,13 @@
 //!
 //! Every test thread has its own queue, so parallel tests never see each
 //! other's updates.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 /// Runs `func` on the UI thread, like [`slint::invoke_from_event_loop`].
 pub(crate) fn invoke_from_event_loop(

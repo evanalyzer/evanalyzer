@@ -1,3 +1,5 @@
+//! # migration_v2_to_v3
+//!
 //! Migrates a [`ProjectSettings`](crate::settings::project_settings::ProjectSettings)
 //! document from schema version 2 to version 3.
 //!
@@ -13,6 +15,13 @@
 //!   4 x 4 grid in number order) becomes `AUTO`, anything else
 //!   `{"FIXED": {"rows", "cols"}}`.
 //! - `wellImageOrder` keeps its values (negative ones are dropped).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use serde_json::{Map, Value, json};
 

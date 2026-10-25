@@ -1,3 +1,5 @@
+//! # check_templates
+//!
 //! Validates that every `.evatemplate`/`.evamodule` file under a given directory
 //! (searched recursively) still deserializes as `ProjectTemplate`/
 //! `ModuleTemplate` - the same types and the same `serde_json::from_str`
@@ -16,6 +18,13 @@
 //! templates and points this at the checkout.
 //!
 //! Usage: `cargo run -p evanalyzer_cfg --example check_templates -- <dir>`
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-08-24
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::settings::templates::{ModuleTemplate, ProjectTemplate};
 use std::path::Path;

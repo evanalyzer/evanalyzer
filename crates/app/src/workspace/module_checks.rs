@@ -1,3 +1,5 @@
+//! # module_checks
+//!
 //! Checking a project's modules - on load and in the editor, so
 //! mistakes show where they are instead of only when a run starts.
 //!
@@ -8,6 +10,13 @@
 //! isn't meant. [`check_project`] adds what only the whole project shows: a
 //! step's commands with its values against the images' channels, the
 //! classification and the other steps.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::module_editing::{remove_binding, same_kind, setting_at};

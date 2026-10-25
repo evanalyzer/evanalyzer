@@ -1,7 +1,16 @@
+//! # results_tracks
+//!
 //! One row per track: when it was seen, how far and how straight it moved,
 //! its measurements over its time points - Results › Tracks and its export.
 //! A track never leaves its image: one query per image, so a results file
 //! with many thousands of tracks is read an image's worth at a time.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::results_generator::{
     ResultsGenerator, class_filter_sql, column_aggregate_expr, sql_string_in_list,

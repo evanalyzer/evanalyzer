@@ -1,3 +1,12 @@
+//! # bench_cellpose
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Benchmark: a Cellpose pipeline (Cellpose -> extract objects) over
 // synthetic 16-bit images with cell-like spots, run through the real job
 // generator + JobExecutor. Prints the wall time and the process's peak RAM.

@@ -1,3 +1,5 @@
+//! # object_render
+//!
 //! Drawing objects on the image - the editor's (the project's objects and
 //! the preview's) and Results' split view's (an analysis' objects) alike:
 //! each object a box, a mask and a color with the objects' opacity, painted
@@ -6,6 +8,13 @@
 //! opaque on top - with lines from the selected object to its relatives.
 //! A click picks the object drawn on top ([`pick`]). The callers only turn
 //! their objects into [`ObjectDrawInstance`]s.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-24
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use bitvec::prelude::*;
 use evanalyzer_app::project::ProjectExt;

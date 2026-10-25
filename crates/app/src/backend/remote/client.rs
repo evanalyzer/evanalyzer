@@ -1,3 +1,5 @@
+//! # client
+//!
 //! [`RemoteBackend`]: a [`Backend`](crate::api::Backend) that runs everything
 //! on an `evanalyzer worker` instance. Front ends use it exactly like the
 //! local backend - jobs still arrive as `RunningJob`s with an event channel.
@@ -8,6 +10,13 @@
 //! Laid out like `backend::local`: [`session`] holds the connection and
 //! matches requests with replies; the other modules adapt one API trait each
 //! onto it.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod filesystem;
 mod image_reader;

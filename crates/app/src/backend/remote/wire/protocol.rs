@@ -1,5 +1,14 @@
+//! # protocol
+//!
 //! Messages exchanged between client and server, and the conversions between
 //! in-memory types and their wire form (pixels split off into frame blobs).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::AnalysisRequest;
 use crate::api::BoxplotFilter;

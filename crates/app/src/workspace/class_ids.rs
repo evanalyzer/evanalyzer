@@ -1,5 +1,14 @@
+//! # class_ids
+//!
 //! A project class's id: the free ones to choose from, and changing it -
 //! together with every reference to the class.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::module_editing::{setting_at, uses_segmentation_class};
 use evanalyzer_cfg::{

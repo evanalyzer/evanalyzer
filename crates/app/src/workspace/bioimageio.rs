@@ -1,9 +1,18 @@
+//! # bioimageio
+//!
 //! bioimage.io model support.
 //!
 //! Parses a model's `rdf.yaml` description and turns it into a configured AI
 //! segmentation [`PipelineCommand`](evanalyzer_cfg::settings::pipeline_command::PipelineCommand),
 //! so a downloaded bioimage.io model can auto-fill a Cellpose/StarDist/U-Net
 //! command instead of the user wiring every parameter by hand.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod rdf_model;
 pub mod rdf_parser;

@@ -1,3 +1,5 @@
+//! # object_index
+//!
 //! Lightweight, always-resident metadata for every object across a whole
 //! image, built once from the per-tile scratch files ([`TileObjectStore`])
 //! written during the tile loop.
@@ -14,6 +16,13 @@
 //! extracting what's needed here, so the index itself stays cheap in
 //! memory afterward. Retrieving an object's *full* data again later is a
 //! separate, later concern (the paged/LRU cache behind `ObjectCache`).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-03
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::object_scratch::TileObjectStore;
 use crate::ImagePlane;

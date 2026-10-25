@@ -1,3 +1,5 @@
+//! # algos_from_config_tests
+//!
 //! Tests for `algos_from_config.rs`, kept in a *separate* file rather than a
 //! nested `#[cfg(test)] mod tests` inside that file - `algos_from_config.rs`
 //! is a real generated-code output (`crates/cfg/build/pipeline_commands_generator.rs`
@@ -6,6 +8,13 @@
 //! would be silently wiped the next time that generator runs. This file is
 //! untouched by the generator and still gets full access to `algos_from_config`'s
 //! private items because it's a sibling module under the same parent (`job`).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-07-13
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use super::algos_from_config::into_algorithm;
 use crate::algos::*;
 use evanalyzer_cfg::core_types::{

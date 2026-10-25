@@ -1,3 +1,5 @@
+//! # plugin
+//!
 //! The libtorch plugin library (this crate built as a cdylib with its
 //! `torch` engine - `cargo build-ai-plugin`), loaded on the first
 //! model run.
@@ -17,6 +19,13 @@
 //! next to the program itself (a `cargo build` of the workspace) or at
 //! `EVANALYZER_AI_PLUGIN` (a file path, for development and tests) is
 //! taken first. A loaded plugin stays loaded: libtorch cannot be unloaded.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::cuda_probe;
 use crate::api::{

@@ -1,3 +1,12 @@
+// # templates
+//
+// **Author:** Joachim Danmayr
+// **Date:** 2026-06-11
+//
+// ## License
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::settings::classification_settings::ClassificationSettings;
 use crate::settings::meta_data::MetaData;
 use crate::settings::modules::ModuleDefinition;

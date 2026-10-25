@@ -1,3 +1,5 @@
+//! # file_browser
+//!
 //! Rust side of the in-app file browser (`dialogs/file_browser_dialog.slint`),
 //! which replaces the OS open/save dialogs everywhere. It browses the
 //! backend's file system ([`Backend::files`]), so in remote mode the user
@@ -17,6 +19,13 @@
 //!
 //! Folder listings run on a background thread, so a slow server never
 //! freezes the UI.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{
     FileBrowserCrumb, FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState,
@@ -25,8 +34,8 @@ use evanalyzer_app::backends::Backend;
 use evanalyzer_app::fs::DirEntry;
 use evanalyzer_app::fs::PlaceKind;
 use evanalyzer_cfg::{
-    EVANALYZER_TRAINED_AI_MODELS, LEGACY_PROJECT_FILE_EXTENSION, MODULE_TEMPLATE_EXTENSION,
-    PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
+    EVANALYZER_TRAINED_AI_MODELS, MODULE_TEMPLATE_EXTENSION, PROJECT_FILE_EXTENSIONS,
+    PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
 };
 use log::warn;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -743,7 +752,6 @@ fn entry_kind(entry: &DirEntry, image_formats: &[String]) -> i32 {
         PROJECT_FILE_EXTENSIONS,
         PROJECT_FILE_TEMPLATE_EXTENSIONS,
         MODULE_TEMPLATE_EXTENSION,
-        LEGACY_PROJECT_FILE_EXTENSION,
     ]
     .iter()
     .any(|ext| has(ext))

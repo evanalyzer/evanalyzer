@@ -1,3 +1,12 @@
+//! # object_list_controller
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::{color_from_hex, get_colors_from_class};

@@ -1,8 +1,17 @@
+//! # annotation_measure
+//!
 //! Measuring manual annotations on their image - drawn, copied or imported
 //! ones alike: every channel under each mask, at full resolution, through
 //! the backend's [`ImageSource`] (this computer's files or the server's).
 //! What to read and the pixel math are core's ([`measure_on_planes`], the
 //! same as for training an object classifier); here only reading them.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-19
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::api::{ImageSource, TileRequest};
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};

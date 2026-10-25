@@ -1,12 +1,18 @@
-mod legacy_import;
-mod legacy_schema;
+//! # evanalyzer_cfg
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 mod load_config;
 mod migration;
 pub mod settings;
 mod types;
 mod utils;
 
-pub use legacy_import::{LegacyImportError, LegacyImportOutcome, import_legacy_project};
 pub use load_config::{load_ai_learning_settings, load_project_settings};
 
 // Constants
@@ -15,8 +21,6 @@ pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evatemplate";
 pub const MODULE_TEMPLATE_EXTENSION: &str = &"evamodule";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
-/// Project file extension used by the old (pre-rewrite) application.
-pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 
 /// Current on-disk format version for [`settings::project_settings::ProjectSettings`].
 /// Bump this, add a new `crate::migration::migration_vN_to_vM` module, and

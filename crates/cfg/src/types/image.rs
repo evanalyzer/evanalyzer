@@ -1,7 +1,16 @@
+//! # image
+//!
 //! Plain image coordinates shared by the engine and its front ends - which
 //! plane and which tile of an image a request or result refers to. Only the
 //! addressing lives here; pixel data and image readers stay in
 //! `evanalyzer_core`.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,3 +1,5 @@
+//! # session_management
+//!
 //! Keeps one EVAnalyzer worker process (`evanalyzer worker`) per logged-in
 //! user and records them in a session file, so a restarted server finds the
 //! still running workers again.
@@ -8,6 +10,13 @@
 //! must not survive a reboot, just like the processes it describes. It is
 //! written atomically (temp file + rename) and readable by the server's user
 //! only, because it holds the worker tokens.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::user_management::User;
 use log::{info, warn};

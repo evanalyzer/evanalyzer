@@ -1,3 +1,12 @@
+//! # threshold
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-05
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use crate::pipeline::pipeline_cache::CacheAddress;
 use crate::pipeline::scope::Scope;
 use evanalyzer_cfg::core_types::{
@@ -195,8 +204,7 @@ impl ImageAlgorithm for Threshold {
         let actual_slice = input_data.as_slice();
 
         // Histograms are rescaled to the source image's *actual observed*
-        // min/max (mirroring the C++ reference's `cv::minMaxLoc` + linear
-        // rescale in docs/threshold/threshold.hpp).
+        // min/max (a per-image linear contrast stretch).
         //
         // Real images rarely use the full theoretical bit-depth range (e.g. a
         // 12-bit sensor stored in a 16-bit container), so binning directly off
@@ -268,9 +276,9 @@ impl ImageAlgorithm for Threshold {
                         hist_memo.insert(s.value_source, hist);
                     }
                     let (hist, dmin, dmax) = hist_memo.get(&s.value_source).unwrap();
-                    // The reference (`docs/threshold/threshold.hpp`,
-                    // `scaleAndSetThreshold(0, calcThresholdValue(...) + 1
-                    // + cValue, ...)`) always maps the raw split bin one
+                    // As in ImageJ (`scaleAndSetThreshold(0,
+                    // calcThresholdValue(...) + 1 + cValue, ...)`), the raw
+                    // split bin is always mapped one
                     // bin *above* itself before rescaling: the split bin
                     // is background, the next bin up is where foreground
                     // starts. Omitting this "+1" makes the threshold one
@@ -310,10 +318,8 @@ impl ImageAlgorithm for Threshold {
         for (out_pixel, &in_pixel) in output_slice.iter_mut().zip(actual_slice.iter()) {
             let mut assigned_id = SegmentationClass::BACKGROUND.as_u32();
             for &(min, max, class_id) in &normalized {
-                // Matches the reference's `cv::threshold(..., THRESH_BINARY)`
-                // (strict `>`) combined with `THRESH_BINARY_INV` (`<=`) via
-                // `bitwise_and`: the lower bound is exclusive, the upper
-                // bound inclusive.
+                // The lower bound is exclusive (strict `>`), the upper
+                // bound inclusive (`<=`).
                 let is_in_range = (in_pixel > min && in_pixel <= max) as u32;
                 assigned_id = (is_in_range * class_id) | ((1 - is_in_range) * assigned_id);
             }
@@ -449,8 +455,8 @@ fn histogram_from_slice(data: &[f32]) -> ([f32; 256], f32, f32) {
 // ── Histogram ────────────────────────────────────────────────────────────────
 
 /// Builds a 256-bin histogram from f32 pixel data, rescaled so that `min`
-/// maps to bin 0 and `max` maps to bin 255. This matches the C++ reference's
-/// per-image `cv::minMaxLoc` contrast stretch, giving auto-threshold
+/// maps to bin 0 and `max` maps to bin 255 - a per-image contrast stretch,
+/// giving auto-threshold
 /// algorithms full bin resolution regardless of how much of the theoretical
 /// bit-depth range the image actually uses.
 fn build_histogram(data: &[f32], min: f32, max: f32) -> [f32; 256] {
@@ -462,8 +468,7 @@ fn build_histogram(data: &[f32], min: f32, max: f32) -> [f32; 256] {
         } else {
             0.0
         };
-        // Round rather than truncate: the reference (`docs/threshold/threshold.hpp`,
-        // `std::lround(value * scale)`) rounds to the nearest bin.
+        // Round to the nearest bin rather than truncate.
         let bin = ((normalized * 255.0).round() as usize).min(255);
         hist[bin] += 1.0;
     }
@@ -514,8 +519,7 @@ fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize 
 }
 
 // ── Algorithm implementations ─────────────────────────────────────────────────
-// All ported from the ImageJ AutoThresholder Java source via the C++ reference
-// in docs/threshold/. Each function accepts a 256-bin f32 histogram and returns
+// All ported from ImageJ's AutoThresholder Java source. Each function accepts a 256-bin f32 histogram and returns
 // the optimal threshold bin index (0–255).
 
 /// A faithful port of ImageJ's `ij.process.AutoThresholder.Otsu(int[] data)`
@@ -687,7 +691,7 @@ fn thresh_li(hist: &[f32; 256]) -> usize {
         } else {
             0.0
         };
-        // C++ simple_round: cast toward zero after ±0.5 shift
+        // Round half away from zero: cast toward zero after a ±0.5 shift
         new_thresh = if temp < -2.220446049250313e-16 {
             (temp - 0.5) as i64 as f64
         } else {
@@ -838,7 +842,7 @@ fn thresh_moments(hist: &[f32; 256]) -> usize {
         return 0;
     }
     let c0 = (-m2 * m2 + m1 * m3) / cd;
-    // C++: c1 = (m0 * -m3 + m2 * m1) / cd  where m0 = 1
+    // c1 = (m0 * -m3 + m2 * m1) / cd  where m0 = 1
     let c1 = (-m3 + m2 * m1) / cd;
     let disc = c1 * c1 - 4.0 * c0;
     if disc < 0.0 {
@@ -933,8 +937,8 @@ fn thresh_intermodes(hist: &[f32; 256]) -> usize {
     let mut iters = 0u32;
     while !bimodal_test(&h) {
         // 3-point running mean over the *previous pass's* values, with
-        // implicit zero-padding at both ends - matches the C++ reference's
-        // previous/current/next rolling window. Must read entirely from `h`
+        // implicit zero-padding at both ends - ImageJ's previous/current/next
+        // rolling window. Must read entirely from `h`
         // and write into a separate buffer: writing into `h` in place would
         // make later iterations of this same pass read already-smoothed
         // neighbors instead of the pre-pass values.
@@ -1760,9 +1764,8 @@ mod tests {
 
         // Pixel index 3 (value 0.0) sits exactly on range 1's lower bound
         // (min_threshold 0.0) and is background, not class 10: the reference
-        // (`docs/threshold/threshold.hpp`, `cv::threshold(..., THRESH_BINARY)`
-        // combined with `THRESH_BINARY_INV`) treats the lower bound as
-        // exclusive and the upper bound as inclusive.
+        // treats the lower bound as exclusive and the upper bound as
+        // inclusive.
         let expected = vec![10, 20, 30, 0, 30, 20];
         assert_eq!(
             result_pixels,
@@ -1922,8 +1925,8 @@ mod tests {
         // multi-peak histogram like this one.
         //
         // Expected value cross-checked against an independent, literal
-        // translation of the C++ previous/current/next rolling-window
-        // smoothing in docs/threshold/threshold_intermodes.hpp. The old
+        // translation of ImageJ's previous/current/next rolling-window
+        // smoothing (Intermodes). The old
         // buggy implementation returned 63 here instead of 64.
         let raw: [f32; 25] = [
             2.0, 5.0, 9.0, 4.0, 7.0, 12.0, 6.0, 3.0, 8.0, 15.0, 20.0, 14.0, 9.0, 5.0, 3.0, 6.0,
@@ -2025,7 +2028,7 @@ mod tests {
     /// a dense, narrow cluster (bins 20-40, count 50 each) and a sparser,
     /// wider cluster (bins 160-200, count 20 each), separated by an empty
     /// valley. Expected values were computed with an independent, literal
-    /// Rust translation of each docs/threshold/*.hpp C++ reference (kept
+    /// Rust translation of each ImageJ AutoThresholder method (kept
     /// out-of-tree, not sharing code with this module), so a match here
     /// means the port is faithful, not just "returns something in range".
     fn bimodal_reference_histogram() -> [f32; 256] {
@@ -2220,10 +2223,10 @@ mod tests {
 
     #[test]
     fn test_isodata_matches_reference() {
-        // The C++ reference truncates its background-mean accumulator via
-        // integer division; this crate intentionally uses proper float
-        // division instead (see threshold.rs review notes), so this value
-        // can drift by ~1 bin from a bit-exact C++ run on other histograms.
+        // ImageJ truncates its background-mean accumulator via integer
+        // division; this crate intentionally uses proper float division
+        // instead, so this value can drift by ~1 bin from ImageJ on other
+        // histograms.
         // On this histogram both agree.
         assert_eq!(thresh_isodata(&bimodal_reference_histogram()), 105);
     }
@@ -2468,11 +2471,10 @@ mod tests {
     /// lower-bound-exclusive/upper-bound-inclusive comparison), not just
     /// the individual `thresh_XXX` bin-selection algorithms above.
     ///
-    /// Before this fix, `Threshold::execute` was missing the reference's
-    /// (`docs/threshold/threshold.hpp`) `scaleAndSetThreshold(0,
-    /// calcThresholdValue(...) + 1 + cValue, ...)` "+1" bin offset and
-    /// used an inclusive lower bound (`>=`) instead of the reference's
-    /// exclusive one (`cv::threshold(..., THRESH_BINARY)` is strict `>`),
+    /// Before this fix, `Threshold::execute` was missing ImageJ's
+    /// `scaleAndSetThreshold(0, calcThresholdValue(...) + 1 + cValue, ...)`
+    /// "+1" bin offset and used an inclusive lower bound (`>=`) instead of
+    /// an exclusive one (strict `>`),
     /// making the threshold systematically one bin too permissive -
     /// letting background-adjacent noise through as foreground.
     ///
@@ -2481,7 +2483,7 @@ mod tests {
     /// `scaleAndSetThreshold` / `ThresholdTriangle::calcThresholdValue`
     /// in that file, run on this exact data.
     #[test]
-    fn test_threshold_execute_matches_cpp_reference() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_threshold_execute_matches_reference() -> Result<(), Box<dyn std::error::Error>> {
         const N: usize = 2000;
         #[rustfmt::skip]
         const RAW: &[u32] = &[
@@ -2620,11 +2622,11 @@ mod tests {
             .filter(|&&v| v != 0)
             .count();
 
-        // C++ reference: min=0.0 max=1449.0 triangleBin=11 finalThreshold=68,
+        // Reference: min=0.0 max=1449.0 triangleBin=11 finalThreshold=68,
         // foreground_px(strict>)=658 of 2000.
         assert_eq!(
             fg, 658,
-            "Threshold::execute foreground pixel count does not match the C++ reference"
+            "Threshold::execute foreground pixel count does not match the reference"
         );
         Ok(())
     }

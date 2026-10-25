@@ -1,3 +1,5 @@
+//! # module_editing
+//!
 //! "Create module": turns consecutive steps of a pipeline into a module
 //! - a new definition in the project, and a step using it in their place.
 //!
@@ -5,6 +7,13 @@
 //! a role for each ([`ClassRole`]); [`create_module`] builds the module with the
 //! roles the user confirmed. With every class a parameter or fixed, the module
 //! runs exactly the commands the steps ran before.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-15
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use chrono::Utc;
 use evanalyzer_cfg::{

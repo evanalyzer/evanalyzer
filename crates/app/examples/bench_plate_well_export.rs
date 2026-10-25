@@ -1,3 +1,12 @@
+//! # bench_plate_well_export
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-14
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 // Throwaway benchmark harness (not part of the test suite) — seeds a
 // synthetic, plate-shaped `.evadb` file at a chosen scale and times
 // `ResultExport::start_export` for the plate/well grid and flat-list

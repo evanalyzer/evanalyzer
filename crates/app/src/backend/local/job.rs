@@ -1,3 +1,5 @@
+//! # job
+//!
 //! Starting and driving analysis/preview jobs - the one place that knows how
 //! to turn `ProjectSettings` into a running `evanalyzer_core::JobExecutor`.
 //!
@@ -9,6 +11,13 @@
 //!
 //! [`CancelHandle`] and `join_job` are shared with classifier training
 //! ([`crate::backend::local::training::start_training`]).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 mod analysis;
 mod preview;
 mod running_job;

@@ -1,7 +1,16 @@
+//! # regions
+//!
 //! Measuring masks on an image read region by region - manual annotations
 //! (drawn, copied or imported) and the rings around objects alike: the
 //! regions to read, and the ring geometry the AI object classifier uses in
 //! training and in the pipeline step.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-25
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::intensities::{ChannelTile, IntensityAccumulator, MaskIntensities};
 use crate::ai_learning::utils::{bbox_overlaps_tile, tile_grid};

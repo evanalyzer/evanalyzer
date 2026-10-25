@@ -1,9 +1,18 @@
+//! # test_support
+//!
 //! Test-only scratch-directory helper shared by command test modules.
 //!
 //! Hand-rolled instead of pulling in the `tempfile` crate (not currently a
 //! dependency of this crate) - all a command test needs is "a project file
 //! on disk nobody else is using", which `std::env::temp_dir()` plus a unique
 //! subdirectory name already gives us.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-07-13
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 #![cfg(test)]
 
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;

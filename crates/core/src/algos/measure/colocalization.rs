@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! How two channels go together - CellProfiler's MeasureColocalization
 //! (cellprofiler/modules/measurecolocalization.py, CellProfiler 4.2.8),

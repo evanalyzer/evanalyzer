@@ -1,7 +1,16 @@
+//! # tracks_all
+//!
 //! Results › Tracks, Full: every track as a table (filters, sortable) and
 //! the selected one's details. The rows come from one summary query; their
 //! area curves from their images' tracks, read for the rows in view (an
 //! image at a time, a few kept). "Show in image" goes to the split layout.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-21
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::tracks::{TRACK_PALETTE, area_curve};
 use super::*;

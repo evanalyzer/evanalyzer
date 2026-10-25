@@ -5,7 +5,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! The shape values of CellProfiler's MeasureObjectSizeShape the objects
 //! don't carry anyway (they have area, perimeter, Feret, axes, ...): the

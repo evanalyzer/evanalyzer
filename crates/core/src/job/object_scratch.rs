@@ -1,3 +1,5 @@
+//! # object_scratch
+//!
 //! Temporary per-tile object storage for the whole-image command phase.
 //!
 //! `job_executor` runs each tile's `ExecutionScope::Tile` commands and, for
@@ -14,6 +16,13 @@
 //! phase finishes (`TileObjectStore` owns a `tempfile::TempDir` and cleans
 //! up on drop), so nothing here is ever read by a different version of the
 //! app the way the DuckDB results schema must be.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-09-03
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::ImageTile;
 use crate::object::Object;

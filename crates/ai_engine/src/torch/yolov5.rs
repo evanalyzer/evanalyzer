@@ -4,7 +4,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! YOLOv5 inference: the RGB image resized to the size the model runs at,
 //! run in overlapping 640 x 640 windows, every window's output decoded into

@@ -1,3 +1,5 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
 """Writes texture_cellprofiler.json: CellProfiler's MeasureTexture values
 (MeasureTexture.run_image and run_one in cellprofiler/modules/measuretexture.py,
 CellProfiler 4.2.8, copied below for 2D: the image as 8 bits, rescaled to

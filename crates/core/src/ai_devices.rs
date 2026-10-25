@@ -1,6 +1,15 @@
+//! # ai_devices
+//!
 //! Which devices AI models (Cellpose, StarDist, U-Net, YOLOv5) run on, set
 //! once at startup from the command line (`--ai-devices`, `--gpu-slots`),
 //! and [`infer`]: a model run on the engine they set up.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_ai_engine::{DeviceSelection, EngineConfig, Image, Request, Response};
 use evanalyzer_cfg::core_types::InternalErrors;

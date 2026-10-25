@@ -13,7 +13,7 @@
 //!
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
-//! Licensed under the **AGPL-3.0**.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 /// The nearest feature of every pixel of a grid (row-major), 8 bytes per
 /// pixel.

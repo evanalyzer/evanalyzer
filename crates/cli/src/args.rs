@@ -1,3 +1,12 @@
+//! # args
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-06-26
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
