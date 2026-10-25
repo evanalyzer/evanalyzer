@@ -34,6 +34,7 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::SaveProjectActions;
 use evanalyzer_app::templates::load_project_template_from_file;
 use evanalyzer_app::templates::load_project_templates;
+use evanalyzer_cfg::MODULE_TEMPLATE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::PROJECT_FILE_TEMPLATE_EXTENSIONS;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
@@ -555,6 +556,7 @@ impl ProjectController {
         let mut allowed_files = image_formats.clone();
         allowed_files.push(PROJECT_FILE_EXTENSIONS);
         allowed_files.push(PROJECT_FILE_TEMPLATE_EXTENSIONS);
+        allowed_files.push(MODULE_TEMPLATE_EXTENSION);
 
         let request = FileRequest::open_file("Open")
             .filter("Supported files", &allowed_files)
@@ -563,7 +565,8 @@ impl ProjectController {
             .filter(
                 "Project template files",
                 &[PROJECT_FILE_TEMPLATE_EXTENSIONS],
-            );
+            )
+            .filter("Module files", &[MODULE_TEMPLATE_EXTENSION]);
         let manager = Arc::clone(self);
         self.app_state.file_browser.open(request, move |path| {
             let Some(path) = path else {
@@ -576,11 +579,71 @@ impl ProjectController {
                     manager.guard_discard(PendingAction::OpenProject(path));
                 } else if ext == Some(PROJECT_FILE_TEMPLATE_EXTENSIONS) {
                     manager.guard_discard(PendingAction::OpenProjectTemplate(path));
+                } else if ext == Some(MODULE_TEMPLATE_EXTENSION) {
+                    manager.add_module_file(&path);
                 } else {
                     manager.image_list_controller.open_new_image(&path);
                 }
             });
         });
+    }
+
+    /// Adds module file `path` (`.evamodule`) to the project's modules - a
+    /// copy, as from the module library - and says how to use it.
+    fn add_module_file(self: &Arc<Self>, path: &std::path::Path) {
+        let backend = self.app_state.backend();
+        let template = match evanalyzer_app::templates::load_module_template_from_file(
+            backend.files(),
+            path,
+        ) {
+            Ok(template) => template,
+            Err(e) => {
+                self.show_warning("Cannot open the module", &e.to_string());
+                return;
+            }
+        };
+        let name = template.module.meta.name.clone();
+        let inserted = {
+            let mut project = self.app_state.get_project_write();
+            evanalyzer_app::modules::insert_module_template(
+                &mut project,
+                &template,
+                &evanalyzer_app::modules::library_name(path),
+            )
+        };
+        match inserted {
+            Ok(_) => {
+                self.app_state.mark_dirty();
+                self.pipelines_controller.modules_changed();
+                self.show_info(
+                    "Module added",
+                    &format!(
+                        "“{name}” is in the project now - use it in a pipeline with \
+                         Add step › Modules."
+                    ),
+                );
+            }
+            Err(e) => self.show_warning("Cannot add the module", &e.to_string()),
+        }
+    }
+
+    /// The info dialog with `message` (an info icon, not the warning sign).
+    fn show_info(&self, title: &str, message: &str) {
+        let title = title.to_owned();
+        let message = message.to_owned();
+        let ui_weak = self.ui.clone();
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let warning = ui.global::<WarningState>();
+                warning.set_info(true);
+                warning.set_title(title.into());
+                warning.set_message(message.into());
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::Warning);
+            }
+        }) {
+            warn!("Failed to show info dialog: {e}");
+        }
     }
 
     /// Opens one image file: shown right away, its folder the project's
@@ -2613,6 +2676,78 @@ pub(crate) mod tests {
         browser.invoke_cancel();
         drain_ui_queue();
         assert!(start.get_active(), "cancelled: still the start page");
+    }
+
+    #[test]
+    fn opening_a_module_file_adds_the_module_to_the_project() {
+        use evanalyzer_cfg::settings::modules::ModuleDefinition;
+        use evanalyzer_cfg::settings::templates::ModuleTemplate;
+        let w = with_window(project_with_pipeline("P"));
+        let template = ModuleTemplate {
+            schema_version: 1,
+            module: ModuleDefinition {
+                key: "SMOOTH".into(),
+                meta: MetaData {
+                    name: "Smooth".into(),
+                    ..Default::default()
+                },
+                classes: vec![],
+                steps: vec![],
+                parameters: vec![],
+                origin: None,
+            },
+            uses: vec![],
+        };
+        let path = w.dir.path().join("smooth.evamodule");
+        std::fs::write(&path, serde_json::to_vec(&template).unwrap()).unwrap();
+
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+
+        let project = w.ui_state.get_project();
+        assert_eq!(project.modules.len(), 1);
+        assert_eq!(project.modules[0].meta.name, "Smooth");
+        drop(project);
+        assert_eq!(w.pipeline_names(), ["P"], "the project stays open");
+        assert!(w.ui_state.is_dirty());
+        let warning = w.ui.global::<WarningState>();
+        assert_eq!(w.dialog(), DialogType::Warning);
+        assert_eq!(warning.get_title(), "Module added");
+        assert!(warning.get_info());
+    }
+
+    #[test]
+    fn opening_a_broken_module_file_shows_a_warning_and_adds_nothing() {
+        let w = with_window(project_with_pipeline("P"));
+        let path = w.dir.path().join("broken.evamodule");
+        std::fs::write(&path, "not json").unwrap();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert!(w.ui_state.get_project().modules.is_empty());
+        assert_eq!(
+            w.ui.global::<WarningState>().get_title(),
+            "Cannot open the module"
+        );
+        assert!(!w.ui.global::<WarningState>().get_info());
+    }
+
+    #[test]
+    fn places_added_in_the_file_dialog_are_kept_in_the_app_settings() {
+        let w = with_window(project_with_pipeline("P"));
+        let browser = w.ui.global::<crate::FileBrowserState>();
+        w.toolbar().invoke_open_file_clicked();
+        drain_ui_queue();
+        browser.invoke_navigate(w.dir.path().to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        browser.invoke_add_place();
+        assert_eq!(
+            w.ui_state.load_app_settings().file_places,
+            [w.dir.path().to_path_buf()]
+        );
+        browser.invoke_remove_place(w.dir.path().to_string_lossy().as_ref().into());
+        assert!(w.ui_state.load_app_settings().file_places.is_empty());
+        browser.invoke_cancel();
+        drain_ui_queue();
     }
 
     /// Opens a file dialog with `open`, then closes it with "Cancel".

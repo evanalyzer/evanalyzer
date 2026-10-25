@@ -243,7 +243,7 @@ pub(crate) fn ui_state_with_window_on(
     *handle.get_project_write() = project;
     use slint::ComponentHandle;
     let ui_state = Arc::new(UiState::new(handle, ui.as_weak()));
-    ui_state.file_browser.attach(ui);
+    ui_state.attach_file_browser(ui);
     ui_state
 }
 

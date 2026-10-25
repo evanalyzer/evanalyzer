@@ -6,7 +6,7 @@
 
 export enum FileBrowserMode { open-file, open-folder, save-file }
 
-// kind: 0 home, 1 drive, 2 folder
+// kind: 0 home, 1 drive, 2 folder, 3 a folder the user added
 export struct FileBrowserPlace {
     name: string,
     path: string,
@@ -39,6 +39,10 @@ export global FileBrowserState {
     in-out property <string> current-path;
     in-out property <[FileBrowserCrumb]> crumbs;
     in-out property <[FileBrowserPlace]> places;
+    // The backend's places are being read (drives can be slow on Windows).
+    in-out property <bool> places-loading: false;
+    // The folder shown is one of the places already.
+    in-out property <bool> current-is-place: false;
     in-out property <[FileBrowserEntry]> entries;
     in-out property <int> selected: -1;
     in-out property <string> file-name;
@@ -66,5 +70,8 @@ export global FileBrowserState {
     callback path-entered(string);
     callback create-folder(string);
     callback overwrite-answered(bool);
+    // The folder shown added to the places / a place the user added removed.
+    callback add-place();
+    callback remove-place(string);
     callback file-name-edited(string);
 }

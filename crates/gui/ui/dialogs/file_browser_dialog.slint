@@ -9,7 +9,7 @@
 // e.g. the AI learning dialog can open it), driven entirely by
 // `FileBrowserState` from Rust: Rust lists folders on a background thread
 // and pushes rows; this file only renders and reports clicks/keys.
-import { InkButton, InkButtonKind, InkIconButton, InkDialog, InkDialogFooter, InkIcons, InkTextField, InkSearchField, InkSelect } from "../ink/ink.slint";
+import { InkBusy, InkButton, InkButtonKind, InkIconButton, InkDialog, InkDialogFooter, InkIcons, InkProgressBar, InkTextField, InkSearchField, InkSelect } from "../ink/ink.slint";
 import { FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "../api/file_browser.slint";
 
 import { ScrollView } from "std-widgets.slint";
@@ -18,6 +18,8 @@ component PlaceRow inherits Rectangle {
     in property <FileBrowserPlace> place;
     in property <bool> current;
     callback clicked;
+    // A folder the user added: taken off the places.
+    callback removed;
 
     height: 32px;
     border-radius: Ink.radius-md;
@@ -34,6 +36,7 @@ component PlaceRow inherits Rectangle {
             y: (parent.height - self.height) / 2;
             source: root.place.kind == 0 ? @image-url("../icons/regular-white/house.svg")
                   : root.place.kind == 1 ? @image-url("../icons/regular-white/hard-drives.svg")
+                  : root.place.kind == 3 ? @image-url("../icons/regular-white/folder-simple-star.svg")
                   : @image-url("../icons/regular-white/folder-simple.svg");
             colorize: root.current ? Ink.focus : Ink.text-dim;
         }
@@ -50,6 +53,16 @@ component PlaceRow inherits Rectangle {
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+    }
+
+    // On hover (over the row's touch area: no flicker): the user's own off.
+    if root.place.kind == 3 && ta.has-hover: InkIconButton {
+        x: parent.width - self.width - 3px;
+        y: (parent.height - self.height) / 2;
+        size: 26px;
+        icon: @image-url("../icons/regular-white/x.svg");
+        label: "Remove from the places";
+        clicked => { root.removed(); }
     }
 }
 
@@ -190,8 +203,34 @@ export component FileBrowserDialog inherits InkDialog {
                             place: place;
                             current: FileBrowserState.current-path == place.path;
                             clicked => { FileBrowserState.navigate(place.path); }
+                            removed => { FileBrowserState.remove-place(place.path); }
+                        }
+                        // Drives and network places can take seconds (Windows).
+                        if FileBrowserState.places-loading: HorizontalLayout {
+                            height: 32px;
+                            padding-left: 10px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                InkBusy { size: 16px; }
+                            }
+                            Text {
+                                text: "Loading…";
+                                font-size: Ink.fs-body;
+                                color: Ink.text-mute;
+                                vertical-alignment: center;
+                            }
                         }
                         Rectangle { vertical-stretch: 1; }
+                        // The folder shown as a place of its own (kept in the
+                        // user settings).
+                        InkButton {
+                            text: "Add this folder";
+                            icon: @image-url("../icons/regular-white/plus.svg");
+                            enabled: FileBrowserState.current-path != "" && !FileBrowserState.current-is-place;
+                            disabled-reason: FileBrowserState.current-is-place ? "Already a place" : "Open a folder first";
+                            clicked => { FileBrowserState.add-place(); }
+                        }
                     }
                 }
                 Rectangle { width: 1px; background: Ink.border-soft; }
@@ -372,7 +411,11 @@ export component FileBrowserDialog inherits InkDialog {
                             height: parent.height - 30px;
                             alignment: center;
                             spacing: 8px;
-                            Image {
+                            if FileBrowserState.loading: HorizontalLayout {
+                                alignment: center;
+                                InkBusy { size: 28px; }
+                            }
+                            if !FileBrowserState.loading: Image {
                                 height: 34px;
                                 source: FileBrowserState.error != ""
                                     ? @image-url("../icons/regular-white/warning-circle.svg")
@@ -390,10 +433,37 @@ export component FileBrowserDialog inherits InkDialog {
                                 wrap: word-wrap;
                             }
                         }
+                        // Loading another folder: the old rows veiled, a spinner
+                        // over them (a slow network share can take seconds).
                         if FileBrowserState.loading && FileBrowserState.entries.length > 0: Rectangle {
+                            x: 0;
                             y: 30px;
+                            width: parent.width;
+                            height: parent.height - 30px;
+                            background: Ink.panel.with-alpha(0.7);
+                            // Clicks wait for the new folder.
+                            TouchArea { }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    InkBusy { size: 28px; }
+                                }
+                                Text {
+                                    text: "Loading…";
+                                    font-size: Ink.fs-heading;
+                                    color: Ink.text-mute;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+                        if FileBrowserState.loading: InkProgressBar {
+                            x: 0;
+                            y: 30px;
+                            width: parent.width;
                             height: 2px;
-                            background: Ink.focus;
+                            indeterminate: true;
                         }
                     }
                 }
@@ -448,6 +518,16 @@ export component FileBrowserDialog inherits InkDialog {
                         overflow: elide;
                     }
 
+                    Text {
+                        horizontal-stretch: 1;
+                        text: FileBrowserState.error != "" && FileBrowserState.entries.length > 0 ? FileBrowserState.error : "";
+                        font-size: Ink.fs-body;
+                        color: Ink.err;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                    }
+
                     // New folder (inline)
                     new-folder := HorizontalLayout {
                         spacing: 6px;
@@ -475,16 +555,8 @@ export component FileBrowserDialog inherits InkDialog {
                             clicked => { new-folder.naming = false; keys.focus(); }
                         }
                     }
-
-                    Text {
-                        horizontal-stretch: 1;
-                        text: FileBrowserState.error != "" && FileBrowserState.entries.length > 0 ? FileBrowserState.error : "";
-                        font-size: Ink.fs-body;
-                        color: Ink.err;
-                        vertical-alignment: center;
-                        horizontal-alignment: right;
-                        overflow: elide;
-                    }
+                    // A small gap to the dialog's own buttons.
+                    Rectangle { width: 10px; }
 
                     InkButton {
                         text: "Cancel";

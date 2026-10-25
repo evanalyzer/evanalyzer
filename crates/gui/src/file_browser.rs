@@ -32,7 +32,7 @@ use crate::{
 };
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::fs::DirEntry;
-use evanalyzer_app::fs::PlaceKind;
+use evanalyzer_app::fs::{Place, PlaceKind};
 use evanalyzer_cfg::{
     EVANALYZER_TRAINED_AI_MODELS, MODULE_TEMPLATE_EXTENSION, PROJECT_FILE_EXTENSIONS,
     PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
@@ -40,7 +40,17 @@ use evanalyzer_cfg::{
 use log::warn;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
+
+/// Where the folders the user added to the places are kept (the user
+/// settings) - see [`FileBrowser::set_user_places`].
+pub trait UserPlaces: Send + Sync {
+    fn load(&self) -> Vec<PathBuf>;
+    fn save(&self, places: Vec<PathBuf>);
+}
+
+/// [`FileBrowserPlace::kind`] of a folder the user added.
+const USER_PLACE: i32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileMode {
@@ -159,6 +169,8 @@ struct Session {
     last_dir: Option<PathBuf>,
     /// Save target waiting for the user to confirm replacing it.
     pending_overwrite: Option<PathBuf>,
+    /// The backend's places (home, drives, …), as last read.
+    places: Vec<Place>,
 }
 
 /// One per window: the dialog is drawn inside that window.
@@ -168,6 +180,8 @@ pub struct FileBrowser<W: ComponentHandle + 'static> {
     /// server or disconnects.
     backend: Mutex<Arc<dyn Backend>>,
     session: Mutex<Session>,
+    /// The folders the user added to the places, kept elsewhere.
+    user_places: Mutex<Option<Weak<dyn UserPlaces>>>,
 }
 
 impl<W> FileBrowser<W>
@@ -180,7 +194,84 @@ where
             window,
             backend: Mutex::new(backend),
             session: Mutex::new(Session::default()),
+            user_places: Mutex::new(None),
         }
+    }
+
+    /// Where the folders the user adds to the places are kept.
+    pub fn set_user_places(&self, store: Weak<dyn UserPlaces>) {
+        *self.user_places.lock().unwrap() = Some(store);
+    }
+
+    fn user_places(&self) -> Option<Arc<dyn UserPlaces>> {
+        self.user_places.lock().unwrap().as_ref()?.upgrade()
+    }
+
+    /// The places shown: the backend's, then the user's.
+    fn place_rows(&self) -> Vec<FileBrowserPlace> {
+        let builtin = self.session.lock().unwrap().places.clone();
+        let user = self.user_places().map(|s| s.load()).unwrap_or_default();
+        builtin
+            .iter()
+            .map(|p| FileBrowserPlace {
+                name: p.name.as_str().into(),
+                path: p.path.to_string_lossy().as_ref().into(),
+                kind: match p.kind {
+                    PlaceKind::Home => 0,
+                    PlaceKind::Drive => 1,
+                    PlaceKind::Folder => 2,
+                },
+            })
+            .chain(user.iter().map(|path| {
+                FileBrowserPlace {
+                    name: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                        .into(),
+                    path: path.to_string_lossy().as_ref().into(),
+                    kind: USER_PLACE,
+                }
+            }))
+            .collect()
+    }
+
+    fn show_places(&self) {
+        let rows = self.place_rows();
+        let current = self.session.lock().unwrap().current_dir.clone();
+        let is_place = rows.iter().any(|p| Path::new(p.path.as_str()) == current);
+        self.with_state(|s| {
+            s.set_places(ModelRc::new(VecModel::from(rows)));
+            s.set_current_is_place(is_place);
+        });
+    }
+
+    /// Adds the folder shown to the user's places (once).
+    fn add_place(&self) {
+        let Some(store) = self.user_places() else {
+            return;
+        };
+        let dir = self.session.lock().unwrap().current_dir.clone();
+        if dir.as_os_str().is_empty() {
+            return;
+        }
+        let mut places = store.load();
+        if !places.contains(&dir) {
+            places.push(dir);
+            store.save(places);
+        }
+        self.show_places();
+    }
+
+    /// Takes `path` off the user's places.
+    fn remove_place(&self, path: &Path) {
+        let Some(store) = self.user_places() else {
+            return;
+        };
+        let mut places = store.load();
+        places.retain(|p| p != path);
+        store.save(places);
+        self.show_places();
     }
 
     fn backend(&self) -> Arc<dyn Backend> {
@@ -233,6 +324,10 @@ where
         state.on_create_folder(move |name| this.create_folder(name.trim()));
         let this = Arc::clone(self);
         state.on_overwrite_answered(move |replace| this.overwrite_answered(replace));
+        let this = Arc::clone(self);
+        state.on_add_place(move || this.add_place());
+        let this = Arc::clone(self);
+        state.on_remove_place(move |path| this.remove_place(Path::new(path.as_str())));
         let this = Arc::clone(self);
         state.on_file_name_edited(move |text| {
             this.session.lock().unwrap().file_name = text.to_string();
@@ -302,8 +397,11 @@ where
             state.set_overwrite_name("".into());
             state.set_entries(ModelRc::new(VecModel::from(Vec::<FileBrowserEntry>::new())));
             state.set_selected(-1);
+            state.set_places_loading(true);
             state.set_visible(true);
         });
+        // The user's places right away, the backend's when read.
+        self.show_places();
         self.update_can_accept();
 
         // Places and the start folder load in the background - the start
@@ -333,21 +431,11 @@ where
                 .filter(|_| start_dir.is_none());
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
-                match &places {
+                ui_this.with_state(|s| s.set_places_loading(false));
+                match places {
                     Ok(places) => {
-                        let rows: Vec<FileBrowserPlace> = places
-                            .iter()
-                            .map(|p| FileBrowserPlace {
-                                name: p.name.as_str().into(),
-                                path: p.path.to_string_lossy().as_ref().into(),
-                                kind: match p.kind {
-                                    PlaceKind::Home => 0,
-                                    PlaceKind::Drive => 1,
-                                    PlaceKind::Folder => 2,
-                                },
-                            })
-                            .collect();
-                        ui_this.with_state(|s| s.set_places(ModelRc::new(VecModel::from(rows))));
+                        ui_this.session.lock().unwrap().places = places;
+                        ui_this.show_places();
                     }
                     Err(e) => ui_this.with_state(|s| s.set_error(e.to_string().into())),
                 }
@@ -390,6 +478,8 @@ where
             s.generation
         };
         let crumbs = crumbs_for(&dir);
+        // Whether "Add to places" applies here.
+        self.show_places();
         self.with_state(|state| {
             state.set_current_path(dir.to_string_lossy().as_ref().into());
             state.set_crumbs(ModelRc::new(VecModel::from(crumbs)));
@@ -1243,5 +1333,82 @@ mod tests {
         drain_ui_queue();
         assert!(!f.state().get_error().is_empty());
         assert!(f.shown().is_empty());
+    }
+
+    /// Places kept in memory, like the app settings keep them.
+    #[derive(Default)]
+    struct MemoryPlaces(Mutex<Vec<PathBuf>>);
+
+    impl UserPlaces for MemoryPlaces {
+        fn load(&self) -> Vec<PathBuf> {
+            self.0.lock().unwrap().clone()
+        }
+        fn save(&self, places: Vec<PathBuf>) {
+            *self.0.lock().unwrap() = places;
+        }
+    }
+
+    fn user_rows(f: &Fixture) -> Vec<(String, String)> {
+        let places = f.state().get_places();
+        (0..places.row_count())
+            .map(|i| places.row_data(i).unwrap())
+            .filter(|p| p.kind == USER_PLACE)
+            .map(|p| (p.name.to_string(), p.path.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_folder_shown_can_be_added_to_and_removed_from_the_places() {
+        let f = fixture();
+        let store: Arc<dyn UserPlaces> = Arc::new(MemoryPlaces::default());
+        f.browser.set_user_places(Arc::downgrade(&store));
+        let _rx = f.open(FileRequest::open_file("Open"));
+        let sub = f.dir.path().join("sub");
+        let sub_text = sub.to_string_lossy().to_string();
+        f.state().invoke_navigate(sub_text.as_str().into());
+        drain_ui_queue();
+        assert!(user_rows(&f).is_empty());
+        assert!(!f.state().get_current_is_place());
+
+        f.state().invoke_add_place();
+        f.state().invoke_add_place();
+        assert_eq!(store.load(), [sub.clone()], "added once");
+        assert_eq!(user_rows(&f), [("sub".to_string(), sub_text.clone())]);
+        assert!(f.state().get_current_is_place());
+
+        f.state()
+            .invoke_navigate(f.dir.path().to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        assert!(!f.state().get_current_is_place(), "the parent is no place");
+
+        f.state().invoke_remove_place(sub_text.as_str().into());
+        assert!(store.load().is_empty());
+        assert!(user_rows(&f).is_empty());
+    }
+
+    #[test]
+    fn the_users_places_show_while_the_backends_still_load() {
+        let f = fixture();
+        let store: Arc<dyn UserPlaces> = Arc::new(MemoryPlaces::default());
+        store.save(vec![f.dir.path().join("sub")]);
+        f.browser.set_user_places(Arc::downgrade(&store));
+        let (tx, _rx) = mpsc::channel();
+        f.browser
+            .open(FileRequest::open_file("Open"), move |p| tx.send(p).unwrap());
+        // Before the background read reports back.
+        assert!(f.state().get_places_loading());
+        assert_eq!(user_rows(&f).len(), 1);
+        drain_ui_queue();
+        assert!(!f.state().get_places_loading());
+        assert_eq!(user_rows(&f).len(), 1, "still there with the backend's");
+        assert!(f.state().get_places().row_count() > 1);
+    }
+
+    #[test]
+    fn without_a_store_adding_a_place_does_nothing() {
+        let f = fixture();
+        let _rx = f.open(FileRequest::open_file("Open"));
+        f.state().invoke_add_place();
+        assert!(user_rows(&f).is_empty());
     }
 }

@@ -3319,6 +3319,13 @@ impl PipelinesController {
     /// only runs once the user has stopped editing for `PREVIEW_DEBOUNCE_MS`.
     /// This avoids a flood of preview refreshes while the user is still typing.
     /// Connects the pipeline focus (see `focus_controller`).
+    /// The project's modules changed outside the pipelines (a module file
+    /// opened): the checks and the lists showing them.
+    pub(crate) fn modules_changed(self: &Arc<Self>) {
+        self.refresh_problems();
+        self.sync_pipelines_to_slint();
+    }
+
     fn pipeline_settings_changed(self: &Arc<Self>) {
         // Values for parameters a module no longer has go; a measurement step
         // added gets its name.

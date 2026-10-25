@@ -144,6 +144,7 @@ pub mod results {
 pub mod fs {
     pub use crate::api::DirEntry;
     pub use crate::api::FileSystem;
+    pub use crate::api::Place;
     pub use crate::api::PlaceKind;
 
     pub use crate::backend::LocalFileSystem;
@@ -191,6 +192,7 @@ pub mod bioimageio {
 
 pub mod templates {
     pub use crate::api::TemplateFolders;
+    pub use crate::workspace::templates::load_module_template_from_file;
     pub use crate::workspace::templates::load_module_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
     pub use crate::workspace::templates::load_project_templates;

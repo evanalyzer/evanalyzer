@@ -76,6 +76,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub author: Option<UserInformation>,
 
+    /// Folders the user added to the file dialog's places (beside home,
+    /// drives, …) - a click there opens them. Of the computer whose files
+    /// the dialog shows (a server's on a server).
+    #[serde(default)]
+    pub file_places: Vec<std::path::PathBuf>,
+
     /// How much memory the image viewport may spend on smoother pan/zoom.
     /// About this computer's RAM, so the GUI keeps it in this computer's
     /// settings even when connected to a server.

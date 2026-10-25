@@ -370,6 +370,14 @@ impl UiState {
         }
     }
 
+    /// The file dialog's places: the folders the user added are kept in the
+    /// user settings.
+    pub fn attach_file_browser(self: &Arc<Self>, ui: &AppWindow) {
+        self.file_browser.attach(ui);
+        let store: Arc<dyn file_browser::UserPlaces> = Arc::clone(self) as _;
+        self.file_browser.set_user_places(Arc::downgrade(&store));
+    }
+
     /// The user's remembered preferences (see `app_settings`).
     pub fn load_app_settings(&self) -> evanalyzer_app::global::AppSettings {
         self.app_settings.lock().unwrap().clone()
@@ -776,7 +784,7 @@ fn run(
     ui_state.set_window_title(false);
     apply_user_settings(&ui, &ui_state);
     attach_system_info(&ui, Arc::clone(&ui_state));
-    ui_state.file_browser.attach(&ui);
+    ui_state.attach_file_browser(&ui);
 
     // Attach callbacks synchronously before the event loop starts.
     // Using invoke_from_event_loop here caused the initial `changed width/height`
@@ -1716,5 +1724,17 @@ mod ui_state_tests {
                 top.y + view.height
             );
         }
+    }
+}
+
+/// The folders the user added to the file dialog's places, in the user
+/// settings.
+impl file_browser::UserPlaces for UiState {
+    fn load(&self) -> Vec<PathBuf> {
+        self.load_app_settings().file_places
+    }
+
+    fn save(&self, places: Vec<PathBuf>) {
+        self.update_app_settings(|s| s.file_places = places);
     }
 }

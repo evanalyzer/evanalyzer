@@ -28,6 +28,18 @@ pub fn load_project_template_from_file(
         .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))
 }
 
+/// Loads one module file (`.evamodule`) from an arbitrary path (e.g. one
+/// picked with "Open…") - its error surfaced, as for
+/// [`load_project_template_from_file`].
+pub fn load_module_template_from_file(
+    files: &dyn FileSystem,
+    path: &Path,
+) -> Result<ModuleTemplate, InternalErrors> {
+    let data = files.read_file(path)?;
+    serde_json::from_slice(&data)
+        .map_err(|e| InternalErrors::Internal(format!("Failed to read the module file: {e}")))
+}
+
 /// Loads all module library files (`.evamodule`, see `ModuleTemplate`)
 /// found in the backend's user and app templates folders.
 pub fn load_module_templates(backend: &dyn Backend) -> Vec<(PathBuf, ModuleTemplate)> {
