@@ -942,6 +942,25 @@ before (`mask_on_plane` hands back the whole mask).
 renders again: **0.2-1 ms**. Kept: **66 KB** (the two strips, u8). Nothing
 runs or is kept while the views are off.
 
+## 3D view: maximum intensity projection, turned freely (2026-10-25)
+
+`editor/viewport_volume.rs`: the stack read once, reduced to at most
+256 × 256 × 256 (pyramid level + every n-th pixel / plane), kept u8/u16;
+one ray per pixel (nearest voxel, a step per voxel), smaller renders while
+turning. Nothing runs or is kept while the view is off.
+
+| | 22 threads | 2 threads |
+|---|---|---|
+| 256³ volume (worst case), turning: 384² | 11 ms | 36 ms |
+| 256³ volume, at rest: 1024² | 53 ms | 244 ms |
+| Fly Brain 256 × 256 × 57, 3 channels, turning: 384 × 212 (real app) | 3.5-4.5 ms | - |
+| Fly Brain, at rest: 1024 × 566 (real app) | 24 ms | - |
+
+(`cargo test --release -p evanalyzer_gui bench_volume -- --ignored
+--nocapture`, one channel; the Fly Brain from the app's debug log.) Kept:
+the volume, 3.7 MB per 8-bit channel for the Fly Brain (11.2 MB), at most
+16.8 MB per 8-bit / 33.6 MB per 16-bit channel; the renders are a few MB.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -967,6 +986,7 @@ graphics driver).
 | Running a pipeline: 50 images 2048², 8 threads, with the z columns | 860-963 MB | 2026-10-25 | 3D-ready results |
 | Image viewer, whole slide, after the 3D viewer changes (2D) | 260-275 MB (test process) | 2026-10-25 | 3D viewer |
 | Orthogonal views of a z-stack (57 planes, 256²) | +66 KB kept | 2026-10-25 | 3D viewer |
+| 3D view of a z-stack | +16.8 MB per 8-bit / 33.6 MB per 16-bit channel at most (Fly Brain: 11.2 MB) | 2026-10-25 | 3D view |
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB (2.56 GB with masks) | 2026-10-23 | Object masks in the results |

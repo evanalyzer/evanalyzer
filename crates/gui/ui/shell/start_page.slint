@@ -2,8 +2,8 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // shell/start_page.slint — the start page (board AA): while nothing is open
-// yet. Opening an image folder (the main way in), a project, or an empty
-// project; the projects opened before. Cells drift slowly in the
+// yet. Opening an image folder (the main way in), one image, a project, or
+// an empty project; the projects opened before. Cells drift slowly in the
 // background, as in About - stepped by a 10 Hz timer, not every frame, and
 // still with Settings › Viewport › Reduce motion.
 
@@ -333,6 +333,16 @@ export component StartPage inherits Rectangle {
                 shortcut: "Ctrl Shift O";
                 clicked => {
                     StartState.open-images-folder();
+                }
+            }
+
+            StartAction {
+                icon: InkIcons.image;
+                title: "Open image…";
+                text: "One image file, opened right away - the others of its folder are listed too.";
+                shortcut: "Ctrl I";
+                clicked => {
+                    StartState.open-image();
                 }
             }
 

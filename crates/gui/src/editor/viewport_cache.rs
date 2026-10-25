@@ -737,7 +737,7 @@ const SUBSAMPLE_BLOCK_H: usize = 512;
 /// by block and each block is thinned out right away, so RAM holds one
 /// block plus the (`step`^2 times smaller) result - never the whole region
 /// at full size, which for an image without a pyramid can be many GB.
-fn read_subsampled(
+pub(crate) fn read_subsampled(
     source: &dyn ImageSource,
     request: &TileRequest,
     step: usize,

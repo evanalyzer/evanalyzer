@@ -789,14 +789,11 @@ impl ImageReader {
             });
         };
 
+        let last_z = series_info.nr_z_stacks.saturating_sub(1) as i32;
         let z_stack_range = match z_range {
-            Some(range) => {
-                // We use inclusive range here to match the input logic
-                *range.start()
-                    ..=*range
-                        .end()
-                        .min(&(series_info.nr_z_stacks.saturating_sub(1) as i32))
-            }
+            // Clamped like t and c: a plane kept from a deeper image (the
+            // z setting is project wide) reads this image's last plane.
+            Some(range) => (*range.start()).min(last_z)..=(*range.end()).min(last_z),
             None => {
                 // We convert this to an inclusive range so it matches the type above
                 0..=(series_info.nr_z_stacks.saturating_sub(1) as i32)
@@ -1161,6 +1158,38 @@ mod tests {
             "/tests/multi-channel-4D-series.ome.tif"
         )
         .into()
+    }
+
+    /// A z plane past the image's last one (kept from a deeper image - the z
+    /// setting is project wide) reads the last plane instead of failing: the
+    /// viewer showed a single plane image black after a z-stack.
+    #[test]
+    fn a_plane_past_the_last_reads_the_last_plane() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::SplitChannels).unwrap();
+        let last = reader.get_image_meta().series[&0].nr_z_stacks as i32 - 1;
+        let read = |z: i32| {
+            reader
+                .read_image_tile_combined_parallel(
+                    0,
+                    0,
+                    ZProjection::None,
+                    &Some(z..=z),
+                    0,
+                    None,
+                    &full_tile(),
+                )
+                .unwrap()
+        };
+        let (past, at_last) = (read(last + 22), read(last));
+        assert_eq!(past.len(), at_last.len());
+        for (p, l) in past.iter().zip(&at_last) {
+            match (&*p.image, &*l.image) {
+                (ImageContainer::F32Gray(a), ImageContainer::F32Gray(b)) => {
+                    assert_eq!(a.as_slice(), b.as_slice(), "channel {}", p.c_stack)
+                }
+                _ => panic!("expected gray channels"),
+            }
+        }
     }
 
     fn full_tile() -> ImageTile {

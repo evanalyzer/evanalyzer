@@ -60,6 +60,7 @@ pub mod viewport_image_controller;
 pub mod viewport_object_controller;
 pub mod viewport_ortho;
 pub mod viewport_task;
+pub mod viewport_volume;
 pub mod viewport_worker;
 
 pub struct Editor {

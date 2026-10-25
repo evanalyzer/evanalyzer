@@ -8,7 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::spawn_job;
-use crate::api::{PreviewRequest, RunningJob, StartPreviewError, WHOLE_IMAGE_PREVIEW_MAX_TILES};
+use crate::api::{PreviewRequest, RunningJob, StartPreviewError};
 use crate::workspace::settings::ViewportMemorySettings;
 use evanalyzer_core::PreviewTileSettings;
 use log::{debug, error};
@@ -33,29 +33,27 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
         process_all_tiles: request.whole_image,
     });
 
-    // As asked, else what this computer can take. The whole image: its
-    // full-size tiles, not what is in view.
-    let max = if request.whole_image {
-        WHOLE_IMAGE_PREVIEW_MAX_TILES
-    } else {
-        request
+    // The viewport: as asked, else what this computer can take. The whole
+    // image: no limit - all of it, as asked for.
+    if !request.whole_image {
+        let max = request
             .max_visible_tiles
             .unwrap_or_else(|| {
                 ViewportMemorySettings::auto_preview_tiles(
                     crate::backend::local::system::cpu_ram_diagnostics().1,
                 )
             })
-            .max(1) as usize
-    };
-    match job.count_preview_visible_tiles() {
-        Ok(tiles) if tiles > max => {
-            debug!("Preview rejected: viewport covers {tiles} tiles (max {max})");
-            return Err(StartPreviewError::TooManyTiles { tiles, max });
+            .max(1) as usize;
+        match job.count_preview_visible_tiles() {
+            Ok(tiles) if tiles > max => {
+                debug!("Preview rejected: viewport covers {tiles} tiles (max {max})");
+                return Err(StartPreviewError::TooManyTiles { tiles, max });
+            }
+            // Not being able to count is no reason to block the preview - the
+            // job itself reports a real read error if there is one.
+            Err(e) => error!("Failed to count visible preview tiles: {e:?}"),
+            Ok(_) => {}
         }
-        // Not being able to count is no reason to block the preview - the
-        // job itself reports a real read error if there is one.
-        Err(e) => error!("Failed to count visible preview tiles: {e:?}"),
-        Ok(_) => {}
     }
 
     job.breakpoint = request.breakpoint;

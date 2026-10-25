@@ -351,6 +351,22 @@ export component StackBar inherits Rectangle {
                 StackSteps.set-z(z);
             }
         }
+        // The 3D view: the stack's brightest voxels, turned with the mouse.
+        // It and the orthogonal views are either / or: turning one on turns the other off.
+        if root.has-z && root.slice: InkIconButton {
+            size: 26px;
+            icon: InkIcons.volume;
+            label: "3D view";
+            active: ViewportState.volume_view;
+            clicked => {
+                ViewportState.volume_view = !ViewportState.volume_view;
+                if ViewportState.volume_view && ViewportState.ortho {
+                    ViewportState.ortho = false;
+                    ViewportState.ortho_changed(false);
+                }
+                ViewportState.volume_view_changed(ViewportState.volume_view, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, false);
+            }
+        }
         // The XZ and YZ views through a crosshair.
         if root.has-z && root.slice: InkIconButton {
             size: 26px;
@@ -359,6 +375,10 @@ export component StackBar inherits Rectangle {
             active: ViewportState.ortho;
             clicked => {
                 ViewportState.ortho = !ViewportState.ortho;
+                if ViewportState.ortho && ViewportState.volume_view {
+                    ViewportState.volume_view = false;
+                    ViewportState.volume_view_changed(false, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, false);
+                }
                 ViewportState.ortho_changed(ViewportState.ortho);
             }
         }

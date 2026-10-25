@@ -193,23 +193,6 @@ impl PipelineWorker {
                     whole_image,
                 }) {
                     Ok(job) => job,
-                    Err(StartPreviewError::TooManyTiles { tiles, max }) if whole_image => {
-                        // A whole slide: the analysis is the way there.
-                        let message = format!(
-                            "The image is too large to preview whole: {tiles} tiles of 4096 px \
-                             (max {max}). Run the analysis on it instead."
-                        );
-                        let ui_handle = self.app_state.ui_handle.clone();
-                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
-                            if let Some(ui) = ui_handle.upgrade() {
-                                let preview = ui.global::<PreviewRunState>();
-                                preview.set_status_message(message.into());
-                                preview.set_has_error(true);
-                                preview.set_done(true);
-                            }
-                        });
-                        return;
-                    }
                     Err(StartPreviewError::TooManyTiles { tiles, max }) => {
                         // Tell the user to zoom in instead of silently grinding
                         // through hundreds of tiles.

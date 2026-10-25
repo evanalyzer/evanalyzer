@@ -589,6 +589,8 @@ impl ImageMetaController {
         }
         self.sync_pixel_size_settings_to_slint();
         self.viewport_controller.sync_scale_bar_to_slint();
+        // The z spacing: the orthogonal and 3D views draw z by it.
+        self.viewport_controller.pixel_sizes_changed();
     }
 
     /// Resets pixel dimensions to their original values as defined in the image metadata.
@@ -611,6 +613,8 @@ impl ImageMetaController {
         }
         self.sync_pixel_size_settings_to_slint();
         self.viewport_controller.sync_scale_bar_to_slint();
+        // The z spacing: the orthogonal and 3D views draw z by it.
+        self.viewport_controller.pixel_sizes_changed();
     }
 
     /// Synchronizes current pixel size settings from the shared state to the Slint UI properties.
@@ -768,6 +772,32 @@ mod tests {
         assert_eq!(sizes.x, 1.5);
         assert_eq!(sizes.y, 2.5);
         assert_eq!(sizes.z, Some(3.5));
+    }
+
+    /// A new pixel size renders the orthogonal and 3D views again - they
+    /// draw z by it - while they are on; off, nothing to render.
+    #[test]
+    fn a_new_pixel_size_renders_the_orthogonal_and_3d_views_again() {
+        let (_ui_state, controller) = make_controller();
+        let vc = &controller.viewport_controller;
+        let pending = |slot: &crate::editor::viewport_controller::Tasks| {
+            let taken = |c: &std::sync::Arc<
+                crate::editor::viewport_controller::DrawingTaskContainer,
+            >| { c.task_request.0.lock().unwrap().take().is_some() };
+            (taken(&slot.ortho_task), taken(&slot.volume_task))
+        };
+
+        controller.set_manual_pixel_sizes(100.0, 100.0, 300.0);
+        assert_eq!(pending(&vc.drawing_tasks), (false, false), "both off");
+
+        vc.set_ortho(true);
+        vc.set_volume_view(Some((Default::default(), false)));
+        pending(&vc.drawing_tasks);
+        controller.set_manual_pixel_sizes(100.0, 100.0, 500.0);
+        assert_eq!(pending(&vc.drawing_tasks), (true, true), "both on");
+
+        controller.reset_manual_pixel_sizes();
+        assert_eq!(pending(&vc.drawing_tasks), (true, true), "reset, too");
     }
 
     #[test]

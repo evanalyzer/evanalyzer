@@ -72,8 +72,9 @@ impl ViewportWorker {
             ("HighResWorker", TaskDispatch::HighRes),
             ("LowResWorker", TaskDispatch::LowRes),
             ("ObjectWorker", TaskDispatch::Objects),
-            // Waits idle unless the orthogonal views are on.
+            // Wait idle unless the orthogonal views / the 3D view are on.
             ("OrthoWorker", TaskDispatch::Ortho),
+            ("VolumeWorker", TaskDispatch::Volume),
         ];
 
         for (name, dispatch) in configs {
@@ -90,6 +91,14 @@ impl ViewportWorker {
     }
 
     fn run_worker_loop(self: &Arc<Self>, scope: TaskDispatch) -> ! {
+        if scope == TaskDispatch::Volume {
+            let mut volume = None;
+            let container = self.task_container(scope);
+            loop {
+                wait_for_task(container);
+                self.render_volume(&mut volume);
+            }
+        }
         if scope == TaskDispatch::Ortho {
             let mut strips = crate::editor::viewport_ortho::OrthoStrips::default();
             let container = self.task_container(scope);
@@ -112,6 +121,7 @@ impl ViewportWorker {
             TaskDispatch::LowRes => &self.viewport_controller.drawing_tasks.low_res_task,
             TaskDispatch::HighRes => &self.viewport_controller.drawing_tasks.high_res_task,
             TaskDispatch::Ortho => &self.viewport_controller.drawing_tasks.ortho_task,
+            TaskDispatch::Volume => &self.viewport_controller.drawing_tasks.volume_task,
             _ => &self.viewport_controller.drawing_tasks.object_task,
         }
     }
@@ -512,6 +522,16 @@ impl ViewportWorker {
         // channels) - a flag check only while they are off.
         if !is_low_res && self.viewport_controller.ortho().0 {
             self.viewport_controller.trigger_ortho();
+        }
+        // So does the 3D view (channels, display ranges, time point).
+        if !is_low_res
+            && self
+                .viewport_controller
+                .volume
+                .lock()
+                .is_ok_and(|v| v.is_some())
+        {
+            self.viewport_controller.trigger_volume();
         }
 
         if comparing && !is_low_res && version_tracker.load(Ordering::SeqCst) == current_version {

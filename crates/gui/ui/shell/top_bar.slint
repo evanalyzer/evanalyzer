@@ -884,6 +884,15 @@ export component TopBar inherits Rectangle {
                     }
                 }
 
+                EvaMenuItem {
+                    icon: InkIcons.image;
+                    text: "Open image…";
+                    shortcut: "Ctrl I";
+                    clicked => {
+                        ToolbarState.open_image_clicked();
+                    }
+                }
+
                 recent-item := EvaMenuItem {
                     icon: InkIcons.project;
                     text: "Open recent";

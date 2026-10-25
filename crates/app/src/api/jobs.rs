@@ -58,22 +58,17 @@ pub struct PreviewRequest {
     /// window's computer decides.
     pub breakpoint_tiles: u32,
     /// The whole image instead of the viewport: the visible tiles first, then
-    /// the others - the counts of the whole image. Refused for an image of
-    /// more than [`WHOLE_IMAGE_PREVIEW_MAX_TILES`] full-size tiles (a whole
-    /// slide: the analysis is the way there).
+    /// the others - the counts of the whole image. No tile limit: the whole
+    /// image means all of it, also a whole slide (`max_visible_tiles` is
+    /// for the viewport only).
     pub whole_image: bool,
 }
-
-/// A whole-image preview's limit: full-size (4096 px) tiles, 16 = a
-/// 16384 x 16384 image.
-pub const WHOLE_IMAGE_PREVIEW_MAX_TILES: usize = 16;
 
 #[derive(Debug)]
 pub enum StartPreviewError {
     /// The viewport covers more than `max` tiles (see
     /// [`PreviewRequest::max_visible_tiles`]) - the user has to zoom in
-    /// first. A whole-image preview: the image has more than `max`
-    /// ([`WHOLE_IMAGE_PREVIEW_MAX_TILES`]).
+    /// first. Never for a whole-image preview.
     TooManyTiles {
         tiles: usize,
         max: usize,

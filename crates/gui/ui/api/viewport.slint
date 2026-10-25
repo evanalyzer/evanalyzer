@@ -130,6 +130,19 @@ export global ViewportState {
     in-out property <float> yz_img_h: 0;
     in-out property <bool> yz_ready: false;
     callback ortho_changed(bool);
+
+    // The 3D view of a z-stack (`volume_view` on): the brightest voxel along
+    // each ray (MIP), turned by `volume_yaw` / `volume_pitch` (radians),
+    // zoomed by `volume_zoom` (1: fits).
+    in-out property <bool> volume_view: false;
+    in-out property <float> volume_yaw: 0;
+    in-out property <float> volume_pitch: 0;
+    in-out property <float> volume_zoom: 1;
+    in-out property <image> volume_image;
+    in-out property <bool> volume_ready: false;
+    in-out property <bool> volume_z_known: true;
+    // (on, yaw, pitch, zoom, being turned - a quicker render meanwhile).
+    callback volume_view_changed(bool, float, float, float, bool);
     // The crosshair moved to (x, y), full-resolution image pixels.
     callback ortho_cross_moved(float, float);
 

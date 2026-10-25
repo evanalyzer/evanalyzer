@@ -327,6 +327,12 @@ impl ProjectController {
                 manager.open_file_handler();
             });
 
+            // Open image (one file)
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>().on_open_image_clicked(move || {
+                manager.open_image_handler();
+            });
+
             // Save (saves to existing path, prompts if none)
             let manager = Arc::clone(self);
             ui.global::<ToolbarState>().on_save_file_clicked(move || {
@@ -573,6 +579,33 @@ impl ProjectController {
                 } else {
                     manager.image_list_controller.open_new_image(&path);
                 }
+            });
+        });
+    }
+
+    /// Opens one image file: shown right away, its folder the project's
+    /// images (as when it is opened with "Open…").
+    fn open_image_handler(self: &Arc<Self>) {
+        // The backend's formats - in remote mode the worker's.
+        let image_formats = self.app_state.backend().image_formats();
+        let image_formats: Vec<&str> = image_formats.iter().map(String::as_str).collect();
+        let request = FileRequest::open_file("Open image")
+            .filter("Image files", &image_formats)
+            .start_in(
+                self.app_state
+                    .get_project()
+                    .images
+                    .root
+                    .clone()
+                    .unwrap_or_default(),
+            );
+        let manager = Arc::clone(self);
+        self.app_state.file_browser.open(request, move |path| {
+            let Some(path) = path else {
+                return;
+            };
+            crate::helper::ui_thread::spawn(move || {
+                manager.image_list_controller.open_new_image(&path);
             });
         });
     }
@@ -2000,7 +2033,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_empty_project_leaves_the_start_page_for_pipelines() {
+    fn an_empty_project_leaves_the_start_page_for_images() {
         let w = with_window(ProjectWithRuntime::default());
         w.start.show_start();
         drain_ui_queue();
@@ -2014,7 +2047,7 @@ pub(crate) mod tests {
         assert!(!start.get_active());
         assert_eq!(
             w.ui.global::<crate::LayoutState>().get_mode(),
-            crate::WorkspaceMode::Pipelines
+            crate::WorkspaceMode::Images
         );
     }
 
@@ -2555,6 +2588,31 @@ pub(crate) mod tests {
             Some(PendingAction::Disconnect)
         ));
         assert!(w.ui_state.backend().is_remote());
+    }
+
+    /// The start page's "Open image…" asks for one image file - only image
+    /// files offered; cancelled, nothing changes and the start page stays.
+    #[test]
+    fn open_image_on_the_start_page_asks_for_an_image_file() {
+        use slint::Model;
+        let w = with_window(ProjectWithRuntime::default());
+        w.start.show_start();
+        drain_ui_queue();
+        let start = w.ui.global::<crate::StartState>();
+        start.invoke_open_image();
+        drain_ui_queue();
+        let browser = w.ui.global::<crate::FileBrowserState>();
+        assert!(browser.get_visible(), "a file dialog is open");
+        assert_eq!(browser.get_title(), "Open image");
+        let filters: Vec<String> = browser
+            .get_filter_names()
+            .iter()
+            .map(|f| f.to_string())
+            .collect();
+        assert_eq!(filters, ["Image files"]);
+        browser.invoke_cancel();
+        drain_ui_queue();
+        assert!(start.get_active(), "cancelled: still the start page");
     }
 
     /// Opens a file dialog with `open`, then closes it with "Cancel".

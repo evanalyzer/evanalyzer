@@ -73,6 +73,13 @@ impl StartPageController {
             }
         });
         let ui_weak = self.ui.clone();
+        start.on_open_image(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<crate::ToolbarState>()
+                    .invoke_open_image_clicked();
+            }
+        });
+        let ui_weak = self.ui.clone();
         start.on_open_project(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<crate::ToolbarState>()
@@ -80,8 +87,9 @@ impl StartPageController {
             }
         });
         let ui_weak = self.ui.clone();
+        // Images first, as for any project: where its images come in.
         start.on_empty_project(move || {
-            set_active(&ui_weak, false, Some(crate::WorkspaceMode::Pipelines));
+            set_active(&ui_weak, false, Some(crate::WorkspaceMode::Images));
         });
         let ui_weak = self.ui.clone();
         start.on_from_template(move || {

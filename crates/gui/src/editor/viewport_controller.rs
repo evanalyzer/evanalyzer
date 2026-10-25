@@ -286,6 +286,7 @@ pub struct Tasks {
     pub(crate) high_res_task: Arc<DrawingTaskContainer>,
     pub(crate) object_task: Arc<DrawingTaskContainer>,
     pub(crate) ortho_task: Arc<DrawingTaskContainer>,
+    pub(crate) volume_task: Arc<DrawingTaskContainer>,
 }
 
 pub struct ViewportController {
@@ -344,6 +345,9 @@ pub struct ViewportController {
     /// The orthogonal views: (on, crosshair x, crosshair y) - full-resolution
     /// image pixels (see `viewport_ortho`).
     pub(crate) ortho: Mutex<(bool, f32, f32)>,
+    /// The 3D view: its camera and whether it is being turned - `None` off
+    /// (see `viewport_volume`).
+    pub(crate) volume: Mutex<Option<(crate::editor::viewport_volume::Camera, bool)>>,
 }
 
 /// Posts `t` into the worker's single-slot task queue, merging it with
@@ -389,6 +393,10 @@ impl ViewportController {
                 task_count: Arc::new(AtomicU32::new(0)),
                 task_request: Arc::new((Mutex::new(None), Condvar::new())),
             }),
+            volume_task: Arc::new(DrawingTaskContainer {
+                task_count: Arc::new(AtomicU32::new(0)),
+                task_request: Arc::new((Mutex::new(None), Condvar::new())),
+            }),
         };
 
         Self {
@@ -424,8 +432,70 @@ impl ViewportController {
             viewport_cache,
             results_overlay: RwLock::new(None),
             ortho: Mutex::new((false, 0.0, 0.0)),
+            volume: Mutex::new(None),
             app_state,
         }
+    }
+
+    /// The 3D view now - `None` while it is off.
+    pub(crate) fn volume_view(&self) -> Option<crate::editor::viewport_volume::VolumeView> {
+        let (camera, turning) = (*self.volume.lock().expect("Poisoned"))?;
+        let view = self.viewport_state.read().expect("Poisoned");
+        Some(crate::editor::viewport_volume::VolumeView {
+            camera,
+            width: view.viewport_width,
+            height: view.viewport_height,
+            turning,
+        })
+    }
+
+    /// Switches the 3D view on (with the camera) or off (`None`) - off,
+    /// its worker frees the volume.
+    pub fn set_volume_view(&self, view: Option<(crate::editor::viewport_volume::Camera, bool)>) {
+        let off = view.is_none();
+        *self.volume.lock().expect("Poisoned") = view;
+        if off {
+            let ui_weak = self.ui.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let state = ui.global::<ViewportSlintState>();
+                    state.set_volume_image(slint::Image::default());
+                    state.set_volume_ready(false);
+                }
+            })
+            .ok();
+        }
+        self.trigger_volume();
+    }
+
+    /// Renders the 3D view again (frees it when off).
+    pub(crate) fn trigger_volume(&self) {
+        merge_into_slot(
+            &self.drawing_tasks.volume_task.task_request,
+            DrawingTask::default(),
+        );
+    }
+
+    /// Shows a render of the 3D view.
+    pub(crate) fn post_volume(
+        &self,
+        buffer: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
+        z_known: bool,
+    ) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ViewportSlintState>();
+                // Turned off meanwhile: nothing to show.
+                if !state.get_volume_view() {
+                    return;
+                }
+                state.set_volume_image(slint::Image::from_rgb8(buffer));
+                state.set_volume_z_known(z_known);
+                state.set_volume_ready(true);
+            }
+        })
+        .ok();
     }
 
     /// The orthogonal views: (on, crosshair x, crosshair y).
@@ -464,6 +534,17 @@ impl ViewportController {
             (ortho.1, ortho.2) = (x, y);
         }
         self.trigger_ortho();
+    }
+
+    /// The pixel sizes changed: the orthogonal views and the 3D view draw z
+    /// by them - rendered again, those that are on.
+    pub fn pixel_sizes_changed(&self) {
+        if self.ortho().0 {
+            self.trigger_ortho();
+        }
+        if self.volume.lock().is_ok_and(|v| v.is_some()) {
+            self.trigger_volume();
+        }
     }
 
     /// Renders the orthogonal views again - only while they are on.

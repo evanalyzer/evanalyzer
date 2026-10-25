@@ -48,7 +48,10 @@ export component Viewport inherits Rectangle {
     // Orthogonal views of a z-stack: the XZ view in a band below the image,
     // the YZ view in a band right of it - the image's area gives way. Off
     // (or a single plane), no band: the image has the whole viewport.
-    property <bool> ortho-on: ViewportState.ortho && ImageMetaData.nr_z_stacks > 1 && !root.split-mode;
+    // The 3D view (a z-stack) covers the viewport - the orthogonal views
+    // wait meanwhile.
+    property <bool> volume-on: ViewportState.volume_view && ImageMetaData.nr_z_stacks > 1 && !root.split-mode;
+    property <bool> ortho-on: ViewportState.ortho && ImageMetaData.nr_z_stacks > 1 && !root.split-mode && !root.volume-on;
     property <length> band: root.ortho-on ? clamp(min(root.width - root.inset-left - root.inset-right, root.height - root.inset-bottom) * 0.28, 96px, 320px) : 0px;
     // The bands sit beside the floating panels, not under them: the image's
     // area ends where they start.
@@ -696,6 +699,70 @@ export component Viewport inherits Rectangle {
         }
     }
 
+    // -- The 3D view: over the image; drag to turn, wheel to zoom, double
+    // click to start over --
+    if root.volume-on: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: Ink.viewport;
+        property <length> last-x;
+        property <length> last-y;
+        function changed-view(turning: bool) {
+            ViewportState.volume_view_changed(true, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, turning);
+        }
+        Image {
+            source: ViewportState.volume_image;
+            visible: ViewportState.volume_ready;
+            image-fit: contain;
+            width: parent.width;
+            height: parent.height;
+        }
+        TouchArea {
+            mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    parent.last-x = self.mouse-x;
+                    parent.last-y = self.mouse-y;
+                }
+                if e.kind == PointerEventKind.up {
+                    parent.changed-view(false);
+                    GlobalAppState.reclaim_focus_requested += 1;
+                }
+            }
+            moved => {
+                if self.pressed {
+                    ViewportState.volume_yaw += (self.mouse-x - parent.last-x) / 1px * 0.01;
+                    ViewportState.volume_pitch -= (self.mouse-y - parent.last-y) / 1px * 0.01;
+                    parent.last-x = self.mouse-x;
+                    parent.last-y = self.mouse-y;
+                    parent.changed-view(true);
+                }
+            }
+            scroll-event(e) => {
+                ViewportState.volume_zoom = clamp(ViewportState.volume_zoom * Math.pow(1.0015, e.delta-y / 1px), 0.2, 20);
+                parent.changed-view(false);
+                accept
+            }
+            double-clicked => {
+                ViewportState.volume_yaw = 0;
+                ViewportState.volume_pitch = 0;
+                ViewportState.volume_zoom = 1;
+                parent.changed-view(false);
+            }
+        }
+        // Beside the floating panels.
+        Text {
+            x: root.edge-left;
+            y: root.margin;
+            text: "3D view (brightest voxel) · drag to turn · wheel to zoom · double-click to reset"
+                + (ViewportState.volume_z_known ? "" : " · z spacing unknown: planes as thick as a pixel");
+            font-size: Ink.fs-secondary;
+            color: ViewportState.volume_z_known ? #FFFFFFB0 : Ink.warn;
+        }
+    }
+
     // Z / T, at the bottom left; the navigator keeps its corner.
     // The insets already end a gap away from the panels: the bar and the
     // navigator line up with the panels' edges (and the Tuning dock's);
@@ -710,19 +777,22 @@ export component Viewport inherits Rectangle {
 
     stack-bar := StackBar {
         x: root.edge-left;
-        // With the orthogonal views: above the XZ view, in the image's area.
-        y: root.ortho-on ? root.xy-h - self.height - root.margin : parent.height - self.height - root.margin - root.inset-bottom;
-        room: root.ortho-on ? root.xy-w - root.edge-left - root.margin - (scale-row.visible ? scale-row.width + 12px : 0px)
-            : root.split-mode
+        // Always at the bottom with its whole width - with the orthogonal
+        // views over the XZ view's lower edge: in the image's area above it,
+        // too narrow, it would cut off its own buttons (the views' toggles).
+        y: parent.height - self.height - root.margin - root.inset-bottom;
+        room: root.split-mode
             ? root.width - root.edge-left - root.edge-right - (navigator.visible ? navigator.width + 12px : 0px)
-            : root.width - root.edge-left - root.edge-right-bottom - (scale-row.visible ? scale-row.width + 12px : 0px);
+            // The scale bar is in the image's area then, not on this line.
+            : root.width - root.edge-left - root.edge-right-bottom - (scale-row.visible && !root.ortho-on ? scale-row.width + 12px : 0px);
     }
 
     // Above the image's touch area: clicks in it move the view. Top right,
     // on the right panels' edge (the results' split pane: bottom right, its
     // image panel is at the top).
     navigator := Navigator {
-        mode: LayoutState.navigator-mode;
+        // Hidden (2) in the 3D view: nothing of the image to navigate.
+        mode: root.volume-on ? 2 : LayoutState.navigator-mode;
         x: root.ortho-on ? root.xy-w - self.width - root.margin : parent.width - self.width - root.edge-right;
         y: root.split-mode ? parent.height - self.height - root.margin - root.inset-bottom : root.margin;
         viewport-width: root.xy-w;
@@ -743,7 +813,8 @@ export component Viewport inherits Rectangle {
             : parent.height - self.height - root.margin - root.inset-bottom
             - (root.split-mode && self.nav ? navigator.height + 8px : 0px);
         alignment: end;
-        visible: ImageMetaData.image_name != "" && ViewportState.scale_bar_width > 0;
+        // Not in the 3D view: turned and zoomed, it has no one scale.
+        visible: ImageMetaData.image_name != "" && ViewportState.scale_bar_width > 0 && !root.volume-on;
         accessible-role: text;
         accessible-label: "Scale bar " + ViewportState.scale_bar_text;
         VerticalLayout {

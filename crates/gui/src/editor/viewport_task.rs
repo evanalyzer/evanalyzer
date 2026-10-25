@@ -15,6 +15,8 @@ pub enum TaskDispatch {
     Objects,
     /// The orthogonal views (see `viewport_ortho`).
     Ortho,
+    /// The 3D view (see `viewport_volume`).
+    Volume,
 }
 
 #[derive(Debug, Clone)]

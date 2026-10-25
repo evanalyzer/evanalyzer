@@ -245,7 +245,6 @@ pub mod preview {
     pub use crate::api::PreviewRequest;
     pub use crate::api::PreviewViewport;
     pub use crate::api::StartPreviewError;
-    pub use crate::api::WHOLE_IMAGE_PREVIEW_MAX_TILES;
 }
 
 pub mod images {

@@ -245,6 +245,17 @@ impl ViewportImageController {
                 },
             );
 
+            // The 3D view on/off, turned or zoomed
+            let manager = Arc::clone(self);
+            ui.global::<ViewportSlintState>().on_volume_view_changed(
+                move |on, yaw, pitch, zoom, turning| {
+                    let camera = crate::editor::viewport_volume::Camera { yaw, pitch, zoom };
+                    manager
+                        .viewport_controller
+                        .set_volume_view(on.then_some((camera, turning)));
+                },
+            );
+
             // The orthogonal views on/off, their crosshair moved
             let manager = Arc::clone(self);
             ui.global::<ViewportSlintState>()
@@ -1482,6 +1493,40 @@ mod tests {
         assert_eq!(vp.zoom, 2.0);
         assert_eq!((vp.offset_x, vp.offset_y), (-3.0, 4.0));
         assert_eq!((vp.mouse_pos_x, vp.mouse_pos_y), (11.0, 12.0));
+    }
+
+    /// The Z bar keeps its buttons with the orthogonal views on (it once
+    /// moved into the image's narrower area and cut them off - the views
+    /// couldn't be switched off again): both toggles inside the bar.
+    #[test]
+    fn the_z_bar_keeps_its_buttons_with_the_orthogonal_views_on() {
+        use crate::ImageMetaData;
+        use i_slint_backend_testing::ElementHandle;
+
+        let (ui, _, _controller) = attached();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        let meta = ui.global::<ImageMetaData>();
+        meta.set_image_name("stack.tif".into());
+        meta.set_nr_z_stacks(57);
+        // A wide scale bar takes the room the side panels take in the app:
+        // in the image's area the bar was then too narrow for its buttons.
+        ui.global::<ViewportSlintState>().set_scale_bar_width(600.0);
+        ui.global::<ViewportSlintState>().set_ortho(true);
+
+        let bar = ElementHandle::find_by_accessible_label(&ui, "Objects, Z and T")
+            .next()
+            .expect("the Z bar");
+        let (bar_at, bar_size) = (bar.absolute_position(), bar.size());
+        for label in ["Orthogonal views", "3D view"] {
+            let button = ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}: cut off"));
+            let (at, size) = (button.absolute_position(), button.size());
+            assert!(
+                at.x >= bar_at.x && at.x + size.width <= bar_at.x + bar_size.width,
+                "{label} at {at:?} {size:?} outside the bar {bar_at:?} {bar_size:?}"
+            );
+        }
     }
 
     /// A click in the navigator moves the view there - centered on the
