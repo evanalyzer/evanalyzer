@@ -1,7 +1,7 @@
 // Copyright 2026 Joachim Danmayr.
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
-import { GlobalAppState, HistogramState } from "../api/state.slint";
+import { ChannelState, GlobalAppState, HistogramState } from "../api/state.slint";
 import { MarkerData, ToolState, ViewportObjectState, ViewportState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
 import { Ink } from "../ink/palette.slint";
@@ -12,7 +12,7 @@ import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ResultsState } from "../api/results.slint";
 
 import { Navigator } from "viewport_navigator.slint";
-import { StackBar } from "viewport_stack_bar.slint";
+import { StackBar, StackSteps } from "viewport_stack_bar.slint";
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
@@ -44,6 +44,28 @@ export component Viewport inherits Rectangle {
 
     background: Ink.viewport;
     clip: true;
+
+    // Orthogonal views of a z-stack: the XZ view in a band below the image,
+    // the YZ view in a band right of it - the image's area gives way. Off
+    // (or a single plane), no band: the image has the whole viewport.
+    property <bool> ortho-on: ViewportState.ortho && ImageMetaData.nr_z_stacks > 1 && !root.split-mode;
+    property <length> band: root.ortho-on ? clamp(min(root.width - root.inset-left - root.inset-right, root.height - root.inset-bottom) * 0.28, 96px, 320px) : 0px;
+    // The bands sit beside the floating panels, not under them: the image's
+    // area ends where they start.
+    property <length> xy-w: root.ortho-on ? root.width - root.inset-right - root.band : root.width;
+    property <length> xy-h: root.ortho-on ? root.height - root.inset-bottom - root.band : root.height;
+    // A plane in the views: as tall as the image's pixels are wide, times
+    // the z spacing over the pixel size - the stack in its true proportions.
+    property <length> plane-px: ViewportState.ortho_aniso * ViewportState.zoom_factor * 1px;
+    property <length> stack-px: ViewportState.ortho_depth * root.plane-px;
+    // A stack thicker than its band: the band shows the planes around the
+    // current one.
+    property <length> z-off: root.stack-px <= root.band ? 0px
+        : clamp(root.band / 2 - (ChannelState.selected_z_stack + 0.5) * root.plane-px, root.band - root.stack-px, 0px);
+    // The plane at `pos` (along a view's z axis).
+    pure function plane-at(pos: length) -> int {
+        clamp(floor((pos - root.z-off) / root.plane-px), 0, ViewportState.ortho_depth - 1)
+    }
 
     // Image pixel coordinates -> viewport coordinates, with the live
     // zoom/offset (see `ViewportState.ghost_img_x`).
@@ -107,6 +129,11 @@ export component Viewport inherits Rectangle {
     }
 
     i_container := Rectangle {
+        x: 0;
+        y: 0;
+        width: root.xy-w;
+        height: root.xy-h;
+        clip: root.ortho-on;
 
         // Layer 1: The Blurry Overview (always fills the container)
         Image {
@@ -177,6 +204,20 @@ export component Viewport inherits Rectangle {
             y: root.screen_y(ViewportState.obj_img_y);
             width: root.screen_len(ViewportState.obj_img_w);
             height: root.screen_len(ViewportState.obj_img_h);
+        }
+
+        // The orthogonal views' crosshair.
+        if root.ortho-on: Rectangle {
+            x: root.screen_x(ViewportState.ortho_x);
+            width: 1px;
+            height: parent.height;
+            background: #FFEE00B0;
+        }
+        if root.ortho-on: Rectangle {
+            y: root.screen_y(ViewportState.ortho_y);
+            width: parent.width;
+            height: 1px;
+            background: #FFEE00B0;
         }
 
         // Layer 4: Markers
@@ -353,17 +394,20 @@ export component Viewport inherits Rectangle {
 
     }
 
-    changed width => {
-        ViewportState.report_viewport_size(root.width / 1px, root.height / 1px);
+    // The image's area - all of the viewport without the orthogonal views.
+    changed xy-w => {
+        ViewportState.report_viewport_size(root.xy-w / 1px, root.xy-h / 1px);
     }
-    changed height => {
-        ViewportState.report_viewport_size(root.width / 1px, root.height / 1px);
+    changed xy-h => {
+        ViewportState.report_viewport_size(root.xy-w / 1px, root.xy-h / 1px);
     }
 
     paint-area := TouchArea {
         enabled: root.enabled;
-        width: 100%;
-        height: 100%;
+        x: 0;
+        y: 0;
+        width: root.xy-w;
+        height: root.xy-h;
         mouse-cursor: root.brush-tool ? MouseCursor.crosshair : MouseCursor.default;
         pointer-event(evt) => {
             if (evt.kind == PointerEventKind.down) {
@@ -451,6 +495,11 @@ export component Viewport inherits Rectangle {
                     ViewportState.report_mouse_moved(self.mouse-x, self.mouse-y);
                 }
             }
+            // The orthogonal views: a click (no drag) with the Move tool
+            // puts the crosshair there.
+            if root.ortho-on && evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left && ViewportObjectState.act_tool_state == ToolState.Move && abs(self.mouse-x - root.press-x) < 4px && abs(self.mouse-y - root.press-y) < 4px {
+                ViewportState.ortho_cross_moved((self.mouse-x - ViewportState.offset_x) / ViewportState.zoom_factor / 1px, (self.mouse-y - ViewportState.offset_y) / ViewportState.zoom_factor / 1px);
+            }
             if (evt.kind == PointerEventKind.up) {
                 if root.brush-tool && ViewportObjectState.is_drawing {
                     ViewportObjectState.brush-stroke(self.mouse-x, self.mouse-y, 2);
@@ -507,6 +556,146 @@ export component Viewport inherits Rectangle {
         }
     }
 
+    // -- The orthogonal views: XZ below the image, YZ right of it --
+    // x (XZ) and y (YZ) as in the image, live with its pan/zoom; z the
+    // planes, the current one marked; a click or drag moves the crosshair
+    // and the plane.
+    if root.ortho-on: Rectangle {
+        x: 0;
+        y: root.xy-h;
+        width: root.xy-w;
+        height: root.band;
+        clip: true;
+        background: Ink.viewport;
+        Image {
+            source: ViewportState.xz_image;
+            visible: ViewportState.xz_ready;
+            image-fit: fill;
+            image-rendering: pixelated;
+            x: root.screen_x(ViewportState.xz_img_x);
+            y: root.z-off;
+            width: root.screen_len(ViewportState.xz_img_w);
+            height: root.stack-px;
+        }
+        Rectangle {
+            x: root.screen_x(ViewportState.ortho_x);
+            width: 1px;
+            height: parent.height;
+            background: #FFEE00B0;
+        }
+        Rectangle {
+            y: root.z-off + (ChannelState.selected_z_stack + 0.5) * root.plane-px;
+            width: parent.width;
+            height: 1px;
+            background: #FFEE00B0;
+        }
+        // The edge to the image.
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 1px;
+            background: Ink.border;
+        }
+        TouchArea {
+            mouse-cursor: MouseCursor.crosshair;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                    ViewportState.ortho_cross_moved((self.mouse-x - ViewportState.offset_x) / ViewportState.zoom_factor / 1px, ViewportState.ortho_y);
+                    StackSteps.set-z(root.plane-at(self.mouse-y));
+                }
+            }
+            moved => {
+                if self.pressed {
+                    ViewportState.ortho_cross_moved((self.mouse-x - ViewportState.offset_x) / ViewportState.zoom_factor / 1px, ViewportState.ortho_y);
+                    StackSteps.set-z(root.plane-at(self.mouse-y));
+                }
+            }
+        }
+    }
+    if root.ortho-on: Rectangle {
+        x: root.xy-w;
+        y: 0;
+        width: root.band;
+        height: root.xy-h;
+        clip: true;
+        background: Ink.viewport;
+        Image {
+            source: ViewportState.yz_image;
+            visible: ViewportState.yz_ready;
+            image-fit: fill;
+            image-rendering: pixelated;
+            x: root.z-off;
+            y: root.screen_y(ViewportState.yz_img_y);
+            width: root.stack-px;
+            height: root.screen_len(ViewportState.yz_img_h);
+        }
+        Rectangle {
+            x: root.z-off + (ChannelState.selected_z_stack + 0.5) * root.plane-px;
+            width: 1px;
+            height: parent.height;
+            background: #FFEE00B0;
+        }
+        Rectangle {
+            y: root.screen_y(ViewportState.ortho_y);
+            width: parent.width;
+            height: 1px;
+            background: #FFEE00B0;
+        }
+        // The edge to the image.
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: 1px;
+            height: parent.height;
+            background: Ink.border;
+        }
+        TouchArea {
+            mouse-cursor: MouseCursor.crosshair;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                    ViewportState.ortho_cross_moved(ViewportState.ortho_x, (self.mouse-y - ViewportState.offset_y) / ViewportState.zoom_factor / 1px);
+                    StackSteps.set-z(root.plane-at(self.mouse-x));
+                }
+            }
+            moved => {
+                if self.pressed {
+                    ViewportState.ortho_cross_moved(ViewportState.ortho_x, (self.mouse-y - ViewportState.offset_y) / ViewportState.zoom_factor / 1px);
+                    StackSteps.set-z(root.plane-at(self.mouse-x));
+                }
+            }
+        }
+    }
+    // The corner between them: what the views show.
+    if root.ortho-on: Rectangle {
+        x: root.xy-w;
+        y: root.xy-h;
+        width: root.band;
+        height: root.band;
+        background: Ink.viewport;
+        border-width: 1px;
+        border-color: Ink.border;
+        VerticalLayout {
+            padding: 8px;
+            spacing: 4px;
+            alignment: center;
+            Text {
+                text: "XZ below · YZ right";
+                font-size: Ink.fs-secondary;
+                color: Ink.text-mute;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            Text {
+                text: ViewportState.ortho_z_known ? "z spacing × \{round(ViewportState.ortho_aniso * 100) / 100}" : "z spacing unknown - planes drawn as square pixels; set it in the image settings";
+                font-size: Ink.fs-caption;
+                color: ViewportState.ortho_z_known ? Ink.text-mute : Ink.warn;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
     // Z / T, at the bottom left; the navigator keeps its corner.
     // The insets already end a gap away from the panels: the bar and the
     // navigator line up with the panels' edges (and the Tuning dock's);
@@ -521,8 +710,10 @@ export component Viewport inherits Rectangle {
 
     stack-bar := StackBar {
         x: root.edge-left;
-        y: parent.height - self.height - root.margin - root.inset-bottom;
-        room: root.split-mode
+        // With the orthogonal views: above the XZ view, in the image's area.
+        y: root.ortho-on ? root.xy-h - self.height - root.margin : parent.height - self.height - root.margin - root.inset-bottom;
+        room: root.ortho-on ? root.xy-w - root.edge-left - root.margin - (scale-row.visible ? scale-row.width + 12px : 0px)
+            : root.split-mode
             ? root.width - root.edge-left - root.edge-right - (navigator.visible ? navigator.width + 12px : 0px)
             : root.width - root.edge-left - root.edge-right-bottom - (scale-row.visible ? scale-row.width + 12px : 0px);
     }
@@ -532,10 +723,10 @@ export component Viewport inherits Rectangle {
     // image panel is at the top).
     navigator := Navigator {
         mode: LayoutState.navigator-mode;
-        x: parent.width - self.width - root.edge-right;
+        x: root.ortho-on ? root.xy-w - self.width - root.margin : parent.width - self.width - root.edge-right;
         y: root.split-mode ? parent.height - self.height - root.margin - root.inset-bottom : root.margin;
-        viewport-width: root.width;
-        viewport-height: root.height;
+        viewport-width: root.xy-w;
+        viewport-height: root.xy-h;
     }
 
     // The scale bar: bottom right, on the Z / T bar's line - beside the
@@ -546,8 +737,10 @@ export component Viewport inherits Rectangle {
         property <bool> nav: navigator.visible;
         width: max(150px, ViewportState.scale_bar_width);
         height: 34px;
-        x: parent.width - self.width - (root.split-mode ? root.edge-right : root.edge-right-bottom);
-        y: parent.height - self.height - root.margin - root.inset-bottom
+        x: root.ortho-on ? root.xy-w - self.width - root.margin
+            : parent.width - self.width - (root.split-mode ? root.edge-right : root.edge-right-bottom);
+        y: root.ortho-on ? root.xy-h - self.height - root.margin
+            : parent.height - self.height - root.margin - root.inset-bottom
             - (root.split-mode && self.nav ? navigator.height + 8px : 0px);
         alignment: end;
         visible: ImageMetaData.image_name != "" && ViewportState.scale_bar_width > 0;

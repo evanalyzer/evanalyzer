@@ -19,6 +19,7 @@ use crate::{
 };
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::project::ProjectExt;
+use evanalyzer_cfg::core_types::ImageDimensionality;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
@@ -243,6 +244,16 @@ impl ViewportImageController {
                         .ok();
                 },
             );
+
+            // The orthogonal views on/off, their crosshair moved
+            let manager = Arc::clone(self);
+            ui.global::<ViewportSlintState>()
+                .on_ortho_changed(move |on| manager.viewport_controller.set_ortho(on));
+            let manager = Arc::clone(self);
+            ui.global::<ViewportSlintState>()
+                .on_ortho_cross_moved(move |x, y| {
+                    manager.viewport_controller.set_ortho_cross(x, y)
+                });
 
             // Viewport mouse moved
             let manager = Arc::clone(self);
@@ -691,6 +702,8 @@ impl ViewportImageController {
             IntensityProjection::Volume => (Some(z_stack..=z_stack), ZStackHandling::Volume3d),
         };
 
+        let plane_before = project.get_shown_z_plane();
+
         // Between planes (2D) and volumes (3D) the size settings change
         // meaning (an area, a volume): the ones set need a look.
         let was_volume = project
@@ -728,10 +741,22 @@ impl ViewportImageController {
             stack_handling: TStackHandling::AllStacks,
             frame_interval,
         });
+        // A volume's objects are drawn as their part on the plane shown:
+        // another plane, other parts (a plane's objects stay as they are).
+        let redraw_objects = project.get_shown_z_plane() != plane_before
+            && project
+                .get_objects()
+                .into_iter()
+                .flatten()
+                .chain(project.get_preview_objects())
+                .any(|o| o.dimensionality != ImageDimensionality::Planar);
         drop(project);
 
         self.viewport_controller
             .trigger_redraw_low_res_and_high_res();
+        if redraw_objects {
+            self.viewport_controller.trigger_image_redraw_objects();
+        }
         // E.g. the results' split view: its objects of this plane. A
         // projection (Max, …) shows no one slice: its hidden Z slider says
         // nothing.

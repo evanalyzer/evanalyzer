@@ -13,6 +13,8 @@ pub enum TaskDispatch {
     LowRes,
     HighResAndLowRes,
     Objects,
+    /// The orthogonal views (see `viewport_ortho`).
+    Ortho,
 }
 
 #[derive(Debug, Clone)]

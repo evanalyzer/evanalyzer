@@ -5,11 +5,30 @@
 // actions, the image shown, the project's name, preview and Run.
 
 import { ViewportObjectState } from "../api/viewport.slint";
-import { Ink, InkScheme, InkIcons, InkSegmented, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkSearchField } from "../ink/ink.slint";
+import {
+    Ink,
+    InkScheme,
+    InkIcons,
+    InkSegmented,
+    InkButton,
+    InkButtonKind,
+    InkIconButton,
+    InkBarSeparator,
+    InkMenuFrame,
+    InkMenuItem,
+    InkMenuCaption,
+    InkMenuSeparator,
+    InkSearchField,
+} from "../ink/ink.slint";
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ToolbarState } from "../api/toolbar.slint";
-import { GlobalAppState, DialogType, ConnectionState, ChannelState } from "../api/state.slint";
+import {
+    GlobalAppState,
+    DialogType,
+    ConnectionState,
+    ChannelState,
+} from "../api/state.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ImagesListState, ImageItemData } from "../api/images_list.slint";
@@ -67,6 +86,7 @@ component EvaButton inherits Rectangle {
                 color: Ink.text;
                 vertical-alignment: center;
             }
+
             Image {
                 source: InkIcons.caret-down;
                 width: 9px;
@@ -120,6 +140,7 @@ component QuickImageRow inherits Rectangle {
             width: 13px;
             colorize: root.current ? Ink.text : Ink.text-mute;
         }
+
         Text {
             text: root.item.path;
             font-size: Ink.fs-body;
@@ -130,6 +151,7 @@ component QuickImageRow inherits Rectangle {
             horizontal-stretch: 1;
             overflow: elide;
         }
+
         Text {
             text: root.item.image-dimension;
             font-size: Ink.fs-caption;
@@ -223,6 +245,7 @@ component QuickImagePicker inherits Rectangle {
                 }
             }
         }
+
         if ImagesListState.quick-images.length == 0: Text {
             height: root.row-h;
             text: "No image matches";
@@ -246,6 +269,7 @@ component QuickImagePicker inherits Rectangle {
                 }
             }
         }
+
         if ImagesListState.quick-matches > ImagesListState.quick-images.length: Text {
             text: "\{ImagesListState.quick-images.length} of \{ImagesListState.quick-matches} - type to narrow down";
             font-size: Ink.fs-caption;
@@ -256,6 +280,7 @@ component QuickImagePicker inherits Rectangle {
             height: 1px;
             background: Ink.border;
         }
+
         InkMenuItem {
             icon: InkIcons.images;
             text: "Show all images";
@@ -303,6 +328,7 @@ component ImageChip inherits Rectangle {
                         width: 13px;
                         colorize: Ink.text-mute;
                     }
+
                     Text {
                         max-width: 240px;
                         text: ImageMetaData.image_name;
@@ -313,6 +339,7 @@ component ImageChip inherits Rectangle {
                         overflow: elide;
                     }
                 }
+
                 name-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
@@ -320,6 +347,7 @@ component ImageChip inherits Rectangle {
                     }
                 }
             }
+
             if root.has-series: Rectangle {
                 width: 1px;
                 background: Ink.border;
@@ -339,6 +367,7 @@ component ImageChip inherits Rectangle {
                         color: Ink.text;
                         vertical-alignment: center;
                     }
+
                     Image {
                         y: (parent.height - self.height) / 2;
                         source: InkIcons.caret-down;
@@ -346,6 +375,7 @@ component ImageChip inherits Rectangle {
                         colorize: Ink.text-dim;
                     }
                 }
+
                 series-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
@@ -377,6 +407,7 @@ component ImageChip inherits Rectangle {
             InkMenuCaption {
                 text: "SERIES · FOR EVERY IMAGE";
             }
+
             for s[i] in ImageMetaData.series_list: InkMenuItem {
                 text: s.width > 0 && s.height > 0 ? "Series \{s.idx + 1} · \{s.width} × \{s.height}" : "Series \{s.idx + 1}";
                 checked: ChannelState.selected_series == s.idx;
@@ -422,6 +453,7 @@ component AutoPreviewToggle inherits Rectangle {
                     background: root.on ? Ink.ok : Ink.text-faint;
                 }
             }
+
             Text {
                 text: "Auto preview";
                 font-size: Ink.fs-body;
@@ -448,7 +480,7 @@ export global RunText {
         (PipelineRunningState.images-total > 1 ? PipelineRunningState.images-done + " / " + PipelineRunningState.images-total
             : PipelineRunningState.tiles-total > 0 ? "tile " + PipelineRunningState.tiles-done + " / " + PipelineRunningState.tiles-total
             : "starting")
-        + (PipelineRunningState.eta != "" ? " · " + PipelineRunningState.eta : "")
+            + (PipelineRunningState.eta != "" ? " · " + PipelineRunningState.eta : "")
     }
     pure public function fraction() -> float {
         PipelineRunningState.images-total > 1 ? PipelineRunningState.images-done / PipelineRunningState.images-total
@@ -483,6 +515,7 @@ component RunStatus inherits Rectangle {
                 drop-shadow-color: Ink.focus.with-alpha(0.5);
             }
         }
+
         Text {
             text: "Analyzing";
             font-size: Ink.fs-body;
@@ -490,6 +523,7 @@ component RunStatus inherits Rectangle {
             color: Ink.focus;
             vertical-alignment: center;
         }
+
         VerticalLayout {
             alignment: center;
             Rectangle {
@@ -506,6 +540,7 @@ component RunStatus inherits Rectangle {
                 }
             }
         }
+
         Text {
             text: RunText.count();
             font-family: Ink.font-mono;
@@ -513,6 +548,7 @@ component RunStatus inherits Rectangle {
             color: Ink.focus;
             vertical-alignment: center;
         }
+
         VerticalLayout {
             alignment: center;
             Rectangle {
@@ -533,6 +569,7 @@ component RunStatus inherits Rectangle {
                     font-weight: 600;
                     color: Ink.err;
                 }
+
                 stop-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
@@ -593,6 +630,7 @@ export component TopBar inherits Rectangle {
                         ToolbarState.undo_clicked();
                     }
                 }
+
                 InkIconButton {
                     size: 30px;
                     icon: InkIcons.redo;
@@ -604,6 +642,7 @@ export component TopBar inherits Rectangle {
                         ToolbarState.redo_clicked();
                     }
                 }
+
                 Rectangle {
                     width: 30px;
                     height: 30px;
@@ -627,6 +666,7 @@ export component TopBar inherits Rectangle {
                         background: Ink.warn;
                     }
                 }
+
                 if root.editing: InkIconButton {
                     size: 30px;
                     icon: InkIcons.refresh;
@@ -639,6 +679,7 @@ export component TopBar inherits Rectangle {
                 if root.editing: InkIconButton {
                     size: 30px;
                     icon: InkIcons.preview-whole;
+                    tint: Ink.info;
                     label: "Preview the whole image";
                     keys: ["Shift", "F5"];
                     clicked => {
@@ -713,6 +754,7 @@ export component TopBar inherits Rectangle {
                         AiLearningState.open_requested();
                     }
                 }
+
                 if !root.running: AutoPreviewToggle { }
                 if !root.running: InkButton {
                     text: "Run";
@@ -821,7 +863,10 @@ export component TopBar inherits Rectangle {
                 open-y: root.absolute-position.y + Ink.bar-h - 2px;
                 menu-width: 290px;
 
-                InkMenuCaption { text: "PROJECT"; }
+                InkMenuCaption {
+                    text: "PROJECT";
+                }
+
                 EvaMenuItem {
                     icon: InkIcons.add;
                     text: "New";
@@ -829,6 +874,7 @@ export component TopBar inherits Rectangle {
                         ToolbarState.new_file_clicked();
                     }
                 }
+
                 EvaMenuItem {
                     icon: InkIcons.open;
                     text: "Open…";
@@ -837,12 +883,14 @@ export component TopBar inherits Rectangle {
                         ToolbarState.open_file_clicked();
                     }
                 }
+
                 recent-item := EvaMenuItem {
                     icon: InkIcons.project;
                     text: "Open recent";
                     opens: 1;
                     enabled: StartState.recent.length > 0;
                 }
+
                 EvaMenuItem {
                     icon: InkIcons.copy;
                     text: "New from template…";
@@ -861,6 +909,7 @@ export component TopBar inherits Rectangle {
                 }
 
                 InkMenuSeparator { }
+
                 EvaMenuItem {
                     icon: InkIcons.save;
                     text: "Save";
@@ -869,12 +918,14 @@ export component TopBar inherits Rectangle {
                         ToolbarState.save_file_clicked();
                     }
                 }
+
                 EvaMenuItem {
                     text: "Save as…";
                     clicked => {
                         ToolbarState.save_as_file_clicked();
                     }
                 }
+
                 EvaMenuItem {
                     text: "Save as template…";
                     clicked => {
@@ -883,6 +934,7 @@ export component TopBar inherits Rectangle {
                 }
 
                 InkMenuSeparator { }
+
                 EvaMenuItem {
                     icon: InkIcons.settings;
                     text: "Project settings…";
@@ -890,6 +942,7 @@ export component TopBar inherits Rectangle {
                         GlobalAppState.active-dialog = DialogType.project-settings;
                     }
                 }
+
                 EvaMenuItem {
                     icon: InkIcons.link;
                     text: "Cite project";
@@ -899,6 +952,7 @@ export component TopBar inherits Rectangle {
                 }
 
                 InkMenuSeparator { }
+
                 view-item := EvaMenuItem {
                     icon: InkIcons.panels-hide;
                     text: "View";
@@ -906,7 +960,11 @@ export component TopBar inherits Rectangle {
                 }
 
                 InkMenuSeparator { }
-                InkMenuCaption { text: "TOOLS"; }
+
+                InkMenuCaption {
+                    text: "TOOLS";
+                }
+
                 EvaMenuItem {
                     icon: InkIcons.ai;
                     text: "AI training…";
@@ -914,6 +972,7 @@ export component TopBar inherits Rectangle {
                         AiLearningState.open_requested();
                     }
                 }
+
                 EvaMenuItem {
                     icon: InkIcons.debug;
                     text: "Debug mode";
@@ -922,6 +981,7 @@ export component TopBar inherits Rectangle {
                         PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
                     }
                 }
+
                 EvaMenuItem {
                     icon: InkIcons.server;
                     text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
@@ -939,11 +999,13 @@ export component TopBar inherits Rectangle {
                 }
 
                 InkMenuSeparator { }
+
                 help-item := EvaMenuItem {
                     icon: InkIcons.help;
                     text: "Help";
                     opens: 3;
                 }
+
                 EvaMenuItem {
                     icon: InkIcons.info;
                     text: "About";
@@ -972,6 +1034,7 @@ export component TopBar inherits Rectangle {
                     }
                 }
                 InkMenuSeparator { }
+
                 InkMenuItem {
                     text: "Clear the list";
                     clicked => {
@@ -998,6 +1061,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-changed();
                     }
                 }
+
                 InkMenuItem {
                     text: "Classes";
                     checked: LayoutState.classes-open;
@@ -1008,6 +1072,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-changed();
                     }
                 }
+
                 InkMenuItem {
                     text: "Image";
                     checked: LayoutState.image-open;
@@ -1018,6 +1083,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-changed();
                     }
                 }
+
                 InkMenuItem {
                     text: "Objects";
                     checked: LayoutState.objects-open;
@@ -1028,6 +1094,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-changed();
                     }
                 }
+
                 InkMenuItem {
                     text: "Measurements";
                     checked: LayoutState.measurements-open;
@@ -1038,6 +1105,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-changed();
                     }
                 }
+
                 InkMenuItem {
                     icon: LayoutState.panels-hidden ? InkIcons.panels-show : InkIcons.panels-hide;
                     text: LayoutState.panels-hidden ? "Show the panels" : "Hide all panels";
@@ -1046,6 +1114,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-hidden = !LayoutState.panels-hidden;
                     }
                 }
+
                 InkMenuItem {
                     text: "Step values on a second line";
                     checked: LayoutState.step-values-below;
@@ -1054,6 +1123,7 @@ export component TopBar inherits Rectangle {
                         LayoutState.panels-changed();
                     }
                 }
+
                 InkMenuSeparator { }
                 // The navigator: by itself (only zoomed in), always, never.
                 HorizontalLayout {
@@ -1069,6 +1139,7 @@ export component TopBar inherits Rectangle {
                         color: Ink.text;
                         vertical-alignment: center;
                     }
+
                     InkSegmented {
                         horizontal-stretch: 1;
                         label: "Navigator";
@@ -1094,6 +1165,7 @@ export component TopBar inherits Rectangle {
                         color: Ink.text;
                         vertical-alignment: center;
                     }
+
                     InkSegmented {
                         horizontal-stretch: 1;
                         label: "Colors";
@@ -1122,6 +1194,7 @@ export component TopBar inherits Rectangle {
                         GlobalAppState.active-dialog = DialogType.shortcuts-help;
                     }
                 }
+
                 InkMenuItem {
                     icon: InkIcons.help;
                     text: "evanalyzer.org";
@@ -1133,5 +1206,4 @@ export component TopBar inherits Rectangle {
             }
         }
     }
-
 }

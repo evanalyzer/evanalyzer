@@ -19,7 +19,7 @@ use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
 use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, RetainedTile, UiState};
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageContainer;
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::{ObjectExt, ProjectExt};
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use slint::{Color, ComponentHandle, Model, VecModel};
@@ -285,6 +285,7 @@ pub struct Tasks {
     pub(crate) low_res_task: Arc<DrawingTaskContainer>,
     pub(crate) high_res_task: Arc<DrawingTaskContainer>,
     pub(crate) object_task: Arc<DrawingTaskContainer>,
+    pub(crate) ortho_task: Arc<DrawingTaskContainer>,
 }
 
 pub struct ViewportController {
@@ -340,6 +341,9 @@ pub struct ViewportController {
     /// The results' split view: the analysis' objects, drawn instead of
     /// the project's (see [`ResultsOverlay`]).
     pub(crate) results_overlay: RwLock<Option<Arc<ResultsOverlay>>>,
+    /// The orthogonal views: (on, crosshair x, crosshair y) - full-resolution
+    /// image pixels (see `viewport_ortho`).
+    pub(crate) ortho: Mutex<(bool, f32, f32)>,
 }
 
 /// Posts `t` into the worker's single-slot task queue, merging it with
@@ -381,6 +385,10 @@ impl ViewportController {
                 task_count: Arc::new(AtomicU32::new(0)),
                 task_request: Arc::new((Mutex::new(None), Condvar::new())),
             }),
+            ortho_task: Arc::new(DrawingTaskContainer {
+                task_count: Arc::new(AtomicU32::new(0)),
+                task_request: Arc::new((Mutex::new(None), Condvar::new())),
+            }),
         };
 
         Self {
@@ -415,8 +423,106 @@ impl ViewportController {
             full_image_size: Mutex::new((0, 0)),
             viewport_cache,
             results_overlay: RwLock::new(None),
+            ortho: Mutex::new((false, 0.0, 0.0)),
             app_state,
         }
+    }
+
+    /// The orthogonal views: (on, crosshair x, crosshair y).
+    pub(crate) fn ortho(&self) -> (bool, f32, f32) {
+        *self.ortho.lock().expect("Poisoned")
+    }
+
+    /// Switches the orthogonal views on or off - off, their worker frees
+    /// what it keeps. A new crosshair starts at the image's centre.
+    pub fn set_ortho(&self, on: bool) {
+        {
+            let mut ortho = self.ortho.lock().expect("Poisoned");
+            if ortho.0 == on {
+                return;
+            }
+            if on {
+                let (w, h) = *self.full_image_size.lock().expect("Poisoned");
+                *ortho = (true, w as f32 / 2.0, h as f32 / 2.0);
+            } else {
+                ortho.0 = false;
+            }
+        }
+        if !on {
+            self.post_ortho_off();
+        }
+        self.trigger_ortho();
+    }
+
+    /// Moves the crosshair to (`x`, `y`) (full-resolution image pixels).
+    pub fn set_ortho_cross(&self, x: f32, y: f32) {
+        {
+            let mut ortho = self.ortho.lock().expect("Poisoned");
+            if !ortho.0 || (ortho.1, ortho.2) == (x, y) {
+                return;
+            }
+            (ortho.1, ortho.2) = (x, y);
+        }
+        self.trigger_ortho();
+    }
+
+    /// Renders the orthogonal views again - only while they are on.
+    pub(crate) fn trigger_ortho(&self) {
+        merge_into_slot(
+            &self.drawing_tasks.ortho_task.task_request,
+            DrawingTask::default(),
+        );
+    }
+
+    /// Shows a render of the orthogonal views and the crosshair it is for.
+    pub(crate) fn post_ortho(&self, frame: crate::editor::viewport_ortho::OrthoFrame) {
+        let (_, x, y) = self.ortho();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ViewportSlintState>();
+            state.set_ortho_x(x);
+            state.set_ortho_y(y);
+            state.set_ortho_depth(frame.depth);
+            state.set_ortho_aniso(frame.aniso);
+            state.set_ortho_z_known(frame.z_known);
+            match frame.xz {
+                Some((buffer, at, len)) => {
+                    state.set_xz_image(slint::Image::from_rgb8(buffer));
+                    state.set_xz_img_x(at);
+                    state.set_xz_img_w(len);
+                    state.set_xz_ready(true);
+                }
+                None => state.set_xz_ready(false),
+            }
+            match frame.yz {
+                Some((buffer, at, len)) => {
+                    state.set_yz_image(slint::Image::from_rgb8(buffer));
+                    state.set_yz_img_y(at);
+                    state.set_yz_img_h(len);
+                    state.set_yz_ready(true);
+                }
+                None => state.set_yz_ready(false),
+            }
+        })
+        .ok();
+    }
+
+    /// The views off: their images freed.
+    fn post_ortho_off(&self) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ViewportSlintState>();
+                state.set_xz_image(slint::Image::default());
+                state.set_yz_image(slint::Image::default());
+                state.set_xz_ready(false);
+                state.set_yz_ready(false);
+            }
+        })
+        .ok();
     }
 
     /// The current content generation - see `content_generation`.
@@ -1179,6 +1285,8 @@ impl ViewportController {
         };
         let auto_objects = project.get_preview_objects();
         let hide_unclassified = project.hide_unclassified_objects();
+        // A volume's object is drawn as its part on the plane shown.
+        let shown_z = project.get_shown_z_plane();
 
         // The results' split view: the analysis' objects instead.
         let results_overlay = self.results_overlay.read().expect("Poisoned").clone();
@@ -1245,6 +1353,9 @@ impl ViewportController {
             if !is_object_drawn(&*project, hide_unclassified, &object.object_class) {
                 continue;
             }
+            let Some(mask) = object.mask_on_plane(shown_z) else {
+                continue;
+            };
 
             let is_selected = selected_object_id.as_ref() == Some(&object.id);
 
@@ -1270,7 +1381,7 @@ impl ViewportController {
                 z.key(&object.object_class, is_selected),
                 ObjectDrawInstance {
                     bbox: object.bbox,
-                    mask: &object.mask_data,
+                    mask,
                     color: slint::Rgba8Pixel {
                         r: color.red(),
                         g: color.green(),

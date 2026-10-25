@@ -472,14 +472,25 @@ impl ResultCharts {
             true => "mask",
             false => "NULL::BLOB",
         };
+        // A volume's object: which of its planes is this one, of how many -
+        // its mask is cut to that plane below. NULL for a plane's object.
+        let z = filter.plane.z_stack;
+        let volume_expr = match database.has_volume_columns()? {
+            true => format!(
+                "CASE WHEN ndim = 3 THEN {z} - bbox_zmin_px END, \
+                 CASE WHEN ndim = 3 THEN bbox_zmax_px - bbox_zmin_px + 1 END"
+            ),
+            false => "NULL::UINTEGER, NULL::UINTEGER".to_string(),
+        };
         let sql = format!(
             "SELECT object_id::VARCHAR, coalesce(object_class_id[1], -1), \
              bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px, \
              centroid_x_px, centroid_y_px, area_px, intensity_mean_gray, \
-             ({value_expr})::DOUBLE, NULLIF(track_id, 0), {parents_expr}, {mask_expr} \
+             ({value_expr})::DOUBLE, NULLIF(track_id, 0), {parents_expr}, {mask_expr}, \
+             {volume_expr} \
              FROM objects WHERE image_rel_path = ? AND {on_plane} AND t_stack = ? \
              ORDER BY object_id",
-            on_plane = database.object_on_plane_sql("", filter.plane.z_stack)?,
+            on_plane = database.object_on_plane_sql("", z)?,
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         stmt.query_map(
@@ -496,10 +507,16 @@ impl ResultCharts {
                         .collect(),
                     _ => Vec::new(),
                 };
+                let bbox_px: [u32; 4] = [row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?];
+                let mut mask = row.get::<_, Option<Vec<u8>>>(13)?.unwrap_or_default();
+                let volume: (Option<u32>, Option<u32>) = (row.get(14)?, row.get(15)?);
+                if let (Some(plane), Some(depth)) = volume {
+                    mask = mask_of_plane(&mask, bbox_px, depth, plane);
+                }
                 Ok(ResultObject {
                     object_id: row.get(0)?,
                     class_id: row.get(1)?,
-                    bbox_px: [row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?],
+                    bbox_px,
                     centroid_px: [
                         row.get::<_, Option<f64>>(6)?.unwrap_or(0.0) as f32,
                         row.get::<_, Option<f64>>(7)?.unwrap_or(0.0) as f32,
@@ -518,7 +535,7 @@ impl ResultCharts {
                             .collect(),
                         _ => Vec::new(),
                     },
-                    mask: row.get::<_, Option<Vec<u8>>>(13)?.unwrap_or_default(),
+                    mask,
                 })
             },
         )
@@ -638,6 +655,21 @@ impl ResultsGenerator {
 /// histogram/scatter/boxplot request; the set of supported columns is the
 /// same either way (identity columns and per-channel intensity aren't
 /// resolvable to a single per-object SQL expression yet).
+/// The part on its plane `plane` of a volume's object's stored `mask` (all
+/// its `depth` planes of `bbox_px`, z-major - see `mask_codec`), encoded the
+/// same way; empty if the mask doesn't fit.
+fn mask_of_plane(mask: &[u8], bbox_px: [u32; 4], depth: u32, plane: u32) -> Vec<u8> {
+    let [x0, y0, x1, y1] = bbox_px;
+    let len = (x1 - x0 + 1) as usize * (y1 - y0 + 1) as usize;
+    let Some(all) = evanalyzer_core::decode_mask(mask, len * depth as usize) else {
+        return Vec::new();
+    };
+    let start = plane as usize * len;
+    all.get(start..start + len)
+        .map(evanalyzer_core::encode_mask)
+        .unwrap_or_default()
+}
+
 fn chart_value_expr(column: &Column) -> Result<String, InternalErrors> {
     column_aggregate_expr(column).map_err(|_| {
         InternalErrors::InvalidArgument(format!(
@@ -1127,6 +1159,52 @@ mod tests {
 
     /// Results that keep masks give each object its own; results without
     /// (written before they did) none - the split view draws ellipses then.
+    /// A volume's object (z-planes 1 to 3) on plane 2 brings its mask's part
+    /// on that plane - each plane has another pixel set.
+    #[test]
+    fn a_volumes_object_brings_its_mask_cut_at_the_plane() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10).in_volume(1, 3)]);
+        let filter = |z| ImageObjectsFilter {
+            image_rel_path: "img1.tif".into(),
+            plane: PlaneFilter {
+                z_stack: z,
+                t_stack: 0,
+            },
+            value_column: None,
+        };
+        // The fixture's box: 0..=10 × 0..=10 (not read here: the results'
+        // columns are cached at the first query, before the mask's is added).
+        let len = 11 * 11;
+        let mut mask = bitvec::vec::BitVec::<u64, bitvec::order::Lsb0>::repeat(false, len * 3);
+        for plane in 0..3 {
+            mask.set(plane * len + plane, true);
+        }
+        let conn = generator.connection();
+        conn.execute_batch("ALTER TABLE objects ADD COLUMN mask BLOB")
+            .unwrap();
+        conn.execute(
+            "UPDATE objects SET mask = ?",
+            [evanalyzer_core::encode_mask(&mask)],
+        )
+        .unwrap();
+
+        for (z, set) in [(1, 0), (2, 1), (3, 2)] {
+            let objects = ResultCharts {}
+                .image_objects(&generator, &filter(z))
+                .unwrap();
+            let cut = objects[0].decoded_mask().expect("the plane's mask");
+            assert_eq!(cut.len(), len, "z {z}");
+            assert_eq!(cut.iter_ones().collect::<Vec<_>>(), [set], "z {z}");
+        }
+        assert!(
+            ResultCharts {}
+                .image_objects(&generator, &filter(4))
+                .unwrap()
+                .is_empty(),
+            "not on z 4"
+        );
+    }
+
     #[test]
     fn image_objects_bring_their_masks_when_the_results_keep_them() {
         let spec = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];

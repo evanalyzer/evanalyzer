@@ -72,6 +72,8 @@ impl ViewportWorker {
             ("HighResWorker", TaskDispatch::HighRes),
             ("LowResWorker", TaskDispatch::LowRes),
             ("ObjectWorker", TaskDispatch::Objects),
+            // Waits idle unless the orthogonal views are on.
+            ("OrthoWorker", TaskDispatch::Ortho),
         ];
 
         for (name, dispatch) in configs {
@@ -88,6 +90,14 @@ impl ViewportWorker {
     }
 
     fn run_worker_loop(self: &Arc<Self>, scope: TaskDispatch) -> ! {
+        if scope == TaskDispatch::Ortho {
+            let mut strips = crate::editor::viewport_ortho::OrthoStrips::default();
+            let container = self.task_container(scope);
+            loop {
+                wait_for_task(container);
+                self.render_ortho(&mut strips);
+            }
+        }
         let mut buffers = RenderBuffers::new();
         let drawing_task_container = self.task_container(scope);
         loop {
@@ -101,6 +111,7 @@ impl ViewportWorker {
         match scope {
             TaskDispatch::LowRes => &self.viewport_controller.drawing_tasks.low_res_task,
             TaskDispatch::HighRes => &self.viewport_controller.drawing_tasks.high_res_task,
+            TaskDispatch::Ortho => &self.viewport_controller.drawing_tasks.ortho_task,
             _ => &self.viewport_controller.drawing_tasks.object_task,
         }
     }
@@ -497,6 +508,12 @@ impl ViewportWorker {
             }
         }
 
+        // The orthogonal views follow the sharp render (view, plane,
+        // channels) - a flag check only while they are off.
+        if !is_low_res && self.viewport_controller.ortho().0 {
+            self.viewport_controller.trigger_ortho();
+        }
+
         if comparing && !is_low_res && version_tracker.load(Ordering::SeqCst) == current_version {
             self.render_compare(&viewport_state, &mut b.compare);
         } else if !comparing {
@@ -765,7 +782,7 @@ fn composite_into_screen(
 
 /// How a channel is drawn: its values through the histogram window, in
 /// `color`.
-fn channel_ctx<'a>(
+pub(crate) fn channel_ctx<'a>(
     image_data: SampleSlice<'a>,
     histogram: HistogramSettings,
     color: [f32; 3],
@@ -892,7 +909,7 @@ impl RenderBuffers {
 /// `ProjectExt::get_channel_display_colors`), or the reader's colour when the
 /// project knows the channel not. RGB images keep their fixed colours -
 /// except in grayscale mode, where every channel is white.
-fn channel_display_color(
+pub(crate) fn channel_display_color(
     channel: &ViewChannel,
     project_color: Option<[f32; 3]>,
     grayscale: bool,

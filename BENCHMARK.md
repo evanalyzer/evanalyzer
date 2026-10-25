@@ -920,6 +920,28 @@ alternated, 10 s pauses, 22 cores:
   `images` the same. Only `pixel_size_z_nm` changed on purpose: an unknown
   z spacing is NULL now (was a number).
 
+## 3D viewer: volume objects on their plane, orthogonal views (2026-10-25)
+
+**2D unchanged.** `bench_viewport_whole_slide` (generated 60000 × 40000
+slide, 1920 × 1080, 22 cores, default caches), base = HEAD without these
+changes, 20 runs alternated (ABBA, BAAB, ABBA ×3), 6-10 s pauses:
+
+| | base | new |
+|---|---|---|
+| Total of the 20 steps (open, zoom, pan away and back) | mean 435 ms, median 432 ms (422-455) | mean 438 ms, median 438 ms (421-455) |
+| Process peak | 261-275 MB | 260-270 MB |
+
+The difference (0.6 %) is within the spread between runs (one round each
+way had the other build ahead). On the 2D path only a flag check per sharp
+render was added (the orthogonal views off); a plane's objects are drawn as
+before (`mask_on_plane` hands back the whole mask).
+
+**Orthogonal views** (real app, Fly Brain: 256 × 256 × 57 planes, RGB as
+3 channels, zoom 308 %): moving the crosshair reads both views' lines on all
+57 planes in parallel in **7-8 ms**; a new display range or colour only
+renders again: **0.2-1 ms**. Kept: **66 KB** (the two strips, u8). Nothing
+runs or is kept while the views are off.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -943,6 +965,8 @@ graphics driver).
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB (1.05 GB with masks) | 2026-10-23 | Object masks in the results |
 | Running a pipeline: 50 images 2048², 8 threads, with the z columns | 860-963 MB | 2026-10-25 | 3D-ready results |
+| Image viewer, whole slide, after the 3D viewer changes (2D) | 260-275 MB (test process) | 2026-10-25 | 3D viewer |
+| Orthogonal views of a z-stack (57 planes, 256²) | +66 KB kept | 2026-10-25 | 3D viewer |
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB (2.56 GB with masks) | 2026-10-23 | Object masks in the results |

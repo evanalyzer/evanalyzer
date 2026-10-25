@@ -7,10 +7,20 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_cfg::{core_types::ObjectClass, settings::object_settings::ObjectMetricSettings};
+use bitvec::{order::Lsb0, slice::BitSlice};
+use evanalyzer_cfg::{
+    core_types::{ImageDimensionality, ObjectClass},
+    settings::object_settings::ObjectMetricSettings,
+};
 
 pub trait ObjectExt {
     fn is_part_of(&self, x: u32, y: u32) -> bool;
+    /// The object's mask on plane `z` (`None`: no one plane shown - a
+    /// z-projection): a plane's object's whole mask (shown on every plane);
+    /// a volume's object's part on `z` - `None` where it isn't on `z`.
+    fn mask_on_plane(&self, z: Option<i32>) -> Option<&BitSlice<u64, Lsb0>>;
+    /// [`Self::is_part_of`] on plane `z` (see [`Self::mask_on_plane`]).
+    fn is_part_of_on_plane(&self, x: u32, y: u32, z: Option<i32>) -> bool;
     fn add_object_class(&mut self, object_class: ObjectClass);
     fn remove_object_class(&mut self, object_class: &ObjectClass);
     fn remove_all_object_classes(&mut self);
@@ -35,6 +45,35 @@ impl ObjectExt for ObjectMetricSettings {
 
         // Access the mask bit
         self.mask_data.get(bit_index).map(|b| *b).unwrap_or(false)
+    }
+
+    fn mask_on_plane(&self, z: Option<i32>) -> Option<&BitSlice<u64, Lsb0>> {
+        match self.dimensionality {
+            ImageDimensionality::Planar => Some(&self.mask_data),
+            ImageDimensionality::Volume { depth } => {
+                let plane = z? - self.z_stack;
+                if plane < 0 || plane >= depth as i32 {
+                    return None;
+                }
+                let [x_min, y_min, x_max, y_max] = self.bbox;
+                let len = (x_max - x_min + 1) as usize * (y_max - y_min + 1) as usize;
+                let start = plane as usize * len;
+                self.mask_data.get(start..start + len)
+            }
+        }
+    }
+
+    fn is_part_of_on_plane(&self, x: u32, y: u32, z: Option<i32>) -> bool {
+        let Some(mask) = self.mask_on_plane(z) else {
+            return false;
+        };
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        if x < x_min || x > x_max || y < y_min || y > y_max {
+            return false;
+        }
+        let width = (x_max - x_min + 1) as usize;
+        let bit_index = (y - y_min) as usize * width + (x - x_min) as usize;
+        mask.get(bit_index).is_some_and(|b| *b)
     }
 
     fn add_object_class(&mut self, object_class: ObjectClass) {
@@ -68,6 +107,49 @@ mod tests {
             bbox: [10, 20, 13, 22],
             mask_data,
             ..Default::default()
+        }
+    }
+
+    /// A 2 × 1 volume's object over z 4..=6: (10, 20) on z 4, (11, 20) on
+    /// z 6, nothing on z 5.
+    fn volume_object() -> ObjectMetricSettings {
+        let mask_data: BitVec<u64, Lsb0> = [true, false, false, false, false, true]
+            .into_iter()
+            .collect();
+        ObjectMetricSettings {
+            bbox: [10, 20, 11, 20],
+            mask_data,
+            z_stack: 4,
+            dimensionality: ImageDimensionality::Volume { depth: 3 },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_volumes_object_is_cut_at_the_plane_shown() {
+        let object = volume_object();
+        let on = |z| {
+            object
+                .mask_on_plane(z)
+                .map(|m| m.iter().by_vals().collect::<Vec<_>>())
+        };
+        assert_eq!(on(Some(4)), Some(vec![true, false]));
+        assert_eq!(on(Some(5)), Some(vec![false, false]));
+        assert_eq!(on(Some(6)), Some(vec![false, true]));
+        assert_eq!(on(Some(3)), None, "before its first plane");
+        assert_eq!(on(Some(7)), None, "after its last plane");
+        assert_eq!(on(None), None, "a projection shows no one plane");
+        assert!(object.is_part_of_on_plane(10, 20, Some(4)));
+        assert!(!object.is_part_of_on_plane(10, 20, Some(6)));
+        assert!(object.is_part_of_on_plane(11, 20, Some(6)));
+    }
+
+    #[test]
+    fn a_planes_object_is_shown_on_every_plane() {
+        let object = single_pixel_object();
+        for z in [None, Some(0), Some(9)] {
+            assert_eq!(object.mask_on_plane(z).map(|m| m.len()), Some(12));
+            assert!(object.is_part_of_on_plane(11, 21, z));
         }
     }
 

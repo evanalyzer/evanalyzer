@@ -81,7 +81,9 @@ pub(crate) fn mask_holds(bbox: [u32; 4], mask: &BitSlice<u64, Lsb0>, x: u32, y: 
 /// plumbing in [`ViewportController::sync_objects_to_slint_viewport`].
 pub(crate) struct ObjectDrawInstance<'a> {
     pub(crate) bbox: [u32; 4],
-    pub(crate) mask: &'a bitvec::vec::BitVec<u64, bitvec::order::Lsb0>,
+    /// A bit per pixel of `bbox`, row by row - of a volume's object its
+    /// part on the plane shown.
+    pub(crate) mask: &'a BitSlice<u64, Lsb0>,
     pub(crate) color: slint::Rgba8Pixel,
 }
 

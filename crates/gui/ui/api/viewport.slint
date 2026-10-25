@@ -109,6 +109,30 @@ export global ViewportState {
     in-out property <length> scale_bar_width;
     in-out property <string> scale_bar_text;
 
+    // Orthogonal views of a z-stack (`ortho` on): through the crosshair at
+    // (`ortho_x`, `ortho_y`) - full-resolution image pixels - the XZ view
+    // below the image and the YZ view beside it, `ortho_depth` planes, a
+    // plane `ortho_aniso` times a pixel's width (1: the z spacing unknown,
+    // `ortho_z_known` false). Each view's image lies along the image from
+    // `xz_img_x` / `yz_img_y`, `xz_img_w` / `yz_img_h` long.
+    in-out property <bool> ortho: false;
+    in-out property <float> ortho_x: 0;
+    in-out property <float> ortho_y: 0;
+    in-out property <int> ortho_depth: 1;
+    in-out property <float> ortho_aniso: 1;
+    in-out property <bool> ortho_z_known: true;
+    in-out property <image> xz_image;
+    in-out property <float> xz_img_x: 0;
+    in-out property <float> xz_img_w: 0;
+    in-out property <bool> xz_ready: false;
+    in-out property <image> yz_image;
+    in-out property <float> yz_img_y: 0;
+    in-out property <float> yz_img_h: 0;
+    in-out property <bool> yz_ready: false;
+    callback ortho_changed(bool);
+    // The crosshair moved to (x, y), full-resolution image pixels.
+    callback ortho_cross_moved(float, float);
+
     // Navigator
     in-out property <float> nav_x: 0;
     in-out property <float> nav_y: 0;

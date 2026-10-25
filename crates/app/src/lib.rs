@@ -251,6 +251,7 @@ pub mod preview {
 pub mod images {
     pub use crate::api::ImageChannel;
     pub use crate::api::ImageContainer;
+    pub use crate::api::ImageInfo;
     pub use crate::api::ImageMeta;
     pub use crate::api::ImageSource;
     pub use crate::api::ManagedImage;

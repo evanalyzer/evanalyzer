@@ -2831,6 +2831,12 @@ impl ResultsGenerator {
         self.has_object_column("mask")
     }
 
+    /// Whether the results have the z columns (`ndim`, `bbox_zmin_px`, …) -
+    /// not results from before them.
+    pub(super) fn has_volume_columns(&self) -> Result<bool, InternalErrors> {
+        self.has_object_column("ndim")
+    }
+
     /// Whether these results hold a volume's objects (3D) - none in results
     /// from before the z columns. Cached: the objects don't change.
     fn has_volumes(&self) -> Result<bool, InternalErrors> {

@@ -302,6 +302,7 @@ impl ViewPortObjectController {
             let project = self.app_state.get_project();
             let z = ZOrder::new(&*project);
             let hide_unclassified = project.hide_unclassified_objects();
+            let shown_z = project.get_shown_z_plane();
 
             // As drawn (`object_render::pick`); objects that aren't drawn
             // (hidden class, hidden unclassified) can't be picked.
@@ -312,11 +313,10 @@ impl ViewPortObjectController {
                 .chain(project.get_preview_objects())
                 .filter(|o| is_object_drawn(&*project, hide_unclassified, &o.object_class))
                 .collect();
-            pick(
-                objects
-                    .iter()
-                    .map(|o| (z.key(&o.object_class, false), o.is_part_of(x1, y1))),
-            )
+            pick(objects.iter().map(|o| {
+                let holds = o.is_part_of_on_plane(x1, y1, shown_z);
+                (z.key(&o.object_class, false), holds)
+            }))
             .map(|i| objects[i].id.clone())
         };
 

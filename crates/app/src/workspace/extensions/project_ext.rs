@@ -24,7 +24,8 @@ use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
 use evanalyzer_cfg::settings::images_settings::{
-    ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
+    ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackHandling,
+    ZStackSettings,
 };
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::modules::ModuleDefinition;
@@ -154,6 +155,9 @@ pub trait ProjectExt {
     fn set_image_z_stack(&mut self, z_stack: &ZStackSettings);
     fn set_global_z_stack(&mut self, z_stack: &ZStackSettings);
     fn get_z_stack(&self) -> Option<&ZStackSettings>;
+    /// The z-plane the viewer shows - `None` for a z-projection (no one
+    /// plane). A volume (3D) is shown plane by plane.
+    fn get_shown_z_plane(&self) -> Option<i32>;
     fn get_t_stack(&self) -> Option<&TStackSettings>;
     fn get_pixel_sizes(&self) -> PixelSizeSettings;
     fn get_selected_image_channel(&self) -> Option<&ChannelSettings>;
@@ -847,6 +851,22 @@ impl ProjectExt for ProjectWithRuntime {
         match image_z_stack {
             Some(z) => Some(z),
             None => self.images.settings.z_stack.as_ref(),
+        }
+    }
+
+    fn get_shown_z_plane(&self) -> Option<i32> {
+        let Some(z) = self.get_z_stack() else {
+            return Some(0);
+        };
+        match z.z_projection {
+            ZStackHandling::SingleStack | ZStackHandling::AllStacks | ZStackHandling::Volume3d => {
+                Some(z.z_range.as_ref().map_or(0, |r| *r.start()))
+            }
+            ZStackHandling::MaxIntensity
+            | ZStackHandling::MinIntensity
+            | ZStackHandling::AvgIntensity
+            | ZStackHandling::SumIntensity
+            | ZStackHandling::TakeTheMiddle => None,
         }
     }
 

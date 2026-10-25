@@ -7,6 +7,7 @@
 // that still shows them; the objects toggle and the keys work folded too.
 
 import { ChannelState, IntensityProjection } from "../api/state.slint";
+import { ViewportState } from "../api/viewport.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { LayoutState } from "../api/layout.slint";
@@ -348,6 +349,17 @@ export component StackBar inherits Rectangle {
             count: ImageMetaData.nr_z_stacks;
             picked(z) => {
                 StackSteps.set-z(z);
+            }
+        }
+        // The XZ and YZ views through a crosshair.
+        if root.has-z && root.slice: InkIconButton {
+            size: 26px;
+            icon: InkIcons.ortho;
+            label: "Orthogonal views";
+            active: ViewportState.ortho;
+            clicked => {
+                ViewportState.ortho = !ViewportState.ortho;
+                ViewportState.ortho_changed(ViewportState.ortho);
             }
         }
 
