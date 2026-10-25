@@ -807,6 +807,58 @@ cost ~1 ms - the change is mostly simpler code. Old / new builds alternated,
 
 Same objects (112,941, same area sum). Within noise, no speed or RAM change.
 
+## scopeio 0.0.0-alpha.2 and where the time goes (2026-10-25)
+
+scopeio now normalizes to f32 in the same pass as the read
+(`F32SignificantBits`, signed data `F32NormalizedShifted` like ImageJ), so the
+native buffer and EVAnalyzer's own conversion pass are gone; the extension list
+comes from scopeio's `FormatInfo`. Performance-check project (81 × 2048² `.vsi`;
+the whole slide with its 5-channel series, now series 0), old / new build
+alternated, 10 s apart:
+
+| | before | after |
+|---|---|---|
+| 81 images: wall | 13.0 / 14.9 / 15.0 s | 13.1 / 13.9 / 14.1 s |
+| 81 images: CPU / peak RSS | 230-234 s / 3.18-3.28 GB | 229-239 s / 3.15-3.36 GB |
+| Whole slide: wall | 54.6 / 54.8 s | 54.1 / 58.9 s |
+| Whole slide: CPU / peak RSS | 693-712 s / 8.25-8.29 GB | 699-715 s / 7.41-7.91 GB |
+
+Same objects before and after (298,262 and 99,441, compared row by row without
+ids). The whole slide had 99,473 objects with bioformats-rs (2026-10-24): 32
+differ since the reader switch, not this update.
+
+Against bioformats-rs (commit 2cf743ca, the last build before the switch),
+same project, old / new alternated:
+
+| | bioformats-rs | scopeio alpha.2 |
+|---|---|---|
+| 81 images: wall | 12.7 / 12.8 / 13.7 s | 12.4 / 12.5 / 12.5 s |
+| 81 images: CPU / peak RSS | 217-225 s / 3.01-3.26 GB | 223-227 s / 3.30-3.33 GB |
+| Whole slide: wall | 62.0 / 62.9 s | 55.2 / 55.7 s |
+| Whole slide: CPU / peak RSS | 802-817 s / 7.50-7.77 GB | 693-697 s / 7.56-7.96 GB |
+
+81 images: the same objects and intensities; physical sizes (nm) differ in the
+7th digit (pixel size now in nm from the reader, before µm × 1000 in f32).
+Whole slide: 99,473 → 99,441 objects.
+
+Reading split RGB with one decode per tile (`ChannelSelect::Samples`) was tried
+and dropped: on the uncompressed RGB fixture (4096 × 3000) the same time
+(127-188 / 146-152 ms) but 157 → 286 MB peak, because the planar buffer has to
+be copied into one image per channel.
+
+Where the time goes (debug log, CPU seconds summed over tiles):
+
+| | 81 images | whole slide |
+|---|---|---|
+| Reading (decoding) | 5.5 s | 380 s of 533 s in the tiles (JPEG 2000) |
+| Rolling Ball (sliding paraboloid) | 210 s of 242 s | 68 s |
+| Median Subtract | - | 29 s |
+| Single-threaded after the tiles | - | Tile Merge 5.6 s, Voronoi 6.3 s, export 1.7 s |
+
+Sliding paraboloid, 2048², radius 4, pre-smooth, one idle core: 570 ms - 3×3
+max 69 ms and 3×3 mean 61 ms before the slide, x passes 49 ms each, y 78 ms,
+diagonal half-passes 30-36 ms.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -842,6 +894,7 @@ graphics driver).
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 | Running a pipeline: 6 images 12288² (54 tiles), 8 threads | 4.5-4.6 GB | 2026-10-25 | One shared image reader |
 | Reading a 3-channel ND2 2424² with a max projection of 23 z | ~390 MB (test process) | 2026-10-25 | One shared image reader |
+| Whole slide (5 channels, 21 tiles, 99,441 objects), performance-check project | 7.41-7.91 GB (was 8.25-8.29 GB) | 2026-10-25 | scopeio 0.0.0-alpha.2 |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

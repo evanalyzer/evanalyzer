@@ -122,10 +122,7 @@ impl Backend for LocalBackend {
     }
 
     fn image_formats(&self) -> Vec<String> {
-        super::system::SUPPORTED_IMAGE_FORMATS
-            .iter()
-            .map(|format| format.to_string())
-            .collect()
+        super::system::supported_image_formats()
     }
 
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {

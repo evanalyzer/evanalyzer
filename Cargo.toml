@@ -22,7 +22,7 @@ evanalyzer_app = { path = "crates/app" }
 evanalyzer_gui    = { path = "crates/gui" }
 evanalyzer_cli    = { path = "crates/cli" }
 evanalyzer_server = { path = "crates/server" }
-scopeio = { git = "https://github.com/evanalyzer/scopeio" }
+scopeio = { git = "https://github.com/evanalyzer/scopeio", tag = "0.0.0-alpha.2" }
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 tungstenite = "0.30.0"
 rustls = { version = "0.23.45", default-features = false, features = ["std", "ring", "logging"] }
@@ -53,10 +53,6 @@ rayon = "1.12.0"
 rustfft = "6.4.1"
 schemars = "1.2.2"
 serde = "1.0.229"
-# preserve_order: JSON objects keep their insertion order (the schemas in
-# docs/ are sorted on purpose, see json_schema_builder.rs). float_roundtrip: floats parse to
-# the exact value they were written from (results and reference data
-# compared bit for bit).
 serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
 tempfile = "3.27.0"
 burn = { version = "0.21", default-features = false, features = ["ndarray", "autodiff"] }

@@ -9,27 +9,41 @@
 
 use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
-use crate::image::image_ome_parser::{build_image_meta, channel_select, scopeio_err};
+use crate::image::image_ome_parser::{build_image_meta, channel_select, is_signed, scopeio_err};
 use crate::utils::converters::wavelength_to_rgb_float;
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use kornia_image::{Image, ImageSize};
 use log::debug;
 use rayon::prelude::*;
-use scopeio::{OutputSpec, PixelBuf, Region, RegionRequest};
+use scopeio::{ChannelSelect, OutputSpec, OutputType, Region, RegionRequest};
 use std::ops::RangeInclusive;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// File extensions `ImageReader` can open - the formats scopeio reads (see
-/// its README). Companion files that are opened through their main file
-/// (VSI's `.ets`) are left out.
-pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
-    "tif", "tiff", "tf2", "tf8", "btf", "jpg", "jpeg", "png", "bmp", "jp2", "j2k", "vsi", "czi",
-    "nd2", "lif", "lof", "xlef", "xlcf", "xlif", "svs", "ndpi", "ndpis", "mrxs", "lsm", "qptiff",
-    "scn", "bif", "ims", "oib", "oif", "oir", "dcm", "dicom", "zvi", "dv", "r3d", "stk", "nd",
-];
+/// Extensions scopeio lists that would make a folder scan pick up files
+/// that aren't images of their own: `xml`/`dat` are only images under the
+/// fixed file names of Operetta and scan^R, `img` is the data half of a
+/// NIfTI/Analyze `.hdr` + `.img` pair, and the OME companion files point at
+/// TIFFs the scan finds anyway.
+const SCAN_EXCLUDED_EXTENSIONS: &[&str] = &["xml", "dat", "img", "ome.xml", "companion.ome"];
+
+/// File extensions `ImageReader` can open, lower case without the dot -
+/// the extensions of every format scopeio reads as a file (not folder
+/// formats such as OME-Zarr), without [`SCAN_EXCLUDED_EXTENSIONS`].
+pub fn supported_image_formats() -> Vec<String> {
+    let mut extensions: Vec<String> = scopeio::supported_formats()
+        .iter()
+        .filter(|format| !format.opens_folder)
+        .flat_map(|format| format.extensions.iter())
+        .filter(|ext| !SCAN_EXCLUDED_EXTENSIONS.contains(ext))
+        .map(|ext| ext.to_string())
+        .collect();
+    extensions.sort();
+    extensions.dedup();
+    extensions
+}
 
 #[derive(Clone)]
 pub struct ManagedImage<T, const C: usize> {
@@ -409,74 +423,83 @@ impl ImageReader {
             .inner
             .series_meta(series as usize)
             .map_err(scopeio_err)?;
+        let select = channel_select(series_meta, self.read_mode, image_plane.c.max(0) as u32);
+        self.read_region_f32(
+            series,
+            resolution_idx,
+            image_plane,
+            select,
+            image_tile,
+            ImageSize { width, height },
+        )
+    }
+
+    /// Reads `select` of one z/t plane as f32 samples, normalized by
+    /// scopeio in the same pass as the read: integers by their significant
+    /// bits (the largest value becomes 1.0), signed ones shifted by the
+    /// type's minimum first as in ImageJ (int8: -128 -> 0.0, 127 -> 1.0),
+    /// floats as stored. One gray or RGB image (alpha dropped) at `plane`.
+    fn read_region_f32(
+        &self,
+        series: i32,
+        resolution_idx: i32,
+        plane: &ImagePlane,
+        select: ChannelSelect,
+        image_tile: &ImageTile,
+        size: ImageSize,
+    ) -> Result<ImageContainer, InternalErrors> {
+        let series_meta = self
+            .inner
+            .series_meta(series as usize)
+            .map_err(scopeio_err)?;
         // An out-of-range resolution level falls back to the coarsest level
         // that exists, rather than erroring.
         let level = (resolution_idx as usize).min(series_meta.levels.len().saturating_sub(1));
+        let dtype = if is_signed(series_meta.pixel_type) {
+            OutputType::F32NormalizedShifted
+        } else {
+            OutputType::F32SignificantBits
+        };
         let request = RegionRequest {
             series: series as usize,
             level,
-            z: image_plane.z.max(0) as u32,
-            t: image_plane.t.max(0) as u32,
-            channels: channel_select(series_meta, self.read_mode, image_plane.c.max(0) as u32),
+            z: plane.z.max(0) as u32,
+            t: plane.t.max(0) as u32,
+            channels: select,
             region: Region::new(
                 image_tile.offset_x as u64,
                 image_tile.offset_y as u64,
-                width as u64,
-                height as u64,
+                size.width as u64,
+                size.height as u64,
             ),
-            // Interleaved RGB (alpha dropped) or gray, stored sample type.
-            output: OutputSpec::default(),
+            output: OutputSpec {
+                dtype,
+                ..Default::default()
+            },
         };
         let image = self.inner.read_region(&request).map_err(scopeio_err)?;
-        let channels = image.channels;
+        let channels = image.channels as usize;
+        let data: Vec<f32> = image.into_vec().map_err(scopeio_err)?;
 
-        // Integer samples are normalized by the bit depth (the largest value
-        // becomes 1.0). Signed samples are shifted by the type's minimum
-        // first, as ImageJ does (int8: -128 -> 0.0, 0 -> 0.502, 127 -> 1.0).
-        // Float samples are kept as stored.
-        let inv = 1.0 / ((1u64 << pyramid_info.nr_bits) - 1) as f32;
-        let shift = (1u64 << (pyramid_info.nr_bits - 1)) as f64;
-        let signed = |x: f64| ((x + shift) * inv as f64) as f32;
-        let data: Vec<f32> = match image.data {
-            PixelBuf::U8(v) => v.par_iter().map(|&x| x as f32 * inv).collect(),
-            PixelBuf::I8(v) => v.par_iter().map(|&x| signed(x as f64)).collect(),
-            PixelBuf::U16(v) => v.par_iter().map(|&x| x as f32 * inv).collect(),
-            PixelBuf::I16(v) => v.par_iter().map(|&x| signed(x as f64)).collect(),
-            PixelBuf::U32(v) => v.par_iter().map(|&x| x as f32 * inv).collect(),
-            PixelBuf::I32(v) => v.par_iter().map(|&x| signed(x as f64)).collect(),
-            PixelBuf::F32(v) => v,
-            PixelBuf::F64(v) => v.par_iter().map(|&x| x as f32).collect(),
-            other => {
-                return Err(InternalErrors::ImageReadError(format!(
-                    "Unsupported sample type {:?}",
-                    other.pixel_type()
-                )));
-            }
-        };
-
-        let image_size = ImageSize { width, height };
         let tile_offset = Point2d {
             x: image_tile.offset_x,
             y: image_tile.offset_y,
         };
-        let plane = Some(image_plane.clone());
+        let plane = Some(*plane);
         if channels == 3 {
-            let data =
-                Image::<f32, 3>::new(image_size, data).map_err(InternalErrors::from_kornia)?;
-            Ok(ImageContainer::F32Rgb(ManagedImage {
+            let data = Image::<f32, 3>::new(size, data).map_err(InternalErrors::from_kornia)?;
+            return Ok(ImageContainer::F32Rgb(ManagedImage {
                 data,
                 tile_offset,
                 plane,
-            }))
-        } else {
-            let data =
-                Image::<f32, 1>::new(image_size, data).map_err(InternalErrors::from_kornia)?;
-            Ok(ImageContainer::F32Gray(ManagedImage {
-                data,
-                tile_offset,
-                plane,
-            }))
+            }));
         }
+        let data = Image::<f32, 1>::new(size, data).map_err(InternalErrors::from_kornia)?;
+        Ok(ImageContainer::F32Gray(ManagedImage {
+            data,
+            tile_offset,
+            plane,
+        }))
     }
 
     /// Reads every requested channel's (possibly Z-projected) tile using
@@ -694,19 +717,7 @@ impl ImageReader {
                 }
             }
 
-            // --- METADATA & FINAL OBJECT ---
-            let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
-                InternalErrors::ImageReadError(format!("Series {} does not exist", series))
-            })?;
-
-            Ok(ImageChannel {
-                image: Arc::new(image),
-                color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
-                is_visible: true,
-                c_stack: *c_stack_to_read,
-                name: channel_meta.name.clone(),
-                is_rgb: pyramid_info.is_rgb,
-            })
+            self.image_channel(series, *c_stack_to_read, pyramid_info.is_rgb, image)
         };
 
         let resulting_images: Vec<ImageChannel> = if parallel {
@@ -724,6 +735,32 @@ impl ImageReader {
         };
 
         Ok(resulting_images)
+    }
+
+    /// Channel `c`'s `image` with its name and display colour.
+    fn image_channel(
+        &self,
+        series: i32,
+        c: i32,
+        is_rgb: bool,
+        image: ImageContainer,
+    ) -> Result<ImageChannel, InternalErrors> {
+        let channel_meta = self.image_meta.series[&series]
+            .channels
+            .get(&c)
+            .ok_or_else(|| {
+                InternalErrors::ImageReadError(format!(
+                    "Channel {c} does not exist in series {series}"
+                ))
+            })?;
+        Ok(ImageChannel {
+            image: Arc::new(image),
+            color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
+            is_visible: true,
+            c_stack: c,
+            name: channel_meta.name.clone(),
+            is_rgb,
+        })
     }
 }
 
@@ -1175,6 +1212,85 @@ mod tests {
                     );
                 }
                 other => panic!("unexpected variant combination: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_supported_formats_come_from_scopeio_without_companion_files() {
+        let formats = supported_image_formats();
+        for ext in ["tif", "ome.tif", "vsi", "czi", "nd2", "lif", "svs", "png"] {
+            assert!(
+                formats.iter().any(|f| f == ext),
+                "{ext} missing in {formats:?}"
+            );
+        }
+        for ext in ["xml", "dat", "img", "zarr"] {
+            assert!(
+                !formats.iter().any(|f| f == ext),
+                "{ext} must not be scanned"
+            );
+        }
+    }
+
+    /// Split RGB channels come from one read per colour channel and equal
+    /// the samples of the packed RGB read, in the requested order.
+    #[test]
+    fn split_rgb_channels_are_the_samples_of_the_packed_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rgb.png");
+        let (w, h) = (7u32, 5u32);
+        image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 40) as u8, (x * y * 5) as u8])
+        })
+        .save(&path)
+        .unwrap();
+
+        let packed = ImageReader::new(&path, ReadMode::Default).unwrap();
+        let packed = packed
+            .read_image_tile_combined(0, 0, ZProjection::None, &None, 0, None, &full_tile())
+            .unwrap();
+        let rgb = packed[0].image.as_f32_slice().unwrap();
+
+        let split = ImageReader::new(&path, ReadMode::SplitChannels).unwrap();
+        for parallel in [false, true] {
+            let order = vec![2, 0, 1];
+            let channels = if parallel {
+                split.read_image_tile_combined_parallel(
+                    0,
+                    0,
+                    ZProjection::None,
+                    &None,
+                    0,
+                    Some(&order),
+                    &full_tile(),
+                )
+            } else {
+                split.read_image_tile_combined(
+                    0,
+                    0,
+                    ZProjection::None,
+                    &None,
+                    0,
+                    Some(&order),
+                    &full_tile(),
+                )
+            }
+            .unwrap();
+            assert_eq!(
+                channels.iter().map(|c| c.c_stack).collect::<Vec<_>>(),
+                order,
+                "the requested order"
+            );
+            for channel in &channels {
+                let sample = channel.c_stack as usize;
+                let expected: Vec<f32> = rgb.iter().skip(sample).step_by(3).copied().collect();
+                assert_eq!(
+                    channel.image.as_f32_slice().unwrap(),
+                    expected,
+                    "sample {sample}"
+                );
+                assert_eq!(channel.image.plane().unwrap().c, channel.c_stack);
             }
         }
     }

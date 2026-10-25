@@ -12,7 +12,7 @@ use crate::image::image_meta::{
 };
 use crate::image::image_reader::ReadMode;
 use evanalyzer_cfg::core_types::InternalErrors;
-use scopeio::{ChannelSelect, Plane, SeriesMeta};
+use scopeio::{ChannelSelect, PixelType, Plane, SeriesMeta};
 use std::path::Path;
 
 pub(crate) fn scopeio_err(e: scopeio::Error) -> InternalErrors {
@@ -49,6 +49,12 @@ fn bit_depth(series: &SeriesMeta) -> u16 {
         .filter(|&bits| bits > 0)
         .map(u16::from)
         .unwrap_or(series.pixel_type.bytes() as u16 * 8)
+}
+
+/// Signed integer samples, which are shifted by the type's minimum when
+/// normalized.
+pub(crate) fn is_signed(pixel_type: PixelType) -> bool {
+    matches!(pixel_type, PixelType::I8 | PixelType::I16 | PixelType::I32)
 }
 
 /// The time between two frames [s]: the series' time increment, else
@@ -173,7 +179,6 @@ pub(crate) fn build_image_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scopeio::PixelType;
     use std::path::PathBuf;
 
     fn series(samples_per_pixel: u8, size_c: u32) -> SeriesMeta {

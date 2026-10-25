@@ -14,7 +14,7 @@
 
 /// File extensions (lowercase, no dot) the image readers accept. Depends on
 /// which reader features `evanalyzer_core` was built with.
-pub use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
+pub use evanalyzer_core::supported_image_formats;
 
 /// Logical CPU cores and total RAM in bytes.
 pub fn cpu_ram_diagnostics() -> (usize, u64) {

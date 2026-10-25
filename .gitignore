@@ -31,7 +31,7 @@ lcov.info
 tests/G7_03.vsi
 tests/_G7_03_/stack1/frame_t_0.ets
 tests/IPOD detection test.nd2
-tests/performance
+tests/performance-check/
 tests/20260831_Uptake1_Exp0706_PH1.evadb
 # Synthetic time series (crates/core/examples/make_time_series.rs, ~1.3GB)
 tests/timeseries_96img_48t_tracked.evadb

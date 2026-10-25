@@ -1,0 +1,2 @@
+Likely bug in Measure Texture: texture.rs expects raw gray values, but the channel it reads seems to be already scaled to 0–1, so in real runs almost every pixel would land in gray level 0 or 1. Its tests pass because they feed raw values. The page describes the intended behaviour.
+Training options do nothing yet: "Balance classes", "Normalize features" and "Hold back" appear in the AI training dialog but aren't passed to training. The page says so.
