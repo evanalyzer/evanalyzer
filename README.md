@@ -12,6 +12,7 @@
 [![Dependency audit](docs/audit-badge.svg)](docs/audit-history.csv)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm_Noncommercial-blue)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](https://github.com/evanalyzer/evanalyzer/releases/latest)
+
 <a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-light.svg#gh-light-mode-only" height="40" alt="Made with Slint"></a>
 
 **Find, classify and measure objects in microscopy images - reproducibly, on ordinary computers.**
@@ -84,7 +85,7 @@ GPU (CUDA) builds for AI models are available for Linux and Windows.
 | `evanalyzer_gui` | Slint desktop GUI |
 | `evanalyzer_cli` | Headless command line (`evanalyzer cli ...`) |
 | `evanalyzer_server` | Multi-user server (`evanalyzer server`, see [docs/server.md](docs/server.md)) |
-| `evanalyzer_ai_engine` | AI model interface and the libtorch plugin |
+| `evanalyzer_ai` | AI model interface and the libtorch plugin |
 | `evanalyzer_bin` | The `evanalyzer` binary: GUI, CLI or server |
 
 ### Building
@@ -100,7 +101,7 @@ cargo run -p evanalyzer_bin -- --project my.evaproj   # start the GUI with a pro
 ```
 
 A plugin next to the binary (as in `target/debug`) is found first;
-`EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai_engine.so` points at another
+`EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai.so` points at another
 one. Release packages put it in `ai/cpu` or `ai/cuda` with its libtorch (see
 `.github/workflows/release.yml`).
 

@@ -38,7 +38,7 @@ fn segmentation_classes_count_as_the_object_class_they_become() {
 
 #[test]
 fn object_commands_report_inputs_filters_and_outputs() {
-    let coloc = PipelineCommand::Colocalization(ColocalizationSettings {
+    let coloc = PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings {
         classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
         filter_classes: vec![ObjectClass::Global(3)],
         exclude_classes: vec![ObjectClass::Global(4)],
@@ -62,7 +62,7 @@ fn save_image_reports_its_display_classes() {
 
 #[test]
 fn classes_inside_an_enum_variant_are_reported() {
-    let coloc = PipelineCommand::Colocalization(ColocalizationSettings {
+    let coloc = PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings {
         multiplicity: ObjectColocObjectsColocMultiplicitySettings::MultiFor(vec![
             ObjectClass::Global(11),
         ]),

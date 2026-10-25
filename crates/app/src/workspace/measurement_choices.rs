@@ -116,7 +116,7 @@ mod tests {
     /// A pipeline with Image Quality (quality_01, channel 0) and Exclude
     /// Image with one rule.
     fn project() -> (ProjectWithRuntime, PipelineCommand) {
-        let mut quality = command("image_quality");
+        let mut quality = command("measure_image_quality");
         *quality.measurement_id_mut().unwrap() = "quality_01".into();
         let mut exclude = command("exclude_image");
         let PipelineCommand::ExcludeImage(settings) = &mut exclude else {

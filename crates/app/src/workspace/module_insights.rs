@@ -114,7 +114,7 @@ pub fn created_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> 
             new_unless_in_place(s.output_class, s.input_class),
         )],
         PipelineCommand::LoadAnnotatedObjects(s) => vec![("output_class".into(), s.output_class)],
-        PipelineCommand::Colocalization(s) => vec![(
+        PipelineCommand::ColocalizeObjects(s) => vec![(
             "class_for_overlapping_areas".into(),
             s.class_for_overlapping_areas,
         )],
@@ -136,7 +136,7 @@ pub fn read_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> {
             read
         }
         PipelineCommand::AiObjectClassifier(s) => list("input_classes", &s.input_classes),
-        PipelineCommand::Colocalization(s) => list("classes_to_coloc", &s.classes_to_coloc),
+        PipelineCommand::ColocalizeObjects(s) => list("classes_to_coloc", &s.classes_to_coloc),
         PipelineCommand::RelateObjects(s) => {
             let mut read = list("child_classes", &s.child_classes);
             read.extend(list("parent_classes", &s.parent_classes));
@@ -166,7 +166,7 @@ pub fn assigned_classes(command: &PipelineCommand) -> (Vec<ObjectClass>, bool) {
     let mut any = false;
     match command {
         PipelineCommand::ClassifyObjects(s) => assigned.push(s.output_class),
-        PipelineCommand::Colocalization(s) => assigned.push(s.mark_as),
+        PipelineCommand::ColocalizeObjects(s) => assigned.push(s.mark_as),
         PipelineCommand::AiObjectClassifier(s) => {
             assigned.extend(s.segmentation_mapping.iter().map(|m| m.output_class))
         }

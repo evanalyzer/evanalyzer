@@ -498,7 +498,7 @@ fn classify_objects_settings_clamp_area_and_circularity_fields() {
 
 #[test]
 fn colocalization_settings_convert_all_fields() {
-    let settings = ColocalizationSettings {
+    let settings = ColocalizeObjectsSettings {
         classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
         mark_objects_of: ObjectClass::Global(1),
         mark_as: ObjectClass::Global(5),
@@ -510,7 +510,7 @@ fn colocalization_settings_convert_all_fields() {
         size_unit: SizeUnitsRel::Pixels,
         min_coloc_area: 12.5,
     };
-    let result = Colocalization::from(settings);
+    let result = ColocalizeObjects::from(settings);
     assert_eq!(
         result.classes_to_coloc,
         vec![ObjectClass::Global(1), ObjectClass::Global(2)]
@@ -1065,8 +1065,8 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
     // catch a dispatch arm wired to the wrong algorithm.
     let cases: Vec<(PipelineCommand, &str)> = vec![
         (
-            PipelineCommand::Colocalization(ColocalizationSettings::default()),
-            "Colocalization",
+            PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings::default()),
+            "Colocalize Objects",
         ),
         (
             PipelineCommand::ColorFilterCommand(ColorFilterCommandSettings::default()),

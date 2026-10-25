@@ -11,7 +11,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_ai_engine::{DeviceSelection, EngineConfig, Image, Request, Response};
+use evanalyzer_ai::{DeviceSelection, EngineConfig, Image, Request, Response};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::fmt;
 use std::str::FromStr;
@@ -73,9 +73,9 @@ pub(crate) fn ai_device_options() -> &'static AiDeviceOptions {
 }
 
 /// Runs `request` on `image` with the AI engine (see
-/// `evanalyzer_ai_engine`), set up with these options on the first call.
+/// `evanalyzer_ai`), set up with these options on the first call.
 pub(crate) fn infer(request: &Request, image: Image<'_>) -> Result<Response, InternalErrors> {
-    evanalyzer_ai_engine::infer(request, image, engine_config).map_err(InternalErrors::Generic)
+    evanalyzer_ai::infer(request, image, engine_config).map_err(InternalErrors::Generic)
 }
 
 fn engine_config() -> EngineConfig {

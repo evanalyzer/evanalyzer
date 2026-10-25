@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_ai_engine::{Image, Request, Response, Task};
+use evanalyzer_ai::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 
@@ -425,7 +425,7 @@ impl Stardist {
 mod tests {
     use super::*;
     #[cfg(feature = "libtorch-in-process")]
-    use evanalyzer_ai_engine::torch::test_support::{tch::Tensor, trace_and_save_model};
+    use evanalyzer_ai::torch::test_support::{tch::Tensor, trace_and_save_model};
     use kornia_image::{Image, ImageSize};
 
     fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {

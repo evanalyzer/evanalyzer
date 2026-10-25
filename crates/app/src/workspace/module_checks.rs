@@ -550,7 +550,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ModuleProblem> {
                         .join(" › ")
                 ),
             };
-            // "the pipeline “Coloc” at #8 (Colocalization)" - the step's id
+            // "the pipeline “Coloc” at #8 (ColocalizeObjects)" - the step's id
             // as its card shows it, so it isn't read as a step inside a
             // module.
             let this_step = format!(
@@ -940,7 +940,7 @@ fn check_definition(
         let Some(command) = step.command() else {
             continue;
         };
-        if let PipelineCommand::Colocalization(coloc) = command
+        if let PipelineCommand::ColocalizeObjects(coloc) = command
             && let Some(local) = coloc
                 .classes_to_coloc
                 .iter()
@@ -1053,8 +1053,8 @@ mod tests {
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::modules::{ModuleParameterDef, ParamBinding, ParamValue};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
-        BlurSettings, ColocalizationSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
-        RelateObjectsSettings, VoronoiSettings,
+        BlurSettings, ColocalizeObjectsSettings, ExtractClassMappingSettings,
+        ExtractObjectsSettings, RelateObjectsSettings, VoronoiSettings,
     };
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     fn pearson(name: &str) -> PipelineCommand {
-        let mut command = PipelineCommand::default_for_key("measure_colocalization").unwrap();
+        let mut command = PipelineCommand::default_for_key("measure_image_colocalization").unwrap();
         *command.measurement_id_mut().unwrap() = name.into();
         command
     }
@@ -1283,7 +1283,7 @@ mod tests {
         });
         definition.steps.push(step(
             2,
-            PipelineCommand::Colocalization(ColocalizationSettings {
+            PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings {
                 classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Local(1)],
                 ..Default::default()
             }),
@@ -1374,7 +1374,7 @@ mod tests {
             ),
             step(
                 2,
-                PipelineCommand::Colocalization(ColocalizationSettings {
+                PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings {
                     classes_to_coloc: vec![
                         ObjectClass::Global(1),
                         ObjectClass::Global(2),

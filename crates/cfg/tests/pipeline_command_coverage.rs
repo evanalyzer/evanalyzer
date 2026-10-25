@@ -389,12 +389,12 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 52] = [
+    let expected: [(&str, &[CommandCategory]); 54] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
         ("ClassifyObjects", &[Object, Measure, Dataset]),
-        ("Colocalization", &[Object, Measure, Dataset]),
+        ("Colocalize Objects", &[Object, Measure, Dataset]),
         ("ColorFilterCommand", &[Segment, Preprocess]),
         ("ConnectedComponents", &[InstanceSegmentation, Extract]),
         ("DistanceTransform", &[Segment, Preprocess]),
@@ -423,15 +423,17 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
         // Measurements first, then dataset steps (which run after every image).
-        ("Area Occupied", &[Measure, Dataset]),
-        ("Image Intensity", &[Measure, Dataset]),
-        ("Image Quality", &[Measure, Dataset]),
+        ("Measure Image Area Occupied", &[Measure, Dataset]),
+        ("Measure Image Intensity", &[Measure, Dataset]),
+        ("Measure Image Quality", &[Measure, Dataset]),
         ("Exclude Image", &[Measure, Dataset]),
-        ("Measure Colocalization", &[Measure, Dataset]),
+        ("Measure Image Colocalization", &[Measure, Dataset]),
+        ("Measure Object Colocalization", &[Measure, Dataset]),
         ("Measure Object Neighbors", &[Measure, Dataset]),
-        ("Measure Distance To Parent", &[Measure, Dataset]),
+        ("Measure Object Distance To Parent", &[Measure, Dataset]),
         ("Measure Object Shape", &[Measure, Dataset]),
-        ("Measure Texture", &[Measure, Dataset]),
+        ("Measure Image Texture", &[Measure, Dataset]),
+        ("Measure Object Texture", &[Measure, Dataset]),
         ("Propagation", &[Object, Measure, Dataset]),
         ("ObjectMath", &[Object, Measure, Dataset]),
         ("AI Pixel Classifier", &[InstanceSegmentation]),
@@ -606,7 +608,7 @@ fn apply_param_change_unit_fields_toggle_both_variants() {
     // SizeUnits fields.
     for (name, field) in [
         ("ClassifyObjects", "size_unit"),
-        ("Colocalization", "size_unit"),
+        ("Colocalize Objects", "size_unit"),
         ("ObjectMath", "size_unit"),
         ("Voronoi", "unit"),
     ] {
@@ -636,7 +638,7 @@ fn apply_param_change_unit_fields_toggle_both_variants() {
 #[test]
 fn colocalization_size_unit_also_offers_percent() {
     // `size_unit` is a SizeUnitsRel: nm / px like SizeUnits, plus "%".
-    let mut cmd = default_command(id_of("Colocalization")).unwrap();
+    let mut cmd = default_command(id_of("Colocalize Objects")).unwrap();
     let def = cmd
         .to_parameters()
         .into_iter()
@@ -656,9 +658,9 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
     let obj_class_fields: &[(&str, &str)] = &[
         ("ClassifyObjects", "output_class"),
         ("ClassifyObjects", "overlapping_with"),
-        ("Colocalization", "class_for_overlapping_areas"),
-        ("Colocalization", "mark_objects_of"),
-        ("Colocalization", "mark_as"),
+        ("Colocalize Objects", "class_for_overlapping_areas"),
+        ("Colocalize Objects", "mark_objects_of"),
+        ("Colocalize Objects", "mark_as"),
         ("ObjectMath", "input_class"),
         ("ObjectMath", "other_class"),
         ("ObjectMath", "output_class"),
@@ -689,12 +691,12 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
 fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
     let multi_obj_class_fields: &[(&str, &str)] = &[
         ("ClassifyObjects", "input_classes"),
-        ("Colocalization", "classes_to_coloc"),
+        ("Colocalize Objects", "classes_to_coloc"),
         ("Relate Objects", "child_classes"),
         ("Relate Objects", "parent_classes"),
-        // Colocalization.filter_classes is `#[cmdsmeta(visible = false)]`, so it
+        // ColocalizeObjects.filter_classes is `#[cmdsmeta(visible = false)]`, so it
         // never reaches `to_parameters()` - not tested here.
-        ("Colocalization", "exclude_classes"),
+        ("Colocalize Objects", "exclude_classes"),
         ("ObjectMath", "other_filter_classes"),
         ("Voronoi", "center_filter_classes"),
         ("Voronoi", "mask_filter_classes"),
@@ -1035,7 +1037,7 @@ fn apply_param_change_colocalization_multiplicity_switches_to_and_edits_multi_fo
     // list is then editable via the synthetic "multiplicity.0" MultiObjClass
     // field, using the same comma-list/toggle: syntax every other
     // MultiObjClass field supports.
-    let mut cmd = default_command(id_of("Colocalization")).unwrap();
+    let mut cmd = default_command(id_of("Colocalize Objects")).unwrap();
     assert_eq!(param_value(&cmd, "multiplicity"), "All partners");
 
     cmd.apply_param_change("multiplicity", "Several partners only for selected classes");

@@ -17,7 +17,7 @@ publish = false
 [workspace.dependencies]
 evanalyzer_core = { path = "crates/core" }
 evanalyzer_cfg = { path = "crates/cfg" }
-evanalyzer_ai_engine = { path = "crates/ai_engine" }
+evanalyzer_ai = { path = "crates/ai" }
 evanalyzer_app = { path = "crates/app" }
 evanalyzer_gui    = { path = "crates/gui" }
 evanalyzer_cli    = { path = "crates/cli" }

@@ -208,7 +208,7 @@ pub fn system_diagnostics() -> SystemDiagnostics {
     SystemDiagnostics {
         cpu_cores,
         total_ram_bytes,
-        cuda_available: evanalyzer_ai_engine::cuda_is_available(),
+        cuda_available: evanalyzer_ai::cuda_is_available(),
     }
 }
 

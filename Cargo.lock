@@ -2469,7 +2469,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "evanalyzer_ai_engine"
+name = "evanalyzer_ai"
 version = "0.1.0"
 dependencies = [
  "libloading",
@@ -2573,7 +2573,7 @@ dependencies = [
  "csv",
  "duckdb",
  "env_logger",
- "evanalyzer_ai_engine",
+ "evanalyzer_ai",
  "evanalyzer_cfg",
  "fast-uuid-v7",
  "image",

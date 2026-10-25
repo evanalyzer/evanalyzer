@@ -182,7 +182,7 @@ fn format_number(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algos::{ImageQuality, MeasureColocalization};
+    use crate::algos::{MeasureImageQuality, MeasureObjectColocalization};
     use crate::pipeline::pipeline::PipelineImageMeta;
     use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectId};
 
@@ -190,7 +190,7 @@ mod tests {
     /// saturated, no slope (a flat image).
     fn cache() -> GlobalPipelineCache {
         let mut cache = GlobalPipelineCache::default();
-        let quality = ImageQuality {
+        let quality = MeasureImageQuality {
             id: "quality_01".into(),
             channel: ImageChannelIdx(0),
         };
@@ -313,15 +313,15 @@ mod tests {
         assert!(err.contains("rule 1 has no measurement"), "{err}");
 
         // A value per object can't decide about an image.
-        let info = MeasureColocalization {
+        let info = MeasureObjectColocalization {
             id: "per_object".into(),
+            objects: evanalyzer_cfg::core_types::ObjectClass::Global(1),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(1),
             threshold_percent: 15.0,
             costes: crate::algos::CostesMethod::Off,
-            objects: evanalyzer_cfg::core_types::ObjectClass::Global(1),
         }
-        .measurement_output("object_pearson");
+        .measurement_output("pearson");
         cache.add_object_measurement(info.clone(), vec![(ObjectId(1), 0.5)]);
         let per_object = ExcludeImage {
             exclude_when: ExcludeWhen::AnyRule,

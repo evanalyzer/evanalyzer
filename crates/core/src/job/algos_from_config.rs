@@ -529,15 +529,6 @@ impl From<AiObjectClassifierSettings> for AiObjectClassifier {
     }
 }
 
-impl From<AreaOccupiedSettings> for AreaOccupied {
-    fn from(_s: AreaOccupiedSettings) -> Self {
-        AreaOccupied {
-            id: _s.id,
-            object_class: _s.object_class,
-        }
-    }
-}
-
 impl From<BlurSettings> for Blur {
     fn from(_s: BlurSettings) -> Self {
         Blur {
@@ -604,9 +595,9 @@ impl From<ClassifyObjectsSettings> for ClassifyObjects {
     }
 }
 
-impl From<ColocalizationSettings> for Colocalization {
-    fn from(_s: ColocalizationSettings) -> Self {
-        Colocalization {
+impl From<ColocalizeObjectsSettings> for ColocalizeObjects {
+    fn from(_s: ColocalizeObjectsSettings) -> Self {
+        ColocalizeObjects {
             classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
             all_combinations: _s.all_combinations,
             exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
@@ -774,30 +765,12 @@ impl From<ImageCacheSettings> for ImageCache {
     }
 }
 
-impl From<ImageIntensitySettings> for ImageIntensity {
-    fn from(_s: ImageIntensitySettings) -> Self {
-        ImageIntensity {
-            id: _s.id,
-            channel: _s.channel,
-        }
-    }
-}
-
 impl From<ImageMathSettings> for ImageMath {
     fn from(_s: ImageMathSettings) -> Self {
         ImageMath {
             operand: Operand::from(_s.operand),
             second_image_address: _s.second_image_address,
             swap_operands: _s.swap_operands,
-        }
-    }
-}
-
-impl From<ImageQualitySettings> for ImageQuality {
-    fn from(_s: ImageQualitySettings) -> Self {
-        ImageQuality {
-            id: _s.id,
-            channel: _s.channel,
         }
     }
 }
@@ -852,22 +825,73 @@ impl From<LoadChannelSettings> for LoadChannel {
     }
 }
 
-impl From<MeasureColocalizationSettings> for MeasureColocalization {
-    fn from(_s: MeasureColocalizationSettings) -> Self {
-        MeasureColocalization {
+impl From<MeasureImageAreaOccupiedSettings> for MeasureImageAreaOccupied {
+    fn from(_s: MeasureImageAreaOccupiedSettings) -> Self {
+        MeasureImageAreaOccupied {
+            id: _s.id,
+            object_class: _s.object_class,
+        }
+    }
+}
+
+impl From<MeasureImageColocalizationSettings> for MeasureImageColocalization {
+    fn from(_s: MeasureImageColocalizationSettings) -> Self {
+        MeasureImageColocalization {
             id: _s.id,
             channel_a: _s.channel_a,
             channel_b: _s.channel_b,
             threshold_percent: _s.threshold_percent.clamp(0.0, 100.0),
             costes: CostesMethod::from(_s.costes),
-            objects: _s.objects,
         }
     }
 }
 
-impl From<MeasureDistanceToParentSettings> for MeasureDistanceToParent {
-    fn from(_s: MeasureDistanceToParentSettings) -> Self {
-        MeasureDistanceToParent {
+impl From<MeasureImageIntensitySettings> for MeasureImageIntensity {
+    fn from(_s: MeasureImageIntensitySettings) -> Self {
+        MeasureImageIntensity {
+            id: _s.id,
+            channel: _s.channel,
+        }
+    }
+}
+
+impl From<MeasureImageQualitySettings> for MeasureImageQuality {
+    fn from(_s: MeasureImageQualitySettings) -> Self {
+        MeasureImageQuality {
+            id: _s.id,
+            channel: _s.channel,
+        }
+    }
+}
+
+impl From<MeasureImageTextureSettings> for MeasureImageTexture {
+    fn from(_s: MeasureImageTextureSettings) -> Self {
+        MeasureImageTexture {
+            id: _s.id,
+            channel: _s.channel,
+            scale: _s.scale,
+            gray_levels: _s.gray_levels,
+            directions: TextureDirections::from(_s.directions),
+        }
+    }
+}
+
+impl From<MeasureObjectColocalizationSettings> for MeasureObjectColocalization {
+    fn from(_s: MeasureObjectColocalizationSettings) -> Self {
+        MeasureObjectColocalization {
+            id: _s.id,
+            objects: _s.objects,
+            channel_a: _s.channel_a,
+            channel_b: _s.channel_b,
+            threshold_percent: _s.threshold_percent.clamp(0.0, 100.0),
+            costes: CostesMethod::from(_s.costes),
+        }
+    }
+}
+
+impl From<MeasureObjectDistanceToParentSettings> for MeasureObjectDistanceToParent {
+    fn from(_s: MeasureObjectDistanceToParentSettings) -> Self {
+        MeasureObjectDistanceToParent {
             id: _s.id,
             children: _s.children,
             parent_class: _s.parent_class,
@@ -896,15 +920,15 @@ impl From<MeasureObjectShapeSettings> for MeasureObjectShape {
     }
 }
 
-impl From<MeasureTextureSettings> for MeasureTexture {
-    fn from(_s: MeasureTextureSettings) -> Self {
-        MeasureTexture {
+impl From<MeasureObjectTextureSettings> for MeasureObjectTexture {
+    fn from(_s: MeasureObjectTextureSettings) -> Self {
+        MeasureObjectTexture {
             id: _s.id,
+            objects: _s.objects,
             channel: _s.channel,
             scale: _s.scale,
             gray_levels: _s.gray_levels,
             directions: TextureDirections::from(_s.directions),
-            objects: _s.objects,
         }
     }
 }
@@ -1188,9 +1212,6 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::AiObjectClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::AiObjectClassifier::from(settings),
         ))),
-        PipelineCommand::AreaOccupied(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::AreaOccupied::from(settings),
-        ))),
         PipelineCommand::Blur(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Blur::from(settings),
         ))),
@@ -1200,8 +1221,8 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::ClassifyObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ClassifyObjects::from(settings),
         ))),
-        PipelineCommand::Colocalization(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::Colocalization::from(settings),
+        PipelineCommand::ColocalizeObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ColocalizeObjects::from(settings),
         ))),
         PipelineCommand::ColorFilterCommand(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ColorFilterCommand::from(settings),
@@ -1245,14 +1266,8 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::ImageCache(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ImageCache::from(settings),
         ))),
-        PipelineCommand::ImageIntensity(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::ImageIntensity::from(settings),
-        ))),
         PipelineCommand::ImageMath(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ImageMath::from(settings),
-        ))),
-        PipelineCommand::ImageQuality(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::ImageQuality::from(settings),
         ))),
         PipelineCommand::IntensityTransformation(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::IntensityTransformation::from(settings),
@@ -1266,20 +1281,35 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::LoadChannel(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::LoadChannel::from(settings),
         ))),
-        PipelineCommand::MeasureColocalization(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::MeasureColocalization::from(settings),
+        PipelineCommand::MeasureImageAreaOccupied(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureImageAreaOccupied::from(settings),
         ))),
-        PipelineCommand::MeasureDistanceToParent(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::MeasureDistanceToParent::from(settings),
+        PipelineCommand::MeasureImageColocalization(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureImageColocalization::from(settings),
         ))),
+        PipelineCommand::MeasureImageIntensity(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureImageIntensity::from(settings),
+        ))),
+        PipelineCommand::MeasureImageQuality(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureImageQuality::from(settings),
+        ))),
+        PipelineCommand::MeasureImageTexture(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureImageTexture::from(settings),
+        ))),
+        PipelineCommand::MeasureObjectColocalization(settings) => Ok(PipelineStep::Image(
+            Box::new(crate::algos::MeasureObjectColocalization::from(settings)),
+        )),
+        PipelineCommand::MeasureObjectDistanceToParent(settings) => Ok(PipelineStep::Image(
+            Box::new(crate::algos::MeasureObjectDistanceToParent::from(settings)),
+        )),
         PipelineCommand::MeasureObjectNeighbors(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectNeighbors::from(settings),
         ))),
         PipelineCommand::MeasureObjectShape(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectShape::from(settings),
         ))),
-        PipelineCommand::MeasureTexture(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::MeasureTexture::from(settings),
+        PipelineCommand::MeasureObjectTexture(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureObjectTexture::from(settings),
         ))),
         PipelineCommand::MedianSubtract(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MedianSubtract::from(settings),

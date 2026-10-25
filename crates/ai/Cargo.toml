@@ -1,5 +1,5 @@
 [package]
-name = "evanalyzer_ai_engine"
+name = "evanalyzer_ai"
 description = "Runs AI models: the engine-neutral interface, the engines (libtorch, …) and the loader of the libtorch plugin"
 version = { workspace = true }
 edition = { workspace = true }
@@ -9,11 +9,11 @@ publish = { workspace = true }
 
 # Only an rlib here: the libtorch plugin is the same crate built as a cdylib
 # on request - `cargo build-ai-plugin` (see .cargo/config.toml), i.e.
-# `cargo rustc -p evanalyzer_ai_engine --features torch --crate-type cdylib`.
+# `cargo rustc -p evanalyzer_ai --features torch --crate-type cdylib`.
 # Declaring the cdylib would make cargo link a (torch-less) copy of it in
 # every build that depends on this crate.
 [lib]
-name = "evanalyzer_ai_engine"
+name = "evanalyzer_ai"
 doctest = false
 
 [dependencies]

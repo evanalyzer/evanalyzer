@@ -81,12 +81,6 @@ pub enum PipelineCommand {
         alias = "ai_object_classifier"
     )]
     AiObjectClassifier(AiObjectClassifierSettings),
-    #[serde(
-        alias = "area-occupied",
-        alias = "areaOccupied",
-        alias = "area_occupied"
-    )]
-    AreaOccupied(AreaOccupiedSettings),
     #[serde(alias = "blur")]
     Blur(BlurSettings),
     #[serde(alias = "cellpose")]
@@ -97,8 +91,12 @@ pub enum PipelineCommand {
         alias = "classify_objects"
     )]
     ClassifyObjects(ClassifyObjectsSettings),
-    #[serde(alias = "colocalization")]
-    Colocalization(ColocalizationSettings),
+    #[serde(
+        alias = "colocalize-objects",
+        alias = "colocalizeObjects",
+        alias = "colocalize_objects"
+    )]
+    ColocalizeObjects(ColocalizeObjectsSettings),
     #[serde(
         alias = "color-filter-command",
         alias = "colorFilterCommand",
@@ -171,20 +169,8 @@ pub enum PipelineCommand {
     IlluminationCorrection(IlluminationCorrectionSettings),
     #[serde(alias = "image-cache", alias = "imageCache", alias = "image_cache")]
     ImageCache(ImageCacheSettings),
-    #[serde(
-        alias = "image-intensity",
-        alias = "imageIntensity",
-        alias = "image_intensity"
-    )]
-    ImageIntensity(ImageIntensitySettings),
     #[serde(alias = "image-math", alias = "imageMath", alias = "image_math")]
     ImageMath(ImageMathSettings),
-    #[serde(
-        alias = "image-quality",
-        alias = "imageQuality",
-        alias = "image_quality"
-    )]
-    ImageQuality(ImageQualitySettings),
     #[serde(
         alias = "intensity-transformation",
         alias = "intensityTransformation",
@@ -202,17 +188,47 @@ pub enum PipelineCommand {
     #[serde(alias = "load-channel", alias = "loadChannel", alias = "load_channel")]
     LoadChannel(LoadChannelSettings),
     #[serde(
-        alias = "measure-colocalization",
-        alias = "measureColocalization",
-        alias = "measure_colocalization"
+        alias = "measure-image-area-occupied",
+        alias = "measureImageAreaOccupied",
+        alias = "measure_image_area_occupied"
     )]
-    MeasureColocalization(MeasureColocalizationSettings),
+    MeasureImageAreaOccupied(MeasureImageAreaOccupiedSettings),
     #[serde(
-        alias = "measure-distance-to-parent",
-        alias = "measureDistanceToParent",
-        alias = "measure_distance_to_parent"
+        alias = "measure-image-colocalization",
+        alias = "measureImageColocalization",
+        alias = "measure_image_colocalization"
     )]
-    MeasureDistanceToParent(MeasureDistanceToParentSettings),
+    MeasureImageColocalization(MeasureImageColocalizationSettings),
+    #[serde(
+        alias = "measure-image-intensity",
+        alias = "measureImageIntensity",
+        alias = "measure_image_intensity"
+    )]
+    MeasureImageIntensity(MeasureImageIntensitySettings),
+    #[serde(
+        alias = "measure-image-quality",
+        alias = "measureImageQuality",
+        alias = "measure_image_quality"
+    )]
+    MeasureImageQuality(MeasureImageQualitySettings),
+    #[serde(
+        alias = "measure-image-texture",
+        alias = "measureImageTexture",
+        alias = "measure_image_texture"
+    )]
+    MeasureImageTexture(MeasureImageTextureSettings),
+    #[serde(
+        alias = "measure-object-colocalization",
+        alias = "measureObjectColocalization",
+        alias = "measure_object_colocalization"
+    )]
+    MeasureObjectColocalization(MeasureObjectColocalizationSettings),
+    #[serde(
+        alias = "measure-object-distance-to-parent",
+        alias = "measureObjectDistanceToParent",
+        alias = "measure_object_distance_to_parent"
+    )]
+    MeasureObjectDistanceToParent(MeasureObjectDistanceToParentSettings),
     #[serde(
         alias = "measure-object-neighbors",
         alias = "measureObjectNeighbors",
@@ -226,11 +242,11 @@ pub enum PipelineCommand {
     )]
     MeasureObjectShape(MeasureObjectShapeSettings),
     #[serde(
-        alias = "measure-texture",
-        alias = "measureTexture",
-        alias = "measure_texture"
+        alias = "measure-object-texture",
+        alias = "measureObjectTexture",
+        alias = "measure_object_texture"
     )]
-    MeasureTexture(MeasureTextureSettings),
+    MeasureObjectTexture(MeasureObjectTextureSettings),
     #[serde(
         alias = "median-subtract",
         alias = "medianSubtract",
@@ -326,356 +342,370 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 1,
-            name: "Area Occupied",
-            category: CommandCategory::Measure,
-            summary: "Measures how much of the image the objects of a class cover.",
-            description: "The area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
-        },
-        CommandMeta {
-            id: 2,
             name: "Blur",
             category: CommandCategory::Preprocess,
             summary: "Smooths an image by averaging pixel intensities within a local neighborhood.",
             description: "This algorithm applies a uniform box filter where every pixel within the moving\nwindow contributes equally to the final value. It is a computationally fast\nmethod used for general image smoothing, blending variations, and rapid noise\nsuppression where edge precision is less critical.",
         },
         CommandMeta {
-            id: 3,
+            id: 2,
             name: "AI Cellpose Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a Cellpose-SAM model",
             description: "[AI Cellpose Segmentation] -> [Extract Objects]\n\nObject segmentation using Cellpose-SAM model which can be downloaded from\nhttps://evanalyzer.org/downloads/#ai-models\n\nCellpose-SAM is a biological segmentation model that integrates the pretrained transformer\narchitecture of Meta's Segment Anything Model (SAM) with the Cellpose framework to accurately\npredict vector flow fields for dense cellular structures.\nBy combining these methods, it achieves \"superhuman generalization,\" outperforming the average\naccuracy of human annotators and reaching near-optimal cell masking performance. [1]\n\n[1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org",
         },
         CommandMeta {
-            id: 4,
+            id: 3,
             name: "ClassifyObjects",
             category: CommandCategory::Object,
             summary: "Classifies ROIs based on morphological and intensity features.",
             description: "This command applies rule-based classification logic to assign object classes\nto extracted ROIs. Classification is performed using configurable criteria\nincluding area, shape descriptors, and intensity statistics.",
         },
         CommandMeta {
-            id: 5,
-            name: "Colocalization",
+            id: 4,
+            name: "Colocalize Objects",
             category: CommandCategory::Object,
             summary: "Calculates spatial colocalization and intersections between specified object classes.",
             description: "This command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
         },
         CommandMeta {
-            id: 6,
+            id: 5,
             name: "ColorFilterCommand",
             category: CommandCategory::Preprocess,
             summary: "A command that filters an image based on a specific HSV color range.",
             description: "Pixels falling outside the HSV range are masked\nout by setting to black.",
         },
         CommandMeta {
-            id: 7,
+            id: 6,
             name: "ConnectedComponents",
             category: CommandCategory::InstanceSegmentation,
             summary: "Identifies and labels discrete objects within a binary or multi-class image.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]",
         },
         CommandMeta {
-            id: 8,
+            id: 7,
             name: "DistanceTransform",
             category: CommandCategory::Preprocess,
             summary: "A command that calculates the Euclidean Distance Map (EDM) of an f32 image.",
             description: "This algorithm identifies pixels below a threshold as \"background\" and\ncalculates the distance of every \"foreground\" pixel to the nearest background pixel.",
         },
         CommandMeta {
-            id: 9,
+            id: 8,
             name: "EdgeDetectionCanny",
             category: CommandCategory::Preprocess,
             summary: "Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.",
             description: "This algorithm identifies optimal edge locations by calculating spatial intensity\ngradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,\nand applying a dual-threshold hysteresis loop to preserve weak edges connected\nto strong ones while completely rejecting isolated noise.",
         },
         CommandMeta {
-            id: 10,
+            id: 9,
             name: "EdgeDetectionSobel",
             category: CommandCategory::Preprocess,
             summary: "Extracts directional boundaries by computing spatial image intensity gradients.",
             description: "This algorithm applies localized 3x3 kernels to approximate the first derivative\nof pixel intensities across the horizontal and vertical axes. It highlights\nareas of sharp luminance changes, producing a continuous gradient map that\nemphasizes prominent structural edges and surface transitions.",
         },
         CommandMeta {
-            id: 11,
+            id: 10,
             name: "EnhanceContrast",
             category: CommandCategory::Preprocess,
             summary: "Configuration for contrast enhancement and histogram manipulation.",
             description: "This algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.",
         },
         CommandMeta {
-            id: 12,
+            id: 11,
             name: "Exclude Image",
             category: CommandCategory::Measure,
             summary: "Leaves an image out of the results when its measurements say it's bad.",
             description: "Each rule compares a measurement of an earlier step (e.g. Image\nQuality's focus score) with a value. When the rules are met, the image\nis analysed to the end but disabled in the results, with the reason - to\ncheck it by hand and enable it again if it's fine. The rules are checked\non every plane; one plane meeting them excludes the whole image. A\nmeasurement without a value (e.g. the slope of a flat image) doesn't\nmeet a rule.",
         },
         CommandMeta {
-            id: 13,
+            id: 12,
             name: "ExtractObjects",
             category: CommandCategory::Extract,
             summary: "Represents a bounded object extracted from a labeled image.",
             description: "A command to extract spatial statistics and bounding boxes from labeled objects.",
         },
         CommandMeta {
-            id: 14,
+            id: 13,
             name: "FillHoles",
             category: CommandCategory::InstanceSegmentation,
             summary: "Fills enclosed background holes in the segmentation map.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nA direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nWhich pixels count as a \"hole\" is decided the same way ImageJ does it:\nevery non-background pixel is \"foreground\" regardless of its actual\nlabel/class value, so a background pocket enclosed by *any* mix of labels\nis still a hole. Unlike ImageJ, each hole is then attributed back to the\nclass that actually encloses it - every enclosed background region is\ngrouped into a connected component, and that component is filled with\nwhichever label is most common among its immediately bordering pixels\n(falling back to `FILL_VALUE` only in the degenerate case of a hole with\nno foreground neighbor at all). This keeps multi-class segmentation maps\ncorrect: a hole inside a class-2 object is filled with 2, not merged with\na fixed value that happens to collide with an unrelated class elsewhere\nin the image.",
         },
         CommandMeta {
-            id: 15,
+            id: 14,
             name: "FillObjectHoles",
             category: CommandCategory::Extract,
             summary: "Fills the holes inside every object, one object at a time.",
             description: "[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
         },
         CommandMeta {
-            id: 16,
+            id: 15,
             name: "GaussianBlur",
             category: CommandCategory::Preprocess,
             summary: "Smooths an image and reduces background noise using a Gaussian kernel.",
             description: "This algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.",
         },
         CommandMeta {
-            id: 17,
+            id: 16,
             name: "Hessian",
             category: CommandCategory::Preprocess,
             summary: "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.",
             description: "This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.",
         },
         CommandMeta {
-            id: 18,
+            id: 17,
             name: "IlluminationCorrection",
             category: CommandCategory::Preprocess,
             summary: "Use this when your images are brighter in the middle and dimmer toward the edges/corners (vignetting), or show any other smooth shading pattern that repeats the same way across every tile or every image from the same microscope/camera setup - a consequence of the optics or illumination, not the sample.",
             description: "Left uncorrected, that shading makes intensity comparisons between regions of an image (or between images/wells) unreliable, even though it rarely stops segmentation from finding objects on its own.\n\nUse **Rolling Ball** instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n**How it works**\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
         },
         CommandMeta {
-            id: 19,
+            id: 18,
             name: "ImageCache",
             category: CommandCategory::Preprocess,
             summary: "A filter that acts as a synchronization point between the pipeline and a storage backend.",
             description: "`ImageCache` allows the pipeline to branch or \"undo\" operations by saving\nstates to a named address and reloading them as needed.",
         },
         CommandMeta {
-            id: 20,
-            name: "Image Intensity",
-            category: CommandCategory::Measure,
-            summary: "Measures the brightness of a channel across the whole image.",
-            description: "Total, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
-        },
-        CommandMeta {
-            id: 21,
+            id: 19,
             name: "ImageMath",
             category: CommandCategory::Preprocess,
             summary: "A filter that performs pixel-wise mathematical operations between the current pipeline image and a secondary image stored in the cache.",
             description: "This command allows for complex image blending, masking, and comparison.",
         },
         CommandMeta {
-            id: 22,
-            name: "Image Quality",
-            category: CommandCategory::Measure,
-            summary: "Measures how usable a channel of the image is: sharp, not noisy, not overexposed.",
-            description: "Focus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
-        },
-        CommandMeta {
-            id: 23,
+            id: 20,
             name: "IntensityTransformation",
             category: CommandCategory::Preprocess,
             summary: "Configuration for adjusting image contrast and brightness.",
             description: "This transformation applies a linear mapping to pixel values.\nIn manual mode, the output is typically calculated as:\n`output = input * contrast + brightness`.",
         },
         CommandMeta {
-            id: 24,
+            id: 21,
             name: "Laplacian",
             category: CommandCategory::Preprocess,
             summary: "Configuration for the Laplacian edge detection filter.",
             description: "The Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.",
         },
         CommandMeta {
-            id: 25,
+            id: 22,
             name: "LoadAnnotatedObjects",
             category: CommandCategory::Object,
             summary: "Loads the hand-annotated objects of the image into the pipeline.",
             description: "Every loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
         },
         CommandMeta {
-            id: 26,
+            id: 23,
             name: "LoadChannel",
             category: CommandCategory::Preprocess,
             summary: "Loads an image channel as the image the following steps work on.",
             description: "Replaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na module that detects nuclei in one channel and cells in another.\n\nProjection: Auto loads the channel as the project's z-stack setting does.\nAny other choice loads it with its own z-projection, or one z-plane (None).\nUse it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.\nObjects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.",
         },
         CommandMeta {
-            id: 27,
-            name: "Measure Colocalization",
+            id: 24,
+            name: "Measure Image Area Occupied",
             category: CommandCategory::Measure,
-            summary: "Measures how two channels go together, over the whole image and per object - CellProfiler's MeasureColocalization.",
+            summary: "Measures how much of the image the objects of a class cover.",
+            description: "The area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
+        },
+        CommandMeta {
+            id: 25,
+            name: "Measure Image Colocalization",
+            category: CommandCategory::Measure,
+            summary: "Measures how two channels go together over the whole image - CellProfiler's MeasureColocalization, per image.",
             description: "Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
         },
         CommandMeta {
+            id: 26,
+            name: "Measure Image Intensity",
+            category: CommandCategory::Measure,
+            summary: "Measures the brightness of a channel across the whole image.",
+            description: "Total, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
+        },
+        CommandMeta {
+            id: 27,
+            name: "Measure Image Quality",
+            category: CommandCategory::Measure,
+            summary: "Measures how usable a channel of the image is: sharp, not noisy, not overexposed.",
+            description: "Focus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
+        },
+        CommandMeta {
             id: 28,
-            name: "Measure Distance To Parent",
+            name: "Measure Image Texture",
+            category: CommandCategory::Measure,
+            summary: "Measures the texture of a channel over the whole image - Haralick's features (CellProfiler's MeasureTexture, per image).",
+            description: "The pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
+        },
+        CommandMeta {
+            id: 29,
+            name: "Measure Object Colocalization",
+            category: CommandCategory::Measure,
+            summary: "Measures how two channels go together in each object of a class - CellProfiler's MeasureColocalization, per object.",
+            description: "The values of Measure Image Colocalization (but the slope) of the\nobject's pixels: the threshold is a percentage of the object's maximum,\nRWC ranks the values of all the objects, and Costes uses the whole\nimage's Costes thresholds.",
+        },
+        CommandMeta {
+            id: 30,
+            name: "Measure Object Distance To Parent",
             category: CommandCategory::Measure,
             summary: "Each child's distance to its parent of a class (linked by Relate Objects): centre to centre, and from its centre to the parent's edge.",
             description: "A child without a parent of the class has no value.",
         },
         CommandMeta {
-            id: 29,
+            id: 31,
             name: "Measure Object Neighbors",
             category: CommandCategory::Measure,
             summary: "For each object: its neighbours, how much of its outline touches them, and its first and second closest object.",
             description: "The closest objects are by the distance between the centres; each\ndistance names the object it is to. \"Percent touching\" is the part of\nthe object's outline pixels within the distance (+ ½ px) of a neighbour.",
         },
         CommandMeta {
-            id: 30,
+            id: 32,
             name: "Measure Object Shape",
             category: CommandCategory::Measure,
             summary: "For each object: its convex area and solidity as CellProfiler gives them (the pixels whose centre lies in the convex hull; area / convex area), its Euler number (1 - holes, 8-connected) and its radii (the distance of its pixels to the nearest pixel outside it: maximum, mean, median).",
             description: "",
         },
         CommandMeta {
-            id: 31,
-            name: "Measure Texture",
+            id: 33,
+            name: "Measure Object Texture",
             category: CommandCategory::Measure,
-            summary: "Measures the texture of a channel - Haralick's features, over the whole image and per object (CellProfiler's MeasureTexture).",
-            description: "The pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
+            summary: "Measures the texture of a channel in each object of a class - Haralick's features (CellProfiler's MeasureTexture, per object).",
+            description: "The same values as Measure Image Texture, of the object's pixels only.",
         },
         CommandMeta {
-            id: 32,
+            id: 34,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
         },
         CommandMeta {
-            id: 33,
+            id: 35,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.",
         },
         CommandMeta {
-            id: 34,
+            id: 36,
             name: "ObjectMath",
             category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by object pair.",
             description: "When more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 35,
+            id: 37,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "Segments the image with a pixel classifier trained in the AI training dialog.",
             description: "[Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nTrain a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.\nThe classifier assigns every pixel of the image to a class, producing a segmented image.\nThe segmentation mapping translates the model's classes into this project's segmentation classes.\n\nUse a pixel classifier in place of a threshold step.\nLike a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.",
         },
         CommandMeta {
-            id: 36,
+            id: 38,
             name: "Propagation",
             category: CommandCategory::Object,
             summary: "Grows a region around each seed object through a channel.",
             description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
         },
         CommandMeta {
-            id: 37,
+            id: 39,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 38,
+            id: 40,
             name: "Relate Objects",
             category: CommandCategory::Object,
             summary: "Links objects to the objects they belong to: each child (e.g.",
             description: "a spot) gets at most one parent of each parent class (e.g. its cell).\n\nThe results then give per parent the number of its children and the\nmean, median, ... of their measurements, and the parent's values next to\neach child. A child already linked to a parent of one of these classes\nis linked anew - or unlinked when no parent matches.",
         },
         CommandMeta {
-            id: 39,
+            id: 41,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 40,
+            id: 42,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 41,
+            id: 43,
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 42,
+            id: 44,
             name: "SimpleTracker",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 43,
+            id: 45,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 44,
+            id: 46,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 45,
+            id: 47,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 46,
+            id: 48,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 47,
+            id: 49,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 48,
+            id: 50,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 49,
+            id: 51,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 50,
+            id: 52,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 51,
+            id: 53,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -690,119 +720,125 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         0 => Some(PipelineCommand::AiObjectClassifier(
             AiObjectClassifierSettings::default(),
         )),
-        1 => Some(PipelineCommand::AreaOccupied(
-            AreaOccupiedSettings::default(),
-        )),
-        2 => Some(PipelineCommand::Blur(BlurSettings::default())),
-        3 => Some(PipelineCommand::Cellpose(CellposeSettings::default())),
-        4 => Some(PipelineCommand::ClassifyObjects(
+        1 => Some(PipelineCommand::Blur(BlurSettings::default())),
+        2 => Some(PipelineCommand::Cellpose(CellposeSettings::default())),
+        3 => Some(PipelineCommand::ClassifyObjects(
             ClassifyObjectsSettings::default(),
         )),
-        5 => Some(PipelineCommand::Colocalization(
-            ColocalizationSettings::default(),
+        4 => Some(PipelineCommand::ColocalizeObjects(
+            ColocalizeObjectsSettings::default(),
         )),
-        6 => Some(PipelineCommand::ColorFilterCommand(
+        5 => Some(PipelineCommand::ColorFilterCommand(
             ColorFilterCommandSettings::default(),
         )),
-        7 => Some(PipelineCommand::ConnectedComponents(
+        6 => Some(PipelineCommand::ConnectedComponents(
             ConnectedComponentsSettings::default(),
         )),
-        8 => Some(PipelineCommand::DistanceTransform(
+        7 => Some(PipelineCommand::DistanceTransform(
             DistanceTransformSettings::default(),
         )),
-        9 => Some(PipelineCommand::EdgeDetectionCanny(
+        8 => Some(PipelineCommand::EdgeDetectionCanny(
             EdgeDetectionCannySettings::default(),
         )),
-        10 => Some(PipelineCommand::EdgeDetectionSobel(
+        9 => Some(PipelineCommand::EdgeDetectionSobel(
             EdgeDetectionSobelSettings::default(),
         )),
-        11 => Some(PipelineCommand::EnhanceContrast(
+        10 => Some(PipelineCommand::EnhanceContrast(
             EnhanceContrastSettings::default(),
         )),
-        12 => Some(PipelineCommand::ExcludeImage(
+        11 => Some(PipelineCommand::ExcludeImage(
             ExcludeImageSettings::default(),
         )),
-        13 => Some(PipelineCommand::ExtractObjects(
+        12 => Some(PipelineCommand::ExtractObjects(
             ExtractObjectsSettings::default(),
         )),
-        14 => Some(PipelineCommand::FillHoles(FillHolesSettings::default())),
-        15 => Some(PipelineCommand::FillObjectHoles(
+        13 => Some(PipelineCommand::FillHoles(FillHolesSettings::default())),
+        14 => Some(PipelineCommand::FillObjectHoles(
             FillObjectHolesSettings::default(),
         )),
-        16 => Some(PipelineCommand::GaussianBlur(
+        15 => Some(PipelineCommand::GaussianBlur(
             GaussianBlurSettings::default(),
         )),
-        17 => Some(PipelineCommand::Hessian(HessianSettings::default())),
-        18 => Some(PipelineCommand::IlluminationCorrection(
+        16 => Some(PipelineCommand::Hessian(HessianSettings::default())),
+        17 => Some(PipelineCommand::IlluminationCorrection(
             IlluminationCorrectionSettings::default(),
         )),
-        19 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
-        20 => Some(PipelineCommand::ImageIntensity(
-            ImageIntensitySettings::default(),
-        )),
-        21 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
-        22 => Some(PipelineCommand::ImageQuality(
-            ImageQualitySettings::default(),
-        )),
-        23 => Some(PipelineCommand::IntensityTransformation(
+        18 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
+        19 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
+        20 => Some(PipelineCommand::IntensityTransformation(
             IntensityTransformationSettings::default(),
         )),
-        24 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        25 => Some(PipelineCommand::LoadAnnotatedObjects(
+        21 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
+        22 => Some(PipelineCommand::LoadAnnotatedObjects(
             LoadAnnotatedObjectsSettings::default(),
         )),
-        26 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
-        27 => Some(PipelineCommand::MeasureColocalization(
-            MeasureColocalizationSettings::default(),
+        23 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
+        24 => Some(PipelineCommand::MeasureImageAreaOccupied(
+            MeasureImageAreaOccupiedSettings::default(),
         )),
-        28 => Some(PipelineCommand::MeasureDistanceToParent(
-            MeasureDistanceToParentSettings::default(),
+        25 => Some(PipelineCommand::MeasureImageColocalization(
+            MeasureImageColocalizationSettings::default(),
         )),
-        29 => Some(PipelineCommand::MeasureObjectNeighbors(
+        26 => Some(PipelineCommand::MeasureImageIntensity(
+            MeasureImageIntensitySettings::default(),
+        )),
+        27 => Some(PipelineCommand::MeasureImageQuality(
+            MeasureImageQualitySettings::default(),
+        )),
+        28 => Some(PipelineCommand::MeasureImageTexture(
+            MeasureImageTextureSettings::default(),
+        )),
+        29 => Some(PipelineCommand::MeasureObjectColocalization(
+            MeasureObjectColocalizationSettings::default(),
+        )),
+        30 => Some(PipelineCommand::MeasureObjectDistanceToParent(
+            MeasureObjectDistanceToParentSettings::default(),
+        )),
+        31 => Some(PipelineCommand::MeasureObjectNeighbors(
             MeasureObjectNeighborsSettings::default(),
         )),
-        30 => Some(PipelineCommand::MeasureObjectShape(
+        32 => Some(PipelineCommand::MeasureObjectShape(
             MeasureObjectShapeSettings::default(),
         )),
-        31 => Some(PipelineCommand::MeasureTexture(
-            MeasureTextureSettings::default(),
+        33 => Some(PipelineCommand::MeasureObjectTexture(
+            MeasureObjectTextureSettings::default(),
         )),
-        32 => Some(PipelineCommand::MedianSubtract(
+        34 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        33 => Some(PipelineCommand::MorphologicalCommand(
+        35 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        34 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        35 => Some(PipelineCommand::PixelClassifier(
+        36 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        37 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        36 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
-        37 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        38 => Some(PipelineCommand::RelateObjects(
+        38 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
+        39 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        40 => Some(PipelineCommand::RelateObjects(
             RelateObjectsSettings::default(),
         )),
-        39 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        40 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        41 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        42 => Some(PipelineCommand::SimpleTracker(
+        41 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        42 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        43 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        44 => Some(PipelineCommand::SimpleTracker(
             SimpleTrackerSettings::default(),
         )),
-        43 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        44 => Some(PipelineCommand::StructureTensor(
+        45 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        46 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        45 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        46 => Some(PipelineCommand::TransformObjects(
+        47 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        48 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        47 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        48 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        49 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        50 => Some(PipelineCommand::WeightedDeviation(
+        49 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        50 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        51 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        52 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        51 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        53 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -813,11 +849,10 @@ impl PipelineCommand {
     /// serialized `type` tag is the same name upper-cased.
     pub const KEYS: &'static [&'static str] = &[
         "ai_object_classifier",
-        "area_occupied",
         "blur",
         "cellpose",
         "classify_objects",
-        "colocalization",
+        "colocalize_objects",
         "color_filter_command",
         "connected_components",
         "distance_transform",
@@ -832,18 +867,21 @@ impl PipelineCommand {
         "hessian",
         "illumination_correction",
         "image_cache",
-        "image_intensity",
         "image_math",
-        "image_quality",
         "intensity_transformation",
         "laplacian",
         "load_annotated_objects",
         "load_channel",
-        "measure_colocalization",
-        "measure_distance_to_parent",
+        "measure_image_area_occupied",
+        "measure_image_colocalization",
+        "measure_image_intensity",
+        "measure_image_quality",
+        "measure_image_texture",
+        "measure_object_colocalization",
+        "measure_object_distance_to_parent",
         "measure_object_neighbors",
         "measure_object_shape",
-        "measure_texture",
+        "measure_object_texture",
         "median_subtract",
         "morphological_command",
         "object_math",
@@ -870,11 +908,10 @@ impl PipelineCommand {
     pub fn key(&self) -> &'static str {
         match self {
             Self::AiObjectClassifier(_) => "ai_object_classifier",
-            Self::AreaOccupied(_) => "area_occupied",
             Self::Blur(_) => "blur",
             Self::Cellpose(_) => "cellpose",
             Self::ClassifyObjects(_) => "classify_objects",
-            Self::Colocalization(_) => "colocalization",
+            Self::ColocalizeObjects(_) => "colocalize_objects",
             Self::ColorFilterCommand(_) => "color_filter_command",
             Self::ConnectedComponents(_) => "connected_components",
             Self::DistanceTransform(_) => "distance_transform",
@@ -889,18 +926,21 @@ impl PipelineCommand {
             Self::Hessian(_) => "hessian",
             Self::IlluminationCorrection(_) => "illumination_correction",
             Self::ImageCache(_) => "image_cache",
-            Self::ImageIntensity(_) => "image_intensity",
             Self::ImageMath(_) => "image_math",
-            Self::ImageQuality(_) => "image_quality",
             Self::IntensityTransformation(_) => "intensity_transformation",
             Self::Laplacian(_) => "laplacian",
             Self::LoadAnnotatedObjects(_) => "load_annotated_objects",
             Self::LoadChannel(_) => "load_channel",
-            Self::MeasureColocalization(_) => "measure_colocalization",
-            Self::MeasureDistanceToParent(_) => "measure_distance_to_parent",
+            Self::MeasureImageAreaOccupied(_) => "measure_image_area_occupied",
+            Self::MeasureImageColocalization(_) => "measure_image_colocalization",
+            Self::MeasureImageIntensity(_) => "measure_image_intensity",
+            Self::MeasureImageQuality(_) => "measure_image_quality",
+            Self::MeasureImageTexture(_) => "measure_image_texture",
+            Self::MeasureObjectColocalization(_) => "measure_object_colocalization",
+            Self::MeasureObjectDistanceToParent(_) => "measure_object_distance_to_parent",
             Self::MeasureObjectNeighbors(_) => "measure_object_neighbors",
             Self::MeasureObjectShape(_) => "measure_object_shape",
-            Self::MeasureTexture(_) => "measure_texture",
+            Self::MeasureObjectTexture(_) => "measure_object_texture",
             Self::MedianSubtract(_) => "median_subtract",
             Self::MorphologicalCommand(_) => "morphological_command",
             Self::ObjectMath(_) => "object_math",
@@ -930,11 +970,12 @@ impl PipelineCommand {
             "ai_object_classifier" => Some(Self::AiObjectClassifier(
                 AiObjectClassifierSettings::default(),
             )),
-            "area_occupied" => Some(Self::AreaOccupied(AreaOccupiedSettings::default())),
             "blur" => Some(Self::Blur(BlurSettings::default())),
             "cellpose" => Some(Self::Cellpose(CellposeSettings::default())),
             "classify_objects" => Some(Self::ClassifyObjects(ClassifyObjectsSettings::default())),
-            "colocalization" => Some(Self::Colocalization(ColocalizationSettings::default())),
+            "colocalize_objects" => {
+                Some(Self::ColocalizeObjects(ColocalizeObjectsSettings::default()))
+            }
             "color_filter_command" => Some(Self::ColorFilterCommand(
                 ColorFilterCommandSettings::default(),
             )),
@@ -961,9 +1002,7 @@ impl PipelineCommand {
                 IlluminationCorrectionSettings::default(),
             )),
             "image_cache" => Some(Self::ImageCache(ImageCacheSettings::default())),
-            "image_intensity" => Some(Self::ImageIntensity(ImageIntensitySettings::default())),
             "image_math" => Some(Self::ImageMath(ImageMathSettings::default())),
-            "image_quality" => Some(Self::ImageQuality(ImageQualitySettings::default())),
             "intensity_transformation" => Some(Self::IntensityTransformation(
                 IntensityTransformationSettings::default(),
             )),
@@ -972,11 +1011,26 @@ impl PipelineCommand {
                 LoadAnnotatedObjectsSettings::default(),
             )),
             "load_channel" => Some(Self::LoadChannel(LoadChannelSettings::default())),
-            "measure_colocalization" => Some(Self::MeasureColocalization(
-                MeasureColocalizationSettings::default(),
+            "measure_image_area_occupied" => Some(Self::MeasureImageAreaOccupied(
+                MeasureImageAreaOccupiedSettings::default(),
             )),
-            "measure_distance_to_parent" => Some(Self::MeasureDistanceToParent(
-                MeasureDistanceToParentSettings::default(),
+            "measure_image_colocalization" => Some(Self::MeasureImageColocalization(
+                MeasureImageColocalizationSettings::default(),
+            )),
+            "measure_image_intensity" => Some(Self::MeasureImageIntensity(
+                MeasureImageIntensitySettings::default(),
+            )),
+            "measure_image_quality" => Some(Self::MeasureImageQuality(
+                MeasureImageQualitySettings::default(),
+            )),
+            "measure_image_texture" => Some(Self::MeasureImageTexture(
+                MeasureImageTextureSettings::default(),
+            )),
+            "measure_object_colocalization" => Some(Self::MeasureObjectColocalization(
+                MeasureObjectColocalizationSettings::default(),
+            )),
+            "measure_object_distance_to_parent" => Some(Self::MeasureObjectDistanceToParent(
+                MeasureObjectDistanceToParentSettings::default(),
             )),
             "measure_object_neighbors" => Some(Self::MeasureObjectNeighbors(
                 MeasureObjectNeighborsSettings::default(),
@@ -984,7 +1038,9 @@ impl PipelineCommand {
             "measure_object_shape" => Some(Self::MeasureObjectShape(
                 MeasureObjectShapeSettings::default(),
             )),
-            "measure_texture" => Some(Self::MeasureTexture(MeasureTextureSettings::default())),
+            "measure_object_texture" => Some(Self::MeasureObjectTexture(
+                MeasureObjectTextureSettings::default(),
+            )),
             "median_subtract" => Some(Self::MedianSubtract(MedianSubtractSettings::default())),
             "morphological_command" => Some(Self::MorphologicalCommand(
                 MorphologicalCommandSettings::default(),
@@ -1018,11 +1074,10 @@ impl PipelineCommand {
     pub fn name(&self) -> &str {
         match self {
             Self::AiObjectClassifier(_) => "AI Object Classifier",
-            Self::AreaOccupied(_) => "Area Occupied",
             Self::Blur(_) => "Blur",
             Self::Cellpose(_) => "AI Cellpose Segmentation",
             Self::ClassifyObjects(_) => "ClassifyObjects",
-            Self::Colocalization(_) => "Colocalization",
+            Self::ColocalizeObjects(_) => "Colocalize Objects",
             Self::ColorFilterCommand(_) => "ColorFilterCommand",
             Self::ConnectedComponents(_) => "ConnectedComponents",
             Self::DistanceTransform(_) => "DistanceTransform",
@@ -1037,18 +1092,21 @@ impl PipelineCommand {
             Self::Hessian(_) => "Hessian",
             Self::IlluminationCorrection(_) => "IlluminationCorrection",
             Self::ImageCache(_) => "ImageCache",
-            Self::ImageIntensity(_) => "Image Intensity",
             Self::ImageMath(_) => "ImageMath",
-            Self::ImageQuality(_) => "Image Quality",
             Self::IntensityTransformation(_) => "IntensityTransformation",
             Self::Laplacian(_) => "Laplacian",
             Self::LoadAnnotatedObjects(_) => "LoadAnnotatedObjects",
             Self::LoadChannel(_) => "LoadChannel",
-            Self::MeasureColocalization(_) => "Measure Colocalization",
-            Self::MeasureDistanceToParent(_) => "Measure Distance To Parent",
+            Self::MeasureImageAreaOccupied(_) => "Measure Image Area Occupied",
+            Self::MeasureImageColocalization(_) => "Measure Image Colocalization",
+            Self::MeasureImageIntensity(_) => "Measure Image Intensity",
+            Self::MeasureImageQuality(_) => "Measure Image Quality",
+            Self::MeasureImageTexture(_) => "Measure Image Texture",
+            Self::MeasureObjectColocalization(_) => "Measure Object Colocalization",
+            Self::MeasureObjectDistanceToParent(_) => "Measure Object Distance To Parent",
             Self::MeasureObjectNeighbors(_) => "Measure Object Neighbors",
             Self::MeasureObjectShape(_) => "Measure Object Shape",
-            Self::MeasureTexture(_) => "Measure Texture",
+            Self::MeasureObjectTexture(_) => "Measure Object Texture",
             Self::MedianSubtract(_) => "MedianSubtract",
             Self::MorphologicalCommand(_) => "MorphologicalCommand",
             Self::ObjectMath(_) => "ObjectMath",
@@ -1075,11 +1133,10 @@ impl PipelineCommand {
     pub fn category(&self) -> &CommandCategory {
         match self {
             Self::AiObjectClassifier(_) => &CommandCategory::Object,
-            Self::AreaOccupied(_) => &CommandCategory::Measure,
             Self::Blur(_) => &CommandCategory::Preprocess,
             Self::Cellpose(_) => &CommandCategory::Segment,
             Self::ClassifyObjects(_) => &CommandCategory::Object,
-            Self::Colocalization(_) => &CommandCategory::Object,
+            Self::ColocalizeObjects(_) => &CommandCategory::Object,
             Self::ColorFilterCommand(_) => &CommandCategory::Preprocess,
             Self::ConnectedComponents(_) => &CommandCategory::InstanceSegmentation,
             Self::DistanceTransform(_) => &CommandCategory::Preprocess,
@@ -1094,18 +1151,21 @@ impl PipelineCommand {
             Self::Hessian(_) => &CommandCategory::Preprocess,
             Self::IlluminationCorrection(_) => &CommandCategory::Preprocess,
             Self::ImageCache(_) => &CommandCategory::Preprocess,
-            Self::ImageIntensity(_) => &CommandCategory::Measure,
             Self::ImageMath(_) => &CommandCategory::Preprocess,
-            Self::ImageQuality(_) => &CommandCategory::Measure,
             Self::IntensityTransformation(_) => &CommandCategory::Preprocess,
             Self::Laplacian(_) => &CommandCategory::Preprocess,
             Self::LoadAnnotatedObjects(_) => &CommandCategory::Object,
             Self::LoadChannel(_) => &CommandCategory::Preprocess,
-            Self::MeasureColocalization(_) => &CommandCategory::Measure,
-            Self::MeasureDistanceToParent(_) => &CommandCategory::Measure,
+            Self::MeasureImageAreaOccupied(_) => &CommandCategory::Measure,
+            Self::MeasureImageColocalization(_) => &CommandCategory::Measure,
+            Self::MeasureImageIntensity(_) => &CommandCategory::Measure,
+            Self::MeasureImageQuality(_) => &CommandCategory::Measure,
+            Self::MeasureImageTexture(_) => &CommandCategory::Measure,
+            Self::MeasureObjectColocalization(_) => &CommandCategory::Measure,
+            Self::MeasureObjectDistanceToParent(_) => &CommandCategory::Measure,
             Self::MeasureObjectNeighbors(_) => &CommandCategory::Measure,
             Self::MeasureObjectShape(_) => &CommandCategory::Measure,
-            Self::MeasureTexture(_) => &CommandCategory::Measure,
+            Self::MeasureObjectTexture(_) => &CommandCategory::Measure,
             Self::MedianSubtract(_) => &CommandCategory::Preprocess,
             Self::MorphologicalCommand(_) => &CommandCategory::Preprocess,
             Self::ObjectMath(_) => &CommandCategory::Object,
@@ -1137,7 +1197,6 @@ impl PipelineCommand {
                 CommandCategory::Measure,
                 CommandCategory::Dataset,
             ],
-            Self::AreaOccupied(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::Blur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Cellpose(_) => &[CommandCategory::Extract],
             Self::ClassifyObjects(_) => &[
@@ -1145,7 +1204,7 @@ impl PipelineCommand {
                 CommandCategory::Measure,
                 CommandCategory::Dataset,
             ],
-            Self::Colocalization(_) => &[
+            Self::ColocalizeObjects(_) => &[
                 CommandCategory::Object,
                 CommandCategory::Measure,
                 CommandCategory::Dataset,
@@ -1173,9 +1232,7 @@ impl PipelineCommand {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
             Self::ImageCache(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::ImageIntensity(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::ImageMath(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::ImageQuality(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::IntensityTransformation(_) => {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
@@ -1186,15 +1243,26 @@ impl PipelineCommand {
                 CommandCategory::Dataset,
             ],
             Self::LoadChannel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::MeasureColocalization(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
-            Self::MeasureDistanceToParent(_) => {
+            Self::MeasureImageAreaOccupied(_) => {
+                &[CommandCategory::Measure, CommandCategory::Dataset]
+            }
+            Self::MeasureImageColocalization(_) => {
+                &[CommandCategory::Measure, CommandCategory::Dataset]
+            }
+            Self::MeasureImageIntensity(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
+            Self::MeasureImageQuality(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
+            Self::MeasureImageTexture(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
+            Self::MeasureObjectColocalization(_) => {
+                &[CommandCategory::Measure, CommandCategory::Dataset]
+            }
+            Self::MeasureObjectDistanceToParent(_) => {
                 &[CommandCategory::Measure, CommandCategory::Dataset]
             }
             Self::MeasureObjectNeighbors(_) => {
                 &[CommandCategory::Measure, CommandCategory::Dataset]
             }
             Self::MeasureObjectShape(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
-            Self::MeasureTexture(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
+            Self::MeasureObjectTexture(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::MedianSubtract(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::MorphologicalCommand(_) => {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
@@ -1251,11 +1319,10 @@ impl PipelineCommand {
     pub fn to_parameters(&self) -> Vec<ParameterDef> {
         match self {
             Self::AiObjectClassifier(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a trained object classifier model, saved from the AI training dialog.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["evamodel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_mapping".to_string(), display_name: "Segmentation Mapping".to_string(), description: "Maps the model's predicted classes to this project's object classes.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.segmentation_mapping.iter().map(|__item| [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class predicted by the classifier model.".to_string(), value: __item.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ModelClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "The project's own object class objects predicted as `object_class`\nare assigned.".to_string(), value: __item.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated by the model. Leave empty to apply the model to\nevery object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after prediction\n\n- **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.\n- **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.".to_string(), value: match _s.match_handling { ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Reclassify on match".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectAiObjectClassifierAiClassifyMatchHandlingSettings :: ReclassifyIfMatch) { ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }]].concat(),
-            Self::AreaOccupied(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"area_occupied_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "The objects whose area is measured.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Blur(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7)".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::Cellpose(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "input_channels".to_string(), display_name: "Input Channels".to_string(), description: "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.".to_string(), value: format!("{}", _s.input_channels), param_type: ParamType::Dropdown, options: vec!["1".to_string(), "2".to_string(), "3".to_string()], min: 1.0f32, max: 3.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "flow_iterations".to_string(), display_name: "Flow Iterations".to_string(), description: "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.".to_string(), value: format!("{}", _s.flow_iterations), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (200i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15i32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_resize".to_string(), display_name: "Max Resize".to_string(), description: "Longest image side, in pixels, the image is scaled down to before\nsegmentation; the masks are scaled back up to the original size\nafterwards. Smaller values make large cells look like the cell sizes\nthe model was trained on and are faster. The scale is taken from the\nfull image, so every tile is scaled the same. `0` keeps the full\nresolution (the Cellpose web demo uses `1000`).".to_string(), value: format!("{}", _s.max_resize), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "flow_threshold".to_string(), display_name: "Flow Threshold".to_string(), description: "Flow error threshold: an object whose shape doesn't match the flows\nthe model predicted (mean squared error above this value) is removed.\nIncrease to keep more objects, decrease to keep only clean ones. `0`\ndisables the check (Cellpose's default is `0.4`).".to_string(), value: format!("{}", _s.flow_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 10.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.4f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "cellpose_postprocessing".to_string(), display_name: "Cellpose Postprocessing".to_string(), description: "Build the objects from the flows exactly like Cellpose does: pixels\nfollow the interpolated flows, an object only starts where more than\n10 pixels end up together, and pixels that reach no such spot become\nbackground. Off, every spot any pixel ends up at starts an object,\nwhich can join touching cells. Cellpose also fills the holes inside\neach object - add a Fill Object Holes step after this one for that.".to_string(), value: format!("{}", _s.cellpose_postprocessing), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "replicate_gray_channel".to_string(), display_name: "Replicate Gray Channel".to_string(), description: "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.".to_string(), value: format!("{}", _s.replicate_gray_channel), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ClassifyObjects(_s) => [vec![ParameterDef { name: "origin_segmentation".to_string(), display_name: "Origin Segmentation".to_string(), description: "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nIf no seg class is selected the criteria are applied to all objects.".to_string(), value: _s.origin_segmentation.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiSegClass, options: (0u32..33u32).map(|__idx| if _s.origin_segmentation.iter().any(|c| c.as_u32() == __idx) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<SegmentationClass>::new()).iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.".to_string(), value: match _s.match_handling { ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove output class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove output class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Add class on mismatch".to_string(), "Remove output class on match".to_string(), "Remove output class on mismatch".to_string(), "Remove objects matching criteria".to_string(), "Keep objects matching criteria".to_string(), "Reclassify on match".to_string(), "Reclassify on mismatch".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectClassifyObjectsClassifyMatchHandlingSettings :: RemoveAllClassesIfNotMatch) { ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove output class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove output class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, advanced: false, option_advanced: vec![true, true, true, true, true, false, false, false], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Tag".to_string(), description: "Class label assigned to (or removed from) objects by the chosen operation\n\nUsed as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\nHas no effect when the selected operation only manipulates input classes or clears all classes.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "overlapping_with".to_string(), display_name: "Intersecting With".to_string(), description: "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_area`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.".to_string(), value: _s.overlapping_with.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_intersection_area".to_string(), display_name: "Min Intersection Area".to_string(), description: "Minimum intersection area with an `overlapping_with` object, in `size_unit`\n\nHas no effect while `overlapping_with` is Unset.".to_string(), value: format!("{}", _s.min_intersection_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit to use for object extraction".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_area".to_string(), display_name: "Min Area".to_string(), description: "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.min_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_area".to_string(), display_name: "Max Area".to_string(), description: "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.max_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2147483648.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_circularity".to_string(), display_name: "Min Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.min_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_circularity".to_string(), display_name: "Max Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.max_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_solidity".to_string(), display_name: "Min Solidity".to_string(), description: "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.min_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_solidity".to_string(), display_name: "Max Solidity".to_string(), description: "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.max_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_aspect_ratio".to_string(), display_name: "Min Aspect Ratio".to_string(), description: "Minimum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.min_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_aspect_ratio".to_string(), display_name: "Max Aspect Ratio".to_string(), description: "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.max_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2147483648.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_eccentricity".to_string(), display_name: "Min Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.min_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_eccentricity".to_string(), display_name: "Max Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.max_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_feret".to_string(), display_name: "Min Feret".to_string(), description: "Feret diameter threshold\n\nThe absolute shortest parallel distance across the object.\nThis represents the minimum sieve size a particle could pass through.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.min_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_feret".to_string(), display_name: "Max Feret".to_string(), description: "Maximum feret diameter threshold in selected unit (px or nm)\n\nThe absolute longest distance across the object at any angle.\nUsed to measure elongation or the maximum length of a particle.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.max_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2147483648.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "allow_edge_touching".to_string(), display_name: "Allow Edge Touching".to_string(), description: "Whether object can touch image edge".to_string(), value: format!("{}", _s.allow_edge_touching), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "intensity_filters".to_string(), display_name: "Intensity Filters".to_string(), description: "Intensity criteria, e.g. \"average in channel 1 brighter than 1200\"\n\nAll filters must match (logical AND), like every other criterion of\nthis command. Combine an `Above` and a `Below` filter on the same\nchannel and metric to select an intensity range. Empty: no intensity\ncriterion.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.intensity_filters.iter().map(|__item| [vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "Image channel whose intensity is compared (0-based)\n\nAn object without a measurement for this channel (the image has no\nsuch channel) never matches.".to_string(), value: __item.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (0)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "metric".to_string(), display_name: "Metric".to_string(), description: "Intensity statistic of the object to compare".to_string(), value: match __item.metric { ObjectClassifyObjectsIntensityMetricSettings::Avg => "Average".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Sum => "Sum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Min => "Minimum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Max => "Maximum".to_string() }, param_type: ParamType::Dropdown, options: vec!["Average".to_string(), "Sum".to_string(), "Minimum".to_string(), "Maximum".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectClassifyObjectsIntensityMetricSettings :: Avg) { ObjectClassifyObjectsIntensityMetricSettings::Avg => "Average".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Sum => "Sum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Min => "Minimum".to_string(), ObjectClassifyObjectsIntensityMetricSettings::Max => "Maximum".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }], vec![ParameterDef { name: "comparison".to_string(), display_name: "Comparison".to_string(), description: "Whether the object must be brighter or darker than the threshold".to_string(), value: match __item.comparison { ObjectClassifyObjectsIntensityComparisonSettings::Above => "Brighter than".to_string(), ObjectClassifyObjectsIntensityComparisonSettings::Below => "Darker than".to_string() }, param_type: ParamType::Dropdown, options: vec!["Brighter than".to_string(), "Darker than".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectClassifyObjectsIntensityComparisonSettings :: Above) { ObjectClassifyObjectsIntensityComparisonSettings::Above => "Brighter than".to_string(), ObjectClassifyObjectsIntensityComparisonSettings::Below => "Darker than".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "threshold".to_string(), display_name: "Threshold".to_string(), description: "Intensity threshold, in `unit`\n\nFor `Sum` this is the summed intensity of all object pixels, so it\nscales with the object's area.".to_string(), value: format!("{}", __item.threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of `threshold`\n\nbit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match __item.unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (PixelUnits :: Bit) { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, advanced: true, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::Colocalization(_s) => [vec![ParameterDef { name: "classes_to_coloc".to_string(), display_name: "Colocalize".to_string(), description: "The classes whose objects must overlap (e.g. the ch1 and the ch2\nspots): each object overlapping an object of every other class\nrecords them as its partners - listed and counted in the results.".to_string(), value: _s.classes_to_coloc.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes_to_coloc.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "all_combinations".to_string(), display_name: "All combinations".to_string(), description: "Record every pair that overlaps, also of objects that don't overlap\nan object of each class: one step with A, B and C shows A∩B, A∩C,\nB∩C and A∩B∩C in the results' partner columns. Off: only the objects\noverlapping every other class record partners. \"As\" and the overlap\nregions always need every class.".to_string(), value: format!("{}", _s.all_combinations), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "But not".to_string(), description: "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"".to_string(), value: _s.exclude_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "By at least".to_string(), description: "Minimum overlapping area size to count objects as coloc".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for the minimum coloc area size".to_string(), value: match _s.size_unit { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string(), "%".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnitsRel :: Pixels) { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "multiplicity".to_string(), display_name: "Partners".to_string(), description: "Which overlapping objects count as partners.".to_string(), value: match _s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "All partners".to_string(), ObjectColocObjectsColocMultiplicitySettings::OneToOne => "Only the best-overlapping partner".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Several partners only for selected classes".to_string() }, param_type: ParamType::Dropdown, options: vec!["All partners".to_string(), "Only the best-overlapping partner".to_string(), "Several partners only for selected classes".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectColocObjectsColocMultiplicitySettings :: ManyToMany) { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "All partners".to_string(), ObjectColocObjectsColocMultiplicitySettings::OneToOne => "Only the best-overlapping partner".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Several partners only for selected classes".to_string() }, advanced: false, option_advanced: vec![false, false, true], section: String::new() }], match &_s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => vec![], ObjectColocObjectsColocMultiplicitySettings::OneToOne => vec![], ObjectColocObjectsColocMultiplicitySettings::MultiFor(__inner) => vec![ParameterDef { name: "multiplicity.0".to_string(), display_name: "Several partners only for selected classes".to_string(), description: "Only objects of these classes may have more than one partner; every\nother class in `classes_to_coloc` is capped to its best-overlapping\none. E.g. with `classes_to_coloc: [Cell, Spot]` and `MultiFor([Cell])`,\na cell can have any number of spots, but each spot one cell (the one\nit overlaps most). Kept for older pipelines - Relate Objects links\nspots to cells.".to_string(), value: __inner.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if __inner.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }, vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Overlap regions as".to_string(), description: "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class".to_string(), value: _s.class_for_overlapping_areas.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mark_objects_of".to_string(), display_name: "Mark objects of".to_string(), description: "Optional: the objects of this class that colocalize also get the\nclass below (e.g. the ch1 spots overlapping a ch2 spot). `Unset`:\nthe colocalizing objects of every class.".to_string(), value: _s.mark_objects_of.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mark_as".to_string(), display_name: "As".to_string(), description: "Optional: the class the colocalizing objects get (e.g. \"ch1 with\nch2\") - to count them per image or relate them to cells. `Unset`:\nonly the partners are recorded.".to_string(), value: _s.mark_as.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::ColocalizeObjects(_s) => [vec![ParameterDef { name: "classes_to_coloc".to_string(), display_name: "Colocalize".to_string(), description: "The classes whose objects must overlap (e.g. the ch1 and the ch2\nspots): each object overlapping an object of every other class\nrecords them as its partners - listed and counted in the results.".to_string(), value: _s.classes_to_coloc.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes_to_coloc.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "all_combinations".to_string(), display_name: "All combinations".to_string(), description: "Record every pair that overlaps, also of objects that don't overlap\nan object of each class: one step with A, B and C shows A∩B, A∩C,\nB∩C and A∩B∩C in the results' partner columns. Off: only the objects\noverlapping every other class record partners. \"As\" and the overlap\nregions always need every class.".to_string(), value: format!("{}", _s.all_combinations), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "But not".to_string(), description: "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"".to_string(), value: _s.exclude_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "By at least".to_string(), description: "Minimum overlapping area size to count objects as coloc".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for the minimum coloc area size".to_string(), value: match _s.size_unit { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string(), "%".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnitsRel :: Pixels) { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "multiplicity".to_string(), display_name: "Partners".to_string(), description: "Which overlapping objects count as partners.".to_string(), value: match _s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "All partners".to_string(), ObjectColocObjectsColocMultiplicitySettings::OneToOne => "Only the best-overlapping partner".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Several partners only for selected classes".to_string() }, param_type: ParamType::Dropdown, options: vec!["All partners".to_string(), "Only the best-overlapping partner".to_string(), "Several partners only for selected classes".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectColocObjectsColocMultiplicitySettings :: ManyToMany) { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "All partners".to_string(), ObjectColocObjectsColocMultiplicitySettings::OneToOne => "Only the best-overlapping partner".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Several partners only for selected classes".to_string() }, advanced: false, option_advanced: vec![false, false, true], section: String::new() }], match &_s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::ManyToMany => vec![], ObjectColocObjectsColocMultiplicitySettings::OneToOne => vec![], ObjectColocObjectsColocMultiplicitySettings::MultiFor(__inner) => vec![ParameterDef { name: "multiplicity.0".to_string(), display_name: "Several partners only for selected classes".to_string(), description: "Only objects of these classes may have more than one partner; every\nother class in `classes_to_coloc` is capped to its best-overlapping\none. E.g. with `classes_to_coloc: [Cell, Spot]` and `MultiFor([Cell])`,\na cell can have any number of spots, but each spot one cell (the one\nit overlaps most). Kept for older pipelines - Relate Objects links\nspots to cells.".to_string(), value: __inner.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if __inner.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }, vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Overlap regions as".to_string(), description: "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class".to_string(), value: _s.class_for_overlapping_areas.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mark_objects_of".to_string(), display_name: "Mark objects of".to_string(), description: "Optional: the objects of this class that colocalize also get the\nclass below (e.g. the ch1 spots overlapping a ch2 spot). `Unset`:\nthe colocalizing objects of every class.".to_string(), value: _s.mark_objects_of.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mark_as".to_string(), display_name: "As".to_string(), description: "Optional: the class the colocalizing objects get (e.g. \"ch1 with\nch2\") - to count them per image or relate them to cells. `Unset`:\nonly the partners are recorded.".to_string(), value: _s.mark_as.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ColorFilterCommand(_s) => [vec![ParameterDef { name: "range.min_h".to_string(), display_name: "Min. Hue".to_string(), description: "Minimum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.min_h), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 360.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.max_h".to_string(), display_name: "Max. Hue".to_string(), description: "Maximum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.max_h), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 360.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (360.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.min_s".to_string(), display_name: "Min. Sat.".to_string(), description: "Minimum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_s), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.max_s".to_string(), display_name: "Max. Sat.".to_string(), description: "Maximum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_s), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.min_v".to_string(), display_name: "Min. Brightness".to_string(), description: "Minimum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_v), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "range.max_v".to_string(), display_name: "Max. Brightness".to_string(), description: "Maximum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_v), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ConnectedComponents(_s) => vec![ParameterDef { name: "min_size".to_string(), display_name: "Min Size".to_string(), description: "Minimum object size, in pixels, an object must have to be kept.\n\nAfter labeling, connected components with a pixel count below this\nthreshold are discarded (their pixels are reset to background) and\nthe remaining object IDs are re-compacted to a contiguous range.\nUseful for suppressing noise/speckle artifacts before they reach\ndownstream measurement or classification steps. A value of 0 (the\ndefault) disables filtering.".to_string(), value: format!("{}", _s.min_size), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0i32)), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::DistanceTransform(_s) => [vec![ParameterDef { name: "threshold".to_string(), display_name: "Threshold".to_string(), description: "Values less than or equal to this are treated as background (distance = 0).".to_string(), value: format!("{}", _s.threshold), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "edges_are_background".to_string(), display_name: "Edges Are Background".to_string(), description: "If true, the pixels outside the image boundary are treated as background.".to_string(), value: format!("{}", _s.edges_are_background), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1270,18 +1337,21 @@ impl PipelineCommand {
             Self::Hessian(_s) => vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines which component of the Hessian matrix structure to extract.\n\nDepending on the mode, this can highlight interest points (blobs)\nor directional features (ridges).".to_string(), value: match _s.mode { FiltersHessianHessianModeSettings::Determinant => "Determinant".to_string(), FiltersHessianHessianModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersHessianHessianModeSettings::EigenvaluesY => "Eigenvalues Y".to_string() }, param_type: ParamType::Dropdown, options: vec!["Determinant".to_string(), "Eigenvalues X".to_string(), "Eigenvalues Y".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersHessianHessianModeSettings::default()) { FiltersHessianHessianModeSettings::Determinant => "Determinant".to_string(), FiltersHessianHessianModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersHessianHessianModeSettings::EigenvaluesY => "Eigenvalues Y".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }],
             Self::IlluminationCorrection(_s) => [vec![ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "How the illumination field is estimated from the image.".to_string(), value: match _s.method { FiltersIlluminationCorrectionCorrectionMethodSettings::Regular => "Regular".to_string(), FiltersIlluminationCorrectionCorrectionMethodSettings::Background => "Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["Regular".to_string(), "Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersIlluminationCorrectionCorrectionMethodSettings::default()) { FiltersIlluminationCorrectionCorrectionMethodSettings::Regular => "Regular".to_string(), FiltersIlluminationCorrectionCorrectionMethodSettings::Background => "Background".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "block_size".to_string(), display_name: "Block Size".to_string(), description: "Block size, in pixels, used to reduce the image to a coarse\nillumination estimate before smoothing. Should be larger than the\nlargest foreground object, so objects are averaged/eroded away and\nonly the slow-varying illumination trend survives.".to_string(), value: format!("{}", _s.block_size), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 2000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (60usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "smoothing".to_string(), display_name: "Smoothing".to_string(), description: "Smoothing applied to the block-reduced field to remove blockiness.".to_string(), value: match _s.smoothing { FiltersIlluminationCorrectionSmoothingMethodSettings::None => "None".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { .. } => "Gaussian".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::Median { .. } => "Median".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial => "Fit Polynomial".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Gaussian".to_string(), "Median".to_string(), "Fit Polynomial".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersIlluminationCorrectionSmoothingMethodSettings::default()) { FiltersIlluminationCorrectionSmoothingMethodSettings::None => "None".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { .. } => "Gaussian".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::Median { .. } => "Median".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial => "Fit Polynomial".to_string() }, advanced: true, option_advanced: vec![false, false, false, false], section: String::new() }], match &_s.smoothing { FiltersIlluminationCorrectionSmoothingMethodSettings::None => vec![], FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { sigma } => vec![ParameterDef { name: "smoothing.sigma".to_string(), display_name: "Sigma".to_string(), description: "Standard deviation, in block-grid units.".to_string(), value: format!("{}", sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 20.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], FiltersIlluminationCorrectionSmoothingMethodSettings::Median { radius } => vec![ParameterDef { name: "smoothing.radius".to_string(), display_name: "Radius".to_string(), description: "Neighborhood radius, in block-grid units.".to_string(), value: format!("{}", radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 20.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2usize)), advanced: false, option_advanced: vec![], section: String::new() }], FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial => vec![] }, vec![ParameterDef { name: "apply_method".to_string(), display_name: "Apply Method".to_string(), description: "How the field is combined with the original image.".to_string(), value: match _s.apply_method { FiltersIlluminationCorrectionApplyMethodSettings::Divide => "Divide".to_string(), FiltersIlluminationCorrectionApplyMethodSettings::Subtract => "Subtract".to_string() }, param_type: ParamType::Dropdown, options: vec!["Divide".to_string(), "Subtract".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersIlluminationCorrectionApplyMethodSettings::default()) { FiltersIlluminationCorrectionApplyMethodSettings::Divide => "Divide".to_string(), FiltersIlluminationCorrectionApplyMethodSettings::Subtract => "Subtract".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "rescale".to_string(), display_name: "Rescale".to_string(), description: "Stretch the corrected image's intensities to fill the full\n`[0.0, 1.0]` range afterward - guards against `Divide` pushing\npreviously-dim regions above `1.0`.".to_string(), value: format!("{}", _s.rescale), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ImageCache(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Whether to save the current state to the cache or load a state from it.".to_string(), value: match _s.mode { MathImageCacheImageCacheModeSettings::Store => "Store".to_string(), MathImageCacheImageCacheModeSettings::Load => "Load".to_string() }, param_type: ParamType::Dropdown, options: vec!["Store".to_string(), "Load".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathImageCacheImageCacheModeSettings::default()) { MathImageCacheImageCacheModeSettings::Store => "Store".to_string(), MathImageCacheImageCacheModeSettings::Load => "Load".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "address".to_string(), display_name: "Address".to_string(), description: "The unique identifier or memory slot where the image is stored.".to_string(), value: _s.address.to_param_value(), param_type: ParamType::ImageAddress, options: { let (kind, nr) = _s.address.param_parts(); vec![kind.to_string(), nr.to_string()] }, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageAddress::default()).to_param_value(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::ImageIntensity(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"intensity_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ImageMath(_s) => [vec![ParameterDef { name: "operand".to_string(), display_name: "Operand".to_string(), description: "The specific mathematical or logical operator to apply.".to_string(), value: match _s.operand { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Invert".to_string(), "Add".to_string(), "Subtract".to_string(), "Multiply".to_string(), "Divide".to_string(), "And".to_string(), "Or".to_string(), "Xor".to_string(), "Min".to_string(), "Max".to_string(), "Average".to_string(), "Difference Type".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathImageMathOperandSettings::default()) { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false, false, false, false, false, false], section: String::new() }], vec![ParameterDef { name: "second_image_address".to_string(), display_name: "Second Image Address".to_string(), description: "The second image to use for the operation.".to_string(), value: _s.second_image_address.to_param_value(), param_type: ParamType::ImageAddress, options: { let (kind, nr) = _s.second_image_address.param_parts(); vec![kind.to_string(), nr.to_string()] }, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageAddress::default()).to_param_value(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "swap_operands".to_string(), display_name: "Swap Operands".to_string(), description: "If false, the calculation is `(Current Image OP Cached Image)`.\nIf true, the calculation is `(Cached Image OP Current Image)`.\n\nThis is critical for non-commutative operations like Subtraction or Division.".to_string(), value: format!("{}", _s.swap_operands), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::ImageQuality(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"quality_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::IntensityTransformation(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines whether to use automated enhancement or user-defined values.".to_string(), value: match _s.mode { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, param_type: ParamType::Dropdown, options: vec!["Automatic".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersIntensityTransformIntensityTransformModeSettings::default()) { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "contrast".to_string(), display_name: "Contrast".to_string(), description: "Contrast multiplier (gain).\n\nOnly active in manual mode.\nValues > 1.0 increase contrast, while values < 1.0 decrease it.".to_string(), value: format!("{}", _s.contrast), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "brightness".to_string(), display_name: "Brightness".to_string(), description: "Brightness offset (bias).\n\nOnly active in manual mode.\nPositive values brighten the image, negative values darken it.".to_string(), value: format!("{}", _s.brightness), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Laplacian(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::LoadAnnotatedObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "keep_annotated_classes".to_string(), display_name: "Keep Annotated Classes".to_string(), description: "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.".to_string(), value: format!("{}", _s.keep_annotated_classes), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (false)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::LoadChannel(_s) => [vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The image channel to load.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "projection".to_string(), display_name: "Projection".to_string(), description: "Optional z projection setting\n\nIf set to Auto the global z-projection setting from the project is used.\nIf not Auto the image channel is loaded with the given z-projection settings.".to_string(), value: match _s.projection { MathLoadChannelChannelZProjectionSettings::Auto => "Auto".to_string(), MathLoadChannelChannelZProjectionSettings::None => "None".to_string(), MathLoadChannelChannelZProjectionSettings::MaxIntensity => "Max Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::MinIntensity => "Min Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::AvgIntensity => "Avg Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::SumIntensity => "Sum Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => "Take The Middle".to_string() }, param_type: ParamType::Dropdown, options: vec!["Auto".to_string(), "None".to_string(), "Max Intensity".to_string(), "Min Intensity".to_string(), "Avg Intensity".to_string(), "Sum Intensity".to_string(), "Take The Middle".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathLoadChannelChannelZProjectionSettings :: Auto) { MathLoadChannelChannelZProjectionSettings::Auto => "Auto".to_string(), MathLoadChannelChannelZProjectionSettings::None => "None".to_string(), MathLoadChannelChannelZProjectionSettings::MaxIntensity => "Max Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::MinIntensity => "Min Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::AvgIntensity => "Avg Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::SumIntensity => "Sum Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => "Take The Middle".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false], section: String::new() }], vec![ParameterDef { name: "z_index".to_string(), display_name: "Z Index".to_string(), description: "With projection None: the z-plane loaded (0 = the first).".to_string(), value: format!("{}", _s.z_index), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0u32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::MeasureColocalization(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"coloc_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_a".to_string(), display_name: "Channel A".to_string(), description: "The first channel (A).".to_string(), value: _s.channel_a.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_b".to_string(), display_name: "Channel B".to_string(), description: "The second channel (B).".to_string(), value: _s.channel_b.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (1)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "threshold_percent".to_string(), display_name: "Threshold (% of maximum)".to_string(), description: "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the image, or in\nthe object).".to_string(), value: format!("{}", _s.threshold_percent), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "costes".to_string(), display_name: "Costes thresholds".to_string(), description: "Manders with Costes' automatic thresholds, and how they are found.".to_string(), value: match _s.costes { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, param_type: ParamType::Dropdown, options: vec!["Off".to_string(), "Faster".to_string(), "Fast".to_string(), "Accurate".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureColocalizationCostesMethodSettings :: Faster) { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Per object of".to_string(), description: "The objects of this class get values of their own as well (unset:\nthe whole image only).".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::MeasureDistanceToParent(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"parent_distance_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "children".to_string(), display_name: "Children".to_string(), description: "The children measured (e.g. spots).".to_string(), value: _s.children.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "parent_class".to_string(), display_name: "Parent".to_string(), description: "The class of their parent (as linked by Relate Objects, e.g. Cell).".to_string(), value: _s.parent_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureImageAreaOccupied(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"area_occupied_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "The objects whose area is measured.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureImageColocalization(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"coloc_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_a".to_string(), display_name: "Channel A".to_string(), description: "The first channel (A).".to_string(), value: _s.channel_a.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_b".to_string(), display_name: "Channel B".to_string(), description: "The second channel (B).".to_string(), value: _s.channel_b.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (1)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "threshold_percent".to_string(), display_name: "Threshold (% of maximum)".to_string(), description: "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the image).".to_string(), value: format!("{}", _s.threshold_percent), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "costes".to_string(), display_name: "Costes thresholds".to_string(), description: "Manders with Costes' automatic thresholds, and how they are found.".to_string(), value: match _s.costes { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, param_type: ParamType::Dropdown, options: vec!["Off".to_string(), "Faster".to_string(), "Fast".to_string(), "Accurate".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureColocalizationCostesMethodSettings :: Faster) { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }]].concat(),
+            Self::MeasureImageIntensity(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"intensity_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureImageQuality(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"quality_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureImageTexture(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"texture_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel measured.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "scale".to_string(), display_name: "Scale [px]".to_string(), description: "How far apart the two pixels of a pair are, in pixels - about the\nsize of the texture's grain.".to_string(), value: format!("{}", _s.scale), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "gray_levels".to_string(), display_name: "Gray levels".to_string(), description: "The gray levels the 8-bit values are rescaled to (2 to 256): fewer\nare faster and less noisy, more see finer differences.".to_string(), value: format!("{}", _s.gray_levels), param_type: ParamType::Spinner, options: vec![], min: 2.0f32, max: 256.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (256u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "directions".to_string(), display_name: "Directions".to_string(), description: "One value per feature (the mean of the directions) or one per\ndirection.".to_string(), value: match _s.directions { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean of the directions".to_string(), "Each direction".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureTextureTextureDirectionsSettings :: Mean) { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }]].concat(),
+            Self::MeasureObjectColocalization(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"object_coloc_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_a".to_string(), display_name: "Channel A".to_string(), description: "The first channel (A).".to_string(), value: _s.channel_a.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_b".to_string(), display_name: "Channel B".to_string(), description: "The second channel (B).".to_string(), value: _s.channel_b.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (1)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "threshold_percent".to_string(), display_name: "Threshold (% of maximum)".to_string(), description: "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the object).".to_string(), value: format!("{}", _s.threshold_percent), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "costes".to_string(), display_name: "Costes thresholds".to_string(), description: "Manders with Costes' automatic thresholds (the whole image's), and\nhow they are found.".to_string(), value: match _s.costes { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, param_type: ParamType::Dropdown, options: vec!["Off".to_string(), "Faster".to_string(), "Fast".to_string(), "Accurate".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureColocalizationCostesMethodSettings :: Faster) { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }]].concat(),
+            Self::MeasureObjectDistanceToParent(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"parent_distance_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "children".to_string(), display_name: "Children".to_string(), description: "The children measured (e.g. spots).".to_string(), value: _s.children.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "parent_class".to_string(), display_name: "Parent".to_string(), description: "The class of their parent (as linked by Relate Objects, e.g. Cell).".to_string(), value: _s.parent_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureObjectNeighbors(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"neighbors_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "neighbors".to_string(), display_name: "Neighbors".to_string(), description: "The objects that count as neighbours (unset: the measured objects\nthemselves).".to_string(), value: _s.neighbors.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "method".to_string(), display_name: "Neighbors are".to_string(), description: "Which objects count as neighbours.".to_string(), value: match _s.method { MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent => "Expand until adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::Adjacent => "Adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::WithinDistance => "Within a distance".to_string() }, param_type: ParamType::Dropdown, options: vec!["Expand until adjacent".to_string(), "Adjacent".to_string(), "Within a distance".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureObjectNeighborsNeighborMethodSettings :: ExpandUntilAdjacent) { MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent => "Expand until adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::Adjacent => "Adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::WithinDistance => "Within a distance".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "distance".to_string(), display_name: "Distance [px]".to_string(), description: "With \"Within a distance\": how far, in pixels.".to_string(), value: format!("{}", _s.distance), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (5u32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureObjectShape(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"shape_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
-            Self::MeasureTexture(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"texture_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel measured.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "scale".to_string(), display_name: "Scale [px]".to_string(), description: "How far apart the two pixels of a pair are, in pixels - about the\nsize of the texture's grain.".to_string(), value: format!("{}", _s.scale), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "gray_levels".to_string(), display_name: "Gray levels".to_string(), description: "The gray levels the 8-bit values are rescaled to (2 to 256): fewer\nare faster and less noisy, more see finer differences.".to_string(), value: format!("{}", _s.gray_levels), param_type: ParamType::Spinner, options: vec![], min: 2.0f32, max: 256.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (256u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "directions".to_string(), display_name: "Directions".to_string(), description: "One value per feature (the mean of the directions) or one per\ndirection.".to_string(), value: match _s.directions { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean of the directions".to_string(), "Each direction".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureTextureTextureDirectionsSettings :: Mean) { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Per object of".to_string(), description: "The objects of this class get values of their own as well (unset:\nthe whole image only).".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureObjectTexture(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"object_texture_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel measured.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "scale".to_string(), display_name: "Scale [px]".to_string(), description: "How far apart the two pixels of a pair are, in pixels - about the\nsize of the texture's grain.".to_string(), value: format!("{}", _s.scale), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "gray_levels".to_string(), display_name: "Gray levels".to_string(), description: "The gray levels the 8-bit values are rescaled to (2 to 256): fewer\nare faster and less noisy, more see finer differences.".to_string(), value: format!("{}", _s.gray_levels), param_type: ParamType::Spinner, options: vec![], min: 2.0f32, max: 256.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (256u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "directions".to_string(), display_name: "Directions".to_string(), description: "One value per feature (the mean of the directions) or one per\ndirection.".to_string(), value: match _s.directions { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean of the directions".to_string(), "Each direction".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureTextureTextureDirectionsSettings :: Mean) { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }]].concat(),
             Self::MedianSubtract(_s) => vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the neighborhood used to estimate the background.\n\nFeatures smaller than this radius will be preserved, while\nlarger structures will be treated as background and removed.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::MorphologicalCommand(_s) => [vec![ParameterDef { name: "op".to_string(), display_name: "Op".to_string(), description: "The transformation type (e.g., Dilate, Erode).".to_string(), value: match _s.op { MorphologyMorphologicalTransformationMorphOpsSettings::Dilate => "Dilate".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Erode => "Erode".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Open => "Open".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Close => "Close".to_string() }, param_type: ParamType::Dropdown, options: vec!["Dilate".to_string(), "Erode".to_string(), "Open".to_string(), "Close".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MorphologyMorphologicalTransformationMorphOpsSettings::default()) { MorphologyMorphologicalTransformationMorphOpsSettings::Dilate => "Dilate".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Erode => "Erode".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Open => "Open".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Close => "Close".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The diameter of the structuring element in pixels.\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "kernel_shape".to_string(), display_name: "Kernel Shape".to_string(), description: "The geometric profile of the structuring element.".to_string(), value: match _s.kernel_shape { MorphologyMorphologicalTransformationKernelShapesSettings::Box => "Box".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Ellipse => "Ellipse".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Cross => "Cross".to_string() }, param_type: ParamType::Dropdown, options: vec!["Box".to_string(), "Ellipse".to_string(), "Cross".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MorphologyMorphologicalTransformationKernelShapesSettings::default()) { MorphologyMorphologicalTransformationKernelShapesSettings::Box => "Box".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Ellipse => "Ellipse".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Cross => "Cross".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "use_grayscale".to_string(), display_name: "Use Grayscale".to_string(), description: "If set the grayscale image instead of the labeld image is taken to perform a morphological transform".to_string(), value: format!("{}", _s.use_grayscale), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::ObjectMath(_s) => [vec![ParameterDef { name: "operation".to_string(), display_name: "Operation".to_string(), description: "Boolean set operation to apply".to_string(), value: match _s.operation { ObjectObjectMathObjectSetOperationSettings::And => "And".to_string(), ObjectObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ObjectObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ObjectObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }, param_type: ParamType::Dropdown, options: vec!["And".to_string(), "Or".to_string(), "Xor".to_string(), "Subtract".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectObjectMathObjectSetOperationSettings::default()) { ObjectObjectMathObjectSetOperationSettings::And => "And".to_string(), ObjectObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ObjectObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ObjectObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }], vec![ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "ROIs carrying this class are the left-hand operand (\"A\").".to_string(), value: _s.input_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "other_class".to_string(), display_name: "Other Class".to_string(), description: "ROIs carrying this class are the right-hand operand (\"B\").".to_string(), value: _s.other_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "other_filter_classes".to_string(), display_name: "Other Filter Classes".to_string(), description: "Optional additional label filters applied to `other_class` objects.\n\nOnly `other_class` objects that carry all listed classes are used.".to_string(), value: _s.other_filter_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.other_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for `min_overlap_area`".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_overlap_area".to_string(), display_name: "Min Overlap Area".to_string(), description: "Minimum overlap area before an `other_class` object is treated as a partner\nof an input object; objects overlapping less than this are ignored.".to_string(), value: format!("{}", _s.min_overlap_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "If unset, the result replaces the input object in place.\n\nIf set, a new object carrying this class is created for each input object instead,\nleaving the input object untouched.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "keep_unmatched".to_string(), display_name: "Keep Unmatched".to_string(), description: "When an input object has no qualifying overlapping partner: keep it unchanged in\nthe output (true), or drop it entirely - no output for it at all - (false).\n\nNote this is a policy override, not the literal mathematical result: e.g. for\n`And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\nstill leaves A untouched rather than emitting a zero-area object.".to_string(), value: format!("{}", _s.keep_unmatched), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1308,7 +1378,6 @@ impl PipelineCommand {
     pub fn to_summary(&self) -> String {
         match self {
             Self::AiObjectClassifier(_) => String::new(),
-            Self::AreaOccupied(s) => format!("ID: {}", s.id.clone()),
             Self::Blur(s) => format!("Kernel size: {}", format!("{:.3}", s.kernel_size)),
             Self::Cellpose(_) => String::new(),
             Self::ClassifyObjects(s) => format!(
@@ -1318,7 +1387,7 @@ impl PipelineCommand {
                 format!("{:.3}", s.max_eccentricity),
                 format!("{}", s.allow_edge_touching)
             ),
-            Self::Colocalization(_) => String::new(),
+            Self::ColocalizeObjects(_) => String::new(),
             Self::ColorFilterCommand(s) => format!("Max. Hue: {}", format!("{:.3}", s.range.max_h)),
             Self::ConnectedComponents(s) => format!("Min Size: {}", format!("{:.3}", s.min_size)),
             Self::DistanceTransform(_) => String::new(),
@@ -1343,18 +1412,25 @@ impl PipelineCommand {
             Self::Hessian(_) => String::new(),
             Self::IlluminationCorrection(_) => String::new(),
             Self::ImageCache(_) => String::new(),
-            Self::ImageIntensity(s) => format!("ID: {}", s.id.clone()),
             Self::ImageMath(_) => String::new(),
-            Self::ImageQuality(s) => format!("ID: {}", s.id.clone()),
             Self::IntensityTransformation(_) => String::new(),
             Self::Laplacian(_) => String::new(),
             Self::LoadAnnotatedObjects(_) => String::new(),
             Self::LoadChannel(_) => String::new(),
-            Self::MeasureColocalization(s) => format!("ID: {}", s.id.clone()),
-            Self::MeasureDistanceToParent(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureImageAreaOccupied(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureImageColocalization(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureImageIntensity(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureImageQuality(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureImageTexture(s) => format!(
+                "ID: {} · Scale [px]: {}",
+                s.id.clone(),
+                format!("{:.3}", s.scale)
+            ),
+            Self::MeasureObjectColocalization(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureObjectDistanceToParent(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureObjectNeighbors(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureObjectShape(s) => format!("ID: {}", s.id.clone()),
-            Self::MeasureTexture(s) => format!(
+            Self::MeasureObjectTexture(s) => format!(
                 "ID: {} · Scale [px]: {}",
                 s.id.clone(),
                 format!("{:.3}", s.scale)
@@ -1433,14 +1509,16 @@ impl PipelineCommand {
     /// measurements' keys start with it. `None`: no measurement step.
     pub fn measurement_id(&self) -> Option<&str> {
         match self {
-            Self::AreaOccupied(s) => Some(s.id.as_str()),
-            Self::ImageIntensity(s) => Some(s.id.as_str()),
-            Self::ImageQuality(s) => Some(s.id.as_str()),
-            Self::MeasureColocalization(s) => Some(s.id.as_str()),
-            Self::MeasureDistanceToParent(s) => Some(s.id.as_str()),
+            Self::MeasureImageAreaOccupied(s) => Some(s.id.as_str()),
+            Self::MeasureImageColocalization(s) => Some(s.id.as_str()),
+            Self::MeasureImageIntensity(s) => Some(s.id.as_str()),
+            Self::MeasureImageQuality(s) => Some(s.id.as_str()),
+            Self::MeasureImageTexture(s) => Some(s.id.as_str()),
+            Self::MeasureObjectColocalization(s) => Some(s.id.as_str()),
+            Self::MeasureObjectDistanceToParent(s) => Some(s.id.as_str()),
             Self::MeasureObjectNeighbors(s) => Some(s.id.as_str()),
             Self::MeasureObjectShape(s) => Some(s.id.as_str()),
-            Self::MeasureTexture(s) => Some(s.id.as_str()),
+            Self::MeasureObjectTexture(s) => Some(s.id.as_str()),
             _ => None,
         }
     }
@@ -1448,14 +1526,16 @@ impl PipelineCommand {
     /// [`Self::measurement_id`] to change.
     pub fn measurement_id_mut(&mut self) -> Option<&mut String> {
         match self {
-            Self::AreaOccupied(s) => Some(&mut s.id),
-            Self::ImageIntensity(s) => Some(&mut s.id),
-            Self::ImageQuality(s) => Some(&mut s.id),
-            Self::MeasureColocalization(s) => Some(&mut s.id),
-            Self::MeasureDistanceToParent(s) => Some(&mut s.id),
+            Self::MeasureImageAreaOccupied(s) => Some(&mut s.id),
+            Self::MeasureImageColocalization(s) => Some(&mut s.id),
+            Self::MeasureImageIntensity(s) => Some(&mut s.id),
+            Self::MeasureImageQuality(s) => Some(&mut s.id),
+            Self::MeasureImageTexture(s) => Some(&mut s.id),
+            Self::MeasureObjectColocalization(s) => Some(&mut s.id),
+            Self::MeasureObjectDistanceToParent(s) => Some(&mut s.id),
             Self::MeasureObjectNeighbors(s) => Some(&mut s.id),
             Self::MeasureObjectShape(s) => Some(&mut s.id),
-            Self::MeasureTexture(s) => Some(&mut s.id),
+            Self::MeasureObjectTexture(s) => Some(&mut s.id),
             _ => None,
         }
     }
@@ -1464,14 +1544,16 @@ impl PipelineCommand {
     /// "pearson_01").
     pub fn measurement_id_prefix(&self) -> Option<&'static str> {
         match self {
-            Self::AreaOccupied(_) => Some("area_occupied"),
-            Self::ImageIntensity(_) => Some("intensity"),
-            Self::ImageQuality(_) => Some("quality"),
-            Self::MeasureColocalization(_) => Some("coloc"),
-            Self::MeasureDistanceToParent(_) => Some("parent_distance"),
+            Self::MeasureImageAreaOccupied(_) => Some("area_occupied"),
+            Self::MeasureImageColocalization(_) => Some("coloc"),
+            Self::MeasureImageIntensity(_) => Some("intensity"),
+            Self::MeasureImageQuality(_) => Some("quality"),
+            Self::MeasureImageTexture(_) => Some("texture"),
+            Self::MeasureObjectColocalization(_) => Some("object_coloc"),
+            Self::MeasureObjectDistanceToParent(_) => Some("parent_distance"),
             Self::MeasureObjectNeighbors(_) => Some("neighbors"),
             Self::MeasureObjectShape(_) => Some("shape"),
-            Self::MeasureTexture(_) => Some("texture"),
+            Self::MeasureObjectTexture(_) => Some("object_texture"),
             _ => None,
         }
     }
@@ -1499,9 +1581,6 @@ impl PipelineCommand {
                 );
                 classes.extend(s.input_classes.iter().copied());
             }
-            Self::AreaOccupied(s) => {
-                classes.push(s.object_class);
-            }
             Self::Blur(_) => {}
             Self::Cellpose(s) => {
                 classes.push(ObjectClass::from_segmentation_class(s.segmentation_class));
@@ -1517,7 +1596,7 @@ impl PipelineCommand {
                 classes.push(s.output_class);
                 classes.push(s.overlapping_with);
             }
-            Self::Colocalization(s) => {
+            Self::ColocalizeObjects(s) => {
                 classes.extend(s.classes_to_coloc.iter().copied());
                 classes.extend(s.exclude_classes.iter().copied());
                 #[allow(unreachable_patterns)]
@@ -1553,9 +1632,7 @@ impl PipelineCommand {
             Self::Hessian(_) => {}
             Self::IlluminationCorrection(_) => {}
             Self::ImageCache(_) => {}
-            Self::ImageIntensity(_) => {}
             Self::ImageMath(_) => {}
-            Self::ImageQuality(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(s) => {
@@ -1563,10 +1640,17 @@ impl PipelineCommand {
                 classes.push(s.output_class);
             }
             Self::LoadChannel(_) => {}
-            Self::MeasureColocalization(s) => {
+            Self::MeasureImageAreaOccupied(s) => {
+                classes.push(s.object_class);
+            }
+            Self::MeasureImageColocalization(_) => {}
+            Self::MeasureImageIntensity(_) => {}
+            Self::MeasureImageQuality(_) => {}
+            Self::MeasureImageTexture(_) => {}
+            Self::MeasureObjectColocalization(s) => {
                 classes.push(s.objects);
             }
-            Self::MeasureDistanceToParent(s) => {
+            Self::MeasureObjectDistanceToParent(s) => {
                 classes.push(s.children);
                 classes.push(s.parent_class);
             }
@@ -1577,7 +1661,7 @@ impl PipelineCommand {
             Self::MeasureObjectShape(s) => {
                 classes.push(s.objects);
             }
-            Self::MeasureTexture(s) => {
+            Self::MeasureObjectTexture(s) => {
                 classes.push(s.objects);
             }
             Self::MedianSubtract(_) => {}
@@ -1700,16 +1784,6 @@ impl PipelineCommand {
                 }
                 if param_name == "match_handling" {
                     s.match_handling = match value { "Add class on match" => ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch, "Reclassify on match" => ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch, _ => (s.match_handling).clone() };
-                }
-            }
-            Self::AreaOccupied(s) => {
-                if param_name == "id" {
-                    s.id = value.to_string();
-                }
-                if param_name == "object_class" {
-                    if let Some(v) = ObjectClass::from_text(value) {
-                        s.object_class = v;
-                    }
                 }
             }
             Self::Blur(s) => {
@@ -1945,7 +2019,7 @@ impl PipelineCommand {
                     }
                 }
             }
-            Self::Colocalization(s) => {
+            Self::ColocalizeObjects(s) => {
                 if param_name == "classes_to_coloc" {
                     if let Some(id) = value
                         .strip_prefix("toggle:")
@@ -2298,16 +2372,6 @@ impl PipelineCommand {
                     }
                 }
             }
-            Self::ImageIntensity(s) => {
-                if param_name == "id" {
-                    s.id = value.to_string();
-                }
-                if param_name == "channel" {
-                    if let Ok(v) = value.parse::<u32>() {
-                        s.channel = ImageChannelIdx(v);
-                    }
-                }
-            }
             Self::ImageMath(s) => {
                 if param_name == "operand" {
                     s.operand = match value {
@@ -2334,16 +2398,6 @@ impl PipelineCommand {
                 }
                 if param_name == "swap_operands" {
                     s.swap_operands = value == "true";
-                }
-            }
-            Self::ImageQuality(s) => {
-                if param_name == "id" {
-                    s.id = value.to_string();
-                }
-                if param_name == "channel" {
-                    if let Ok(v) = value.parse::<u32>() {
-                        s.channel = ImageChannelIdx(v);
-                    }
                 }
             }
             Self::IntensityTransformation(s) => {
@@ -2429,7 +2483,17 @@ impl PipelineCommand {
                     }
                 }
             }
-            Self::MeasureColocalization(s) => {
+            Self::MeasureImageAreaOccupied(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "object_class" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.object_class = v;
+                    }
+                }
+            }
+            Self::MeasureImageColocalization(s) => {
                 if param_name == "id" {
                     s.id = value.to_string();
                 }
@@ -2457,13 +2521,89 @@ impl PipelineCommand {
                         _ => (s.costes).clone(),
                     };
                 }
+            }
+            Self::MeasureImageIntensity(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
+                    }
+                }
+            }
+            Self::MeasureImageQuality(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
+                    }
+                }
+            }
+            Self::MeasureImageTexture(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
+                    }
+                }
+                if param_name == "scale" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.scale = v;
+                    }
+                }
+                if param_name == "gray_levels" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.gray_levels = v;
+                    }
+                }
+                if param_name == "directions" {
+                    s.directions = match value {
+                        "Mean of the directions" => MeasureTextureTextureDirectionsSettings::Mean,
+                        "Each direction" => MeasureTextureTextureDirectionsSettings::Each,
+                        _ => (s.directions).clone(),
+                    };
+                }
+            }
+            Self::MeasureObjectColocalization(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
                 if param_name == "objects" {
                     if let Some(v) = ObjectClass::from_text(value) {
                         s.objects = v;
                     }
                 }
+                if param_name == "channel_a" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel_a = ImageChannelIdx(v);
+                    }
+                }
+                if param_name == "channel_b" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel_b = ImageChannelIdx(v);
+                    }
+                }
+                if param_name == "threshold_percent" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.threshold_percent = v;
+                    }
+                }
+                if param_name == "costes" {
+                    s.costes = match value {
+                        "Off" => MeasureColocalizationCostesMethodSettings::Off,
+                        "Faster" => MeasureColocalizationCostesMethodSettings::Faster,
+                        "Fast" => MeasureColocalizationCostesMethodSettings::Fast,
+                        "Accurate" => MeasureColocalizationCostesMethodSettings::Accurate,
+                        _ => (s.costes).clone(),
+                    };
+                }
             }
-            Self::MeasureDistanceToParent(s) => {
+            Self::MeasureObjectDistanceToParent(s) => {
                 if param_name == "id" {
                     s.id = value.to_string();
                 }
@@ -2520,9 +2660,14 @@ impl PipelineCommand {
                     }
                 }
             }
-            Self::MeasureTexture(s) => {
+            Self::MeasureObjectTexture(s) => {
                 if param_name == "id" {
                     s.id = value.to_string();
+                }
+                if param_name == "objects" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.objects = v;
+                    }
                 }
                 if param_name == "channel" {
                     if let Ok(v) = value.parse::<u32>() {
@@ -2545,11 +2690,6 @@ impl PipelineCommand {
                         "Each direction" => MeasureTextureTextureDirectionsSettings::Each,
                         _ => (s.directions).clone(),
                     };
-                }
-                if param_name == "objects" {
-                    if let Some(v) = ObjectClass::from_text(value) {
-                        s.objects = v;
-                    }
                 }
             }
             Self::MedianSubtract(s) => {
@@ -3377,7 +3517,6 @@ impl PipelineCommand {
                     }
                 }
             }
-            Self::AreaOccupied(_) => {}
             Self::Blur(_) => {}
             Self::Cellpose(_) => {}
             Self::ClassifyObjects(s) => {
@@ -3389,7 +3528,7 @@ impl PipelineCommand {
                     }
                 }
             }
-            Self::Colocalization(_) => {}
+            Self::ColocalizeObjects(_) => {}
             Self::ColorFilterCommand(_) => {}
             Self::ConnectedComponents(_) => {}
             Self::DistanceTransform(_) => {}
@@ -3420,18 +3559,21 @@ impl PipelineCommand {
             Self::Hessian(_) => {}
             Self::IlluminationCorrection(_) => {}
             Self::ImageCache(_) => {}
-            Self::ImageIntensity(_) => {}
             Self::ImageMath(_) => {}
-            Self::ImageQuality(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
             Self::LoadChannel(_) => {}
-            Self::MeasureColocalization(_) => {}
-            Self::MeasureDistanceToParent(_) => {}
+            Self::MeasureImageAreaOccupied(_) => {}
+            Self::MeasureImageColocalization(_) => {}
+            Self::MeasureImageIntensity(_) => {}
+            Self::MeasureImageQuality(_) => {}
+            Self::MeasureImageTexture(_) => {}
+            Self::MeasureObjectColocalization(_) => {}
+            Self::MeasureObjectDistanceToParent(_) => {}
             Self::MeasureObjectNeighbors(_) => {}
             Self::MeasureObjectShape(_) => {}
-            Self::MeasureTexture(_) => {}
+            Self::MeasureObjectTexture(_) => {}
             Self::MedianSubtract(_) => {}
             Self::MorphologicalCommand(_) => {}
             Self::ObjectMath(_) => {}
@@ -3487,7 +3629,6 @@ impl PipelineCommand {
                     s.segmentation_mapping.remove(idx);
                 }
             }
-            Self::AreaOccupied(_) => {}
             Self::Blur(_) => {}
             Self::Cellpose(_) => {}
             Self::ClassifyObjects(s) => {
@@ -3495,7 +3636,7 @@ impl PipelineCommand {
                     s.intensity_filters.remove(idx);
                 }
             }
-            Self::Colocalization(_) => {}
+            Self::ColocalizeObjects(_) => {}
             Self::ColorFilterCommand(_) => {}
             Self::ConnectedComponents(_) => {}
             Self::DistanceTransform(_) => {}
@@ -3518,18 +3659,21 @@ impl PipelineCommand {
             Self::Hessian(_) => {}
             Self::IlluminationCorrection(_) => {}
             Self::ImageCache(_) => {}
-            Self::ImageIntensity(_) => {}
             Self::ImageMath(_) => {}
-            Self::ImageQuality(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
             Self::LoadChannel(_) => {}
-            Self::MeasureColocalization(_) => {}
-            Self::MeasureDistanceToParent(_) => {}
+            Self::MeasureImageAreaOccupied(_) => {}
+            Self::MeasureImageColocalization(_) => {}
+            Self::MeasureImageIntensity(_) => {}
+            Self::MeasureImageQuality(_) => {}
+            Self::MeasureImageTexture(_) => {}
+            Self::MeasureObjectColocalization(_) => {}
+            Self::MeasureObjectDistanceToParent(_) => {}
             Self::MeasureObjectNeighbors(_) => {}
             Self::MeasureObjectShape(_) => {}
-            Self::MeasureTexture(_) => {}
+            Self::MeasureObjectTexture(_) => {}
             Self::MedianSubtract(_) => {}
             Self::MorphologicalCommand(_) => {}
             Self::ObjectMath(_) => {}

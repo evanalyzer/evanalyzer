@@ -8349,13 +8349,13 @@ mod tests {
     #[test]
     fn selecting_a_pipeline_pushes_its_steps_name_and_counts_to_the_ui() {
         let (ui, _ui_state, _controller) =
-            selected(vec![step("Threshold"), step("Colocalization")]);
+            selected(vec![step("Threshold"), step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
         assert_eq!(panel.get_active_pipeline_name(), "Pipeline 1");
         assert_eq!(panel.get_active_pipeline_image_source(), "Channel 0");
         let commands = panel.get_active_commands();
         assert_eq!(commands.row_count(), 2);
-        assert_eq!(commands.row_data(1).unwrap().name, "Colocalization");
+        assert_eq!(commands.row_data(1).unwrap().name, "Colocalize Objects");
         assert_eq!(panel.get_total_enabled_steps(), 2);
         let pipelines = panel.get_pipelines();
         assert_eq!(pipelines.row_count(), 1);
@@ -8550,7 +8550,8 @@ mod tests {
 
     #[test]
     fn a_steps_card_state_and_breakpoint_stay_with_it_when_a_step_above_is_removed() {
-        let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Colocalization")]);
+        let (ui, ui_state, _controller) =
+            selected(vec![step("Threshold"), step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
         let second = ui_state.get_project().pipelines[0].steps[1].id;
         // Expand the second step and put the breakpoint on it.
@@ -8572,7 +8573,8 @@ mod tests {
 
     #[test]
     fn removing_the_breakpoints_step_clears_the_breakpoint() {
-        let (ui, ui_state, controller) = selected(vec![step("Threshold"), step("Colocalization")]);
+        let (ui, ui_state, controller) =
+            selected(vec![step("Threshold"), step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
         let last = ui_state.get_project().pipelines[0].steps[1].id;
         panel.invoke_set_breakpoint(1, step_id_text(last), 1);
@@ -11035,7 +11037,7 @@ mod tests {
     /// A measurement step added gets a name; its copy one of its own.
     #[test]
     fn a_measurement_step_and_its_copy_get_names_of_their_own() {
-        let pearson = PipelineCommand::default_for_key("measure_colocalization").unwrap();
+        let pearson = PipelineCommand::default_for_key("measure_image_colocalization").unwrap();
         let (ui, ui_state, _controller) = selected(vec![PipelineStepSettings {
             id: StepId::UNASSIGNED,
             enabled: true,
@@ -11061,7 +11063,8 @@ mod tests {
 
     #[test]
     fn toggle_remove_and_duplicate_step_change_the_active_pipeline() {
-        let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Colocalization")]);
+        let (ui, ui_state, _controller) =
+            selected(vec![step("Threshold"), step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
 
         panel.invoke_toggle_step(0);
@@ -11074,14 +11077,14 @@ mod tests {
         drain_ui_queue();
         assert_eq!(
             step_names(&ui_state, 1),
-            ["Threshold", "Colocalization", "Colocalization"]
+            ["Threshold", "Colocalize Objects", "Colocalize Objects"]
         );
 
         panel.invoke_remove_step(0);
         drain_ui_queue();
         assert_eq!(
             step_names(&ui_state, 1),
-            ["Colocalization", "Colocalization"]
+            ["Colocalize Objects", "Colocalize Objects"]
         );
         assert_eq!(panel.get_active_commands().row_count(), 2);
 
@@ -11094,9 +11097,9 @@ mod tests {
 
     #[test]
     fn after_an_object_step_the_picker_also_suggests_dataset_steps() {
-        // Colocalization allows Object and Dataset steps after it - the
+        // ColocalizeObjects allows Object and Dataset steps after it - the
         // last chip, which a too-short suggestion list would overrun.
-        let (ui, _ui_state, _controller) = selected(vec![step("Colocalization")]);
+        let (ui, _ui_state, _controller) = selected(vec![step("Colocalize Objects")]);
         ui.global::<PipelinesPanelState>().invoke_insert_step(1, 0);
         let picker = ui.global::<CommandPickerState>();
         assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog);
@@ -11175,14 +11178,14 @@ mod tests {
         let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Threshold")]);
         let coloc_id = all_command_meta()
             .into_iter()
-            .find(|m| m.name == "Colocalization")
+            .find(|m| m.name == "Colocalize Objects")
             .unwrap()
             .id;
         let picker = ui.global::<CommandPickerState>();
 
         picker.invoke_select(coloc_id);
         assert!(picker.get_has_detail());
-        assert_eq!(picker.get_detail().name, "Colocalization");
+        assert_eq!(picker.get_detail().name, "Colocalize Objects");
 
         // After step 0.
         picker.set_pipeline_id(1);
@@ -11193,12 +11196,12 @@ mod tests {
         drain_ui_queue();
         assert_eq!(
             step_names(&ui_state, 1),
-            ["Threshold", "Colocalization", "Threshold"]
+            ["Threshold", "Colocalize Objects", "Threshold"]
         );
         // Open for the next one, which goes in after it.
         assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog);
         assert_eq!(picker.get_insert_after_idx(), 1);
-        assert_eq!(picker.get_last_added(), "Colocalization as step 2");
+        assert_eq!(picker.get_last_added(), "Colocalize Objects as step 2");
 
         // Before everything, and past the end.
         picker.set_insert_after_idx(-1);
@@ -11206,8 +11209,8 @@ mod tests {
         picker.set_insert_after_idx(99);
         picker.invoke_confirm(coloc_id);
         let names = step_names(&ui_state, 1);
-        assert_eq!(names.first().unwrap(), "Colocalization");
-        assert_eq!(names.last().unwrap(), "Colocalization");
+        assert_eq!(names.first().unwrap(), "Colocalize Objects");
+        assert_eq!(names.last().unwrap(), "Colocalize Objects");
         assert_eq!(names.len(), 5);
 
         // Unknown and negative ids are ignored.
@@ -11272,14 +11275,14 @@ mod tests {
 
     #[test]
     fn changing_a_flat_parameter_updates_the_project_and_the_shown_value() {
-        let (ui, ui_state, _controller) = selected(vec![step("Colocalization")]);
+        let (ui, ui_state, _controller) = selected(vec![step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
         let summary_before = panel.get_active_commands().row_data(0).unwrap().summary;
 
         panel.invoke_param_changed(0, "min_coloc_area".into(), "5".into());
         assert_eq!(ui_param(&ui, 0, "min_coloc_area").value, "5");
         let project = ui_state.get_project();
-        let PipelineCommand::Colocalization(settings) =
+        let PipelineCommand::ColocalizeObjects(settings) =
             project.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected coloc");
@@ -11292,7 +11295,7 @@ mod tests {
 
     #[test]
     fn toggling_a_multi_select_parameter_updates_its_flags() {
-        let (ui, _ui_state, _controller) = selected(vec![step("Colocalization")]);
+        let (ui, _ui_state, _controller) = selected(vec![step("Colocalize Objects")]);
         ui.global::<PipelinesPanelState>().invoke_param_changed(
             0,
             "classes_to_coloc".into(),
@@ -11390,13 +11393,13 @@ mod tests {
 
     #[test]
     fn param_change_for_an_unknown_step_or_pipeline_is_ignored() {
-        let (ui, ui_state, _controller) = selected(vec![step("Colocalization")]);
+        let (ui, ui_state, _controller) = selected(vec![step("Colocalize Objects")]);
         let panel = ui.global::<PipelinesPanelState>();
         panel.invoke_param_changed(5, "min_coloc_area".into(), "9".into());
         panel.set_active_pipeline_id(42);
         panel.invoke_param_changed(0, "min_coloc_area".into(), "9".into());
         let project = ui_state.get_project();
-        let PipelineCommand::Colocalization(settings) =
+        let PipelineCommand::ColocalizeObjects(settings) =
             project.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected coloc");

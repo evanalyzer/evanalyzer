@@ -728,7 +728,7 @@ impl<'a> JobExecutor {
         // One `WholeImagePhaseCompleted` unit per whole-image-scoped pipeline
         // that actually has commands to run (TileMerge, plus any user
         // pipeline's WholeImage-scoped steps, e.g. Voronoi or
-        // Colocalization), plus one more for the final export - matches
+        // ColocalizeObjects), plus one more for the final export - matches
         // exactly what the loop below ticks off, so a long-running whole-image
         // command (Voronoi across many objects, say) shows up as one of
         // *several* visible steps instead of the bar freezing on a single
@@ -2937,13 +2937,12 @@ mod full_run_integration_tests {
                 start_image: ImageAddress::Scratchpad,
             },
         );
-        measure.add_command(Box::new(crate::algos::MeasureColocalization {
+        measure.add_command(Box::new(crate::algos::MeasureImageColocalization {
             id: "pearson_01".into(),
             channel_a: evanalyzer_cfg::core_types::ImageChannelIdx(0),
             channel_b: evanalyzer_cfg::core_types::ImageChannelIdx(1),
             threshold_percent: 15.0,
             costes: crate::algos::CostesMethod::Off,
-            objects: ObjectClass::Unset,
         }));
         job.add_post_process_pipeline(measure);
 
@@ -3000,7 +2999,7 @@ mod full_run_integration_tests {
                 start_image: ImageAddress::Scratchpad,
             },
         );
-        measure.add_command(Box::new(crate::algos::AreaOccupied {
+        measure.add_command(Box::new(crate::algos::MeasureImageAreaOccupied {
             id: "area_occupied_01".into(),
             object_class: ObjectClass::Global(1),
         }));
@@ -3074,7 +3073,9 @@ mod full_run_integration_tests {
     /// way.
     #[test]
     fn exclude_image_excludes_the_image_in_a_run() {
-        use crate::algos::{ExcludeImage, ExcludeRule, ExcludeWhen, ImageQuality, RuleComparison};
+        use crate::algos::{
+            ExcludeImage, ExcludeRule, ExcludeWhen, MeasureImageQuality, RuleComparison,
+        };
         let run = |comparison: RuleComparison| {
             let recorder = Arc::new(ExclusionRecorder::default());
             let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
@@ -3086,7 +3087,7 @@ mod full_run_integration_tests {
                     start_image: ImageAddress::Scratchpad,
                 },
             );
-            check.add_command(Box::new(ImageQuality {
+            check.add_command(Box::new(MeasureImageQuality {
                 id: "quality_01".into(),
                 channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
             }));
@@ -3706,7 +3707,7 @@ mod full_run_integration_tests {
             exclude_areas_at_the_edges: false,
             exclude_areas_with_no_center: false,
         }));
-        whole.add_command(Box::new(crate::algos::Colocalization {
+        whole.add_command(Box::new(crate::algos::ColocalizeObjects {
             classes_to_coloc: vec![cell, bar],
             all_combinations: false,
             exclude_classes: vec![],

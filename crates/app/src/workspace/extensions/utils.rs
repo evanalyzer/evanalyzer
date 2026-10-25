@@ -403,7 +403,8 @@ mod tests {
     fn a_projects_measurement_steps_without_an_id_get_one() {
         use evanalyzer_cfg::core_types::PipelineId;
         let pearson = |name: &str| {
-            let mut command = PipelineCommand::default_for_key("measure_colocalization").unwrap();
+            let mut command =
+                PipelineCommand::default_for_key("measure_image_colocalization").unwrap();
             *command.measurement_id_mut().unwrap() = name.into();
             PipelineStepSettings {
                 id: StepId::UNASSIGNED,

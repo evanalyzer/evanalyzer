@@ -21,6 +21,10 @@
 //! - A module's parameter bindings name settings by their path
 //!   (`thresholds.0.object_class_id`); they follow the same renames.
 //!
+//! The Colocalization command is Colocalize Objects now - beside the
+//! Measure Image/Object commands: `"type": "COLOCALIZATION"` becomes
+//! `"COLOCALIZE_OBJECTS"`.
+//!
 //! An annotated object's `parentId` and `children` go: links are `parents`
 //! now (parent class -> parent, set by Relate Objects), and annotations
 //! never had any.
@@ -147,12 +151,25 @@ fn rename_bindings(module: &mut Value) {
     }
 }
 
-/// Renames the settings of every command in `steps`.
+/// The new type of a renamed command.
+fn renamed_type(command_type: &str) -> Option<&'static str> {
+    match command_type {
+        "COLOCALIZATION" => Some("COLOCALIZE_OBJECTS"),
+        _ => None,
+    }
+}
+
+/// Renames every command in `steps` and its settings.
 fn rename_commands(steps: Option<&mut Value>) {
     if let Some(Value::Array(steps)) = steps {
         for step in steps {
             if let Some(command) = step.get_mut("command") {
                 rename_keys(command);
+                if let Some(Value::String(ty)) = command.get_mut("type")
+                    && let Some(renamed) = renamed_type(ty)
+                {
+                    *ty = renamed.into();
+                }
             }
         }
     }
@@ -284,6 +301,30 @@ mod tests {
         assert_eq!(
             raw["modules"][0]["steps"][0]["command"],
             json!({ "type": "STARDIST", "segmentationClass": 3 })
+        );
+    }
+
+    #[test]
+    fn colocalization_becomes_colocalize_objects_in_pipelines_and_modules() {
+        let mut raw = json!({
+            "pipelines": [{ "steps": [
+                { "command": { "type": "COLOCALIZATION", "minColocArea": 2.0 }},
+                { "command": { "type": "THRESHOLD" }}
+            ]}],
+            "modules": [{ "key": "G", "steps": [
+                { "id": 1, "command": { "type": "COLOCALIZATION" }}
+            ], "parameters": []}]
+        });
+        migrate_from_v3_to_v4(&mut raw);
+        let steps = &raw["pipelines"][0]["steps"];
+        assert_eq!(
+            steps[0]["command"],
+            json!({ "type": "COLOCALIZE_OBJECTS", "minColocArea": 2.0 })
+        );
+        assert_eq!(steps[1]["command"]["type"], "THRESHOLD");
+        assert_eq!(
+            raw["modules"][0]["steps"][0]["command"]["type"],
+            "COLOCALIZE_OBJECTS"
         );
     }
 

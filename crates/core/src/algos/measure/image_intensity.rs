@@ -1,4 +1,4 @@
-//! # Image intensity
+//! # Measure Image Intensity
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-22
@@ -25,8 +25,8 @@ use rayon::prelude::*;
 /// objects' intensities. It uses every pixel of the image, the background
 /// too.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", display_name = "Image Intensity")]
-pub struct ImageIntensity {
+#[cmdsmeta(category = "measure", display_name = "Measure Image Intensity")]
+pub struct MeasureImageIntensity {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("intensity_01/...").
     #[cmdsmeta(measurement_id = "intensity", display_name = "ID", summary = true)]
@@ -41,7 +41,7 @@ pub struct ImageIntensity {
 /// are exact to 1/65535 of its range.
 const MAX_BINS: usize = 1 << 16;
 
-impl ImageAlgorithm for ImageIntensity {
+impl ImageAlgorithm for MeasureImageIntensity {
     fn execute(
         &self,
         _ctx: &mut PipelineContext,
@@ -106,7 +106,7 @@ impl ImageAlgorithm for ImageIntensity {
     }
 
     fn name(&self) -> &'static str {
-        "Image intensity"
+        "Measure Image Intensity"
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
@@ -373,7 +373,10 @@ mod tests {
         cache
     }
 
-    fn run(step: &ImageIntensity, cache: &mut GlobalPipelineCache) -> Result<(), InternalErrors> {
+    fn run(
+        step: &MeasureImageIntensity,
+        cache: &mut GlobalPipelineCache,
+    ) -> Result<(), InternalErrors> {
         let mut ctx =
             PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
                 .unwrap();
@@ -401,7 +404,7 @@ mod tests {
     fn measures_every_value_over_all_tiles() {
         // 2, 4, 4, 4, 5, 5, 7, 9: mean 5, population std 2.
         let mut cache = cache_with_gray_tiles(&[&[2.0, 4.0, 4.0], &[4.0, 5.0, 5.0, 7.0, 9.0]]);
-        let step = ImageIntensity {
+        let step = MeasureImageIntensity {
             id: "dapi".into(),
             channel: ImageChannelIdx(0),
         };
@@ -441,7 +444,7 @@ mod tests {
     #[test]
     fn pixels_that_arent_numbers_are_left_out() {
         let mut cache = cache_with_gray_tiles(&[&[f32::NAN, 10.0, 20.0]]);
-        let step = ImageIntensity {
+        let step = MeasureImageIntensity {
             id: "i".into(),
             channel: ImageChannelIdx(0),
         };
@@ -458,7 +461,7 @@ mod tests {
     #[test]
     fn a_channel_the_image_lacks_is_an_error() {
         let mut cache = cache_with_gray_tiles(&[&[1.0]]);
-        let step = ImageIntensity {
+        let step = MeasureImageIntensity {
             id: "i".into(),
             channel: ImageChannelIdx(2),
         };

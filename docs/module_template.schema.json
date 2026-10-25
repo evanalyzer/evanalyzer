@@ -123,24 +123,6 @@
         }
       ]
     },
-    "AreaOccupiedSettings": {
-      "description": "Measures how much of the image the objects of a class cover.\n\nThe area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"area_occupied_01/...\").",
-          "type": "string"
-        },
-        "objectClass": {
-          "description": "The objects whose area is measured.",
-          "$ref": "#/$defs/ObjectClass"
-        }
-      },
-      "required": [
-        "id",
-        "objectClass"
-      ]
-    },
     "AuthorInformation": {
       "type": "object",
       "properties": {
@@ -448,7 +430,7 @@
         }
       }
     },
-    "ColocalizationSettings": {
+    "ColocalizeObjectsSettings": {
       "description": "Calculates spatial colocalization and intersections between specified object classes.\n\nThis command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
       "type": "object",
       "properties": {
@@ -1119,24 +1101,6 @@
       "format": "uint32",
       "minimum": 0
     },
-    "ImageIntensitySettings": {
-      "description": "Measures the brightness of a channel across the whole image.\n\nTotal, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
-      "type": "object",
-      "properties": {
-        "channel": {
-          "description": "The channel to measure.",
-          "$ref": "#/$defs/ImageChannelIdx"
-        },
-        "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"intensity_01/...\").",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "channel"
-      ]
-    },
     "ImageMathSettings": {
       "description": "A filter that performs pixel-wise mathematical operations between the current\npipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.",
       "type": "object",
@@ -1158,24 +1122,6 @@
         "operand",
         "secondImageAddress",
         "swapOperands"
-      ]
-    },
-    "ImageQualitySettings": {
-      "description": "Measures how usable a channel of the image is: sharp, not noisy, not\noverexposed.\n\nFocus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
-      "type": "object",
-      "properties": {
-        "channel": {
-          "description": "The channel to measure.",
-          "$ref": "#/$defs/ImageChannelIdx"
-        },
-        "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"quality_01/...\").",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "channel"
       ]
     },
     "IntensityFilterSettings": {
@@ -1429,68 +1375,6 @@
         }
       ]
     },
-    "MeasureColocalizationSettings": {
-      "description": "Measures how two channels go together, over the whole image and per\nobject - CellProfiler's MeasureColocalization.\n\nPearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
-      "type": "object",
-      "properties": {
-        "channelA": {
-          "description": "The first channel (A).",
-          "$ref": "#/$defs/ImageChannelIdx",
-          "default": 0
-        },
-        "channelB": {
-          "description": "The second channel (B).",
-          "$ref": "#/$defs/ImageChannelIdx",
-          "default": 1
-        },
-        "costes": {
-          "description": "Manders with Costes' automatic thresholds, and how they are found.",
-          "$ref": "#/$defs/MeasureColocalizationCostesMethodSettings",
-          "default": "FASTER"
-        },
-        "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"coloc_01/...\").",
-          "type": "string",
-          "default": ""
-        },
-        "objects": {
-          "description": "The objects of this class get values of their own as well (unset:\nthe whole image only).",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "UNSET"
-        },
-        "thresholdPercent": {
-          "description": "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the image, or in\nthe object).",
-          "type": "number",
-          "format": "float",
-          "default": 15.0,
-          "maximum": 100,
-          "minimum": 0
-        }
-      }
-    },
-    "MeasureDistanceToParentSettings": {
-      "description": "Each child's distance to its parent of a class (linked by Relate\nObjects): centre to centre, and from its centre to the parent's edge.\nA child without a parent of the class has no value.",
-      "type": "object",
-      "properties": {
-        "children": {
-          "description": "The children measured (e.g. spots).",
-          "$ref": "#/$defs/ObjectClass"
-        },
-        "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"parent_distance_01/...\").",
-          "type": "string"
-        },
-        "parentClass": {
-          "description": "The class of their parent (as linked by Relate Objects, e.g. Cell).",
-          "$ref": "#/$defs/ObjectClass"
-        }
-      },
-      "required": [
-        "id",
-        "children",
-        "parentClass"
-      ]
-    },
     "MeasureExcludeImageExcludeWhenSettings": {
       "description": "How the rules combine.",
       "oneOf": [
@@ -1519,6 +1403,193 @@
           "type": "string",
           "const": "ABOVE"
         }
+      ]
+    },
+    "MeasureImageAreaOccupiedSettings": {
+      "description": "Measures how much of the image the objects of a class cover.\n\nThe area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"area_occupied_01/...\").",
+          "type": "string"
+        },
+        "objectClass": {
+          "description": "The objects whose area is measured.",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "id",
+        "objectClass"
+      ]
+    },
+    "MeasureImageColocalizationSettings": {
+      "description": "Measures how two channels go together over the whole image -\nCellProfiler's MeasureColocalization, per image.\n\nPearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
+      "type": "object",
+      "properties": {
+        "channelA": {
+          "description": "The first channel (A).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "channelB": {
+          "description": "The second channel (B).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 1
+        },
+        "costes": {
+          "description": "Manders with Costes' automatic thresholds, and how they are found.",
+          "$ref": "#/$defs/MeasureColocalizationCostesMethodSettings",
+          "default": "FASTER"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"coloc_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "thresholdPercent": {
+          "description": "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the image).",
+          "type": "number",
+          "format": "float",
+          "default": 15.0,
+          "maximum": 100,
+          "minimum": 0
+        }
+      }
+    },
+    "MeasureImageIntensitySettings": {
+      "description": "Measures the brightness of a channel across the whole image.\n\nTotal, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel to measure.",
+          "$ref": "#/$defs/ImageChannelIdx"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"intensity_01/...\").",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "channel"
+      ]
+    },
+    "MeasureImageQualitySettings": {
+      "description": "Measures how usable a channel of the image is: sharp, not noisy, not\noverexposed.\n\nFocus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel to measure.",
+          "$ref": "#/$defs/ImageChannelIdx"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"quality_01/...\").",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "channel"
+      ]
+    },
+    "MeasureImageTextureSettings": {
+      "description": "Measures the texture of a channel over the whole image - Haralick's\nfeatures (CellProfiler's MeasureTexture, per image).\n\nThe pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel measured.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "directions": {
+          "description": "One value per feature (the mean of the directions) or one per\ndirection.",
+          "$ref": "#/$defs/MeasureTextureTextureDirectionsSettings",
+          "default": "MEAN"
+        },
+        "grayLevels": {
+          "description": "The gray levels the 8-bit values are rescaled to (2 to 256): fewer\nare faster and less noisy, more see finer differences.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 256,
+          "maximum": 256,
+          "minimum": 2
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"texture_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "scale": {
+          "description": "How far apart the two pixels of a pair are, in pixels - about the\nsize of the texture's grain.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "maximum": 1000,
+          "minimum": 1
+        }
+      }
+    },
+    "MeasureObjectColocalizationSettings": {
+      "description": "Measures how two channels go together in each object of a class -\nCellProfiler's MeasureColocalization, per object.\n\nThe values of Measure Image Colocalization (but the slope) of the\nobject's pixels: the threshold is a percentage of the object's maximum,\nRWC ranks the values of all the objects, and Costes uses the whole\nimage's Costes thresholds.",
+      "type": "object",
+      "properties": {
+        "channelA": {
+          "description": "The first channel (A).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "channelB": {
+          "description": "The second channel (B).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 1
+        },
+        "costes": {
+          "description": "Manders with Costes' automatic thresholds (the whole image's), and\nhow they are found.",
+          "$ref": "#/$defs/MeasureColocalizationCostesMethodSettings",
+          "default": "FASTER"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"object_coloc_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "objects": {
+          "description": "The objects measured.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "thresholdPercent": {
+          "description": "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the object).",
+          "type": "number",
+          "format": "float",
+          "default": 15.0,
+          "maximum": 100,
+          "minimum": 0
+        }
+      }
+    },
+    "MeasureObjectDistanceToParentSettings": {
+      "description": "Each child's distance to its parent of a class (linked by Relate\nObjects): centre to centre, and from its centre to the parent's edge.\nA child without a parent of the class has no value.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "description": "The children measured (e.g. spots).",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"parent_distance_01/...\").",
+          "type": "string"
+        },
+        "parentClass": {
+          "description": "The class of their parent (as linked by Relate Objects, e.g. Cell).",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "id",
+        "children",
+        "parentClass"
       ]
     },
     "MeasureObjectNeighborsNeighborMethodSettings": {
@@ -1593,8 +1664,8 @@
         "objects"
       ]
     },
-    "MeasureTextureSettings": {
-      "description": "Measures the texture of a channel - Haralick's features, over the whole\nimage and per object (CellProfiler's MeasureTexture).\n\nThe pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
+    "MeasureObjectTextureSettings": {
+      "description": "Measures the texture of a channel in each object of a class - Haralick's\nfeatures (CellProfiler's MeasureTexture, per object).\n\nThe same values as Measure Image Texture, of the object's pixels only.",
       "type": "object",
       "properties": {
         "channel": {
@@ -1616,12 +1687,12 @@
           "minimum": 2
         },
         "id": {
-          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"texture_01/...\").",
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"object_texture_01/...\").",
           "type": "string",
           "default": ""
         },
         "objects": {
-          "description": "The objects of this class get values of their own as well (unset:\nthe whole image only).",
+          "description": "The objects measured.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
@@ -2213,7 +2284,7 @@
           "const": "CENTRE_INSIDE"
         },
         {
-          "description": "The child belongs to the parent it shares the most pixels with -\nfor children whose centre can lie outside themselves (crescents, the\noverlap regions of Colocalization).",
+          "description": "The child belongs to the parent it shares the most pixels with -\nfor children whose centre can lie outside themselves (crescents, the\noverlap regions of ColocalizeObjects).",
           "type": "string",
           "const": "LARGEST_OVERLAP"
         }
@@ -2487,19 +2558,6 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "AREA_OCCUPIED"
-            }
-          },
-          "$ref": "#/$defs/AreaOccupiedSettings",
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
               "const": "BLUR"
             }
           },
@@ -2539,10 +2597,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "COLOCALIZATION"
+              "const": "COLOCALIZE_OBJECTS"
             }
           },
-          "$ref": "#/$defs/ColocalizationSettings",
+          "$ref": "#/$defs/ColocalizeObjectsSettings",
           "required": [
             "type"
           ]
@@ -2734,36 +2792,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "IMAGE_INTENSITY"
-            }
-          },
-          "$ref": "#/$defs/ImageIntensitySettings",
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
               "const": "IMAGE_MATH"
             }
           },
           "$ref": "#/$defs/ImageMathSettings",
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "IMAGE_QUALITY"
-            }
-          },
-          "$ref": "#/$defs/ImageQualitySettings",
           "required": [
             "type"
           ]
@@ -2825,10 +2857,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "MEASURE_COLOCALIZATION"
+              "const": "MEASURE_IMAGE_AREA_OCCUPIED"
             }
           },
-          "$ref": "#/$defs/MeasureColocalizationSettings",
+          "$ref": "#/$defs/MeasureImageAreaOccupiedSettings",
           "required": [
             "type"
           ]
@@ -2838,10 +2870,75 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "MEASURE_DISTANCE_TO_PARENT"
+              "const": "MEASURE_IMAGE_COLOCALIZATION"
             }
           },
-          "$ref": "#/$defs/MeasureDistanceToParentSettings",
+          "$ref": "#/$defs/MeasureImageColocalizationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_IMAGE_INTENSITY"
+            }
+          },
+          "$ref": "#/$defs/MeasureImageIntensitySettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_IMAGE_QUALITY"
+            }
+          },
+          "$ref": "#/$defs/MeasureImageQualitySettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_IMAGE_TEXTURE"
+            }
+          },
+          "$ref": "#/$defs/MeasureImageTextureSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_OBJECT_COLOCALIZATION"
+            }
+          },
+          "$ref": "#/$defs/MeasureObjectColocalizationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_OBJECT_DISTANCE_TO_PARENT"
+            }
+          },
+          "$ref": "#/$defs/MeasureObjectDistanceToParentSettings",
           "required": [
             "type"
           ]
@@ -2877,10 +2974,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "MEASURE_TEXTURE"
+              "const": "MEASURE_OBJECT_TEXTURE"
             }
           },
-          "$ref": "#/$defs/MeasureTextureSettings",
+          "$ref": "#/$defs/MeasureObjectTextureSettings",
           "required": [
             "type"
           ]

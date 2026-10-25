@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_ai_engine::{Detection, Image as AiImage, Request, Response, Task, box_iou};
+use evanalyzer_ai::{Detection, Image as AiImage, Request, Response, Task, box_iou};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use kornia_image::Image;
 use macros::CommandsMeta;
@@ -277,7 +277,7 @@ impl Yolov5 {
 mod tests {
     use super::*;
     #[cfg(feature = "libtorch-in-process")]
-    use evanalyzer_ai_engine::torch::test_support::{
+    use evanalyzer_ai::torch::test_support::{
         tch::{Kind, Tensor},
         trace_and_save_model,
     };

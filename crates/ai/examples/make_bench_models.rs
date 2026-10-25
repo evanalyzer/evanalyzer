@@ -4,7 +4,7 @@
 //! `<dir>/cellpose_light.pt` (next to no compute) and
 //! `<dir>/cellpose_heavy.pt` (6 convolution layers).
 //!
-//!   cargo run --release -p evanalyzer_ai_engine --features test-support \
+//!   cargo run --release -p evanalyzer_ai --features test-support \
 //!     --example make_bench_models -- <dir>
 //!
 //! **Author:** Joachim Danmayr
@@ -14,7 +14,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_ai_engine::torch::test_support::bench_cellpose_model;
+use evanalyzer_ai::torch::test_support::bench_cellpose_model;
 
 fn main() {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).expect("output folder"));

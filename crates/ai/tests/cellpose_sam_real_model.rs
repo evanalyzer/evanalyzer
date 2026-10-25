@@ -10,7 +10,7 @@
 //! Ignored by default even once the file exists: loading a ~1.2GB ViT-L model
 //! and running a forward pass takes real time and isn't something every
 //! `cargo test` invocation should pay for. Run explicitly with:
-//!   cargo test -p evanalyzer_ai_engine --features torch --test cellpose_sam_real_model -- --ignored
+//!   cargo test -p evanalyzer_ai --features torch --test cellpose_sam_real_model -- --ignored
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-09-15

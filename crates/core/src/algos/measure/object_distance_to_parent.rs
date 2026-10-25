@@ -1,4 +1,4 @@
-//! # Measure Distance To Parent
+//! # Measure Object Distance To Parent
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-24
@@ -26,8 +26,11 @@ use macros::CommandsMeta;
 /// Objects): centre to centre, and from its centre to the parent's edge.
 /// A child without a parent of the class has no value.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", display_name = "Measure Distance To Parent")]
-pub struct MeasureDistanceToParent {
+#[cmdsmeta(
+    category = "measure",
+    display_name = "Measure Object Distance To Parent"
+)]
+pub struct MeasureObjectDistanceToParent {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("parent_distance_01/...").
     #[cmdsmeta(
@@ -46,7 +49,7 @@ pub struct MeasureDistanceToParent {
     pub parent_class: ObjectClass,
 }
 
-impl ImageAlgorithm for MeasureDistanceToParent {
+impl ImageAlgorithm for MeasureObjectDistanceToParent {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
@@ -96,7 +99,7 @@ impl ImageAlgorithm for MeasureDistanceToParent {
     }
 
     fn name(&self) -> &'static str {
-        "Measure Distance To Parent"
+        "Measure Object Distance To Parent"
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
@@ -264,7 +267,7 @@ mod tests {
             o.set_parent(CELL, (parent > 0).then(|| ObjectId(parent as u128)));
             cache.object_cache.insert(o.id.clone(), o);
         }
-        let step = MeasureDistanceToParent {
+        let step = MeasureObjectDistanceToParent {
             id: "d".into(),
             children: SPOT,
             parent_class: CELL,

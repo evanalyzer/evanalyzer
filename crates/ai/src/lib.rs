@@ -1,4 +1,4 @@
-//! # evanalyzer_ai_engine
+//! # evanalyzer_ai
 //!
 //! **Author:** Joachim Danmayr
 //!

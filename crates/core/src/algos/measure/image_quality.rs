@@ -1,4 +1,4 @@
-//! # Image quality
+//! # Measure Image Quality
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-22
@@ -37,8 +37,8 @@ use rustfft::{FftPlanner, num_complex::Complex};
 /// values, Immerkær's estimate). Use them with "Exclude Image" to leave bad
 /// images out of the results.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", display_name = "Image Quality")]
-pub struct ImageQuality {
+#[cmdsmeta(category = "measure", display_name = "Measure Image Quality")]
+pub struct MeasureImageQuality {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("quality_01/...").
     #[cmdsmeta(measurement_id = "quality", display_name = "ID", summary = true)]
@@ -53,7 +53,7 @@ pub struct ImageQuality {
 /// image's middle (the whole image held as complex numbers, 16 bytes each).
 const MAX_SPECTRUM_SIDE: usize = 4096;
 
-impl ImageAlgorithm for ImageQuality {
+impl ImageAlgorithm for MeasureImageQuality {
     fn execute(
         &self,
         _ctx: &mut PipelineContext,
@@ -110,7 +110,7 @@ impl ImageAlgorithm for ImageQuality {
     }
 
     fn name(&self) -> &'static str {
-        "Image quality"
+        "Measure Image Quality"
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
@@ -598,7 +598,7 @@ mod tests {
                 height: case.height,
             },
         );
-        let step = ImageQuality {
+        let step = MeasureImageQuality {
             id: "qc".into(),
             channel: ImageChannelIdx(2),
         };
@@ -627,11 +627,13 @@ mod tests {
         // What it reported is what the project offers for its settings
         // (`measurement_outputs` via the settings).
         let mut settings =
-            evanalyzer_cfg::settings::pipeline_command_settings::ImageQualitySettings::default();
+            evanalyzer_cfg::settings::pipeline_command_settings::MeasureImageQualitySettings::default();
         settings.id = "qc".into();
         settings.channel = ImageChannelIdx(2);
         let offered = crate::measurement_outputs(
-            &evanalyzer_cfg::settings::pipeline_command::PipelineCommand::ImageQuality(settings),
+            &evanalyzer_cfg::settings::pipeline_command::PipelineCommand::MeasureImageQuality(
+                settings,
+            ),
         );
         let reported: Vec<_> = cache
             .measurements
@@ -641,7 +643,7 @@ mod tests {
             .collect();
         assert_eq!(reported, offered);
 
-        let missing = ImageQuality {
+        let missing = MeasureImageQuality {
             id: "qc".into(),
             channel: ImageChannelIdx(5),
         };

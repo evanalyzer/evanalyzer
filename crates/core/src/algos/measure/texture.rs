@@ -1,4 +1,4 @@
-//! # Measure Texture
+//! # Texture
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-24
@@ -12,19 +12,19 @@
 //! mahotas.features.haralick), value for value: the channel as 8 bits
 //! (0..255 over the bit depth), rescaled to the gray levels; per direction
 //! the symmetric co-occurrence matrix of the pixel pairs that far apart and
-//! the 13 features of it - over the whole image and, optionally, per object
-//! of a class, where the pixels outside the object and the pixels at 0 are
-//! left out. An object with no pair in one of the directions gets no values
-//! (CellProfiler stores 0 then).
+//! the 13 features of it - over the whole image (Measure Image Texture) or
+//! per object of a class (Measure Object Texture), where the pixels outside
+//! the object and the pixels at 0 are left out. An object with no pair in
+//! one of the directions gets no values (CellProfiler stores 0 then).
 
-use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
+use crate::algos::GlobalPipelineCache;
 use crate::object::Object;
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
-use crate::pipeline::pipeline_measure::{MeasurementRegion, ObjectValue, Outputs};
+use crate::pipeline::pipeline_measure::Outputs;
 use crate::{ImageTile, image::ImageContainer};
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, MeasurementUnit,
-    ObjectClass, ObjectId, max_gray_value,
+    max_gray_value,
 };
 use macros::CommandsMeta;
 use rayon::prelude::*;
@@ -42,59 +42,6 @@ pub enum TextureDirections {
     /// them - four times as many values.
     #[cmdsmeta(display_name = "Each direction")]
     Each,
-}
-
-/// Measures the texture of a channel - Haralick's features, over the whole
-/// image and per object (CellProfiler's MeasureTexture).
-///
-/// The pixel pairs the scale apart in a direction say how the gray levels
-/// go together: e.g. contrast is high where neighbours differ a lot, the
-/// angular second moment where few pairs repeat over and over (smooth or
-/// regular), entropy where the pairs are all different.
-#[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", display_name = "Measure Texture")]
-pub struct MeasureTexture {
-    /// The step's ID, unique in the project - its values' keys start with
-    /// it ("texture_01/...").
-    #[cmdsmeta(measurement_id = "texture", display_name = "ID", summary = true)]
-    pub id: String,
-
-    /// The channel measured.
-    #[cmdsmeta(summary = true)]
-    pub channel: ImageChannelIdx,
-
-    /// How far apart the two pixels of a pair are, in pixels - about the
-    /// size of the texture's grain.
-    #[cmdsmeta(
-        default = 3,
-        min = 1.0,
-        max = 1000.0,
-        step = 1.0,
-        display_name = "Scale [px]",
-        summary = true
-    )]
-    pub scale: u32,
-
-    /// The gray levels the 8-bit values are rescaled to (2 to 256): fewer
-    /// are faster and less noisy, more see finer differences.
-    #[cmdsmeta(
-        default = 256,
-        min = 2.0,
-        max = 256.0,
-        step = 1.0,
-        display_name = "Gray levels"
-    )]
-    pub gray_levels: u32,
-
-    /// One value per feature (the mean of the directions) or one per
-    /// direction.
-    #[cmdsmeta(default = TextureDirections::Mean, display_name = "Directions")]
-    pub directions: TextureDirections,
-
-    /// The objects of this class get values of their own as well (unset:
-    /// the whole image only).
-    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Per object of")]
-    pub objects: ObjectClass,
 }
 
 /// The features, in mahotas' order: (id, name, range).
@@ -136,17 +83,23 @@ const DIRECTIONS: [((isize, isize), u32); 4] =
     [((0, 1), 0), ((1, 1), 135), ((1, 0), 90), ((1, -1), 45)];
 
 /// The 13 features of each direction.
-type Features = [[f64; 13]; 4];
+pub(super) type Features = [[f64; 13]; 4];
 
 /// Co-occurrence counts are indexed `a * LEVELS + b`.
 const LEVELS: usize = 256;
 
-impl ImageAlgorithm for MeasureTexture {
-    fn execute(
-        &self,
-        ctx: &mut PipelineContext,
-        cache: &mut GlobalPipelineCache,
-    ) -> Result<(), InternalErrors> {
+/// The settings Measure Image Texture and Measure Object Texture share.
+#[derive(Clone, Copy)]
+pub(super) struct Texture {
+    pub(super) channel: ImageChannelIdx,
+    pub(super) scale: u32,
+    pub(super) gray_levels: u32,
+    pub(super) directions: TextureDirections,
+}
+
+impl Texture {
+    /// The gray levels of the image's bit depth - checking the settings.
+    pub(super) fn levels(&self, cache: &GlobalPipelineCache) -> Result<Levels, InternalErrors> {
         if self.scale == 0 || !(2..=256).contains(&self.gray_levels) {
             return Err(InternalErrors::InvalidArgument(
                 "Measure texture: the scale must be at least 1, the gray levels 2 to 256".into(),
@@ -158,102 +111,38 @@ impl ImageAlgorithm for MeasureTexture {
                 cache.image_meta.nr_of_bits
             ))
         })?;
-        let levels = Levels::new(scale, self.gray_levels);
-        let image = self.image_features(cache, &levels)?;
-        for (feature, value) in self.values(&image).into_iter().enumerate() {
-            let info = self.output(feature, false);
-            cache.add_image_measurement(
-                info,
-                value
-                    .is_finite()
-                    .then_some((MeasurementRegion::Image, value)),
-            );
-        }
-
-        if self.objects != ObjectClass::Unset {
-            let objects: Vec<_> = cache
-                .object_cache
-                .iter()
-                .filter(|(_, object)| object.is_of(&self.objects, ctx.scope))
-                .collect();
-            let per_object: Vec<(ObjectId, Vec<f64>)> = objects
-                .par_iter()
-                .map(|(id, object)| {
-                    let features = self.object_features(object, cache, &levels);
-                    ((*id).clone(), self.values(&features))
-                })
-                .collect();
-            for feature in 0..self.output_count() {
-                let values: Vec<ObjectValue> = per_object
-                    .iter()
-                    .map(|(id, values)| ObjectValue {
-                        object: id.clone(),
-                        value: values[feature],
-                        related: None,
-                    })
-                    .collect();
-                cache.add_object_measurement(self.output(feature, true), values);
-            }
-        }
-        Ok(())
+        Ok(Levels::new(scale, self.gray_levels))
     }
 
-    fn name(&self) -> &'static str {
-        "Measure Texture"
-    }
-
-    fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::CELLPROFILER, &HARALICK_1973]
-    }
-
-    /// The tiles of the whole image, after they are all read.
-    fn execution_scope(&self) -> ExecutionScope {
-        ExecutionScope::WholeImage
-    }
-
-    fn measures(&self) -> bool {
-        true
-    }
-
-    fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
-        let mut infos: Vec<MeasurementInfo> = (0..self.output_count())
-            .map(|i| self.output(i, false))
-            .collect();
-        if self.objects != ObjectClass::Unset {
-            infos.extend((0..self.output_count()).map(|i| self.output(i, true)));
-        }
-        infos
-    }
-}
-
-impl MeasureTexture {
-    /// How many values per image (and per object).
-    fn output_count(&self) -> usize {
+    /// How many values per image (or per object).
+    pub(super) fn output_count(&self) -> usize {
         match self.directions {
             TextureDirections::Mean => FEATURES.len(),
             TextureDirections::Each => FEATURES.len() * DIRECTIONS.len(),
         }
     }
 
-    /// Output `i` (direction-major with [`TextureDirections::Each`]), of the
-    /// image or of the objects.
-    fn output(&self, i: usize, per_object: bool) -> MeasurementInfo {
+    /// Every output of the step `step_id`.
+    pub(super) fn outputs(&self, step_id: &str, per_object: bool) -> Vec<MeasurementInfo> {
+        (0..self.output_count())
+            .map(|i| self.output(step_id, i, per_object))
+            .collect()
+    }
+
+    /// Output `i` (direction-major with [`TextureDirections::Each`]) of the
+    /// step `step_id`, of the image or of the objects.
+    pub(super) fn output(&self, step_id: &str, i: usize, per_object: bool) -> MeasurementInfo {
         let about = format!("channel {}, scale {}", self.channel, self.scale);
-        let outputs = Outputs::of(&self.id).about(about);
-        let prefix = if per_object { "object_" } else { "" };
-        let suffix = if per_object { " per object" } else { "" };
+        let outputs = Outputs::of(step_id).about(about);
         let (id, name) = match self.directions {
             TextureDirections::Mean => {
                 let (id, name, _) = FEATURES[i];
-                (format!("{prefix}{id}"), format!("{name}{suffix}"))
+                (id.to_string(), name.to_string())
             }
             TextureDirections::Each => {
                 let (id, name, _) = FEATURES[i % FEATURES.len()];
                 let angle = DIRECTIONS[i / FEATURES.len()].1;
-                (
-                    format!("{prefix}{id}_{angle}"),
-                    format!("{name} {angle}°{suffix}"),
-                )
+                (format!("{id}_{angle}"), format!("{name} {angle}°"))
             }
         };
         let info = if per_object {
@@ -268,7 +157,7 @@ impl MeasureTexture {
     }
 
     /// The values stored for `features` (NaN: none), in output order.
-    fn values(&self, features: &Option<Features>) -> Vec<f64> {
+    pub(super) fn values(&self, features: &Option<Features>) -> Vec<f64> {
         let Some(features) = features else {
             return vec![f64::NAN; self.output_count()];
         };
@@ -283,7 +172,7 @@ impl MeasureTexture {
     /// The features over the whole image (CellProfiler's run_image: every
     /// pixel, zeros included). The tiles are counted in parallel; pairs
     /// across a tile border take the neighbour from the tile it lies in.
-    fn image_features(
+    pub(super) fn image_features(
         &self,
         cache: &GlobalPipelineCache,
         levels: &Levels,
@@ -367,7 +256,7 @@ impl MeasureTexture {
 
     /// `object`'s features (CellProfiler's run_one: the pixels of its bounding
     /// box, those outside it at 0, the zeros left out).
-    fn object_features(
+    pub(super) fn object_features(
         &self,
         object: &Object,
         cache: &GlobalPipelineCache,
@@ -448,7 +337,7 @@ thread_local! {
 /// A raw value → its gray level: the value in 8 bits as scikit-image's
 /// img_as_ubyte rounds it (0..255 over the bit depth's maximum), then
 /// rescaled to the gray levels as rescale_intensity and a cast to uint8 do.
-struct Levels {
+pub(super) struct Levels {
     scale: f64,
     rescaled: [u8; 256],
 }
@@ -643,7 +532,7 @@ fn haralick(counts: &[u64], counted: &[u16], n: usize) -> Option<[f64; 13]> {
 }
 
 /// Haralick's texture features.
-const HARALICK_1973: CitationMetadata = CitationMetadata {
+pub(super) const HARALICK_1973: CitationMetadata = CitationMetadata {
     cite_key: "haralick1973textural",
     title: "Textural Features for Image Classification",
     authors: &["Robert M. Haralick", "K. Shanmugam", "Its'Hak Dinstein"],
@@ -657,13 +546,16 @@ const HARALICK_1973: CitationMetadata = CitationMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::{
+        ImageAlgorithm, MeasureImageTexture, MeasureObjectTexture, PipelineContext,
+    };
     use crate::image::{ManagedImage, Point2d};
     use crate::object::ObjectInit;
     use crate::pipeline::pipeline::PipelineImageMeta;
     use crate::pipeline::pipeline_measure::MeasurementValues;
     use crate::pipeline::scope::Scope;
     use bitvec::prelude::*;
-    use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::core_types::{MeasurementTarget, ObjectClass, ObjectId};
     use kornia_image::{Image, ImageSize};
 
     const CELL: ObjectClass = ObjectClass::Global(1);
@@ -748,18 +640,26 @@ mod tests {
 
     fn run(case: &Case, directions: TextureDirections) -> GlobalPipelineCache {
         let mut cache = cache_of(case);
-        let step = MeasureTexture {
+        let mut ctx =
+            PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
+                .unwrap();
+        let image = MeasureImageTexture {
             id: "texture_01".into(),
             channel: ImageChannelIdx(0),
             scale: case.scale,
             gray_levels: case.gray_levels,
             directions,
-            objects: CELL,
         };
-        let mut ctx =
-            PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
-                .unwrap();
-        step.execute(&mut ctx, &mut cache).unwrap();
+        image.execute(&mut ctx, &mut cache).unwrap();
+        let objects = MeasureObjectTexture {
+            id: "object_texture_01".into(),
+            objects: CELL,
+            channel: ImageChannelIdx(0),
+            scale: case.scale,
+            gray_levels: case.gray_levels,
+            directions,
+        };
+        objects.execute(&mut ctx, &mut cache).unwrap();
         cache
     }
 
@@ -818,7 +718,7 @@ mod tests {
                         expected,
                         &format!("{what}: image {id}_{angle}"),
                     );
-                    let values = object_values(&cache, &format!("texture_01/object_{id}_{angle}"));
+                    let values = object_values(&cache, &format!("object_texture_01/{id}_{angle}"));
                     assert_eq!(values.len() * 52, case.object_features.len());
                     for (label, value) in values {
                         let expected = case.object_features[(label - 1) * 52 + d * 13 + f];
@@ -851,27 +751,40 @@ mod tests {
         }
     }
 
-    /// Without a per-object class: 13 image values; per direction 52.
+    /// 13 values; per direction 52 - of the image or of the objects.
     #[test]
     fn outputs_follow_the_settings() {
-        let step = MeasureTexture {
+        let step = MeasureImageTexture {
             id: "t".into(),
             channel: ImageChannelIdx(0),
             scale: 3,
             gray_levels: 256,
             directions: TextureDirections::Mean,
-            objects: ObjectClass::Unset,
         };
         assert_eq!(step.measurement_outputs().len(), 13);
-        let each = MeasureTexture {
+        let each = MeasureImageTexture {
             directions: TextureDirections::Each,
-            objects: CELL,
             ..step
         };
         let outputs = each.measurement_outputs();
-        assert_eq!(outputs.len(), 104);
+        assert_eq!(outputs.len(), 52);
         assert_eq!(outputs[13].key, "t/angular_second_moment_135");
-        assert_eq!(outputs[52].key, "t/object_angular_second_moment_0");
+        let objects = MeasureObjectTexture {
+            id: "o".into(),
+            objects: CELL,
+            channel: ImageChannelIdx(0),
+            scale: 3,
+            gray_levels: 256,
+            directions: TextureDirections::Each,
+        };
+        let outputs = objects.measurement_outputs();
+        assert_eq!(outputs.len(), 52);
+        assert_eq!(outputs[0].key, "o/angular_second_moment_0");
+        assert!(
+            outputs
+                .iter()
+                .all(|o| o.target == MeasurementTarget::Object)
+        );
     }
 
     /// Speed and RAM: a textured 16-bit image in 4 tiles (`BENCH_SIZE`²,
@@ -954,18 +867,23 @@ mod tests {
                 id += 1;
             }
         }
-        for (label, objects) in [
-            ("image only", ObjectClass::Unset),
-            ("image + objects", CELL),
-        ] {
-            let step = MeasureTexture {
-                id: "t".into(),
-                channel: ImageChannelIdx(0),
-                scale: 3,
-                gray_levels,
-                directions: TextureDirections::Mean,
-                objects,
-            };
+        let image = MeasureImageTexture {
+            id: "t".into(),
+            channel: ImageChannelIdx(0),
+            scale: 3,
+            gray_levels,
+            directions: TextureDirections::Mean,
+        };
+        let objects = MeasureObjectTexture {
+            id: "o".into(),
+            objects: CELL,
+            channel: ImageChannelIdx(0),
+            scale: 3,
+            gray_levels,
+            directions: TextureDirections::Mean,
+        };
+        let steps: [(&str, &dyn ImageAlgorithm); 2] = [("image", &image), ("objects", &objects)];
+        for (label, step) in steps {
             let mut ctx = PipelineContext::without_image(
                 std::path::PathBuf::new(),
                 PipelineImageMeta::default(),

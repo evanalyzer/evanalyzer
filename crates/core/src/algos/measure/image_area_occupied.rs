@@ -1,4 +1,4 @@
-//! # Area occupied
+//! # Measure Image Area Occupied
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-22
@@ -22,8 +22,8 @@ use std::collections::{HashMap, HashSet};
 /// The area in pixels and µm² (with a known pixel size) and the part of the
 /// image (0..1). Where objects overlap, the area counts once.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", display_name = "Area Occupied")]
-pub struct AreaOccupied {
+#[cmdsmeta(category = "measure", display_name = "Measure Image Area Occupied")]
+pub struct MeasureImageAreaOccupied {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("area_occupied_01/...").
     #[cmdsmeta(measurement_id = "area_occupied", display_name = "ID", summary = true)]
@@ -34,7 +34,7 @@ pub struct AreaOccupied {
     pub object_class: ObjectClass,
 }
 
-impl ImageAlgorithm for AreaOccupied {
+impl ImageAlgorithm for MeasureImageAreaOccupied {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
@@ -72,7 +72,7 @@ impl ImageAlgorithm for AreaOccupied {
     }
 
     fn name(&self) -> &'static str {
-        "Area occupied"
+        "Measure Image Area Occupied"
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
@@ -214,7 +214,10 @@ mod tests {
         assert_eq!(covered_pixels([&ring].into_iter()), 8);
     }
 
-    fn run(step: &AreaOccupied, cache: &mut GlobalPipelineCache) -> Result<(), InternalErrors> {
+    fn run(
+        step: &MeasureImageAreaOccupied,
+        cache: &mut GlobalPipelineCache,
+    ) -> Result<(), InternalErrors> {
         let mut ctx =
             PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
                 .unwrap();
@@ -262,7 +265,7 @@ mod tests {
             }
             cache.object_cache.insert(object.id.clone(), object);
         }
-        let step = AreaOccupied {
+        let step = MeasureImageAreaOccupied {
             id: "nuclei_area".into(),
             object_class: class,
         };
@@ -290,7 +293,7 @@ mod tests {
     #[test]
     fn without_a_pixel_size_theres_no_um2() {
         let mut cache = GlobalPipelineCache::default();
-        let step = AreaOccupied {
+        let step = MeasureImageAreaOccupied {
             id: "a".into(),
             object_class: ObjectClass::Global(1),
         };
@@ -303,7 +306,7 @@ mod tests {
     #[test]
     fn the_class_must_be_chosen() {
         let mut cache = GlobalPipelineCache::default();
-        let step = AreaOccupied {
+        let step = MeasureImageAreaOccupied {
             id: "a".into(),
             object_class: ObjectClass::Unset,
         };

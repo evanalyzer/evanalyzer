@@ -36,7 +36,7 @@ pub enum RelateRule {
 
     /// The child belongs to the parent it shares the most pixels with -
     /// for children whose centre can lie outside themselves (crescents, the
-    /// overlap regions of Colocalization).
+    /// overlap regions of ColocalizeObjects).
     #[cmdsmeta(display_name = "It overlaps the parent most")]
     LargestOverlap,
 }

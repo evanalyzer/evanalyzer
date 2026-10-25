@@ -155,7 +155,7 @@ pub struct ListView {
     pub aggregations: Vec<Aggregation>,
     pub rows_per_image: bool,
     pub transposed: bool,
-    /// A row per pair of overlapping objects (Colocalization's partners).
+    /// A row per pair of overlapping objects (Colocalize Objects' partners).
     pub coloc_details: bool,
     /// "all", "enabled" or "disabled".
     pub images: String,

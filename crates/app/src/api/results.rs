@@ -346,7 +346,7 @@ pub struct ListFilter {
 pub enum RelatedTo {
     /// Its children linked through the class (Relate Objects).
     ChildrenOf(ObjectClass, String),
-    /// Its partners of the class (Colocalization).
+    /// Its partners of the class (Colocalize Objects).
     PartnersOf(ObjectClass, String),
     /// The object a measurement's value of it names (its nearest
     /// neighbour, its parent): the measurement's key, the object's id.

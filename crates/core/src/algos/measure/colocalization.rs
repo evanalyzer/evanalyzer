@@ -12,21 +12,22 @@
 //! value for value: Pearson and the slope, Manders M1/M2, the overlap
 //! coefficient with K1/K2 and the rank-weighted colocalization (RWC) above a
 //! percentage of each channel's maximum, and Manders M1/M2 above Costes'
-//! automatic thresholds - over the whole image and, optionally, per object
-//! of a class. The rules CellProfiler applies differently there are kept:
-//! over the image a pixel counts when it is *above* the threshold, in an
-//! object when it is *at or above* it; RWC ranks the values of the whole
-//! image or of all the objects; an object's Costes values use the whole
-//! image's Costes thresholds.
+//! automatic thresholds - over the whole image (Measure Image
+//! Colocalization) or per object of a class (Measure Object Colocalization).
+//! The rules CellProfiler applies differently there are kept: over the
+//! image a pixel counts when it is *above* the threshold, in an object when
+//! it is *at or above* it; RWC ranks the values of the whole image or of
+//! all the objects; an object's Costes values use the whole image's Costes
+//! thresholds (Measure Object Colocalization searches for them itself).
 
-use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
+use crate::algos::GlobalPipelineCache;
 use crate::object::Object;
 use crate::pipeline::pipeline_cache::{CacheAddress, channel_pixel_slice, sample_channel_pixel};
-use crate::pipeline::pipeline_measure::{MeasurementRegion, ObjectValue, Outputs};
+use crate::pipeline::pipeline_measure::Outputs;
 use crate::{ImageTile, image::ImageContainer};
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, MeasurementUnit,
-    ObjectClass, ObjectId, max_gray_value,
+    max_gray_value,
 };
 use macros::CommandsMeta;
 use rayon::prelude::*;
@@ -53,56 +54,16 @@ pub enum CostesMethod {
     Accurate,
 }
 
-/// Measures how two channels go together, over the whole image and per
-/// object - CellProfiler's MeasureColocalization.
-///
-/// Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel
-/// A's intensity where channel B is bright too (M2 the other way round),
-/// "bright" meaning above the threshold - a percentage of the channel's
-/// maximum, or Costes' automatic threshold. The overlap coefficient, K1/K2
-/// and RWC (Manders weighted by how similar the two pixels' ranks are) use
-/// the same pixels.
-#[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure", display_name = "Measure Colocalization")]
-pub struct MeasureColocalization {
-    /// The step's ID, unique in the project - its values' keys start with
-    /// it ("coloc_01/...").
-    #[cmdsmeta(measurement_id = "coloc", display_name = "ID", summary = true)]
-    pub id: String,
+/// A value: (id, name, unit, range).
+pub(super) type Value = (
+    &'static str,
+    &'static str,
+    MeasurementUnit,
+    Option<(f64, f64)>,
+);
 
-    /// The first channel (A).
-    #[cmdsmeta(summary = true)]
-    pub channel_a: ImageChannelIdx,
-
-    /// The second channel (B).
-    #[cmdsmeta(default = ImageChannelIdx(1), summary = true)]
-    pub channel_b: ImageChannelIdx,
-
-    /// A pixel counts for Manders, the overlap and RWC when it is brighter
-    /// than this percentage of its channel's maximum (in the image, or in
-    /// the object).
-    #[cmdsmeta(
-        default = 15.0,
-        min = 0.0,
-        max = 100.0,
-        step = 1.0,
-        display_name = "Threshold (% of maximum)"
-    )]
-    pub threshold_percent: f32,
-
-    /// Manders with Costes' automatic thresholds, and how they are found.
-    #[cmdsmeta(default = CostesMethod::Faster, display_name = "Costes thresholds")]
-    pub costes: CostesMethod,
-
-    /// The objects of this class get values of their own as well (unset:
-    /// the whole image only).
-    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Per object of")]
-    pub objects: ObjectClass,
-}
-
-/// The values, in the order of [`MeasureColocalization::measurement_outputs`]:
-/// (id, name, unit, range).
-const VALUES: [(&str, &str, MeasurementUnit, Option<(f64, f64)>); 11] = [
+/// The values, in the order of the outputs (per object without the slope).
+static VALUES: [Value; 11] = [
     (
         "pearson",
         "Pearson",
@@ -160,144 +121,74 @@ const VALUES: [(&str, &str, MeasurementUnit, Option<(f64, f64)>); 11] = [
 const COSTES_VALUES: usize = 2;
 
 /// The slope (in [`VALUES`]): only over the whole image, as in CellProfiler.
-const SLOPE: usize = 1;
+pub(super) const SLOPE: usize = 1;
 
 /// One value per entry of [`VALUES`] (NaN: none).
-type Values = [f64; VALUES.len()];
+pub(super) type Values = [f64; VALUES.len()];
 
-impl ImageAlgorithm for MeasureColocalization {
-    fn execute(
-        &self,
-        ctx: &mut PipelineContext,
-        cache: &mut GlobalPipelineCache,
-    ) -> Result<(), InternalErrors> {
-        let scale = max_gray_value(cache.image_meta.nr_of_bits).ok_or_else(|| {
+pub(super) const CITATIONS: [&CitationMetadata; 4] = [
+    &CitationMetadata::CELLPROFILER,
+    &MANDERS_1993,
+    &COSTES_2004,
+    &SINGAN_2011,
+];
+
+/// The settings Measure Image Colocalization and Measure Object
+/// Colocalization share.
+#[derive(Clone, Copy)]
+pub(super) struct Coloc {
+    pub(super) channel_a: ImageChannelIdx,
+    pub(super) channel_b: ImageChannelIdx,
+    pub(super) threshold_percent: f32,
+    pub(super) costes: CostesMethod,
+}
+
+impl Coloc {
+    /// The image's maximum gray value.
+    pub(super) fn scale(&self, cache: &GlobalPipelineCache) -> Result<f64, InternalErrors> {
+        max_gray_value(cache.image_meta.nr_of_bits).ok_or_else(|| {
             InternalErrors::InvalidArgument(format!(
                 "Colocalization: implausible bit depth {}",
                 cache.image_meta.nr_of_bits
             ))
-        })?;
-        let pairs = self.image_tiles(cache)?;
-        let image = image_values(&pairs, self.threshold_percent as f64, self.costes, scale);
-
-        let objects: Vec<(ObjectId, Vec<(f32, f32)>)> = if self.objects == ObjectClass::Unset {
-            Vec::new()
-        } else {
-            cache
-                .object_cache
-                .iter()
-                .filter(|(_, object)| object.is_of(&self.objects, ctx.scope))
-                .map(|(id, object)| (id.clone(), self.object_pixels(object, cache)))
-                .collect()
-        };
-
-        let costes = self.costes != CostesMethod::Off;
-        for (i, (id, ..)) in VALUES.iter().enumerate() {
-            if !costes && i >= VALUES.len() - COSTES_VALUES {
-                break;
-            }
-            let value = image.values[i];
-            cache.add_image_measurement(
-                self.measurement_output(id),
-                value
-                    .is_finite()
-                    .then_some((MeasurementRegion::Image, value)),
-            );
-        }
-        if self.objects != ObjectClass::Unset {
-            let per_object = object_values(
-                &objects
-                    .iter()
-                    .map(|(_, p)| p.as_slice())
-                    .collect::<Vec<_>>(),
-                self.threshold_percent as f64,
-                image.costes_thresholds,
-            );
-            for (i, (id, ..)) in VALUES.iter().enumerate() {
-                if !costes && i >= VALUES.len() - COSTES_VALUES {
-                    break;
-                }
-                if i == SLOPE {
-                    continue;
-                }
-                cache.add_object_measurement(
-                    self.measurement_output(&format!("object_{id}")),
-                    objects
-                        .iter()
-                        .zip(&per_object)
-                        .map(|((object, _), values)| ObjectValue {
-                            object: object.clone(),
-                            value: values[i],
-                            related: None,
-                        }),
-                );
-            }
-        }
-        Ok(())
+        })
     }
 
-    fn name(&self) -> &'static str {
-        "Measure Colocalization"
-    }
-
-    fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![
-            &CitationMetadata::CELLPROFILER,
-            &MANDERS_1993,
-            &COSTES_2004,
-            &SINGAN_2011,
-        ]
-    }
-
-    /// The tiles of the whole image, after they are all read.
-    fn execution_scope(&self) -> ExecutionScope {
-        ExecutionScope::WholeImage
-    }
-
-    fn measures(&self) -> bool {
-        true
-    }
-
-    fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
-        let about = format!("channel {} × channel {}", self.channel_a, self.channel_b);
-        let outputs = Outputs::of(&self.id).about(about);
+    /// The entries of [`VALUES`] measured: without the Costes ones when off.
+    pub(super) fn values(&self) -> impl Iterator<Item = (usize, &'static Value)> {
         let count = match self.costes {
             CostesMethod::Off => VALUES.len() - COSTES_VALUES,
             _ => VALUES.len(),
         };
-        let with_range = |info: MeasurementInfo, range: Option<(f64, f64)>| match range {
-            Some((min, max)) => info.range(min, max),
-            None => info,
-        };
-        let mut infos: Vec<MeasurementInfo> = VALUES[..count]
-            .iter()
-            .map(|(id, name, unit, range)| with_range(outputs.image(id, name, *unit), *range))
-            .collect();
-        if self.objects != ObjectClass::Unset {
-            infos.extend(
-                VALUES[..count]
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != SLOPE)
-                    .map(|(_, (id, name, unit, range))| {
-                        with_range(
-                            outputs.object(
-                                &format!("object_{id}"),
-                                &format!("{name} per object"),
-                                *unit,
-                            ),
-                            *range,
-                        )
-                    }),
-            );
-        }
-        infos
+        VALUES[..count].iter().enumerate()
     }
-}
 
-impl MeasureColocalization {
+    /// Every output of the step `step_id`: of the image, or of the objects
+    /// (without the slope).
+    pub(super) fn outputs(&self, step_id: &str, per_object: bool) -> Vec<MeasurementInfo> {
+        let about = format!("channel {} × channel {}", self.channel_a, self.channel_b);
+        let outputs = Outputs::of(step_id).about(about);
+        self.values()
+            .filter(|(i, _)| !per_object || *i != SLOPE)
+            .map(|(_, (id, name, unit, range))| {
+                let info = if per_object {
+                    outputs.object(id, name, *unit)
+                } else {
+                    outputs.image(id, name, *unit)
+                };
+                match range {
+                    Some((min, max)) => info.range(*min, *max),
+                    None => info,
+                }
+            })
+            .collect()
+    }
+
     /// The pixels of channels A and B of every tile of the image.
-    fn image_tiles(&self, cache: &GlobalPipelineCache) -> Result<Vec<TilePair>, InternalErrors> {
+    pub(super) fn image_tiles(
+        &self,
+        cache: &GlobalPipelineCache,
+    ) -> Result<Vec<TilePair>, InternalErrors> {
         let (a, b) = (self.channel_a.0 as i32, self.channel_b.0 as i32);
         let tiles: Vec<ImageTile> = cache
             .channel_keys()
@@ -332,7 +223,11 @@ impl MeasureColocalization {
 
     /// The (A, B) values of `object`'s pixels the loaded tiles cover - each
     /// from the first tile of its channel covering it.
-    fn object_pixels(&self, object: &Object, cache: &GlobalPipelineCache) -> Vec<(f32, f32)> {
+    pub(super) fn object_pixels(
+        &self,
+        object: &Object,
+        cache: &GlobalPipelineCache,
+    ) -> Vec<(f32, f32)> {
         let (a, b) = (self.channel_a.0 as i32, self.channel_b.0 as i32);
         let views = cache.resolve_channel_views_for_bbox(object.bbox);
         let tiles = |channel: i32| -> Vec<(ImageTile, bool, &[f32])> {
@@ -378,7 +273,7 @@ impl MeasureColocalization {
 }
 
 /// The same tile of channels A and B.
-struct TilePair {
+pub(super) struct TilePair {
     a: Arc<ImageContainer>,
     b: Arc<ImageContainer>,
 }
@@ -421,8 +316,8 @@ fn pass<T: Send>(
 }
 
 /// The whole image's values and the Costes thresholds found (NaN: off).
-struct ImageResult {
-    values: Values,
+pub(super) struct ImageResult {
+    pub(super) values: Values,
     costes_thresholds: (f64, f64),
 }
 
@@ -460,7 +355,7 @@ impl Sums {
 }
 
 /// The whole image's values (CellProfiler's `run_image_pair_images`).
-fn image_values(
+pub(super) fn image_values(
     tiles: &[TilePair],
     threshold_percent: f64,
     costes: CostesMethod,
@@ -553,16 +448,7 @@ fn image_values(
     values[7] = rwc_x / tot_x;
     values[8] = rwc_y / tot_y;
 
-    let costes_thresholds = match costes {
-        CostesMethod::Off => (f64::NAN, f64::NAN),
-        CostesMethod::Faster => bisection_costes(tiles, scale),
-        CostesMethod::Fast | CostesMethod::Accurate => linear_costes(
-            tiles,
-            scale,
-            costes == CostesMethod::Accurate,
-            (max_x, max_y),
-        ),
-    };
+    let costes_thresholds = costes_thresholds_with(tiles, costes, scale, (max_x, max_y));
     if costes != CostesMethod::Off {
         let (cx, cy) = costes_thresholds;
         let (tot_x, tot_y, comb) = pass(
@@ -587,6 +473,43 @@ fn image_values(
     ImageResult {
         values,
         costes_thresholds,
+    }
+}
+
+/// Costes' thresholds of channels A and B over the whole image (NaN: off).
+pub(super) fn costes_thresholds(
+    tiles: &[TilePair],
+    costes: CostesMethod,
+    scale: f64,
+) -> (f64, f64) {
+    let max = match costes {
+        CostesMethod::Fast | CostesMethod::Accurate => pass(
+            tiles,
+            || (f64::MIN, f64::MIN),
+            |(mx, my), x, y| {
+                *mx = mx.max(x);
+                *my = my.max(y);
+            },
+            |(ax, ay), (bx, by)| (ax.max(bx), ay.max(by)),
+        ),
+        CostesMethod::Off | CostesMethod::Faster => (f64::NAN, f64::NAN),
+    };
+    costes_thresholds_with(tiles, costes, scale, max)
+}
+
+/// [`costes_thresholds`] with the channels' maxima (`max`) known.
+fn costes_thresholds_with(
+    tiles: &[TilePair],
+    costes: CostesMethod,
+    scale: f64,
+    max: (f64, f64),
+) -> (f64, f64) {
+    match costes {
+        CostesMethod::Off => (f64::NAN, f64::NAN),
+        CostesMethod::Faster => bisection_costes(tiles, scale),
+        CostesMethod::Fast | CostesMethod::Accurate => {
+            linear_costes(tiles, scale, costes == CostesMethod::Accurate, max)
+        }
     }
 }
 
@@ -892,7 +815,7 @@ fn linear_costes(
 
 /// Each object's values (CellProfiler's `run_image_pair_objects`) from its
 /// (A, B) pixels; `costes` the whole image's Costes thresholds (NaN: off).
-fn object_values(
+pub(super) fn object_values(
     objects: &[&[(f32, f32)]],
     threshold_percent: f64,
     costes: (f64, f64),
@@ -1071,12 +994,16 @@ const SINGAN_2011: CitationMetadata = CitationMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::{
+        ImageAlgorithm, MeasureImageColocalization, MeasureObjectColocalization, PipelineContext,
+    };
     use crate::image::{ManagedImage, Point2d};
     use crate::object::ObjectInit;
     use crate::pipeline::pipeline::PipelineImageMeta;
     use crate::pipeline::pipeline_measure::MeasurementValues;
     use crate::pipeline::scope::Scope;
     use bitvec::prelude::*;
+    use evanalyzer_cfg::core_types::{MeasurementTarget, ObjectClass, ObjectId};
     use kornia_image::{Image, ImageSize};
 
     const CELL: ObjectClass = ObjectClass::Global(1);
@@ -1180,24 +1107,33 @@ mod tests {
         assert_eq!(cases.len(), 6);
         for case in &cases {
             let mut cache = cache_of(case);
-            let step = MeasureColocalization {
-                id: "coloc_01".into(),
-                channel_a: ImageChannelIdx(0),
-                channel_b: ImageChannelIdx(1),
-                threshold_percent: case.threshold_percent,
-                costes: match case.costes.as_str() {
-                    "Faster" => CostesMethod::Faster,
-                    "Fast" => CostesMethod::Fast,
-                    _ => CostesMethod::Accurate,
-                },
-                objects: CELL,
+            let costes = match case.costes.as_str() {
+                "Faster" => CostesMethod::Faster,
+                "Fast" => CostesMethod::Fast,
+                _ => CostesMethod::Accurate,
             };
             let mut ctx = PipelineContext::without_image(
                 std::path::PathBuf::new(),
                 PipelineImageMeta::default(),
             )
             .unwrap();
-            step.execute(&mut ctx, &mut cache).unwrap();
+            let image = MeasureImageColocalization {
+                id: "coloc_01".into(),
+                channel_a: ImageChannelIdx(0),
+                channel_b: ImageChannelIdx(1),
+                threshold_percent: case.threshold_percent,
+                costes,
+            };
+            image.execute(&mut ctx, &mut cache).unwrap();
+            let objects = MeasureObjectColocalization {
+                id: "object_coloc_01".into(),
+                objects: CELL,
+                channel_a: ImageChannelIdx(0),
+                channel_b: ImageChannelIdx(1),
+                threshold_percent: case.threshold_percent,
+                costes,
+            };
+            objects.execute(&mut ctx, &mut cache).unwrap();
             let measured = &cache.measurements.measurements;
             for (i, (id, ..)) in VALUES.iter().enumerate() {
                 let key = format!("coloc_01/{id}");
@@ -1213,7 +1149,7 @@ mod tests {
                 if i == SLOPE {
                     continue;
                 }
-                let key = format!("coloc_01/object_{id}");
+                let key = format!("object_coloc_01/{id}");
                 let m = measured.iter().find(|m| m.info.key == key).unwrap();
                 let MeasurementValues::Objects(values) = &m.values else {
                     panic!("{key}: per object")
@@ -1231,16 +1167,15 @@ mod tests {
         }
     }
 
-    /// Without Costes and per-object class: the image's values only.
+    /// Without Costes: no Costes values; per object no slope.
     #[test]
     fn outputs_follow_the_settings() {
-        let step = MeasureColocalization {
+        let step = MeasureImageColocalization {
             id: "c".into(),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(1),
             threshold_percent: 15.0,
             costes: CostesMethod::Off,
-            objects: ObjectClass::Unset,
         };
         let keys: Vec<String> = step
             .measurement_outputs()
@@ -1248,18 +1183,29 @@ mod tests {
             .map(|o| o.key)
             .collect();
         assert_eq!(keys.len(), 9);
-        assert!(
-            !keys
-                .iter()
-                .any(|k| k.contains("costes") || k.contains("object_"))
-        );
-        let with_objects = MeasureColocalization {
-            objects: CELL,
+        assert!(!keys.iter().any(|k| k.contains("costes")));
+        let with_costes = MeasureImageColocalization {
             costes: CostesMethod::Faster,
             ..step
         };
-        // 11 per image, 10 per object (no slope per object).
-        assert_eq!(with_objects.measurement_outputs().len(), 21);
+        assert_eq!(with_costes.measurement_outputs().len(), 11);
+        let objects = MeasureObjectColocalization {
+            id: "o".into(),
+            objects: CELL,
+            channel_a: ImageChannelIdx(0),
+            channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes: CostesMethod::Faster,
+        };
+        let outputs = objects.measurement_outputs();
+        // 10 per object: no slope.
+        assert_eq!(outputs.len(), 10);
+        assert!(!outputs.iter().any(|o| o.key == "o/slope"));
+        assert!(
+            outputs
+                .iter()
+                .all(|o| o.target == MeasurementTarget::Object)
+        );
     }
 
     #[test]
@@ -1350,20 +1296,30 @@ mod tests {
                 id += 1;
             }
         }
-        let step = MeasureColocalization {
+        let image = MeasureImageColocalization {
             id: "c".into(),
             channel_a: ImageChannelIdx(0),
             channel_b: ImageChannelIdx(1),
             threshold_percent: 15.0,
             costes,
+        };
+        let objects = MeasureObjectColocalization {
+            id: "o".into(),
             objects: CELL,
+            channel_a: ImageChannelIdx(0),
+            channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes,
         };
         let mut ctx =
             PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
                 .unwrap();
         let start = std::time::Instant::now();
-        step.execute(&mut ctx, &mut cache).unwrap();
-        let elapsed = start.elapsed();
+        image.execute(&mut ctx, &mut cache).unwrap();
+        let image_elapsed = start.elapsed();
+        let start = std::time::Instant::now();
+        objects.execute(&mut ctx, &mut cache).unwrap();
+        let objects_elapsed = start.elapsed();
         let hwm = std::fs::read_to_string("/proc/self/status")
             .ok()
             .and_then(|s| {
@@ -1373,7 +1329,7 @@ mod tests {
             })
             .unwrap_or_default();
         eprintln!(
-            "BENCH measure colocalization {size}², {} objects, costes {costes:?}: {elapsed:?}, {hwm}",
+            "BENCH measure colocalization {size}², {} objects, costes {costes:?}: image {image_elapsed:?}, objects {objects_elapsed:?}, {hwm}",
             id - 1
         );
     }

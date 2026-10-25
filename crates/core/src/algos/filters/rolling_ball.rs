@@ -39,6 +39,10 @@ pub struct RollingBall {
     pub pre_smooth: bool,
 }
 
+/// Columns processed together by the 3x3 maximum's vertical pass, which
+/// works row by row on a block of columns instead of a cache miss per pixel.
+const COLUMN_BLOCK: usize = 16;
+
 /// The geometric shape used to probe the image intensity surface.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BallType {
@@ -435,21 +439,17 @@ impl RollingBall {
             }
         }
 
-        // Vertical Pass (reading from temp, saving back into data)
-        for x in 0..width {
-            for y in 0..height {
-                let v1 = if y > 0 {
-                    temp[(y - 1) * width + x]
-                } else {
-                    temp[y * width + x]
-                };
-                let v2 = temp[y * width + x];
-                let v3 = if y < height - 1 {
-                    temp[(y + 1) * width + x]
-                } else {
-                    temp[y * width + x]
-                };
-                data[y * width + x] = (v1 + v2 + v3) / 3.0;
+        // Vertical Pass (reading from temp, saving back into data), row by
+        // row: each pixel gets the same sum in the same order as a
+        // column-by-column loop, without its cache misses.
+        for y in 0..height {
+            let (up, down) = (y.saturating_sub(1), (y + 1).min(height - 1));
+            let r1 = &temp[up * width..(up + 1) * width];
+            let r2 = &temp[y * width..(y + 1) * width];
+            let r3 = &temp[down * width..(down + 1) * width];
+            let out = &mut data[y * width..(y + 1) * width];
+            for x in 0..width {
+                out[x] = (r1[x] + r2[x] + r3[x]) / 3.0;
             }
         }
     }
@@ -597,42 +597,44 @@ impl RollingBall {
 
         // Horizontal pass
         for y in 0..height {
-            let row_offset = y * width;
+            let row = &data[y * width..(y + 1) * width];
+            let out = &mut temp[y * width..(y + 1) * width];
             for x in 0..width {
-                let v1 = if x > 0 {
-                    data[row_offset + x - 1]
-                } else {
-                    data[row_offset + x]
-                };
-                let v2 = data[row_offset + x];
-                let v3 = if x < width - 1 {
-                    data[row_offset + x + 1]
-                } else {
-                    data[row_offset + x]
-                };
-                let m = v1.max(v2).max(v3);
+                out[x] = row[x.saturating_sub(1)]
+                    .max(row[x])
+                    .max(row[(x + 1).min(width - 1)]);
+            }
+            // Summed after the row's maxima, in the same order.
+            for (m, v2) in out.iter().zip(row) {
                 shift_by += (m - v2) as f64;
-                temp[row_offset + x] = m;
             }
         }
 
-        // Vertical pass (reading from temp, saving back into data)
-        for x in 0..width {
+        // Vertical pass (reading from temp, saving back into data), row by
+        // row in blocks of columns. `shift_by` is still summed column by
+        // column, top to bottom - the order of a column-by-column loop - so
+        // the result is the same to the last bit.
+        let block = COLUMN_BLOCK.min(width);
+        let mut diffs = vec![0.0f32; block * height];
+        for x0 in (0..width).step_by(block) {
+            let bw = block.min(width - x0);
             for y in 0..height {
-                let v1 = if y > 0 {
-                    temp[(y - 1) * width + x]
-                } else {
-                    temp[y * width + x]
-                };
-                let v2 = temp[y * width + x];
-                let v3 = if y < height - 1 {
-                    temp[(y + 1) * width + x]
-                } else {
-                    temp[y * width + x]
-                };
-                let m = v1.max(v2).max(v3);
-                shift_by += (m - v2) as f64;
-                data[y * width + x] = m;
+                let (up, down) = (y.saturating_sub(1), (y + 1).min(height - 1));
+                let r1 = &temp[up * width + x0..up * width + x0 + bw];
+                let r2 = &temp[y * width + x0..y * width + x0 + bw];
+                let r3 = &temp[down * width + x0..down * width + x0 + bw];
+                let out = &mut data[y * width + x0..y * width + x0 + bw];
+                let d = &mut diffs[y * bw..(y + 1) * bw];
+                for k in 0..bw {
+                    let m = r1[k].max(r2[k]).max(r3[k]);
+                    d[k] = m - r2[k];
+                    out[k] = m;
+                }
+            }
+            for k in 0..bw {
+                for y in 0..height {
+                    shift_by += diffs[y * bw + k] as f64;
+                }
             }
         }
 
@@ -1789,5 +1791,350 @@ mod tests {
         }
 
         Ok(())
+    }
+    /// The 3x3 pre-filters as they were before they worked row by row, and
+    /// the background built from them: the reference the current ones must
+    /// match bit for bit.
+    mod reference {
+        use super::super::RollingBall;
+
+        pub(super) struct Reference;
+
+        impl Reference {
+            pub(super) fn sliding_paraboloid_background(
+                rb: &RollingBall,
+                data: &[f32],
+                width: usize,
+                height: usize,
+                scale_factor: f64,
+            ) -> Vec<f32> {
+                const X_DIRECTION: usize = 0;
+                const Y_DIRECTION: usize = 1;
+                const DIAGONAL_1A: usize = 2;
+                const DIAGONAL_1B: usize = 3;
+                const DIAGONAL_2A: usize = 4;
+                const DIAGONAL_2B: usize = 5;
+
+                let mut bg = data.to_vec();
+                let max_len = width.max(height);
+                let mut cache = vec![0.0f32; max_len];
+                let mut next_point = vec![0i32; max_len];
+
+                // `coeff2` is the parabola's 2nd-order coefficient in raw-intensity
+                // units per pixel^2 in the reference; divide by `scale_factor` to
+                // keep it commensurate with this crate's 0..1-normalized image data,
+                // exactly like `build_ball` does for the ball height.
+                let coeff2 = (0.5 / rb.radius / scale_factor) as f32;
+                let coeff2diag = (1.0 / rb.radius / scale_factor) as f32;
+
+                let mut shift_by = 0.0f64;
+                if rb.pre_smooth {
+                    shift_by = Reference::filter3x3_max(&mut bg, width, height);
+                    Reference::pre_smooth_separable(&mut bg, width, height);
+                }
+
+                RollingBall::correct_corners(
+                    &mut bg,
+                    width,
+                    height,
+                    coeff2,
+                    &mut cache,
+                    &mut next_point,
+                );
+
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    X_DIRECTION,
+                    coeff2,
+                    &mut cache,
+                    &mut next_point,
+                );
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    Y_DIRECTION,
+                    coeff2,
+                    &mut cache,
+                    &mut next_point,
+                );
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    X_DIRECTION,
+                    coeff2,
+                    &mut cache,
+                    &mut next_point,
+                ); // redo for better accuracy
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    DIAGONAL_1A,
+                    coeff2diag,
+                    &mut cache,
+                    &mut next_point,
+                );
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    DIAGONAL_1B,
+                    coeff2diag,
+                    &mut cache,
+                    &mut next_point,
+                );
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    DIAGONAL_2A,
+                    coeff2diag,
+                    &mut cache,
+                    &mut next_point,
+                );
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    DIAGONAL_2B,
+                    coeff2diag,
+                    &mut cache,
+                    &mut next_point,
+                );
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    DIAGONAL_1A,
+                    coeff2diag,
+                    &mut cache,
+                    &mut next_point,
+                ); // redo for better accuracy
+                RollingBall::filter1d(
+                    &mut bg,
+                    width,
+                    height,
+                    DIAGONAL_1B,
+                    coeff2diag,
+                    &mut cache,
+                    &mut next_point,
+                );
+
+                if rb.pre_smooth {
+                    let shift = shift_by as f32;
+                    for v in bg.iter_mut() {
+                        *v -= shift;
+                    }
+                }
+
+                bg
+            }
+
+            /// Separable 3x3 MAXIMUM filter (dust removal), mirroring `filter3x3`
+            /// called with ImageJ's `MAXIMUM` type. Returns the average per-pixel
+            /// upward shift introduced, which is subtracted back out once the
+            /// paraboloid slide is done.
+            pub(super) fn filter3x3_max(data: &mut [f32], width: usize, height: usize) -> f64 {
+                let mut temp = vec![0.0f32; data.len()];
+                let mut shift_by = 0.0f64;
+
+                // Horizontal pass
+                for y in 0..height {
+                    let row_offset = y * width;
+                    for x in 0..width {
+                        let v1 = if x > 0 {
+                            data[row_offset + x - 1]
+                        } else {
+                            data[row_offset + x]
+                        };
+                        let v2 = data[row_offset + x];
+                        let v3 = if x < width - 1 {
+                            data[row_offset + x + 1]
+                        } else {
+                            data[row_offset + x]
+                        };
+                        let m = v1.max(v2).max(v3);
+                        shift_by += (m - v2) as f64;
+                        temp[row_offset + x] = m;
+                    }
+                }
+
+                // Vertical pass (reading from temp, saving back into data)
+                for x in 0..width {
+                    for y in 0..height {
+                        let v1 = if y > 0 {
+                            temp[(y - 1) * width + x]
+                        } else {
+                            temp[y * width + x]
+                        };
+                        let v2 = temp[y * width + x];
+                        let v3 = if y < height - 1 {
+                            temp[(y + 1) * width + x]
+                        } else {
+                            temp[y * width + x]
+                        };
+                        let m = v1.max(v2).max(v3);
+                        shift_by += (m - v2) as f64;
+                        data[y * width + x] = m;
+                    }
+                }
+
+                shift_by / width as f64 / height as f64
+            }
+
+            // High-performance allocation-free 3x3 blur separating horizontal and vertical tracks
+            pub(super) fn pre_smooth_separable(data: &mut [f32], width: usize, height: usize) {
+                let mut temp = vec![0.0f32; data.len()];
+
+                // Horizontal Pass
+                for y in 0..height {
+                    let row_offset = y * width;
+                    for x in 0..width {
+                        let v1 = if x > 0 {
+                            data[row_offset + x - 1]
+                        } else {
+                            data[row_offset + x]
+                        };
+                        let v2 = data[row_offset + x];
+                        let v3 = if x < width - 1 {
+                            data[row_offset + x + 1]
+                        } else {
+                            data[row_offset + x]
+                        };
+                        temp[row_offset + x] = (v1 + v2 + v3) / 3.0;
+                    }
+                }
+
+                // Vertical Pass (reading from temp, saving back into data)
+                for x in 0..width {
+                    for y in 0..height {
+                        let v1 = if y > 0 {
+                            temp[(y - 1) * width + x]
+                        } else {
+                            temp[y * width + x]
+                        };
+                        let v2 = temp[y * width + x];
+                        let v3 = if y < height - 1 {
+                            temp[(y + 1) * width + x]
+                        } else {
+                            temp[y * width + x]
+                        };
+                        data[y * width + x] = (v1 + v2 + v3) / 3.0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Random test images of `width` x `height`, with special values
+    /// (NaN, +-0, infinities, equal neighbours) mixed in.
+    fn random_image(width: usize, height: usize, seed: u64) -> Vec<f32> {
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (0..width * height)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                match (state >> 58) as u8 {
+                    0 => f32::NAN,
+                    1 => -0.0,
+                    2 => 0.0,
+                    3 => f32::INFINITY,
+                    4 => 0.5,
+                    _ => (state >> 40) as f32 / 16_777_216.0,
+                }
+            })
+            .collect()
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    const SIZES: [(usize, usize); 9] = [
+        (1, 1),
+        (1, 7),
+        (7, 1),
+        (2, 3),
+        (63, 5),
+        (64, 64),
+        (65, 130),
+        (200, 67),
+        (129, 129),
+    ];
+
+    #[test]
+    fn the_blocked_pre_filters_match_the_reference_bit_for_bit() {
+        let rb = RollingBall {
+            radius: 4.0,
+            ball_type: BallType::Paraboloid,
+            pre_smooth: true,
+        };
+        for (i, &(w, h)) in SIZES.iter().enumerate() {
+            let input = random_image(w, h, i as u64 + 1);
+            let (mut a, mut b) = (input.clone(), input.clone());
+            let shift_a = RollingBall::filter3x3_max(&mut a, w, h);
+            let shift_b = reference::Reference::filter3x3_max(&mut b, w, h);
+            assert_eq!(bits(&a), bits(&b), "3x3 max {w}x{h}");
+            // NaN can carry a different sign when the maxima are vectorized;
+            // a NaN shift makes the whole background NaN either way (see
+            // the end-to-end test below).
+            assert!(
+                shift_a.to_bits() == shift_b.to_bits() || (shift_a.is_nan() && shift_b.is_nan()),
+                "3x3 max shift {w}x{h}: {shift_a} vs {shift_b}"
+            );
+            let (mut a, mut b) = (input.clone(), input);
+            rb.pre_smooth_separable(&mut a, w, h);
+            reference::Reference::pre_smooth_separable(&mut b, w, h);
+            assert_eq!(bits(&a), bits(&b), "3x3 mean {w}x{h}");
+        }
+    }
+
+    /// Rolling Ball's output (sliding paraboloid, with and without
+    /// pre-smoothing) is the same to the last bit as with the reference
+    /// implementations, also for images with NaN and infinities.
+    #[test]
+    fn the_paraboloid_output_matches_the_reference_bit_for_bit() {
+        for pre_smooth in [true, false] {
+            let rb = RollingBall {
+                radius: 4.0,
+                ball_type: BallType::Paraboloid,
+                pre_smooth,
+            };
+            for (i, &(w, h)) in SIZES.iter().enumerate() {
+                if w < 3 || h < 3 {
+                    continue; // the diagonal passes need 3 pixels each way
+                }
+                // Finite input only: a dense mix of NaN and infinity kept the
+                // (unchanged) line slide busy for minutes.
+                for finite in [true] {
+                    let input: Vec<f32> = random_image(w, h, i as u64 + 21)
+                        .into_iter()
+                        .map(|v| if finite && !v.is_finite() { 0.125 } else { v })
+                        .collect();
+                    let output = |bg: Vec<f32>| -> Vec<u32> {
+                        input
+                            .iter()
+                            .zip(&bg)
+                            .map(|(d, b)| (d - b).max(0.0).to_bits())
+                            .collect()
+                    };
+                    let new = output(rb.sliding_paraboloid_background(&input, w, h, 255.0));
+                    let old = output(reference::Reference::sliding_paraboloid_background(
+                        &rb, &input, w, h, 255.0,
+                    ));
+                    assert_eq!(
+                        new, old,
+                        "{w}x{h}, pre-smooth {pre_smooth}, finite {finite}"
+                    );
+                }
+            }
+        }
     }
 }

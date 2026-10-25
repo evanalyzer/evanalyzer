@@ -1,7 +1,7 @@
 //! # Spatial Grid Index
 //!
 //! Provides a uniform-grid spatial index over object bounding boxes, used to prune
-//! pairwise-overlap scans (`Colocalization`, `ClassifyObjects`'s `overlapping_with`) from
+//! pairwise-overlap scans (`ColocalizeObjects`, `ClassifyObjects`'s `overlapping_with`) from
 //! O(N*M) down to roughly O(N+M) for the sparse, small-object layouts typical of bioimage
 //! ROIs.
 //!
@@ -244,7 +244,7 @@ mod tests {
     /// per-cell bucketing), every pair whose bboxes truly intersect (per the naive
     /// `bboxes_intersect` reference) must be mutually discoverable via
     /// `BboxGrid::candidates` - i.e. the grid must never produce a false negative. This is
-    /// the correctness guardrail for using the grid to prune `Colocalization` and
+    /// the correctness guardrail for using the grid to prune `ColocalizeObjects` and
     /// `ClassifyObjects`'s overlap scans: both call sites rely on the grid never hiding a
     /// true candidate from the exact-overlap check that follows it.
     #[test]

@@ -187,7 +187,7 @@ MB release, 582 → 444 MB debug, measured before the libtorch split) - no OpenG
 ## AI models: Cellpose through the plugin (2026-10-19)
 
 Is Cellpose slower now that libtorch runs in a plugin? No. Stand-in
-models (`cargo run --release -p evanalyzer_ai_engine --features test-support
+models (`cargo run --release -p evanalyzer_ai --features test-support
 --example make_bench_models -- <dir>`: "light" = next to no compute, the
 cost around the model; "heavy" = 6 convolution layers) and the real
 Cellpose-SAM (`tests/cpsam_v2.pt`, 1.2 GB), CPU only, 22 shared cores
@@ -197,7 +197,7 @@ Cellpose-SAM (`tests/cpsam_v2.pt`, 1.2 GB), CPU only, 22 shared cores
 through the plugin, same process (~16 s):
 
 ```sh
-cargo test --release -p evanalyzer_ai_engine --features torch-plugin,test-support \
+cargo test --release -p evanalyzer_ai --features torch-plugin,test-support \
   --lib bench_plugin_against_in_process -- --ignored --nocapture
 # + BENCH_CELLPOSE_MODEL=$PWD/tests/cpsam_v2.pt for the real model (~1 min more)
 ```
@@ -219,7 +219,7 @@ real model, one 1024² image, old build vs. new, alternated:
 ```sh
 cargo run --release -p evanalyzer_core --features libtorch --example bench_cellpose -- \
   <workdir> --model tests/cpsam_v2.pt --channels 3 --images 1 --size 1024 --repeat 2
-# with EVANALYZER_AI_PLUGIN=target/release/libevanalyzer_ai_engine.so and libtorch on LD_LIBRARY_PATH
+# with EVANALYZER_AI_PLUGIN=target/release/libevanalyzer_ai.so and libtorch on LD_LIBRARY_PATH
 ```
 
 | Build | Time per image | Peak RAM |
@@ -700,6 +700,26 @@ the image's tiles are counted in parallel (1 byte per pixel per tile in
 flight). Most of the 603 MB is the test's own image (256 MB of f32 plus
 its copy while the tiles are built).
 
+### Measure Image / Object split: texture and colocalization (2026-10-25)
+
+Measure Texture and Measure Colocalization became Measure Image Texture
++ Measure Object Texture and Measure Image Colocalization + Measure
+Object Colocalization (one target per command). `bench_measure_texture`
+/ `bench_measure_colocalization` (release, 2048², 4,624 / 2,601
+objects), the step before vs. the two new ones, alternated, 2 runs each
+(the machine was busy: load ~14-19):
+
+| Benchmark | before (one step, image + objects) | after: image | after: objects | Peak RSS before → after |
+|---|---|---|---|---|
+| Texture, 256 gray levels | 48.8 / 54.9 ms | 24.9 / 25.4 ms | 27.5 / 28.2 ms | 69-72 → 62-63 MB |
+| Colocalization, Costes off | 31.7 / 38.2 ms | 17.1 / 20.4 ms | 13.2 / 15.1 ms | 88-89 MB |
+| Colocalization, Costes Faster | 204 / 237 ms | 186 / 205 ms | 185 / 191 ms | 88-89 MB |
+
+The same work, split - except Costes: the objects' Costes values use the
+whole image's Costes thresholds, so Measure Object Colocalization
+searches for them itself. Both commands with Costes on take ~1.8× the
+step before; either alone about as long as it did.
+
 ### Intensities in gray values only - no `_normalized` lists (2026-10-24)
 
 `intensity_{sum,mean,min,max}_normalized` dropped (nothing read them; 0..1
@@ -858,6 +878,24 @@ Where the time goes (debug log, CPU seconds summed over tiles):
 Sliding paraboloid, 2048², radius 4, pre-smooth, one idle core: 570 ms - 3×3
 max 69 ms and 3×3 mean 61 ms before the slide, x passes 49 ms each, y 78 ms,
 diagonal half-passes 30-36 ms.
+
+## Rolling Ball pre-filters (2026-10-25)
+
+The sliding paraboloid's two 3×3 pre-filters (maximum and mean) worked
+column by column; now row by row, the maximum's shift summed in the original
+order, so the output is the same to the last bit (tested against the old code,
+end to end). 2048² image, one core: 3×3 mean 38-58 → 7 ms, 3×3 max 38-61 →
+18-25 ms, whole background 385-399 → 308-342 ms. Copying the columns into
+lines for the parabola pass brought nothing and was dropped. Performance-check
+project, old / new alternated:
+
+| | before | after |
+|---|---|---|
+| 81 images: wall | 12.9 / 12.9 / 13.9 s | 10.7 / 11.1 / 11.9 s |
+| 81 images: CPU / peak RSS | 227-235 s / 3.21-3.42 GB | 190-195 s / 3.17-3.40 GB |
+| Whole slide: wall / CPU | 52.5 / 53.5 s, 687-706 s | 53.0 / 55.3 s, 694-702 s |
+
+Identical objects (298,262 and 99,441), every column except the ids.
 
 ## Peak RAM overview - for the system requirements
 

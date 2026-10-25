@@ -8,8 +8,8 @@
 //!
 //! ```text
 //! evanalyzer(.exe)
-//! ai/cpu/   evanalyzer_ai_engine (the plugin) + libtorch (CPU)
-//! ai/cuda/  evanalyzer_ai_engine (the plugin) + libtorch (CUDA)  - CUDA packages only
+//! ai/cpu/   evanalyzer_ai (the plugin) + libtorch (CPU)
+//! ai/cuda/  evanalyzer_ai (the plugin) + libtorch (CUDA)  - CUDA packages only
 //! ```
 //!
 //! The CUDA one is tried first where the NVIDIA driver sees a GPU (and the
@@ -111,9 +111,9 @@ pub(crate) fn cuda_plugin_installed() -> bool {
     exe_dir.is_some_and(|dir| dir.join("ai").join("cuda").join(library_name()).is_file())
 }
 
-/// `libevanalyzer_ai_engine.so`, `evanalyzer_ai_engine.dll`, `….dylib`.
+/// `libevanalyzer_ai.so`, `evanalyzer_ai.dll`, `….dylib`.
 fn library_name() -> PathBuf {
-    PathBuf::from(libloading::library_filename("evanalyzer_ai_engine"))
+    PathBuf::from(libloading::library_filename("evanalyzer_ai"))
 }
 
 /// Where the plugin is looked for, in this order (files that don't exist
@@ -540,7 +540,7 @@ mod tests {
             .args([
                 "rustc",
                 "-p",
-                "evanalyzer_ai_engine",
+                "evanalyzer_ai",
                 "--features",
                 "torch",
                 "--crate-type",
@@ -564,7 +564,7 @@ mod tests {
     /// `BENCH_CELLPOSE_MODEL` (e.g. `tests/cpsam_v2.pt`, 3 input channels)
     /// runs once at 512 x 512 - about a minute on 22 CPU cores.
     /// Run with:
-    ///   cargo test --release -p evanalyzer_ai_engine --features torch-plugin,test-support \
+    ///   cargo test --release -p evanalyzer_ai --features torch-plugin,test-support \
     ///     --lib bench_plugin_against_in_process -- --ignored --nocapture
     #[cfg(feature = "test-support")]
     #[test]

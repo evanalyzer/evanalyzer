@@ -599,7 +599,7 @@ pub enum ObjectRelateObjectsRelateRuleSettings {
     CentreInside,
     /// The child belongs to the parent it shares the most pixels with -
     /// for children whose centre can lie outside themselves (crescents, the
-    /// overlap regions of Colocalization).
+    /// overlap regions of ColocalizeObjects).
     #[serde(
         alias = "largest-overlap",
         alias = "largestOverlap",
@@ -2472,19 +2472,19 @@ impl Default for ClassifyObjectsSettings {
     }
 }
 
-fn _serde_default_colocalization_classes_to_coloc() -> Vec<ObjectClass> {
+fn _serde_default_colocalizeobjects_classes_to_coloc() -> Vec<ObjectClass> {
     vec![]
 }
-fn _serde_default_colocalization_all_combinations() -> bool {
+fn _serde_default_colocalizeobjects_all_combinations() -> bool {
     bool::default()
 }
-fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
+fn _serde_default_colocalizeobjects_exclude_classes() -> Vec<ObjectClass> {
     vec![]
 }
-fn _serde_default_colocalization_mark_objects_of() -> ObjectClass {
+fn _serde_default_colocalizeobjects_mark_objects_of() -> ObjectClass {
     ObjectClass::default()
 }
-fn _serde_default_colocalization_mark_as() -> ObjectClass {
+fn _serde_default_colocalizeobjects_mark_as() -> ObjectClass {
     ObjectClass::default()
 }
 /// Calculates spatial colocalization and intersections between specified object classes.
@@ -2496,18 +2496,18 @@ fn _serde_default_colocalization_mark_as() -> ObjectClass {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct ColocalizationSettings {
+pub struct ColocalizeObjectsSettings {
     /// The classes whose objects must overlap (e.g. the ch1 and the ch2
     /// spots): each object overlapping an object of every other class
     /// records them as its partners - listed and counted in the results.
-    #[serde(default = "_serde_default_colocalization_classes_to_coloc")]
+    #[serde(default = "_serde_default_colocalizeobjects_classes_to_coloc")]
     pub classes_to_coloc: Vec<ObjectClass>,
     /// Record every pair that overlaps, also of objects that don't overlap
     /// an object of each class: one step with A, B and C shows A∩B, A∩C,
     /// B∩C and A∩B∩C in the results' partner columns. Off: only the objects
     /// overlapping every other class record partners. "As" and the overlap
     /// regions always need every class.
-    #[serde(default = "_serde_default_colocalization_all_combinations")]
+    #[serde(default = "_serde_default_colocalizeobjects_all_combinations")]
     pub all_combinations: bool,
     /// Classes an object must NOT overlap to be considered colocalized.
     ///
@@ -2518,7 +2518,7 @@ pub struct ColocalizationSettings {
     /// So it's a "match A and B, but not C" filter
     ///
     /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
-    #[serde(default = "_serde_default_colocalization_exclude_classes")]
+    #[serde(default = "_serde_default_colocalizeobjects_exclude_classes")]
     pub exclude_classes: Vec<ObjectClass>,
     /// Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
@@ -2533,12 +2533,12 @@ pub struct ColocalizationSettings {
     /// Optional: the objects of this class that colocalize also get the
     /// class below (e.g. the ch1 spots overlapping a ch2 spot). `Unset`:
     /// the colocalizing objects of every class.
-    #[serde(default = "_serde_default_colocalization_mark_objects_of")]
+    #[serde(default = "_serde_default_colocalizeobjects_mark_objects_of")]
     pub mark_objects_of: ObjectClass,
     /// Optional: the class the colocalizing objects get (e.g. "ch1 with
     /// ch2") - to count them per image or relate them to cells. `Unset`:
     /// only the partners are recorded.
-    #[serde(default = "_serde_default_colocalization_mark_as")]
+    #[serde(default = "_serde_default_colocalizeobjects_mark_as")]
     pub mark_as: ObjectClass,
     /// Optional additional label filters.
     ///
@@ -2546,7 +2546,7 @@ pub struct ColocalizationSettings {
     pub filter_classes: Vec<ObjectClass>,
 }
 
-impl Default for ColocalizationSettings {
+impl Default for ColocalizeObjectsSettings {
     fn default() -> Self {
         Self {
             classes_to_coloc: vec![],
@@ -2853,20 +2853,6 @@ pub struct VoronoiSettings {
 
 // ============ MEASURE ============
 
-/// Measures how much of the image the objects of a class cover.
-///
-/// The area in pixels and µm² (with a known pixel size) and the part of the
-/// image (0..1). Where objects overlap, the area counts once.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AreaOccupiedSettings {
-    /// The step's ID, unique in the project - its values' keys start with
-    /// it ("area_occupied_01/...").
-    pub id: String,
-    /// The objects whose area is measured.
-    pub object_class: ObjectClass,
-}
-
 /// Leaves an image out of the results when its measurements say it's bad.
 ///
 /// Each rule compares a measurement of an earlier step (e.g. Image
@@ -2885,6 +2871,60 @@ pub struct ExcludeImageSettings {
     pub rules: Vec<ExcludeRuleSettings>,
 }
 
+/// Measures how much of the image the objects of a class cover.
+///
+/// The area in pixels and µm² (with a known pixel size) and the part of the
+/// image (0..1). Where objects overlap, the area counts once.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureImageAreaOccupiedSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("area_occupied_01/...").
+    pub id: String,
+    /// The objects whose area is measured.
+    pub object_class: ObjectClass,
+}
+
+/// Measures how two channels go together over the whole image -
+/// CellProfiler's MeasureColocalization, per image.
+///
+/// Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel
+/// A's intensity where channel B is bright too (M2 the other way round),
+/// "bright" meaning above the threshold - a percentage of the channel's
+/// maximum, or Costes' automatic threshold. The overlap coefficient, K1/K2
+/// and RWC (Manders weighted by how similar the two pixels' ranks are) use
+/// the same pixels.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureImageColocalizationSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("coloc_01/...").
+    pub id: String,
+    /// The first channel (A).
+    pub channel_a: ImageChannelIdx,
+    /// The second channel (B).
+    pub channel_b: ImageChannelIdx,
+    /// A pixel counts for Manders, the overlap and RWC when it is brighter
+    /// than this percentage of its channel's maximum (in the image).
+    #[schemars(range(min = 0, max = 100))]
+    pub threshold_percent: f32,
+    /// Manders with Costes' automatic thresholds, and how they are found.
+    pub costes: MeasureColocalizationCostesMethodSettings,
+}
+
+impl Default for MeasureImageColocalizationSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            channel_a: ImageChannelIdx::default(),
+            channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0f32,
+            costes: MeasureColocalizationCostesMethodSettings::Faster,
+        }
+    }
+}
+
 /// Measures the brightness of a channel across the whole image.
 ///
 /// Total, mean, standard deviation, minimum, maximum, median, lower and
@@ -2893,7 +2933,7 @@ pub struct ExcludeImageSettings {
 /// too.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ImageIntensitySettings {
+pub struct MeasureImageIntensitySettings {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("intensity_01/...").
     pub id: String,
@@ -2912,7 +2952,7 @@ pub struct ImageIntensitySettings {
 /// images out of the results.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ImageQualitySettings {
+pub struct MeasureImageQualitySettings {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("quality_01/...").
     pub id: String,
@@ -2920,47 +2960,85 @@ pub struct ImageQualitySettings {
     pub channel: ImageChannelIdx,
 }
 
-/// Measures how two channels go together, over the whole image and per
-/// object - CellProfiler's MeasureColocalization.
+/// Measures the texture of a channel over the whole image - Haralick's
+/// features (CellProfiler's MeasureTexture, per image).
 ///
-/// Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel
-/// A's intensity where channel B is bright too (M2 the other way round),
-/// "bright" meaning above the threshold - a percentage of the channel's
-/// maximum, or Costes' automatic threshold. The overlap coefficient, K1/K2
-/// and RWC (Manders weighted by how similar the two pixels' ranks are) use
-/// the same pixels.
+/// The pixel pairs the scale apart in a direction say how the gray levels
+/// go together: e.g. contrast is high where neighbours differ a lot, the
+/// angular second moment where few pairs repeat over and over (smooth or
+/// regular), entropy where the pairs are all different.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct MeasureColocalizationSettings {
+pub struct MeasureImageTextureSettings {
     /// The step's ID, unique in the project - its values' keys start with
-    /// it ("coloc_01/...").
+    /// it ("texture_01/...").
     pub id: String,
+    /// The channel measured.
+    pub channel: ImageChannelIdx,
+    /// How far apart the two pixels of a pair are, in pixels - about the
+    /// size of the texture's grain.
+    #[schemars(range(min = 1, max = 1000))]
+    pub scale: u32,
+    /// The gray levels the 8-bit values are rescaled to (2 to 256): fewer
+    /// are faster and less noisy, more see finer differences.
+    #[schemars(range(min = 2, max = 256))]
+    pub gray_levels: u32,
+    /// One value per feature (the mean of the directions) or one per
+    /// direction.
+    pub directions: MeasureTextureTextureDirectionsSettings,
+}
+
+impl Default for MeasureImageTextureSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            channel: ImageChannelIdx::default(),
+            scale: 3u32,
+            gray_levels: 256u32,
+            directions: MeasureTextureTextureDirectionsSettings::Mean,
+        }
+    }
+}
+
+/// Measures how two channels go together in each object of a class -
+/// CellProfiler's MeasureColocalization, per object.
+///
+/// The values of Measure Image Colocalization (but the slope) of the
+/// object's pixels: the threshold is a percentage of the object's maximum,
+/// RWC ranks the values of all the objects, and Costes uses the whole
+/// image's Costes thresholds.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureObjectColocalizationSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("object_coloc_01/...").
+    pub id: String,
+    /// The objects measured.
+    pub objects: ObjectClass,
     /// The first channel (A).
     pub channel_a: ImageChannelIdx,
     /// The second channel (B).
     pub channel_b: ImageChannelIdx,
     /// A pixel counts for Manders, the overlap and RWC when it is brighter
-    /// than this percentage of its channel's maximum (in the image, or in
-    /// the object).
+    /// than this percentage of its channel's maximum (in the object).
     #[schemars(range(min = 0, max = 100))]
     pub threshold_percent: f32,
-    /// Manders with Costes' automatic thresholds, and how they are found.
+    /// Manders with Costes' automatic thresholds (the whole image's), and
+    /// how they are found.
     pub costes: MeasureColocalizationCostesMethodSettings,
-    /// The objects of this class get values of their own as well (unset:
-    /// the whole image only).
-    pub objects: ObjectClass,
 }
 
-impl Default for MeasureColocalizationSettings {
+impl Default for MeasureObjectColocalizationSettings {
     fn default() -> Self {
         Self {
             id: String::default(),
+            objects: ObjectClass::default(),
             channel_a: ImageChannelIdx::default(),
             channel_b: ImageChannelIdx(1),
             threshold_percent: 15.0f32,
             costes: MeasureColocalizationCostesMethodSettings::Faster,
-            objects: ObjectClass::Unset,
         }
     }
 }
@@ -2970,7 +3048,7 @@ impl Default for MeasureColocalizationSettings {
 /// A child without a parent of the class has no value.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct MeasureDistanceToParentSettings {
+pub struct MeasureObjectDistanceToParentSettings {
     /// The step's ID, unique in the project - its values' keys start with
     /// it ("parent_distance_01/...").
     pub id: String,
@@ -3031,20 +3109,19 @@ pub struct MeasureObjectShapeSettings {
     pub objects: ObjectClass,
 }
 
-/// Measures the texture of a channel - Haralick's features, over the whole
-/// image and per object (CellProfiler's MeasureTexture).
+/// Measures the texture of a channel in each object of a class - Haralick's
+/// features (CellProfiler's MeasureTexture, per object).
 ///
-/// The pixel pairs the scale apart in a direction say how the gray levels
-/// go together: e.g. contrast is high where neighbours differ a lot, the
-/// angular second moment where few pairs repeat over and over (smooth or
-/// regular), entropy where the pairs are all different.
+/// The same values as Measure Image Texture, of the object's pixels only.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct MeasureTextureSettings {
+pub struct MeasureObjectTextureSettings {
     /// The step's ID, unique in the project - its values' keys start with
-    /// it ("texture_01/...").
+    /// it ("object_texture_01/...").
     pub id: String,
+    /// The objects measured.
+    pub objects: ObjectClass,
     /// The channel measured.
     pub channel: ImageChannelIdx,
     /// How far apart the two pixels of a pair are, in pixels - about the
@@ -3058,20 +3135,17 @@ pub struct MeasureTextureSettings {
     /// One value per feature (the mean of the directions) or one per
     /// direction.
     pub directions: MeasureTextureTextureDirectionsSettings,
-    /// The objects of this class get values of their own as well (unset:
-    /// the whole image only).
-    pub objects: ObjectClass,
 }
 
-impl Default for MeasureTextureSettings {
+impl Default for MeasureObjectTextureSettings {
     fn default() -> Self {
         Self {
             id: String::default(),
+            objects: ObjectClass::default(),
             channel: ImageChannelIdx::default(),
             scale: 3u32,
             gray_levels: 256u32,
             directions: MeasureTextureTextureDirectionsSettings::Mean,
-            objects: ObjectClass::Unset,
         }
     }
 }
