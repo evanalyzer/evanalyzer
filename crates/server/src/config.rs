@@ -698,7 +698,10 @@ mod tests {
     #[test]
     fn a_relative_data_dir_is_rejected() {
         let error = parse("data_dir = \"eva\"").unwrap_err();
-        assert!(error.contains("data_dir must be an absolute path"), "{error}");
+        assert!(
+            error.contains("data_dir must be an absolute path"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -789,11 +792,7 @@ mod tests {
     #[test]
     fn every_command_line_override_replaces_the_file_s_value() {
         let config = ServerConfig::default()
-            .with_overrides(
-                None,
-                Some("/srv/eva".into()),
-                Some("debug".into()),
-            )
+            .with_overrides(None, Some("/srv/eva".into()), Some("debug".into()))
             .with_worker_ai_overrides(Some("cpu".into()), None);
 
         assert_eq!(config.listen, "127.0.0.1:7400", "not given");

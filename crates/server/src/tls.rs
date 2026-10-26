@@ -21,11 +21,7 @@
 use crate::config::TlsConfig;
 use log::info;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use std::{
-    fs, io,
-    path::Path,
-    sync::Arc,
-};
+use std::{fs, io, path::Path, sync::Arc};
 
 const CERT_FILE: &str = "cert.pem";
 const KEY_FILE: &str = "key.pem";
@@ -165,7 +161,10 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         assert!(load(&config, dir.path()).unwrap().is_none());
-        assert!(fs::read_dir(dir.path()).unwrap().next().is_none(), "nothing generated");
+        assert!(
+            fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "nothing generated"
+        );
     }
 
     #[test]

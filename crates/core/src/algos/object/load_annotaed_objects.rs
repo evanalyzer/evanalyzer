@@ -7,9 +7,10 @@
 //! ## Overview
 //! Runs once per image and plane (`ExecutionScope::WholeImage`): an annotation
 //! crossing a tile border stays one object, and its intensities are measured on
-//! whichever image tiles it covers. Only annotations of the plane being
-//! processed are loaded (the executor fills `GlobalPipelineCache::annotated_objects`
-//! accordingly).
+//! whichever image tiles it covers. Which annotations a plane gets is
+//! `use_on`: by default those of that plane (see
+//! `ObjectMetricSettings::belongs_to`), or every one of the frame or image -
+//! e.g. a region outlined once. A loaded object is of the plane analysed.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10
@@ -23,9 +24,40 @@ use crate::{
     object::Object,
 };
 use evanalyzer_cfg::core_types::{
-    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
+    CitationMetadata, ImagePlane, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
 };
+use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use macros::CommandsMeta;
+
+/// On which planes an annotation is used.
+#[derive(CommandsMeta, Debug, PartialEq)]
+pub enum AnnotationUse {
+    /// Where it was drawn: an annotation of a plane on that plane, one
+    /// drawn on a z-projection in analyses on a z-projection. An analysis on
+    /// a z-projection uses every annotation of the time point.
+    #[cmdsmeta(display_name = "Its own plane")]
+    OwnPlane,
+    /// On every plane of its time point, wherever it was drawn - e.g. a
+    /// region outlined once in a Max view, analysed plane by plane.
+    #[cmdsmeta(display_name = "Every plane")]
+    EveryPlane,
+    /// On every plane and time point - e.g. a fixed region in a time
+    /// series.
+    #[cmdsmeta(display_name = "Every plane and time point")]
+    EveryPlaneAndTimePoint,
+}
+
+impl AnnotationUse {
+    /// Whether `annotation` is used on plane `z` (`None`: a z-projection) of
+    /// frame `t`.
+    fn uses(&self, annotation: &ObjectMetricSettings, z: Option<i32>, t: i32) -> bool {
+        match self {
+            Self::OwnPlane => annotation.belongs_to(z, t),
+            Self::EveryPlane => annotation.t_stack == t,
+            Self::EveryPlaneAndTimePoint => true,
+        }
+    }
+}
 
 /// Loads the hand-annotated objects of the image into the pipeline.
 ///
@@ -49,6 +81,11 @@ pub struct LoadAnnotatedObjects {
     /// Turn off to start from `output_class` alone.
     #[cmdsmeta(default = false, visibility = Advanced)]
     pub keep_annotated_classes: bool,
+
+    /// On which planes an annotation is used: where it was drawn, or on
+    /// every plane (and time point) - e.g. a region outlined once.
+    #[cmdsmeta(default = AnnotationUse::OwnPlane, optional = true, display_name = "Use on")]
+    pub use_on: AnnotationUse,
 }
 
 impl ImageAlgorithm for LoadAnnotatedObjects {
@@ -58,8 +95,12 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
         cache: &mut crate::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let annotations = std::sync::Arc::clone(&cache.annotated_objects);
+        let analysed = cache.analysed_plane;
         let mut loaded = Vec::new();
         for annotation in annotations.iter() {
+            if !self.use_on.uses(annotation, analysed.z, analysed.t) {
+                continue;
+            }
             let wanted = self.input_classes.is_empty()
                 || annotation
                     .object_class
@@ -78,6 +119,13 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
             object.colocalized_with.clear();
             object.retain_parents(|_, _| false);
             object.track = Default::default();
+            // Of the plane analysed (a projection's objects are of plane 0),
+            // like the objects segmented on it.
+            object.plane = ImagePlane {
+                z: analysed.z.unwrap_or(0),
+                c: object.plane.c,
+                t: analysed.t,
+            };
             if !self.keep_annotated_classes {
                 object.clear_object_classes();
             }
@@ -118,7 +166,7 @@ mod tests {
     use super::*;
     use crate::pipeline::scope::Scope;
     use crate::{
-        GlobalPipelineCache, ImageContainer, ImagePlane, ImageTile, ManagedImage,
+        AnalysedPlane, GlobalPipelineCache, ImageContainer, ImageTile, ManagedImage,
         image::{PixelSizes, Point2d},
         object::ObjectInit,
         pipeline::{pipeline::PipelineImageMeta, pipeline_context::PipelineContext},
@@ -215,7 +263,73 @@ mod tests {
             input_classes: vec![],
             output_class: ObjectClass::Unset,
             keep_annotated_classes: true,
+            use_on: AnnotationUse::OwnPlane,
         }
+    }
+
+    /// An annotation on plane `z` of frame `t`, or drawn on a projection.
+    fn on_plane(id: u128, z: i32, t: i32, on_projection: bool) -> ObjectMetricSettings {
+        let mut object = annotation(id, [0, 0, 1, 1], &[]);
+        (object.z_stack, object.t_stack) = (z, t);
+        if on_projection {
+            object.z_projection = evanalyzer_cfg::core_types::ZProjection::MaxIntensity;
+            object.z_stack = 0;
+        }
+        object
+    }
+
+    /// The ids of the annotations `use_on` loads on `analysed`, by their
+    /// stored ids' offsets (the loaded objects get new ids; the areas tell
+    /// them apart).
+    fn loaded_on(use_on: AnnotationUse, analysed: AnalysedPlane) -> Vec<(i32, i32)> {
+        let mut cache = cache_with(vec![
+            on_plane(STORED_ID, 2, 0, false),
+            on_plane(STORED_ID + 10, 5, 0, false),
+            on_plane(STORED_ID + 20, 0, 0, true),
+            on_plane(STORED_ID + 30, 2, 1, false),
+        ]);
+        cache.analysed_plane = analysed;
+        let cmd = LoadAnnotatedObjects {
+            use_on,
+            ..load_all()
+        };
+        let mut planes: Vec<(i32, i32)> = run(&cmd, &mut cache)
+            .iter()
+            .map(|o| (o.plane.z, o.plane.t))
+            .collect();
+        planes.sort();
+        planes
+    }
+
+    #[test]
+    fn by_default_a_plane_gets_its_own_annotations_and_a_projection_those_of_the_frame() {
+        let plane_2 = AnalysedPlane { z: Some(2), t: 0 };
+        assert_eq!(loaded_on(AnnotationUse::OwnPlane, plane_2), [(2, 0)]);
+        let projection = AnalysedPlane { z: None, t: 0 };
+        assert_eq!(
+            loaded_on(AnnotationUse::OwnPlane, projection),
+            [(0, 0), (0, 0), (0, 0)],
+            "every one of frame 0, of the projection's plane 0"
+        );
+    }
+
+    #[test]
+    fn every_plane_uses_each_annotation_of_the_frame_on_every_plane() {
+        let plane_7 = AnalysedPlane { z: Some(7), t: 0 };
+        assert_eq!(
+            loaded_on(AnnotationUse::EveryPlane, plane_7),
+            [(7, 0), (7, 0), (7, 0)],
+            "of plane 7, the one analysed"
+        );
+    }
+
+    #[test]
+    fn every_plane_and_time_point_uses_every_annotation() {
+        let plane = AnalysedPlane { z: Some(1), t: 3 };
+        assert_eq!(
+            loaded_on(AnnotationUse::EveryPlaneAndTimePoint, plane),
+            [(1, 3); 4]
+        );
     }
 
     #[test]

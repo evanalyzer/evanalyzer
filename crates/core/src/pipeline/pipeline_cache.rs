@@ -94,6 +94,14 @@ impl Default for GlobalImageMeta {
     }
 }
 
+/// The image an analysis runs on: plane `z` of frame `t`, or (`z: None`) the
+/// z-projection of frame `t`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct AnalysedPlane {
+    pub z: Option<i32>,
+    pub t: i32,
+}
+
 #[derive(Default, Clone)]
 pub struct GlobalPipelineCache {
     pub image_cache: ImageCache,
@@ -102,9 +110,12 @@ pub struct GlobalPipelineCache {
     /// What the measurement steps measured on this plane.
     pub measurements: PipelineMeasurements,
     pub image_rel_path: PathBuf,
-    /// The objects the user annotated by hand on this image, for the plane being processed
+    /// Every object the user annotated by hand on this image (its series):
+    /// Load Annotated Objects picks the ones it uses on `analysed_plane`.
     pub annotated_objects:
         std::sync::Arc<Vec<evanalyzer_cfg::settings::object_settings::ObjectMetricSettings>>,
+    /// The image being analysed.
+    pub analysed_plane: AnalysedPlane,
     /// The project's class colors (`0xRRGGBB`), for commands that draw objects
     pub class_colors: Arc<HashMap<ObjectClass, u32>>,
 }

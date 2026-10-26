@@ -17,7 +17,9 @@ use crate::{
         image_cache::ImageCache,
         object_cache::ObjectCache,
         pipeline::{Pipeline, PipelineImageMeta},
-        pipeline_cache::{CacheAddress, ChannelVariant, GlobalImageMeta, GlobalPipelineCache},
+        pipeline_cache::{
+            AnalysedPlane, CacheAddress, ChannelVariant, GlobalImageMeta, GlobalPipelineCache,
+        },
     },
     storage::{ImageSummary, PipelineResultExporter},
     utils::resources::MAX_TILE_SIZE,
@@ -779,17 +781,19 @@ impl<'a> JobExecutor {
                 .iter()
                 .any(|(_, _, c)| c.uses_annotated_objects())
         });
-        let series_annotations: &[ObjectMetricSettings] = match loads_annotations {
-            true => image_entry
-                .series
-                .get(&self.active_series(image_entry))
-                .map(|series| series.objects.as_slice())
-                .unwrap_or(&[]),
-            false => &[],
+        // All of them: Load Annotated Objects picks the ones of each plane.
+        let series_annotations: Arc<Vec<ObjectMetricSettings>> = match loads_annotations {
+            true => Arc::new(
+                image_entry
+                    .series
+                    .get(&self.active_series(image_entry))
+                    .map(|series| series.objects.clone())
+                    .unwrap_or_default(),
+            ),
+            false => Arc::default(),
         };
         // With a z-projection the stacks loop sees one projected image, not
-        // individual z-planes: the annotations of every plane and those
-        // drawn on the projection (see `ObjectMetricSettings::belongs_to`).
+        // individual z-planes.
         let per_z_plane = matches!(
             z_handling,
             ZStackHandling::AllStacks | ZStackHandling::SingleStack
@@ -803,13 +807,6 @@ impl<'a> JobExecutor {
             let variant_store: VariantStore = Mutex::new(HashMap::new());
             let reuse_variants = (z_stacks.len() > 1).then_some(&variant_store);
             for &z in &z_stacks {
-                let plane_annotations: Arc<Vec<ObjectMetricSettings>> = Arc::new(
-                    series_annotations
-                        .iter()
-                        .filter(|a| a.belongs_to(per_z_plane.then_some(z), t))
-                        .cloned()
-                        .collect(),
-                );
                 let global_cache = match self.prepare_global_image_cache(
                     full_size,
                     is_rgb,
@@ -1025,7 +1022,11 @@ impl<'a> JobExecutor {
                     tiles_start.elapsed().as_secs_f64()
                 );
                 let stack_merge_result = stack_result.and_then(|mut merged_cache| {
-                    merged_cache.annotated_objects = plane_annotations;
+                    merged_cache.annotated_objects = Arc::clone(&series_annotations);
+                    merged_cache.analysed_plane = AnalysedPlane {
+                        z: per_z_plane.then_some(z),
+                        t,
+                    };
                     merged_cache.measurements.z_stack = z;
                     merged_cache.measurements.t_stack = t;
                     if merged_cache.object_cache.is_empty()
@@ -1352,6 +1353,7 @@ impl<'a> JobExecutor {
             measurements: Default::default(),
             image_rel_path: image_rel_path.into(),
             annotated_objects: Default::default(),
+            analysed_plane: Default::default(),
             class_colors: Arc::clone(&self.class_colors),
         })
     }
@@ -4338,14 +4340,16 @@ mod full_run_integration_tests {
         settings
     }
 
-    #[test]
-    fn load_annotated_objects_runs_without_segmentation_and_only_loads_the_analyzed_plane() {
-        use crate::algos::LoadAnnotatedObjects;
-        const ANALYZED: ObjectClass = ObjectClass::Global(1);
-        const OTHER_Z: ObjectClass = ObjectClass::Global(2);
-        const OTHER_T: ObjectClass = ObjectClass::Global(3);
-        const LOADED: ObjectClass = ObjectClass::Global(4);
+    const ANALYZED: ObjectClass = ObjectClass::Global(1);
+    const OTHER_Z: ObjectClass = ObjectClass::Global(2);
+    const OTHER_T: ObjectClass = ObjectClass::Global(3);
+    const LOADED: ObjectClass = ObjectClass::Global(4);
 
+    /// Runs a pipeline of only Load Annotated Objects (`use_on`) on plane
+    /// z = 0, t = 0 of an image annotated there, on z = 1 and on t = 1: the
+    /// objects exported.
+    fn load_annotations(use_on: crate::algos::AnnotationUse) -> Vec<ObjectMetricSettings> {
+        use crate::algos::LoadAnnotatedObjects;
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let rel_path = PathBuf::from("multi-channel-4D-series.ome.tif");
         let mut series = BTreeMap::new();
@@ -4404,6 +4408,7 @@ mod full_run_integration_tests {
             input_classes: vec![],
             output_class: LOADED,
             keep_annotated_classes: true,
+            use_on,
         }));
         job.add_post_process_pipeline(pipeline);
 
@@ -4411,7 +4416,12 @@ mod full_run_integration_tests {
         job.run(1, tx, Arc::new(AtomicBool::new(false)))
             .expect("loading annotations should succeed");
 
-        let exported = out_objects.lock().unwrap();
+        out_objects.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn load_annotated_objects_runs_without_segmentation_and_only_loads_the_analyzed_plane() {
+        let exported = load_annotations(crate::algos::AnnotationUse::OwnPlane);
         assert_eq!(
             exported.len(),
             1,
@@ -4429,6 +4439,19 @@ mod full_run_integration_tests {
             !object.intensities.is_empty(),
             "the loaded annotation is measured on the image"
         );
+    }
+
+    #[test]
+    fn load_annotated_objects_can_use_every_annotation_on_the_plane_analysed() {
+        let exported = load_annotations(crate::algos::AnnotationUse::EveryPlaneAndTimePoint);
+        assert_eq!(exported.len(), 3, "those of z = 1 and t = 1 too");
+        for object in &exported {
+            assert_eq!(
+                (object.z_stack, object.t_stack),
+                (0, 0),
+                "of the plane analysed"
+            );
+        }
     }
 }
 
@@ -4545,6 +4568,7 @@ mod tile_merge_end_to_end_tests {
             measurements: Default::default(),
             image_rel_path: PathBuf::new(),
             annotated_objects: Default::default(),
+            analysed_plane: Default::default(),
             class_colors: Default::default(),
             image_meta: GlobalImageMeta {
                 full_image_width: ImageSize {

@@ -19,6 +19,18 @@ impl From<ObjectAiObjectClassifierAiClassifyMatchHandlingSettings> for AiClassif
     }
 }
 
+impl From<ObjectLoadAnnotaedObjectsAnnotationUseSettings> for AnnotationUse {
+    fn from(_s: ObjectLoadAnnotaedObjectsAnnotationUseSettings) -> Self {
+        match _s {
+            ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane => AnnotationUse::OwnPlane,
+            ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlane => AnnotationUse::EveryPlane,
+            ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlaneAndTimePoint => {
+                AnnotationUse::EveryPlaneAndTimePoint
+            }
+        }
+    }
+}
+
 impl From<FiltersIlluminationCorrectionApplyMethodSettings> for ApplyMethod {
     fn from(_s: FiltersIlluminationCorrectionApplyMethodSettings) -> Self {
         match _s {
@@ -811,6 +823,7 @@ impl From<LoadAnnotatedObjectsSettings> for LoadAnnotatedObjects {
             input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
             output_class: _s.output_class,
             keep_annotated_classes: _s.keep_annotated_classes,
+            use_on: AnnotationUse::from(_s.use_on),
         }
     }
 }

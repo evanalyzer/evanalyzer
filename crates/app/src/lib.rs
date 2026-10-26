@@ -79,10 +79,10 @@ pub mod global {
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::ColorScheme;
     pub use crate::workspace::settings::NavigatorMode;
-    pub use crate::workspace::settings::USER_FOLDER_NAME;
     pub use crate::workspace::settings::PanelSettings;
     pub use crate::workspace::settings::RecentProject;
     pub use crate::workspace::settings::RecentServer;
+    pub use crate::workspace::settings::USER_FOLDER_NAME;
     pub use crate::workspace::settings::UserInformation;
     pub use crate::workspace::settings::ViewportMemorySettings;
     pub use crate::workspace::settings::{ResultsSplitSettings, SpeedUnit, TrailMode};

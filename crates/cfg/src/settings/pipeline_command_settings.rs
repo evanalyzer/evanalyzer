@@ -35,6 +35,30 @@ pub enum ObjectAiObjectClassifierAiClassifyMatchHandlingSettings {
     ReclassifyIfMatch,
 }
 
+/// On which planes an annotation is used.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectLoadAnnotaedObjectsAnnotationUseSettings {
+    /// Where it was drawn: an annotation of a plane on that plane, one
+    /// drawn on a z-projection in analyses on a z-projection. An analysis on
+    /// a z-projection uses every annotation of the time point.
+    #[default]
+    #[serde(alias = "own-plane", alias = "ownPlane", alias = "own_plane")]
+    OwnPlane,
+    /// On every plane of its time point, wherever it was drawn - e.g. a
+    /// region outlined once in a Max view, analysed plane by plane.
+    #[serde(alias = "every-plane", alias = "everyPlane", alias = "every_plane")]
+    EveryPlane,
+    /// On every plane and time point - e.g. a fixed region in a time
+    /// series.
+    #[serde(
+        alias = "every-plane-and-time-point",
+        alias = "everyPlaneAndTimePoint",
+        alias = "every_plane_and_time_point"
+    )]
+    EveryPlaneAndTimePoint,
+}
+
 /// How the estimated illumination field is combined with the original image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -2619,6 +2643,9 @@ impl Default for IntensityFilterSettings {
     }
 }
 
+fn _serde_default_loadannotatedobjects_use_on() -> ObjectLoadAnnotaedObjectsAnnotationUseSettings {
+    ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane
+}
 /// Loads the hand-annotated objects of the image into the pipeline.
 ///
 /// Every loaded object gets a new object id, is marked as manually annotated
@@ -2639,6 +2666,10 @@ pub struct LoadAnnotatedObjectsSettings {
     ///
     /// Turn off to start from `output_class` alone.
     pub keep_annotated_classes: bool,
+    /// On which planes an annotation is used: where it was drawn, or on
+    /// every plane (and time point) - e.g. a region outlined once.
+    #[serde(default = "_serde_default_loadannotatedobjects_use_on")]
+    pub use_on: ObjectLoadAnnotaedObjectsAnnotationUseSettings,
 }
 
 impl Default for LoadAnnotatedObjectsSettings {
@@ -2647,6 +2678,7 @@ impl Default for LoadAnnotatedObjectsSettings {
             input_classes: vec![],
             output_class: ObjectClass::default(),
             keep_annotated_classes: false,
+            use_on: ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane,
         }
     }
 }

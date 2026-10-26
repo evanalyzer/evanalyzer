@@ -1219,6 +1219,11 @@
           "description": "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
+        },
+        "useOn": {
+          "description": "On which planes an annotation is used: where it was drawn, or on\nevery plane (and time point) - e.g. a region outlined once.",
+          "$ref": "#/$defs/ObjectLoadAnnotaedObjectsAnnotationUseSettings",
+          "default": "OWN_PLANE"
         }
       }
     },
@@ -2197,6 +2202,26 @@
           "required": [
             "MULTI_FOR"
           ]
+        }
+      ]
+    },
+    "ObjectLoadAnnotaedObjectsAnnotationUseSettings": {
+      "description": "On which planes an annotation is used.",
+      "oneOf": [
+        {
+          "description": "Where it was drawn: an annotation of a plane on that plane, one\ndrawn on a z-projection in analyses on a z-projection. An analysis on\na z-projection uses every annotation of the time point.",
+          "type": "string",
+          "const": "OWN_PLANE"
+        },
+        {
+          "description": "On every plane of its time point, wherever it was drawn - e.g. a\nregion outlined once in a Max view, analysed plane by plane.",
+          "type": "string",
+          "const": "EVERY_PLANE"
+        },
+        {
+          "description": "On every plane and time point - e.g. a fixed region in a time\nseries.",
+          "type": "string",
+          "const": "EVERY_PLANE_AND_TIME_POINT"
         }
       ]
     },

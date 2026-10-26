@@ -743,8 +743,8 @@ mod tests {
     /// configured certificate makes it.
     pub(super) fn test_tls(dir: &std::path::Path) -> tls::Tls {
         tls::load(&crate::config::TlsConfig::default(), &dir.join("tls"))
-        .unwrap()
-        .unwrap()
+            .unwrap()
+            .unwrap()
     }
 
     /// Accepts exactly the certificate with this fingerprint - what the real
