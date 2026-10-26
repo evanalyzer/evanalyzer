@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // shell/annotate_bar.slint — the tool bar of annotate mode, floating over
-// the image: the tools, the class painted into, the brush size.
+// the image: the tools, the class painted into, the brush (and wand) size.
 
 import { Ink, InkIcons, InkIconButton, InkToolButton, InkBarSeparator, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuSeparator, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
 import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
@@ -129,6 +129,17 @@ export component AnnotateBar inherits Rectangle {
                         }
                     }
                     InkToolButton {
+                        icon: InkIcons.wand;
+                        label: "Wand - a brush that keeps to edges";
+                        keys: ["W"];
+                        enabled: root.has-class;
+                        disabled-reason: "Pick the class to paint as first";
+                        active: root.tool == ToolState.Wand;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.Wand;
+                        }
+                    }
+                    InkToolButton {
                         icon: InkIcons.eraser;
                         label: "Eraser";
                         active: root.tool == ToolState.Eraser;
@@ -198,7 +209,7 @@ export component AnnotateBar inherits Rectangle {
                 }
             }
 
-            if root.tool == ToolState.Brush || root.tool == ToolState.Eraser: HorizontalLayout {
+            if root.tool == ToolState.Brush || root.tool == ToolState.Wand || root.tool == ToolState.Eraser: HorizontalLayout {
                 spacing: 6px;
                 padding-right: 6px;
                 Text {

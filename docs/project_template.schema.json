@@ -487,6 +487,32 @@
         }
       }
     },
+    "ColorDeconvolutionSettings": {
+      "description": "Separates a brightfield RGB image into its stains and keeps one as a\ngray image: how much of the stain each pixel has (0 = none, 255 in 8 bit\n= OD 2.55; the 8-bit value / 100 is the optical density).\n\nFor IHC: Stain 2 of H-DAB is the DAB (brown) signal - threshold it, or\nmeasure the DAB per nucleus found on Stain 1.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "The brightness of empty glass (no tissue), 0-255 whatever the image's\nbit depth - lower it when the scanner's background isn't pure white.",
+          "type": "number",
+          "format": "float",
+          "default": 255.0,
+          "maximum": 255,
+          "minimum": 1
+        },
+        "output": {
+          "description": "The stain the step keeps.",
+          "$ref": "#/$defs/FiltersColorDeconvolutionStainOutputSettings",
+          "default": "STAIN1"
+        },
+        "stains": {
+          "description": "The stains on the slide.",
+          "$ref": "#/$defs/FiltersColorDeconvolutionStainVectorsSettings",
+          "default": {
+            "type": "H_DAB"
+          }
+        }
+      }
+    },
     "ColorFilterCommandSettings": {
       "description": "A command that filters an image based on a specific HSV color range.\n\nPixels falling outside the HSV range are masked\nout by setting to black.",
       "type": "object",
@@ -690,6 +716,146 @@
     "FillObjectHolesSettings": {
       "description": "Fills the holes inside every object, one object at a time.\n\n[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
       "type": "object"
+    },
+    "FiltersColorDeconvolutionStainOutputSettings": {
+      "description": "Which stain the step keeps.",
+      "oneOf": [
+        {
+          "description": "Stain 1: Hematoxylin in every preset (nuclei).",
+          "type": "string",
+          "const": "STAIN1"
+        },
+        {
+          "description": "Stain 2: DAB in H-DAB, Eosin in H&E and H-E-DAB.",
+          "type": "string",
+          "const": "STAIN2"
+        },
+        {
+          "description": "Stain 3: DAB in H-E-DAB, else the residual - what neither stain\nexplains (high where the stain vectors don't fit the slide).",
+          "type": "string",
+          "const": "STAIN3"
+        }
+      ]
+    },
+    "FiltersColorDeconvolutionStainVectorsSettings": {
+      "description": "The stains' colors: Ruifrok & Johnston's measured stain vectors (OD of\nred, green, blue), or your own.",
+      "oneOf": [
+        {
+          "description": "Hematoxylin and DAB (immunohistochemistry).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "H_DAB"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Hematoxylin and Eosin.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "H_E"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Hematoxylin, Eosin and DAB.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "H_E_DAB"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Your own stain vectors, e.g. measured on a single-stained slide: the\noptical density of each stain in red, green and blue. Stain 3 all 0:\nthe residual (perpendicular to stains 1 and 2).",
+          "type": "object",
+          "properties": {
+            "stain1Blue": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain1Green": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain1Red": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain2Blue": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain2Green": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain2Red": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain3Blue": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain3Green": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "stain3Red": {
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "CUSTOM"
+            }
+          },
+          "required": [
+            "type",
+            "stain1Red",
+            "stain1Green",
+            "stain1Blue",
+            "stain2Red",
+            "stain2Green",
+            "stain2Blue",
+            "stain3Red",
+            "stain3Green",
+            "stain3Blue"
+          ]
+        }
+      ]
     },
     "FiltersHessianHessianModeSettings": {
       "description": "Specifies the feature extraction method for the Hessian matrix.\n\nThe Hessian matrix describes the local second-order structure of an image,\noften used for blob detection (LoG) or ridge extraction.",
@@ -2637,6 +2803,19 @@
             }
           },
           "$ref": "#/$defs/ColocalizeObjectsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "COLOR_DECONVOLUTION"
+            }
+          },
+          "$ref": "#/$defs/ColorDeconvolutionSettings",
           "required": [
             "type"
           ]

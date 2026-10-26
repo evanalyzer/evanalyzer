@@ -12,8 +12,10 @@ export enum ToolState {
     PaintPolygon,
     PaintMarker,
     // Paints a new object / erases pixels of the hand-drawn objects, along
-    // the dragged stroke (`ViewportObjectState.brush-stroke`).
+    // the dragged stroke (`ViewportObjectState.brush-stroke`). The wand
+    // paints like the brush but keeps to edges.
     Brush,
+    Wand,
     Eraser,
 }
 
@@ -160,7 +162,7 @@ export struct PointSlint {
 
 export global ViewportObjectState {
     callback object_paint_finished([PointSlint], ToolState, int);
-    // A point of a brush or eraser stroke, in viewport coordinates: phase 0
+    // A point of a brush, wand or eraser stroke, in viewport coordinates: phase 0
     // the press, 1 a move, 2 the release (Rust paints or erases then).
     callback brush-stroke(length, length, int);
     // The stroke so far as path commands, drawn while dragging.

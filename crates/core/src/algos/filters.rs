@@ -9,6 +9,7 @@
 
 pub mod blur;
 pub mod blur_gaussian;
+pub mod color_deconvolution;
 pub mod color_filter;
 pub mod edge_detection_canny;
 pub mod edge_detection_sobel;

@@ -62,6 +62,7 @@ pub mod viewport_ortho;
 pub mod viewport_task;
 pub mod viewport_volume;
 pub mod viewport_worker;
+pub(crate) mod wand;
 
 pub struct Editor {
     image_list_controller: Arc<images_list_controller::ImagesListController>,

@@ -626,3 +626,59 @@ Lets the user act as the AI's eyes without sending pixels.
 - [ ] Local/on-premise vision model that can check overlays itself (no data leaves the institute).
 - [ ] Suggest existing templates from `evanalyzer-templates` before building from scratch.
 - [ ] Explain an existing pipeline in plain language ("what does this pipeline do?").
+
+## Feature gaps vs. ilastik / CellProfiler / QuPath (2026-10-26)
+Comparison in `docs/feature_comparison.md`. Clean room: ilastik, QuPath and TrackMate are GPL - papers and user docs only, never their code. CellProfiler, Cellpose and StarDist are BSD - porting allowed, CellProfiler as numeric reference. Order for our target users (detection, relations, coloc on WSI): H-DAB → annotation ROI/tools → live pixel classifier → LAP tracker → Zernike/radial distribution. Effort numbers are rough estimates.
+
+### Brightfield stain separation
+- [x] Image command "Color Deconvolution" (`filters/color_deconvolution.rs`, 2026-10-26, Ruifrok & Johnston 2001, from the paper): RGB → OD = -log10(I / white) → OD · M⁻¹; presets H-DAB, H&E, H-E-DAB (the paper's vectors) and Custom (9 values, stain 3 all 0 = residual = cross product of 1 and 2); keeps one stain as gray ("Keep": Stain 1 Hematoxylin / Stain 2 DAB or Eosin / Stain 3 DAB in H-E-DAB or residual); Background (white) 0-255, advanced. Output 0-1 = OD 0-2.55 (`MAX_OPTICAL_DENSITY`): on the 8-bit scale value / 100 = OD, so QuPath-style DAB thresholds (OD 0.2) are typed as 20. Pixels darker than 1/255 of white count as 1/255 (OD 2.41). Not yet checked in the real app on a slide.
+- [ ] Check the DAB values against a reference on a real H-DAB slide (QuPath/ImageJ's numbers only, no code - both GPL).
+- [ ] Later: estimate stain vectors from the image (Macenko).
+
+### Annotation tools (QuPath level)
+EVA has rectangle, ellipse, polygon, brush, eraser, marker - and now the wand. Covered by the pipeline (decided 2026-10-26): analysing inside an annotation (load annotated objects as the region), boolean operations (object commands), hierarchy (Relate: parent/child, counts per parent).
+- [x] Wand (`editor/wand.rs`, 2026-10-26, own method - QuPath's code not read): a brush that keeps to edges. Tool bar after Brush, key W, brush size shared. On release, per circle along the stroke (a third of the radius apart): the visible channels of the view (each scaled to its 1-99 % range, 3 × 3 mean, RGB as 3 colors) → color distance to the cursor's pixel → Otsu splits the circle; the cursor's side, 4-connected to it. No edge (the halves < 0.1 apart): the whole circle, like the brush. Paints like the brush (into the selected hand-drawn object, else a new one). Works on the view's pixels (the pyramid level shown), mapped to full resolution. Not yet tried in the real app.
+- [ ] Wand: try in the real app on a slide (H-DAB nuclei, fluorescence) - is MIN_CONTRAST 0.1 right? A live preview of the region under the cursor (like the brush circle) would help.
+- [ ] Maybe: vertex editing of polygons (move, add, delete points).
+- [ ] Maybe: line / polyline - only if a use case comes up (lengths of fibres/vessels, a distance to an invasion front, a line profile). Not planned for now.
+
+### Interactive pixel classifier (ilastik level)
+Feature set is about equal (Gaussian, gradient, LoG, Hessian, structure tensor, rank × sizes); the gap is the feedback loop.
+- [ ] Live training mode: debounce strokes, retrain the RF on a background thread, predict only the viewport tiles at preview resolution, show a probability overlay. The big UX win.
+- [ ] Uncertainty overlay (difference of the two highest class probabilities) - nearly free once live mode exists.
+- [ ] Accuracy card + normalize / balance (see "AI training panel" above).
+- [ ] Autocontext: second-stage RF that also gets the first stage's probabilities as features.
+- [ ] Optional: difference of Gaussians feature; automatic feature suggestion.
+
+### Object tracking (CellProfiler level)
+Today: greedy nearest neighbour, no gaps, no divisions (`simple_tracker.rs`).
+- [ ] LAP tracker (Jaqaman et al. 2008): step 1 frame-to-frame optimal assignment (Hungarian; cost = squared distance, optional intensity/area difference); step 2 global assignment for gap closing (missing 1-n frames), splits (divisions) and merges. Hungarian: `kuhn_munkres` in the `pathfinding` crate (MIT/Apache) - check transitive licences.
+- [ ] Overlap mode (IoU linking, for big slow objects).
+- [ ] Track measurements: displacement, speed, lifetime, parent track / lineage.
+- ~1 week. ilastik's conservation tracking (ILP solver, learned division/merger classifiers) is not planned - LAP is enough for most users.
+
+### Measurements (CellProfiler level)
+Three separate measurements, not one:
+- [ ] Zernike moments: rotation-invariant shape descriptors up to order n - extend `MeasureObjectShape`. ~1-2 days.
+- [ ] Radial distribution: intensity in concentric rings from object centre to edge (e.g. near nucleus vs. membrane) - new `MeasureObjectIntensityDistribution`, rings per parent via Relate. ~2-3 days.
+- [ ] Granularity: texture size spectrum (signal lost by repeated morphological openings of growing size) - new `MeasureImageGranularity` (+ per object). ~2 days, CPU-heavy.
+
+### Deep-learning training (fine-tuning)
+libtorch can train; EVA only does inference (every `forward` in `no_grad`).
+- [ ] Check that the shipped TorchScript models still have trainable parameters (not `torch.jit.freeze`d); tch: `CModule` `set_train`, `named_parameters`, `nn::Adam`.
+- [ ] U-Net fine-tuning first (masks → class labels, cross-entropy). ~1-2 weeks.
+- [ ] StarDist (object probability + star-convex ray distances) and Cellpose (flow fields from masks by diffusion from the centre + cell probability). ~2-3 weeks each. YOLOv5 (box/objectness loss) last.
+- [ ] Training loop: tiling/crops, augmentation (flips, rotations, intensity), validation split, early stopping, LR schedule; progress / cancel / resume in the training panel; saved as a new model file. GPU in practice, CPU only for small fine-tunes.
+- [ ] Needs fully annotated crops (every object outlined) - whole-object annotation must be fast (see annotation tools).
+
+### ilastik-only workflows (low priority for our users)
+- [ ] Density counting (Lempitsky & Zisserman 2010): dots → regression model of a density map, integral = count; for crowds where segmentation fails. Needs RF regression mode, Gaussian-smoothed dot targets, "count in region" measurement. ~1 week. StarDist/Cellpose cover many cases.
+- [ ] Multicut (boundary-based): boundary probability → watershed superpixels → region adjacency graph with edge features (boundary mean/max) → edge classifier (RF) → multicut solver (GAEC, from the paper). For dense membrane-only tissue. ~1-2 weeks in 2D; Cellpose `cyto` covers much of it.
+- [ ] Carving: seeded watershed from object/background scribbles, one object at a time. 3D version needs 3D analysis first; 2D version = annotations as markers → watershed on gradient (close to what exists).
+
+### Track record / citability
+Not a feature, but needed for adoption - make the existing validation visible:
+- [ ] DOI per release (Zenodo).
+- [ ] Public validation report: EVA vs. CellProfiler on BBBC datasets, numbers + plots (mostly from existing tests).
+- [ ] Software paper (Bioinformatics application note or Nature Methods brief). Not JOSS: requires an OSI licence, PolyForm Noncommercial isn't one.
+- [ ] "How to cite" in the README; menu item exporting a methods text with the citations of the steps used (data in `cite.rs`).

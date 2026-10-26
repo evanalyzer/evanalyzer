@@ -21,6 +21,7 @@ use crate::editor::object_render::{ZOrder, pick};
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
 use crate::editor::viewport_controller::is_object_drawn;
+use crate::editor::wand::{Features, ViewGrid, to_full_image, wand_mask};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::images::{Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask};
@@ -96,7 +97,7 @@ impl ViewPortObjectController {
                         ToolState::Select => return,
                         ToolState::PaintMarker => return,
                         // Strokes come through `brush_stroke`.
-                        ToolState::Brush | ToolState::Eraser => return,
+                        ToolState::Brush | ToolState::Wand | ToolState::Eraser => return,
                         ToolState::PaintRectangle => manager.add_object_from_rect(&points),
                         ToolState::PaintOval => manager.add_oval_from_rect(&points),
                         ToolState::PaintPolygon => {
@@ -519,8 +520,8 @@ impl ViewPortObjectController {
         stroke.push((x, y));
     }
 
-    /// Paints (`Brush`: into the selected hand-drawn object, else a new
-    /// object of the selected class) or erases (`Eraser`: from the hand-drawn
+    /// Paints (`Brush`, `Wand` - keeping to edges: into the selected
+    /// hand-drawn object, else a new object of the selected class) or erases (`Eraser`: from the hand-drawn
     /// objects) the stroke, `brush_size` screen pixels wide - one undo step.
     /// Whether something changed.
     pub fn finish_stroke(&self, tool: ToolState, brush_size: f32) -> bool {
@@ -543,18 +544,24 @@ impl ViewPortObjectController {
                 )
             })
             .collect();
-        let (_, read_context) = self.viewport_cache.get_image_references();
-        let Some((mask, bbox)) = stroke_mask(
-            &image_points,
-            brush_size / 2.0 / view.zoom,
-            read_context.full_image_w,
-            read_context.full_image_h,
-        ) else {
+        let radius = brush_size / 2.0 / view.zoom;
+        let mask = if tool == ToolState::Wand {
+            self.wand_stroke_mask(&image_points, radius)
+        } else {
+            let (_, read_context) = self.viewport_cache.get_image_references();
+            stroke_mask(
+                &image_points,
+                radius,
+                read_context.full_image_w,
+                read_context.full_image_h,
+            )
+        };
+        let Some((mask, bbox)) = mask else {
             return false;
         };
         self.app_state.begin_undo_step();
         match tool {
-            ToolState::Brush => {
+            ToolState::Brush | ToolState::Wand => {
                 if self.paint_into_selected(&mask, bbox) {
                     return true;
                 }
@@ -573,6 +580,39 @@ impl ViewPortObjectController {
             ToolState::Eraser => self.erase(&mask, bbox),
             _ => false,
         }
+    }
+
+    /// The wand's pixels for a stroke through `points` with circles of
+    /// `radius` (both in full-image pixels), found on the view shown - see
+    /// [`crate::editor::wand`]. `None` without a view or when it takes
+    /// nothing.
+    fn wand_stroke_mask(
+        &self,
+        points: &[(f32, f32)],
+        radius: f32,
+    ) -> Option<(BitVec<u64, Lsb0>, [u32; 4])> {
+        let visible = self.app_state.get_project().get_image_channel_visibilities_vec();
+        let data = self.viewport_cache.active_high_res_data.read().expect("Poisoned");
+        let (channels, ctx) = data.as_ref()?;
+        let grid = ViewGrid::new(ctx)?;
+        let view_points: Vec<(f32, f32)> =
+            points.iter().map(|&(x, y)| grid.to_view(x, y)).collect();
+        let view_radius = radius / grid.full_per_view();
+        let reach = view_radius.ceil() + 1.0;
+        let lo = |v: f32| (v - reach).floor().max(0.0) as usize;
+        let hi = |v: f32| (v + reach).ceil().max(0.0) as usize;
+        let window = view_points.iter().fold(
+            [usize::MAX, usize::MAX, 0, 0],
+            |[x0, y0, x1, y1], &(x, y)| [x0.min(lo(x)), y0.min(lo(y)), x1.max(hi(x)), y1.max(hi(y))],
+        );
+        let features =
+            Features::of_window(channels, &visible, ctx.image_w, ctx.image_h, window)?;
+        let local: Vec<(f32, f32)> = view_points
+            .iter()
+            .map(|&(x, y)| (x - features.x0 as f32, y - features.y0 as f32))
+            .collect();
+        let mask = wand_mask(&features, &local, view_radius);
+        to_full_image(&mask, &features, &grid, ctx.full_image_w, ctx.full_image_h)
     }
 
     /// Adds the stroke to the selected object, if it is a hand-drawn one
@@ -1018,11 +1058,16 @@ mod tests {
     /// offset), so `add_to_object_list`'s pixel-by-pixel intensity sampling
     /// has real, in-bounds data to read.
     fn seed_image_cache(viewport_cache: &ViewportCache) {
+        seed_image_cache_with(viewport_cache, vec![0.5f32; 20 * 20]);
+    }
+
+    /// As [`seed_image_cache`], with the 20 x 20 pixels given.
+    fn seed_image_cache_with(viewport_cache: &ViewportCache, pixels: Vec<f32>) {
         let size = kornia_image::ImageSize {
             width: 20,
             height: 20,
         };
-        let image = Image::<f32, 1>::new(size, vec![0.5f32; 20 * 20]).unwrap();
+        let image = Image::<f32, 1>::new(size, pixels).unwrap();
         let container = evanalyzer_app::images::ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -1043,6 +1088,8 @@ mod tests {
             )]),
             ReadContext {
                 zoom: 1.0,
+                zoomed_w: 20.0,
+                zoomed_h: 20.0,
                 image_w: 20,
                 image_h: 20,
                 full_image_w: 20,
@@ -1128,6 +1175,24 @@ mod tests {
         for (i, (x, y)) in points.iter().enumerate() {
             controller.stroke_point(*x, *y, if i == 0 { 0 } else { 1 });
         }
+    }
+
+    #[test]
+    fn a_wand_stroke_paints_up_to_the_edge_only() {
+        let (ui_state, controller) = controller_with_a_class();
+        // Dark left of x 12, bright from it on.
+        let pixels = (0..20 * 20).map(|i| if i % 20 < 12 { 0.2 } else { 0.8 }).collect();
+        seed_image_cache_with(&controller.viewport_cache, pixels);
+
+        // A 16 px wide stroke at x 6-8 would reach x 16 with the brush.
+        stroke(&controller, &[(6.0, 10.0), (8.0, 10.0)]);
+        assert!(controller.finish_stroke(ToolState::Wand, 16.0));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox[2], 11, "up to the edge, not over it");
+        assert_eq!(objects[0].bbox[0], 0);
     }
 
     #[test]

@@ -295,6 +295,10 @@ export component GlobalShortcuts inherits FocusScope {
             ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
             return accept;
         }
+        if (!e.modifiers.control && e.text == "w") {
+            ViewportObjectState.act_tool_state = ToolState.Wand;
+            return accept;
+        }
         // A: the annotate tool bar on / off - leaving it, like its ✕, back
         // to Move.
         if (!e.modifiers.control && !e.modifiers.alt && e.text == "a") {

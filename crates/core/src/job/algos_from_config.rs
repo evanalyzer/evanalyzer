@@ -376,6 +376,47 @@ impl From<FiltersIlluminationCorrectionSmoothingMethodSettings> for SmoothingMet
     }
 }
 
+impl From<FiltersColorDeconvolutionStainOutputSettings> for StainOutput {
+    fn from(_s: FiltersColorDeconvolutionStainOutputSettings) -> Self {
+        match _s {
+            FiltersColorDeconvolutionStainOutputSettings::Stain1 => StainOutput::Stain1,
+            FiltersColorDeconvolutionStainOutputSettings::Stain2 => StainOutput::Stain2,
+            FiltersColorDeconvolutionStainOutputSettings::Stain3 => StainOutput::Stain3,
+        }
+    }
+}
+
+impl From<FiltersColorDeconvolutionStainVectorsSettings> for StainVectors {
+    fn from(_s: FiltersColorDeconvolutionStainVectorsSettings) -> Self {
+        match _s {
+            FiltersColorDeconvolutionStainVectorsSettings::HDab => StainVectors::HDab,
+            FiltersColorDeconvolutionStainVectorsSettings::HE => StainVectors::HE,
+            FiltersColorDeconvolutionStainVectorsSettings::HEDab => StainVectors::HEDab,
+            FiltersColorDeconvolutionStainVectorsSettings::Custom {
+                stain_1_red,
+                stain_1_green,
+                stain_1_blue,
+                stain_2_red,
+                stain_2_green,
+                stain_2_blue,
+                stain_3_red,
+                stain_3_green,
+                stain_3_blue,
+            } => StainVectors::Custom {
+                stain_1_red: stain_1_red.clamp(0.0, 1.0),
+                stain_1_green: stain_1_green.clamp(0.0, 1.0),
+                stain_1_blue: stain_1_blue.clamp(0.0, 1.0),
+                stain_2_red: stain_2_red.clamp(0.0, 1.0),
+                stain_2_green: stain_2_green.clamp(0.0, 1.0),
+                stain_2_blue: stain_2_blue.clamp(0.0, 1.0),
+                stain_3_red: stain_3_red.clamp(0.0, 1.0),
+                stain_3_green: stain_3_green.clamp(0.0, 1.0),
+                stain_3_blue: stain_3_blue.clamp(0.0, 1.0),
+            },
+        }
+    }
+}
+
 impl From<FiltersStructureTensorTensorModeSettings> for TensorMode {
     fn from(_s: FiltersStructureTensorTensorModeSettings) -> Self {
         match _s {
@@ -620,6 +661,16 @@ impl From<ColocalizeObjectsSettings> for ColocalizeObjects {
             mark_objects_of: _s.mark_objects_of,
             mark_as: _s.mark_as,
             filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
+        }
+    }
+}
+
+impl From<ColorDeconvolutionSettings> for ColorDeconvolution {
+    fn from(_s: ColorDeconvolutionSettings) -> Self {
+        ColorDeconvolution {
+            stains: StainVectors::from(_s.stains),
+            output: StainOutput::from(_s.output),
+            background: _s.background.clamp(1.0, 255.0),
         }
     }
 }
@@ -1236,6 +1287,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::ColocalizeObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ColocalizeObjects::from(settings),
+        ))),
+        PipelineCommand::ColorDeconvolution(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ColorDeconvolution::from(settings),
         ))),
         PipelineCommand::ColorFilterCommand(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ColorFilterCommand::from(settings),

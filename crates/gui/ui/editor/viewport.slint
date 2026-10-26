@@ -21,7 +21,7 @@ export component Viewport inherits Rectangle {
     changed comparing => {
         ViewportObjectState.compare-changed(self.comparing);
     }
-    property <bool> brush-tool: ViewportObjectState.act_tool_state == ToolState.Brush || ViewportObjectState.act_tool_state == ToolState.Eraser;
+    property <bool> brush-tool: ViewportObjectState.act_tool_state == ToolState.Brush || ViewportObjectState.act_tool_state == ToolState.Wand || ViewportObjectState.act_tool_state == ToolState.Eraser;
     property <length> last_mouse_y: 0;
     in-out property <image> display_image;
     in-out property <image> ghost_image;
@@ -430,7 +430,7 @@ export component Viewport inherits Rectangle {
             }
             if (evt.kind == PointerEventKind.down) {
 
-                // Brush (needs a class to paint into) and eraser: a stroke.
+                // Brush and wand (need a class to paint into) and eraser: a stroke.
                 if root.brush-tool && evt.button == PointerEventButton.left && (ViewportObjectState.act_tool_state == ToolState.Eraser || ClassificationState.selected_class_id >= 0) {
                     ViewportObjectState.is_drawing = true;
                     ViewportObjectState.brush-path = "M \{self.mouse-x / 1px} \{self.mouse-y / 1px} L \{self.mouse-x / 1px} \{self.mouse-y / 1px}";

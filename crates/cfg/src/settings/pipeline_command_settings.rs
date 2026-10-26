@@ -696,6 +696,70 @@ impl Default for FiltersIlluminationCorrectionSmoothingMethodSettings {
     }
 }
 
+/// Which stain the step keeps.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersColorDeconvolutionStainOutputSettings {
+    /// Stain 1: Hematoxylin in every preset (nuclei).
+    #[default]
+    #[serde(alias = "stain1")]
+    Stain1,
+    /// Stain 2: DAB in H-DAB, Eosin in H&E and H-E-DAB.
+    #[serde(alias = "stain2")]
+    Stain2,
+    /// Stain 3: DAB in H-E-DAB, else the residual - what neither stain
+    /// explains (high where the stain vectors don't fit the slide).
+    #[serde(alias = "stain3")]
+    Stain3,
+}
+
+/// The stains' colors: Ruifrok & Johnston's measured stain vectors (OD of
+/// red, green, blue), or your own.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersColorDeconvolutionStainVectorsSettings {
+    /// Hematoxylin and DAB (immunohistochemistry).
+    #[serde(alias = "h-dab", alias = "hDab", alias = "h_dab")]
+    HDab,
+    /// Hematoxylin and Eosin.
+    #[serde(alias = "hE", alias = "he")]
+    HE,
+    /// Hematoxylin, Eosin and DAB.
+    #[serde(alias = "hEDab", alias = "he-dab", alias = "he_dab")]
+    HEDab,
+    /// Your own stain vectors, e.g. measured on a single-stained slide: the
+    /// optical density of each stain in red, green and blue. Stain 3 all 0:
+    /// the residual (perpendicular to stains 1 and 2).
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "custom")]
+    Custom {
+        #[schemars(range(min = 0, max = 1))]
+        stain_1_red: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_1_green: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_1_blue: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_2_red: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_2_green: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_2_blue: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_3_red: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_3_green: f32,
+        #[schemars(range(min = 0, max = 1))]
+        stain_3_blue: f32,
+    },
+}
+
+impl Default for FiltersColorDeconvolutionStainVectorsSettings {
+    fn default() -> Self {
+        Self::HDab {}
+    }
+}
+
 /// The specific calculation to extract from the Structure Tensor.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -1029,6 +1093,36 @@ impl Default for BlurSettings {
     fn default() -> Self {
         Self {
             kernel_size: 3usize,
+        }
+    }
+}
+
+/// Separates a brightfield RGB image into its stains and keeps one as a
+/// gray image: how much of the stain each pixel has (0 = none, 255 in 8 bit
+/// = OD 2.55; the 8-bit value / 100 is the optical density).
+///
+/// For IHC: Stain 2 of H-DAB is the DAB (brown) signal - threshold it, or
+/// measure the DAB per nucleus found on Stain 1.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorDeconvolutionSettings {
+    /// The stains on the slide.
+    pub stains: FiltersColorDeconvolutionStainVectorsSettings,
+    /// The stain the step keeps.
+    pub output: FiltersColorDeconvolutionStainOutputSettings,
+    /// The brightness of empty glass (no tissue), 0-255 whatever the image's
+    /// bit depth - lower it when the scanner's background isn't pure white.
+    #[schemars(range(min = 1, max = 255))]
+    pub background: f32,
+}
+
+impl Default for ColorDeconvolutionSettings {
+    fn default() -> Self {
+        Self {
+            stains: FiltersColorDeconvolutionStainVectorsSettings::HDab,
+            output: FiltersColorDeconvolutionStainOutputSettings::Stain1,
+            background: 255.0f32,
         }
     }
 }

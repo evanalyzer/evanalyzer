@@ -33,6 +33,7 @@ pub use self::ai_segmentation::yolov5::Yolov5;
 
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
+pub use self::filters::color_deconvolution::{ColorDeconvolution, StainOutput, StainVectors};
 pub use self::filters::color_filter::ColorFilterCommand;
 pub use self::filters::color_filter::HsvRange;
 pub use self::filters::edge_detection_canny::EdgeDetectionCanny;
