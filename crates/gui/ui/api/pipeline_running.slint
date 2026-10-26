@@ -52,6 +52,13 @@ export global PreviewRunState {
     in-out property <bool> whole-image: false;
     in-out property <bool> outdated: false;
     in-out property <int> objects: 0;
+    // A failed preview: the step it failed in ("cellpose › #1 Blur"; empty
+    // if the error doesn't say), and that step (`failed-step` 0: none).
+    in-out property <string> failed-where: "";
+    in-out property <int> failed-pipeline: 0;
+    in-out property <int> failed-step: 0;
     callback cancel();
     callback close();
+    // Shows the step it failed in, in the Steps panel.
+    callback show-step();
 }

@@ -142,6 +142,8 @@ export component Workspace inherits Rectangle {
     if PreviewRunState.shown: PreviewRendering {
         width: 100%;
         height: 100%;
+        free-x: root.dock-x;
+        free-w: root.dock-w;
     }
 
     // -- Left --

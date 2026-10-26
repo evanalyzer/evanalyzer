@@ -216,7 +216,10 @@ impl Pipeline {
             let step_id = *step_id;
             ctx.scope = *scope;
             let step_start = Instant::now();
-            command.run(&mut ctx, &mut cache)?;
+            // Which step failed: front ends point at it.
+            command
+                .run(&mut ctx, &mut cache)
+                .map_err(|e| e.in_step(self.id, step_id))?;
             let duration = step_start.elapsed();
             log::debug!("Executed {} in {:?}", command.name(), duration);
 

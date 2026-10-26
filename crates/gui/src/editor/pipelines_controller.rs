@@ -808,6 +808,23 @@ impl PipelinesController {
                 }
             });
 
+            // Preview overlay: show the step a failed preview failed in
+            let manager = self.clone();
+            ui.global::<PreviewRunState>().on_show_step(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let preview = ui.global::<PreviewRunState>();
+                let step = StepId(preview.get_failed_step() as u32);
+                if step != StepId::UNASSIGNED {
+                    manager.show_step(
+                        PipelineId(preview.get_failed_pipeline() as u32),
+                        Some(step),
+                        false,
+                    );
+                }
+            });
+
             // Preview overlay: close after done
             let manager = self.clone();
             ui.global::<PreviewRunState>().on_close(move || {
@@ -2950,6 +2967,9 @@ impl PipelinesController {
             preview.set_whole_image(whole_image);
             preview.set_outdated(false);
             preview.set_objects(0);
+            preview.set_failed_where("".into());
+            preview.set_failed_pipeline(0);
+            preview.set_failed_step(0);
             preview.set_shown(true);
         }
 
@@ -12217,6 +12237,30 @@ mod tests {
         panel.invoke_show_problem(panel_problems(&ui)[0].index);
         drain_ui_queue();
         assert_eq!(panel.get_active_pipeline_id(), 1);
+        assert!(panel.get_active_commands().row_data(0).unwrap().expanded);
+    }
+
+    /// "Show step" on a failed preview: the pipeline it failed in, the card
+    /// of its step expanded - nothing without a step.
+    #[test]
+    fn show_step_of_a_failed_preview_expands_the_card_of_its_step() {
+        let (ui, ui_state, _controller) = with_spots(1);
+        let (pipeline, step) = {
+            let project = ui_state.get_project();
+            (project.pipelines[0].id, project.pipelines[0].steps[0].id)
+        };
+        let panel = ui.global::<PipelinesPanelState>();
+        let preview = ui.global::<PreviewRunState>();
+
+        preview.invoke_show_step();
+        drain_ui_queue();
+        assert!(!panel.get_active_commands().row_data(0).unwrap().expanded);
+
+        preview.set_failed_pipeline(pipeline.0 as i32);
+        preview.set_failed_step(step.0 as i32);
+        preview.invoke_show_step();
+        drain_ui_queue();
+        assert_eq!(panel.get_active_pipeline_id(), pipeline.0 as i32);
         assert!(panel.get_active_commands().row_data(0).unwrap().expanded);
     }
 

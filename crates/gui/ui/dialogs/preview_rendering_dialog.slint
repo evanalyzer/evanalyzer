@@ -3,12 +3,93 @@
 
 // dialogs/preview_rendering_dialog.slint — while the preview renders: a
 // small pill at the top of the image with the progress and ✕ (cancel, or
-// dismiss a finished one). Not a dialog: the image stays usable.
+// dismiss a finished one). A failure too long for the pill is a card with
+// the whole message, where it failed, "Show step" and "Copy message". Both
+// stay in the free part of the image between the floating panels. Not a
+// dialog: the image stays usable.
 
 import { PreviewRunState } from "../api/pipeline_running.slint";
-import { Ink, InkIcons, InkBusy, InkIconButton, InkTipZone } from "../ink/ink.slint";
+import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { Ink, InkIcons, InkBusy, InkTipZone } from "../ink/ink.slint";
+
+// The overlay is dark in every theme: the dark theme's error red, which
+// reads on it (the light theme's is too dark there).
+global Overlay {
+    out property <color> err: #F87171;
+    out property <color> text: #F4F4F5;
+    out property <color> text-dim: #A1A1AA;
+}
+
+// A text button on the dark overlay.
+component OverlayButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    width: label.preferred-width + 20px;
+    height: 28px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #FFFFFF.with-alpha(0.22);
+    background: ta.has-hover ? #FFFFFF.with-alpha(0.16) : #FFFFFF.with-alpha(0.08);
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+    label := Text {
+        text: root.text;
+        color: Overlay.text;
+        font-size: Ink.fs-secondary;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A round icon button on the dark overlay, with its tooltip.
+component OverlayIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <length> icon-size: 11px;
+    in property <string> tip;
+    callback clicked();
+    width: 24px;
+    height: 24px;
+    border-radius: self.width / 2;
+    background: ta.has-hover ? #FFFFFF.with-alpha(0.18) : transparent;
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-action-default => {
+        root.clicked();
+    }
+    Image {
+        source: root.icon;
+        width: root.icon-size;
+        colorize: #FFFFFF;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    InkTipZone {
+        width: 100%;
+        height: 100%;
+        wanted: ta.has-hover && !ta.pressed;
+        text: root.tip;
+    }
+}
 
 export component PreviewRendering inherits Rectangle {
+    // The free part of the image, between the floating panels (x, width).
+    in property <length> free-x: 0px;
+    in property <length> free-w: self.width;
+
     // Cancels a running preview, or dismisses a finished one.
     function dismiss() {
         if PreviewRunState.done {
@@ -19,12 +100,17 @@ export component PreviewRendering inherits Rectangle {
     }
 
     property <bool> failed: PreviewRunState.done && PreviewRunState.has-error;
+    property <string> failed-in: PreviewRunState.failed-where == "" ? "" : " in " + PreviewRunState.failed-where;
+    property <length> max-w: min(560px, root.free-w - 32px);
+    // A failure the pill can't show in full: the card instead.
+    property <bool> as-card: root.failed && row.preferred-width + 16px > root.max-w;
 
     pill := Rectangle {
-        x: (parent.width - self.width) / 2;
+        x: root.free-x + (root.free-w - self.width) / 2;
         y: 64px;
-        width: min(row.preferred-width + 16px, parent.width - 32px);
+        width: min(row.preferred-width + 16px, root.free-w - 32px);
         height: 32px;
+        visible: !root.as-card;
         accessible-role: groupbox;
         accessible-label: "Preview";
 
@@ -48,19 +134,19 @@ export component PreviewRendering inherits Rectangle {
                     if PreviewRunState.done: Image {
                         source: root.failed ? InkIcons.error : InkIcons.check;
                         width: 13px;
-                        colorize: root.failed ? Ink.err : #FFFFFF;
+                        colorize: root.failed ? Overlay.err : #FFFFFF;
                     }
                 }
 
                 Text {
                     text: !PreviewRunState.done
                         ? (PreviewRunState.whole-image ? "Previewing the whole image…" : "Generating preview…")
-                        : root.failed ? "Preview failed: " + PreviewRunState.status-message
+                        : root.failed ? "Preview failed" + root.failed-in + ": " + PreviewRunState.status-message
                         : PreviewRunState.whole-image && PreviewRunState.outdated ? "Whole image: outdated - settings changed"
                         : PreviewRunState.whole-image ? "Whole image: " + PreviewRunState.objects + (PreviewRunState.objects == 1 ? " object" : " objects")
                         : "Preview ready";
                     font-size: Ink.fs-body;
-                    color: root.failed ? Ink.err
+                    color: root.failed ? Overlay.err
                         : PreviewRunState.done && PreviewRunState.outdated ? Ink.warn : #FFFFFF;
                     vertical-alignment: center;
                     overflow: elide;
@@ -75,36 +161,134 @@ export component PreviewRendering inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                close := Rectangle {
+                OverlayIconButton {
                     y: (parent.height - self.height) / 2;
-                    width: 24px;
-                    height: 24px;
-                    border-radius: 12px;
-                    background: close-ta.has-hover ? #FFFFFF.with-alpha(0.18) : transparent;
-                    accessible-role: button;
-                    accessible-label: "Close";
-                    accessible-action-default => {
+                    icon: InkIcons.close;
+                    tip: "Close";
+                    clicked => {
                         root.dismiss();
-                    }
-                    Image {
-                        source: InkIcons.close;
-                        width: 11px;
-                        colorize: #FFFFFF;
-                    }
-                    close-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.dismiss();
-                        }
-                    }
-                    InkTipZone {
-                        width: 100%;
-                        height: 100%;
-                        wanted: close-ta.has-hover && !close-ta.pressed;
-                        text: "Close";
                     }
                 }
             }
         }
+    }
+
+    if root.as-card: card := Rectangle {
+        x: root.free-x + (root.free-w - self.width) / 2;
+        y: 56px;
+        width: root.max-w;
+        height: column.preferred-height;
+        border-radius: 10px;
+        background: #0C0C0E.with-alpha(0.86);
+        border-width: 1px;
+        border-color: Overlay.err.with-alpha(0.45);
+        accessible-role: groupbox;
+        accessible-label: "Preview failed";
+
+        column := VerticalLayout {
+            padding-left: 14px;
+            padding-right: 8px;
+            padding-top: 8px;
+            padding-bottom: 12px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 14px;
+                    Image {
+                        source: InkIcons.error;
+                        width: 14px;
+                        colorize: Overlay.err;
+                    }
+                }
+                Text {
+                    text: "Preview failed";
+                    font-size: Ink.fs-body;
+                    font-weight: 600;
+                    color: Overlay.err;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: PreviewRunState.failed-where == "" ? "" : "in " + PreviewRunState.failed-where;
+                    font-size: Ink.fs-secondary;
+                    color: Overlay.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                }
+                OverlayIconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: InkIcons.copy;
+                    icon-size: 13px;
+                    tip: "Copy the message";
+                    clicked => {
+                        root.copy-message();
+                    }
+                }
+                OverlayIconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: InkIcons.close;
+                    tip: "Close";
+                    clicked => {
+                        root.dismiss();
+                    }
+                }
+            }
+
+            // The whole message: wrapped, selectable; scrolls past ~6 lines.
+            Flickable {
+                height: min(message.preferred-height, 6 * 19px);
+                content-height: message.preferred-height;
+                message := TextInput {
+                    width: parent.width - 6px;
+                    text: PreviewRunState.status-message;
+                    read-only: true;
+                    single-line: false;
+                    wrap: word-wrap;
+                    font-size: Ink.fs-body;
+                    color: Overlay.text;
+                    selection-background-color: #FFFFFF.with-alpha(0.25);
+                    accessible-label: "Message";
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                padding-top: 2px;
+                if PreviewRunState.failed-step != 0: OverlayButton {
+                    text: "Show step";
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.pipelines;
+                        LayoutState.steps-open = true;
+                        LayoutState.panels-hidden = false;
+                        LayoutState.panels-changed();
+                        PreviewRunState.show-step();
+                    }
+                }
+                OverlayButton {
+                    text: "Copy message";
+                    clicked => {
+                        root.copy-message();
+                    }
+                }
+            }
+        }
+    }
+
+    // Copies the failure: where and what (for a bug report).
+    function copy-message() {
+        clipboard.text = "Preview failed" + root.failed-in + ": " + PreviewRunState.status-message;
+        clipboard.select-all();
+        clipboard.copy();
+        clipboard.clear-selection();
+    }
+    clipboard := TextInput {
+        visible: false;
+        width: 0px;
+        height: 0px;
+        read-only: true;
     }
 }

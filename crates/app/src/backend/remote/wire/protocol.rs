@@ -43,7 +43,7 @@ use crate::backend::remote::wire::pixels::RawImageInfo;
 use crate::backend::remote::wire::pixels::image_from_raw;
 use crate::backend::remote::wire::pixels::image_to_raw;
 use crate::workspace::settings::AppSettings;
-use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
+use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId, TrainingProgressEvent};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use serde::{Deserialize, Serialize};
@@ -306,11 +306,19 @@ pub(crate) enum Reply {
 }
 
 /// An `InternalErrors` reduced to what survives the trip: whether it was a
-/// cancel (front ends treat that differently) and its message.
+/// cancel (front ends treat that differently), its message, and the
+/// pipeline step it happened in with what went wrong there
+/// ([`InternalErrors::step`] / [`InternalErrors::message`]) - both
+/// `serde(default)`: a server before them sends neither.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WireError {
     cancelled: bool,
     message: String,
+    /// (pipeline id, step id).
+    #[serde(default)]
+    step: Option<(u32, u32)>,
+    #[serde(default)]
+    detail: String,
 }
 
 impl From<&InternalErrors> for WireError {
@@ -318,6 +326,8 @@ impl From<&InternalErrors> for WireError {
         WireError {
             cancelled: matches!(e, InternalErrors::Cancelled),
             message: e.to_string(),
+            step: e.step().map(|(pipeline, step)| (pipeline.0, step.0)),
+            detail: e.message(),
         }
     }
 }
@@ -327,6 +337,8 @@ impl WireError {
         WireError {
             cancelled: false,
             message: message.into(),
+            step: None,
+            detail: String::new(),
         }
     }
 
@@ -339,10 +351,15 @@ impl WireError {
     }
 
     pub(crate) fn into_internal(self) -> InternalErrors {
-        if self.cancelled {
-            InternalErrors::Cancelled
-        } else {
-            InternalErrors::Internal(format!("Server: {}", self.message))
+        match self.step {
+            _ if self.cancelled => InternalErrors::Cancelled,
+            // The step it failed in, as in a local run.
+            Some((pipeline, step)) => InternalErrors::InStep {
+                pipeline: PipelineId(pipeline),
+                step: StepId(step),
+                source: Box::new(InternalErrors::Internal(format!("Server: {}", self.detail))),
+            },
+            None => InternalErrors::Internal(format!("Server: {}", self.message)),
         }
     }
 }
@@ -580,6 +597,28 @@ pub(crate) fn channels_from_wire(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A step's error keeps its step across the wire (the GUI points at it
+    /// in remote mode too); a server from before the field sends none.
+    #[test]
+    fn a_step_error_keeps_its_step_across_the_wire() {
+        let error = InternalErrors::Generic("no plugin".into())
+            .in_step(PipelineId(2), StepId(5))
+            .in_image("a.tif".into());
+        let json = serde_json::to_string(&WireError::from(&error)).unwrap();
+        let back = serde_json::from_str::<WireError>(&json)
+            .unwrap()
+            .into_internal();
+        assert_eq!(back.step(), Some((PipelineId(2), StepId(5))));
+        assert_eq!(back.message(), "Server: no plugin");
+
+        let older = r#"{"cancelled":false,"message":"boom"}"#;
+        let back = serde_json::from_str::<WireError>(older)
+            .unwrap()
+            .into_internal();
+        assert_eq!(back.step(), None);
+        assert_eq!(back.to_string(), "Internal error: Server: boom");
+    }
     use evanalyzer_cfg::core_types::ImageDimensionality;
 
     /// The serde format of every type that travels as postcard - the

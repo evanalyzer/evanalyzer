@@ -391,13 +391,12 @@ impl<'a> JobExecutor {
                             })
                             .ok();
                         // Name the failing image in the propagated error - the
-                        // caller (GUI/CLI) only sees this string, not the
+                        // caller (GUI/CLI) only sees this error, not the
                         // ImageFailed event above, so without the path the
                         // user has no way to tell which file broke a batch.
-                        Err(InternalErrors::Internal(format!(
-                            "{}: {e}",
-                            rel_path.display()
-                        )))
+                        // Kept as an error (not text), so the step it failed
+                        // in stays known.
+                        Err(e.in_image(rel_path.clone()))
                     }
                 }
             } else {
@@ -3198,6 +3197,48 @@ mod full_run_integration_tests {
         assert!(
             message.contains("check the pipeline's image source"),
             "{message}"
+        );
+    }
+
+    /// A step failing on the one image of a job: the error says the
+    /// pipeline and step it failed in (front ends point at it), its text
+    /// still names the image.
+    #[test]
+    fn a_failing_step_is_named_in_the_jobs_error() {
+        use crate::algos::{MeasureImageTexture, TextureDirections};
+        use evanalyzer_cfg::core_types::{ImageChannelIdx, StepId};
+
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        let mut post = Pipeline::new(
+            PipelineId(3),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        post.add_step(
+            StepId(4),
+            Scope::Global,
+            Box::new(MeasureImageTexture {
+                id: "texture".into(),
+                channel: ImageChannelIdx(0),
+                scale: 1,
+                gray_levels: 1, // refused: 2 to 256
+                directions: TextureDirections::Mean,
+            }),
+        );
+        job.add_post_process_pipeline(post);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let error = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+
+        assert_eq!(error.step(), Some((PipelineId(3), StepId(4))));
+        assert!(error.message().contains("gray levels 2 to 256"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("multi-channel-4D-series.ome.tif: "),
+            "{error}"
         );
     }
 

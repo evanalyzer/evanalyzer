@@ -7,8 +7,10 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::types::ids::{PipelineId, StepId};
 use ndarray::ShapeError;
 use std::num::ParseIntError;
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -72,6 +74,22 @@ pub enum InternalErrors {
 
     #[error("Cancelled")]
     Cancelled,
+
+    /// The error of a pipeline step - where it happened, for front ends
+    /// that point at the step ([`Self::step`]). Shows as the error itself.
+    #[error("{source}")]
+    InStep {
+        pipeline: PipelineId,
+        step: StepId,
+        source: Box<InternalErrors>,
+    },
+
+    /// The error of the analysis of one image, named by its path.
+    #[error("{}: {source}", path.display())]
+    InImage {
+        path: PathBuf,
+        source: Box<InternalErrors>,
+    },
 }
 
 // Add manual ones
@@ -97,6 +115,68 @@ impl From<serde_json::Error> for InternalErrors {
 impl InternalErrors {
     pub fn from_kornia<E: std::fmt::Debug>(err: E) -> Self {
         InternalErrors::Kornia(format!("{:?}", err))
+    }
+
+    /// `self` as the error of step `step` of pipeline `pipeline` - unless
+    /// it's a cancel (front ends tell those apart by their kind), already
+    /// says where it happened, or the step is unassigned.
+    pub fn in_step(self, pipeline: PipelineId, step: StepId) -> Self {
+        match self {
+            InternalErrors::Cancelled => self,
+            _ if step == StepId::UNASSIGNED || self.step().is_some() => self,
+            source => InternalErrors::InStep {
+                pipeline,
+                step,
+                source: Box::new(source),
+            },
+        }
+    }
+
+    /// `self` as the error of the analysis of the image at `path` - a
+    /// cancel stays a cancel.
+    pub fn in_image(self, path: PathBuf) -> Self {
+        match self {
+            InternalErrors::Cancelled => self,
+            source => InternalErrors::InImage {
+                path,
+                source: Box::new(source),
+            },
+        }
+    }
+
+    /// The pipeline step the error happened in, if a step said so.
+    pub fn step(&self) -> Option<(PipelineId, StepId)> {
+        match self {
+            InternalErrors::InStep { pipeline, step, .. } => Some((*pipeline, *step)),
+            InternalErrors::InImage { source, .. } => source.step(),
+            _ => None,
+        }
+    }
+
+    /// What went wrong, for people: the innermost error's own text,
+    /// without the kind ("Generic error: ") and without where it happened
+    /// (the step, the image) - a front end shows that on its own.
+    pub fn message(&self) -> String {
+        match self {
+            InternalErrors::InStep { source, .. } | InternalErrors::InImage { source, .. } => {
+                source.message()
+            }
+            InternalErrors::Xml(m)
+            | InternalErrors::JsonParsingError(m)
+            | InternalErrors::Internal(m)
+            | InternalErrors::Generic(m)
+            | InternalErrors::Kornia(m)
+            | InternalErrors::ParseError(m)
+            | InternalErrors::JvmError(m)
+            | InternalErrors::ImageReadError(m)
+            | InternalErrors::ParseInt(m)
+            | InternalErrors::AllocationError(m)
+            | InternalErrors::CacheMiss(m)
+            | InternalErrors::Io(m)
+            | InternalErrors::ValidationError(m)
+            | InternalErrors::InvalidArgument(m) => m.clone(),
+            other => other.to_string(),
+        }
     }
 }
 
@@ -150,5 +230,38 @@ mod tests {
             InternalErrors::TooManyObjects("well_A1".to_string()).to_string(),
             "Too many objects"
         );
+    }
+
+    /// A step's error says where it happened, shows as itself, and keeps
+    /// that through the image's path; a cancel and an unassigned step stay
+    /// as they are.
+    #[test]
+    fn a_step_error_keeps_where_it_happened() {
+        let e = InternalErrors::Generic("AI models need the AI plugin".into())
+            .in_step(PipelineId(2), StepId(5));
+        assert_eq!(e.step(), Some((PipelineId(2), StepId(5))));
+        assert_eq!(e.to_string(), "Generic error: AI models need the AI plugin");
+        assert_eq!(e.message(), "AI models need the AI plugin");
+
+        let e = e.in_image(PathBuf::from("a.tif"));
+        assert_eq!(e.step(), Some((PipelineId(2), StepId(5))));
+        assert_eq!(
+            e.to_string(),
+            "a.tif: Generic error: AI models need the AI plugin"
+        );
+        assert_eq!(e.message(), "AI models need the AI plugin");
+
+        // The first step to say where wins (an inner one, re-wrapped).
+        let again = e.in_step(PipelineId(9), StepId(9));
+        assert_eq!(again.step(), Some((PipelineId(2), StepId(5))));
+
+        let cancel = InternalErrors::Cancelled
+            .in_step(PipelineId(2), StepId(5))
+            .in_image(PathBuf::from("a.tif"));
+        assert!(matches!(cancel, InternalErrors::Cancelled));
+
+        let unassigned =
+            InternalErrors::Generic("x".into()).in_step(PipelineId(2), StepId::UNASSIGNED);
+        assert_eq!(unassigned.step(), None);
     }
 }

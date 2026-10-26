@@ -86,7 +86,7 @@
 ## Other
 
 - [x] Add open recent files - the start page's list and RECENT in the EVA menu (2026-10-17)
-- [ ] **Log file for end users** — the log goes to stderr only (lost when started by double-click); only panics reach `<user folder>/crash.log`, which the GUI never mentions. Write a (size-limited) log file to the user folder and add "Help > Open log folder" so users can attach both to bug reports. (Default log level is `info` now, was `debug`.)
+- [ ] Later, maybe (2026-10-26: not for the beta, undecided whether at all): **Log file for end users** — the log goes to stderr only (lost when started by double-click); only panics reach `<user folder>/crash.log`, which the GUI never mentions. Write a (size-limited) log file to the user folder and add "Help > Open log folder" so users can attach both to bug reports. (Default log level is `info` now, was `debug`.)
 - [x] **Image decoder can panic on real files, not just corrupt ones** — fixed: `nr_bits == 0` is rejected with a clean error before the decode path (`image_reader.rs`) — [`crates/core/src/image/image_reader.rs:970-984,1034-1036`](crates/core/src/image/image_reader.rs#L970-L1036)
   If per-resolution metadata omits `BitsPerPixel` (plausible for pyramid sub-levels in real-world files), `nr_bits` defaults to 0 (`image_meta.rs:13` / `image_ome_parser.rs:251-254`). The decode path then calls `buffer.par_chunks_exact(0)` (panics unconditionally) or divides by `bytes_per_sample * source_planes` (divide-by-zero) — hard panic on open.
   *Fix:* validate `nr_bits != 0` after metadata parsing, fall back or return a clean `InternalErrors` instead of reaching the decode path.

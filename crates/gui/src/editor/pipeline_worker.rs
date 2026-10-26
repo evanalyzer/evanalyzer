@@ -23,7 +23,9 @@ use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
 use evanalyzer_app::preview::StartPreviewError;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
+use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors, PipelineId, StepId};
+use evanalyzer_cfg::settings::pipeline_settings::StepContent;
+use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use log::{error, info};
 use slint::ComponentHandle;
 use std::path::PathBuf;
@@ -507,6 +509,8 @@ impl PipelineWorker {
             }
             // The whole image's objects, for its note.
             let mut objects_found = None;
+            // The step a run failed in, if the error says.
+            let mut failed_at = None;
             let (status_message, is_error) = match job_result {
                 Err(_) if connection_lost && job_id.is_some() => (
                     "The connection to the server was lost. The analysis keeps running \
@@ -520,7 +524,15 @@ impl PipelineWorker {
                 }
                 Err(e) => {
                     error!("Pipeline job error: {e:?}");
-                    (format!("Error: {e}"), true)
+                    failed_at = e.step();
+                    // The preview names its step itself (`failed-where`) and
+                    // is of the image shown; a run keeps the image's path.
+                    let message = if is_preview {
+                        e.message()
+                    } else {
+                        e.to_string()
+                    };
+                    (message, true)
                 }
                 Ok(output) => {
                     info!("Pipeline completed successfully");
@@ -570,6 +582,11 @@ impl PipelineWorker {
                     ("Analysis completed successfully.".to_string(), false)
                 }
             };
+            let failed_where = failed_at
+                .map(|(pipeline, step)| {
+                    failed_step_text(&self.app_state.get_project(), pipeline, step)
+                })
+                .unwrap_or_default();
             let ui_handle = self.app_state.ui_handle.clone();
             let is_preview = task.preview;
             let pipelines = self.pipeline_controller.clone();
@@ -580,6 +597,13 @@ impl PipelineWorker {
                         running.set_has_error(is_error);
                         running.set_done(true);
                     });
+                    if is_preview {
+                        let preview = ui.global::<PreviewRunState>();
+                        let (pipeline, step) = failed_at.map_or((0, 0), |(p, s)| (p.0, s.0));
+                        preview.set_failed_where(failed_where.into());
+                        preview.set_failed_pipeline(pipeline as i32);
+                        preview.set_failed_step(step as i32);
+                    }
                     // The steps unlock with the run's end (a lost server
                     // connection isn't one: it goes on there).
                     if !is_preview && !connection_lost {
@@ -600,6 +624,27 @@ impl PipelineWorker {
             });
         }
     }
+}
+
+/// Where a run failed, for people: "cellpose › #1 Blur" - the pipeline, and
+/// the step as its card shows it (its id and the command's or module's
+/// name). Empty if the project no longer has the step.
+fn failed_step_text(project: &ProjectSettings, pipeline: PipelineId, step: StepId) -> String {
+    let Some(pipeline) = project.pipelines.iter().find(|p| p.id == pipeline) else {
+        return String::new();
+    };
+    let Some(step) = pipeline.steps.iter().find(|s| s.id == step) else {
+        return String::new();
+    };
+    let name = match &step.content {
+        StepContent::Command(command) => command.name().to_string(),
+        StepContent::Module(instance) => project
+            .modules
+            .iter()
+            .find(|d| d.key == instance.key)
+            .map_or_else(|| instance.key.clone(), |d| d.meta.name.clone()),
+    };
+    format!("{} › #{} {name}", pipeline.name.trim(), step.id.0)
 }
 
 /// Seconds elapsed per completed image, for the ETA display. `index` is
@@ -965,6 +1010,61 @@ mod tests {
         );
         let analysis_running = &f.worker.pipeline_controller.analysis_running;
         assert!(!analysis_running.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// A preview failing in a step: the pill's card says where ("cellpose ›
+    /// #3 …"), which step "Show step" opens, and the message without "Error:"
+    /// or the image's path.
+    #[test]
+    fn a_failed_preview_says_the_step_it_failed_in() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+        let f = fixture();
+        let mut texture = PipelineCommand::default_for_key("measure_image_texture").unwrap();
+        let PipelineCommand::MeasureImageTexture(settings) = &mut texture else {
+            panic!("texture")
+        };
+        settings.id = "texture_01".into();
+        settings.gray_levels = 1; // refused: 2 to 256
+        let pipeline = PipelineSettings {
+            id: PipelineId(7),
+            name: "cellpose".into(),
+            description: None,
+            image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: StepId(3),
+                enabled: true,
+                content: StepContent::Command(texture),
+            }],
+        };
+        f.worker
+            .app_state
+            .get_project_write()
+            .pipelines
+            .push(pipeline.clone());
+        let mut task = f.task(true);
+        task.project_settings.pipelines.push(pipeline);
+        f.ui.global::<PreviewRunState>().set_shown(true);
+
+        f.worker.run_task(task);
+        drain_ui_queue();
+
+        let preview = f.ui.global::<PreviewRunState>();
+        assert!(preview.get_has_error());
+        assert!(preview.get_shown(), "the error stays");
+        assert_eq!(
+            preview.get_failed_where(),
+            "cellpose › #3 Measure Image Texture"
+        );
+        assert_eq!(preview.get_failed_pipeline(), 7);
+        assert_eq!(preview.get_failed_step(), 3);
+        let message = preview.get_status_message();
+        assert!(message.contains("gray levels 2 to 256"), "{message}");
+        assert!(
+            !message.contains("Error") && !message.contains("fixture.ome.tif"),
+            "{message}"
+        );
     }
 
     #[test]
