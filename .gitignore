@@ -47,5 +47,5 @@ tests/haut/
 CLAUDE.local.md
 # Java Bio-Formats memoizer caches (e.g. from Fiji/QuPath)
 *.bfmemo
-# 3D reference images (Fiji samples, BBBC, ...), local only - licences unchecked.
+# 3D reference images (Fiji samples, ...), local only - licences unchecked.
 tests/3D/
