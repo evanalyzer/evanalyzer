@@ -17,9 +17,12 @@
 //! a large λ approaches a distance-only split, 0 one by brightness only.
 //! Only pixels inside the optional mask are assigned.
 //!
-//! The growth follows `centrosome/_propagate.pyx` (BSD-3-Clause, Broad
-//! Institute): a fixed step cost, 8 neighbours and a fixed order of equally
-//! cheap pixels, so the same image always gives the same regions.
+//! The growth follows `centrosome/_propagate.pyx`: a fixed step cost, 8
+//! neighbours and a fixed order of equally cheap pixels, so the same image
+//! always gives the same regions.
+//!
+//! Portions ported from centrosome, Copyright © 2003 - 2019 Broad Institute,
+//! Inc., BSD-3-Clause - see the third-party notices (About > Licenses).
 
 use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};

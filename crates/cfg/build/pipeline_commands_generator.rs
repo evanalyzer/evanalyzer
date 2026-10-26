@@ -10,6 +10,13 @@
 use std::{collections::HashMap, fs, path::Path};
 use syn::{GenericArgument, Item, ItemEnum, ItemStruct, PathArguments, Type, parse_file};
 
+/// The first lines of every generated file: the license header, then the
+/// `@generated` marker (rustfmt and reviewers skip such files).
+const GENERATED_HEADER: &str = "// Copyright 2026 Joachim Danmayr.\n\
+    // Licensed under the PolyForm Noncommercial License 1.0.0.\n\
+    \n\
+    // @generated - do not edit by hand\n";
+
 pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     let mut commands = Vec::new();
     let mut enums = Vec::new();
@@ -295,7 +302,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     let mut out = String::new();
 
     // Header - only config/serde imports, no core
-    out.push_str("// @generated - do not edit by hand\n");
+    out.push_str(GENERATED_HEADER);
     // out.push_str("use indexmap::IndexMap;\n");
     out.push_str("use crate::{core_types::{ImageAddress,ImageChannelIdx,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
@@ -561,7 +568,7 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     let mut out = String::new();
 
     // Header - imports both core algos and config settings
-    out.push_str("// @generated - do not edit by hand\n");
+    out.push_str(GENERATED_HEADER);
     out.push_str("use evanalyzer_cfg::settings::pipeline_command_settings::*;\n");
     out.push_str("use crate::algos::*;\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::dataset::*;\n\n");
@@ -3282,7 +3289,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // Only true algorithm structs go into the PipelineCommand enum.
     let algo_commands: Vec<&CommandInfo> = commands.iter().filter(|c| c.kind.is_some()).collect();
 
-    out.push_str("// @generated - do not edit by hand\n");
+    out.push_str(GENERATED_HEADER);
     out.push_str("use crate::settings::pipeline_command_settings::*;\n");
     out.push_str("use crate::settings::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");

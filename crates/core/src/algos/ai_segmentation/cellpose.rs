@@ -5,6 +5,9 @@
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+//!
+//! Portions ported from Cellpose, Copyright © 2020 Howard Hughes Medical
+//! Institute, BSD-3-Clause - see the third-party notices (About > Licenses).
 
 use std::path::PathBuf;
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 #
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
+#
 # Fetch EVAnalyzer's prebuilt native dependencies and place them where the build
 # and packaging steps expect them.
 #

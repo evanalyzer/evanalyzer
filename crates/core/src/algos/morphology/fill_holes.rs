@@ -19,11 +19,10 @@ use macros::CommandsMeta;
 ///
 /// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
 ///
-/// A direct port of ImageJ's `Process > Binary > Fill Holes` command
-/// (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
-/// Landini): a background pixel counts as a "hole" - and is turned into
-/// foreground - exactly when it cannot be reached from the image border by a
-/// path of background pixels using 4-connectivity.
+/// Same behaviour as ImageJ's `Process > Binary > Fill Holes`: a
+/// 4-connected flood fill of the background from the image border;
+/// every background pixel it doesn't reach is a hole and is turned into
+/// foreground.
 ///
 /// Which pixels count as a "hole" is decided the same way ImageJ does it:
 /// every non-background pixel is "foreground" regardless of its actual
@@ -43,7 +42,7 @@ pub struct FillHoles {}
 
 impl ImageAlgorithm for FillHoles {
     /// Fills enclosed background holes in the segmentation map - see the
-    /// struct docs for the exact algorithm and its ImageJ provenance.
+    /// struct docs for the exact algorithm.
     fn execute(
         &self,
         ctx: &mut PipelineContext,
@@ -145,7 +144,7 @@ impl FillHoles {
             Self::seed((height - 1) * width + x, input, &mut stack, &mut outside);
         }
 
-        // 4-connected flood fill from every seed, matching `FloodFiller`.
+        // 4-connected flood fill from every seed (as ImageJ's Fill Holes).
         while let Some(idx) = stack.pop() {
             let x = idx % width;
             let y = idx / width;
@@ -253,9 +252,8 @@ mod tests {
         assert_eq!(FillHoles {}.name(), "Fill Holes");
     }
 
-    /// The core algorithmic property that distinguishes a faithful ImageJ
-    /// port from a "close enough" reimplementation: `FloodFiller.fill` is
-    /// documented as 4-connected, not 8-connected.
+    /// The property that makes the result match ImageJ's Fill Holes: the
+    /// border flood fill is 4-connected, not 8-connected.
     ///
     /// Fixture (`0` = background, `9` = foreground):
     /// ```text

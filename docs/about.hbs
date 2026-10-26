@@ -1,7 +1,8 @@
-{{! Template for `cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json`. }}
+{{! Template for cargo-about: the regenerate command is in about.toml. }}
 {{! Emits a compact JSON array of distinct license texts, each with the }}
 {{! crates that use it - much smaller than `--format json`, which repeats }}
-{{! the full dependency graph for every crate. See docs/third-party-licenses.md. }}
+{{! the full dependency graph for every crate. Read by }}
+{{! crates/gui/src/third_party_licenses.rs (the About dialog). }}
 [
 {{#each licenses}}
   {

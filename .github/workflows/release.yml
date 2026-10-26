@@ -169,6 +169,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # The AI plugin with its libtorch in ai/cpu: the plugin's $ORIGIN
           # rpath (see .cargo/config.toml) finds them there. The glob must be
@@ -305,6 +308,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           # The AI plugin with its libtorch in ai\cpu - the app loads it with
@@ -375,6 +381,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # The AI plugin with its CUDA libtorch in ai/cuda (it runs on the CPU
           # too where there is no GPU), and beside it the NVIDIA libraries
@@ -547,6 +556,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           # The AI plugin with its CUDA libtorch in ai\cuda.
@@ -646,6 +658,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/aarch64-apple-darwin/release/evanalyzer       dist/
           # DuckDB next to the binary; the AI plugin with its libtorch in
           # ai/cpu (loaded on the first AI step).
@@ -775,6 +790,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/aarch64-unknown-linux-gnu/release/evanalyzer dist/
           cat > dist/README.txt <<'EOF'
           EVAnalyzer for Linux ARM64
@@ -912,6 +930,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          # Our license and every third-party license text (NVIDIA's terms ask
+          # for theirs to travel with the libraries, not only in the About dialog).
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/aarch64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-arm64/duckdb.dll           dist/
           mkdir -p dist/ai/cpu

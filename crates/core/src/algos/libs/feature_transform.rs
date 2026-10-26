@@ -15,6 +15,10 @@
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+//!
+//! Portions ported from SciPy, Copyright (c) 2001-2002 Enthought, Inc.
+//! 2003, SciPy Developers, BSD-3-Clause - see the third-party notices
+//! (About > Licenses).
 
 /// The nearest feature of every pixel of a grid (row-major), 8 bytes per
 /// pixel.

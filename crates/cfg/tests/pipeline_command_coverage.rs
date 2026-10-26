@@ -14,6 +14,10 @@
 //! by struct name at generation time, so a hardcoded id silently points at
 //! the wrong command the moment a new command is added earlier in that
 //! ordering (see [`id_of`]'s doc comment).
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, PipelineCommand, all_command_meta, default_command,

@@ -41,7 +41,7 @@ impl CitationMetadata {
         pages: None,
     };
 
-    /// ImageJ - for commands ported from ImageJ's source.
+    /// ImageJ 1.x - for commands ported from ImageJ 1.x's source.
     pub const IMAGEJ: CitationMetadata = CitationMetadata {
         cite_key: "schneider2012imagej",
         title: "NIH Image to ImageJ: 25 years of image analysis",

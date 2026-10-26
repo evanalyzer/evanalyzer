@@ -223,6 +223,47 @@ jobs:
       - name: Check every template against the current schema
         run: cargo run -p evanalyzer_cfg --example check_templates -- evanalyzer-templates
 
+  licenses:
+    # The About dialog's license list
+    # (crates/gui/src/generated/third_party_licenses.json) must match
+    # Cargo.lock: regenerate it with the command from about.toml and fail on
+    # any difference - a new or updated dependency then can't ship without
+    # its license text, and a license outside about.toml's accepted list
+    # fails the generation itself. Needs only `cargo metadata`, no build.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.3.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install cargo-about
+        # Pinned: about.toml works around a 0.9.3 bug, and another version
+        # may format the output differently.
+        run: |
+          if [ "$(cargo about --version 2>/dev/null)" != "cargo-about 0.9.3" ]; then
+            cargo install cargo-about --locked --version 0.9.3 --features cli
+          fi
+
+      - name: Regenerate the license list
+        run: |
+          cargo about generate --locked --workspace --features evanalyzer_ai/torch \
+            docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
+
+      - name: Fail if it changed
+        run: |
+          git diff --exit-code -- crates/gui/src/generated/third_party_licenses.json || {
+            echo "::error::third_party_licenses.json is out of date - regenerate it with the command in about.toml and commit it."
+            exit 1
+          }
+
   audit:
     # Dependency/license audit via cargo-audit (RUSTSEC advisory DB). Only
     # needs Cargo.lock, not a full build, so it's a separate lightweight job

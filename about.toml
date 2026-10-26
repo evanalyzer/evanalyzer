@@ -1,3 +1,24 @@
+# cargo-about configuration for the About dialog's license list
+# (crates/gui/src/generated/third_party_licenses.json; non-crate notices -
+# ported code, fonts, native libraries - are in
+# crates/gui/src/third_party_notices.json, kept by hand).
+#
+# Regenerate (from the repo root; CI checks the result is up to date):
+#
+#   cargo about generate --locked --workspace --features evanalyzer_ai/torch \
+#       docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
+#
+# `--workspace` covers every shipped binary (the app, the server, ...);
+# `evanalyzer_ai/torch` adds the AI plugin's crates (tch, torch-sys, ...) -
+# the plugin is evanalyzer_ai built with that feature
+# (`cargo build-ai-plugin`, .cargo/config.toml). cargo-about only reads
+# `cargo metadata`, so libtorch need not be installed. Install it with
+# `cargo install cargo-about --locked --version 0.9.3 --features cli`
+# (the version CI uses - another version may format the output differently).
+
+# Dev-dependencies (test helpers like i-slint-backend-testing) never ship.
+ignore-dev-dependencies = true
+
 accepted = [
     "Apache-2.0",
     "MIT",
@@ -9,7 +30,6 @@ accepted = [
     "Unicode-3.0",
     "CC0-1.0",
     "BSL-1.0",
-    "MPL-2.0",
     "Unlicense",
     "CDLA-Permissive-2.0",
     "IJG",
@@ -21,7 +41,6 @@ accepted = [
 # `[workspace.package]` entry in the root Cargo.toml) - they're internal
 # application crates, not published anywhere. This listing is meant to cover
 # third-party dependencies only, so keep our own crates (PolyForm Noncommercial) out of it.
-# Rebuild about: cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 [private]
 ignore = true
 
@@ -31,39 +50,139 @@ ignore = true
 # `accepted` here is additive to the global list, scoped to just this crate
 # (see https://embarkstudios.github.io/cargo-about/cli/generate/config.html).
 
-# Slint is used under its Royalty-free License (not GPL) - see
-# https://slint.dev/agreements/slint-royalty-free-license.pdf - but its own
-# Cargo.toml still declares "GPL-3.0-only OR LicenseRef-..." so cargo-about
-# needs GPL-3.0-only accepted to resolve it.
+# Slint is used under its Royalty-free License 2.0 (not GPL) - see
+# https://slint.dev/terms-and-conditions#royalty-free. Its crates declare
+# "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
+# LicenseRef-Slint-Software-3.0"; the clarify below picks the Royalty-free
+# license and its text (LICENSES/ in each crate), so GPL-3.0 is not accepted
+# for them at all. The checksum is that file's sha256 - when a Slint update
+# changes it, cargo-about fails: review the new text and update it.
+#
+# The files' `license` is deliberately "<id>-text", not the id itself:
+# cargo-about 0.9.3 inverts the match for LicenseRef-* texts (generate.rs,
+# the `LicenseItem::Other` arm keeps the clarified files whose license does
+# *not* name the LicenseRef). With the id itself the text is dropped ("has
+# no license file" warning). If a newer cargo-about fixes that, the CI diff
+# shows the Slint text gone - then use the id itself here (and for scopeio).
 [i-slint-backend-selector]
-accepted = ["GPL-3.0-only"]
-[i-slint-backend-testing]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-backend-selector.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-backend-selector.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-backend-winit]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-backend-winit.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-backend-winit.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-common]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-common.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-common.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-compiler]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-compiler.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-compiler.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-core]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-core.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-core.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-core-macros]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-core-macros.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-core-macros.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-renderer-femtovg]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-renderer-femtovg.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-renderer-femtovg.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-renderer-skia]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-renderer-skia.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-renderer-skia.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [i-slint-renderer-software]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[i-slint-renderer-software.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[i-slint-renderer-software.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [slint]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[slint.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[slint.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [slint-build]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[slint-build.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[slint-build.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 [slint-macros]
-accepted = ["GPL-3.0-only"]
+accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
+[slint-macros.clarify]
+license = "LicenseRef-Slint-Royalty-free-2.0"
+[[slint-macros.clarify.files]]
+path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
+license = "LicenseRef-Slint-Royalty-free-2.0-text"
+checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
 
 # scopeio (image reading) is AGPL-3.0-only with an additional permission for
 # EVAnalyzer (its LICENSE-EXCEPTION): combined with EVAnalyzer it may be
-# conveyed under EVAnalyzer's license terms. Same author as evanalyzer.
+# conveyed under EVAnalyzer's license terms. Same author as evanalyzer. The
+# clarify lists the exception's text next to the AGPL text (the files'
+# `license` values work around cargo-about 0.9.3, see Slint above).
 [scopeio]
-accepted = ["AGPL-3.0-only"]
+accepted = ["AGPL-3.0-only", "LicenseRef-scopeio-EVAnalyzer-exception"]
+[scopeio.clarify]
+license = "AGPL-3.0-only AND LicenseRef-scopeio-EVAnalyzer-exception"
+[[scopeio.clarify.files]]
+path = "LICENSE"
+license = "AGPL-3.0-only AND LicenseRef-scopeio-EVAnalyzer-exception"
+checksum = "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+[[scopeio.clarify.files]]
+path = "LICENSE-EXCEPTION"
+license = "LicenseRef-scopeio-EVAnalyzer-exception-text"
+checksum = "2fdef09e45fb8067fb50dfcbda3f38b82695d6e3294f2c491b290d493b864d87"
+
+# MPL-2.0: smartstring (via rhai) and option-ext (via dirs -> dirs-sys).
+# Owner reviewed 2026-10-26 - MPL-2.0 is file-level copyleft; both crates
+# ship unmodified, listed with their license and source in the About dialog.
+[smartstring]
+accepted = ["MPL-2.0"]
+[option-ext]
+accepted = ["MPL-2.0"]

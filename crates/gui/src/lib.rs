@@ -1544,6 +1544,38 @@ mod ui_state_tests {
         assert_eq!(info.get_system_error(), "");
     }
 
+    /// Slint's Royalty-free license asks for its AboutSlint widget in the
+    /// About screen: it's there, whole and inside the dialog's hero.
+    #[test]
+    fn the_about_dialog_shows_made_with_slint() {
+        use i_slint_backend_testing::ElementHandle;
+
+        let ui = crate::editor::test_support::test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 720.0));
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::About);
+
+        let logo = ElementHandle::find_by_accessible_label(&ui, "#MadeWithSlint")
+            .next()
+            .expect("AboutSlint's logo");
+        let (at, size) = (logo.absolute_position(), logo.size());
+        assert!(size.width >= 100.0, "{size:?}");
+        // Not stretched: the logo (212 x 97) keeps its aspect ratio.
+        let aspect = size.height / size.width;
+        assert!((aspect - 97.0 / 212.0).abs() < 0.01, "{size:?}");
+        // The hero: the dialog's left 280 px (the dialog is 880 px wide,
+        // centred).
+        let hero_left = (1280.0 - 880.0) / 2.0;
+        assert!(
+            at.x >= hero_left && at.x + size.width <= hero_left + 280.0,
+            "{at:?} {size:?}"
+        );
+        assert!(
+            at.y >= 0.0 && at.y + size.height <= 720.0,
+            "{at:?} {size:?}"
+        );
+    }
+
     #[test]
     fn refreshing_the_system_info_after_the_window_closed_does_nothing() {
         use crate::helper::ui_thread::drain_ui_queue;

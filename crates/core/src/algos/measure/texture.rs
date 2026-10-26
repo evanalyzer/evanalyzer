@@ -7,6 +7,10 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
+//! The Haralick features follow mahotas' implementation, Copyright (c)
+//! 2008-2013 Luis Pedro Coelho et al., MIT - see the third-party notices
+//! (About > Licenses).
+//!
 //! Haralick's texture features (as computed by mahotas.features.haralick):
 //! the channel as 8 bits (its values normalized to 0..1 by the bit depth's
 //! maximum, × 255, so the result doesn't depend on the bit depth),

@@ -1,3 +1,6 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
 // @generated - do not edit by hand
 use crate::algos::*;
 #[allow(unused_imports)]

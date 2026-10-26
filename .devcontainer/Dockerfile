@@ -28,7 +28,7 @@ RUN rustup component add rustfmt
 RUN cargo install cargo-llvm-cov
 RUN cargo install cargo-audit
 RUN cargo install cargo-auditable
-RUN cargo install cargo-about
+RUN cargo install cargo-about --locked --version 0.9.3 --features cli
 RUN cargo install cargo-cyclonedx
 RUN cargo install cargo-outdated
 RUN cargo install cargo-edit

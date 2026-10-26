@@ -340,7 +340,7 @@ impl ImageAlgorithm for Threshold {
         for citation in self
             .thresholds
             .iter()
-            .filter_map(|entry| method_citation(&entry.method))
+            .flat_map(|entry| method_citations(&entry.method).iter().copied())
         {
             if !citations.iter().any(|c| c.cite_key == citation.cite_key) {
                 citations.push(citation);
@@ -520,85 +520,103 @@ fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize 
 }
 
 // ── Algorithm implementations ─────────────────────────────────────────────────
-// All ported from ImageJ's AutoThresholder Java source. Each function accepts a 256-bin f32 histogram and returns
-// the optimal threshold bin index (0–255).
+// Each method is implemented from the definitions in its original paper (cited
+// in its doc comment and in `method_citation`). Every function takes a 256-bin
+// histogram whose bin index doubles as the gray level, and returns the
+// threshold *bin*: bins `0..=t` are background, bins above `t` foreground
+// (`Threshold::execute` adds the "+1" when mapping back to an intensity).
+//
+// Shared conventions, stated once here instead of on every method:
+// - A histogram with fewer than two occupied bins has no split to optimize;
+//   every method returns its lowest occupied bin then (0 when empty). Since
+//   `build_histogram` stretches the observed range to `0..=255`, a single
+//   occupied bin in practice is always bin 0.
+// - A method whose criterion yields a real-valued *decision boundary* `t*`
+//   (Li, minimum error, IsoData) returns `floor(t*)`: the last bin whose gray
+//   level still lies on the background side of the boundary.
+// - Ties in an arg max / arg min are broken towards the lowest bin.
+// - All arithmetic runs in `f64` on fixed-size stack arrays - no allocation.
 
-/// A faithful port of ImageJ's `ij.process.AutoThresholder.Otsu(int[] data)`
-/// ("M. Emre Celebi 6.15.2007, Fourier Library... ported to ImageJ plugin by
-/// G.Landini") - fetched and diffed directly against the real source
-/// (`ij/process/AutoThresholder.java`) rather than assumed, since the
-/// earlier port here (a `sk`/`n1` running-sum formulation searched only over
-/// `1..255`, ties broken by `bcv >= bcv_max`) turned out to diverge from it
-/// in two ways real ImageJ doesn't:
+/// Cumulative count and cumulative first moment, `c[i] = Σ_{j<i} h[j]` and
+/// `s[i] = Σ_{j<i} j·h[j]`, so any class `a..=b` has `c[b + 1] - c[a]`
+/// pixels with gray-level sum `s[b + 1] - s[a]`.
+fn prefix_sums(hist: &[f32; 256]) -> ([f64; 257], [f64; 257]) {
+    let mut c = [0.0f64; 257];
+    let mut s = [0.0f64; 257];
+    for (i, &h) in hist.iter().enumerate() {
+        c[i + 1] = c[i] + h as f64;
+        s[i + 1] = s[i] + i as f64 * h as f64;
+    }
+    (c, s)
+}
+
+/// First and last occupied bin, or `None` for an empty histogram.
+fn occupied_range(hist: &[f32; 256]) -> Option<(usize, usize)> {
+    let lo = hist.iter().position(|&h| h > 0.0)?;
+    let hi = hist.iter().rposition(|&h| h > 0.0)?;
+    Some((lo, hi))
+}
+
+/// The threshold every method returns when there is nothing to split (see
+/// the shared conventions above): `Err(lowest occupied bin)`, otherwise the
+/// occupied range.
+fn splittable_range(hist: &[f32; 256]) -> Result<(usize, usize), usize> {
+    match occupied_range(hist) {
+        None => Err(0),
+        Some((lo, hi)) if lo == hi => Err(lo),
+        Some(range) => Ok(range),
+    }
+}
+
+/// Maps a real-valued decision boundary to the last bin on its lower side.
+fn boundary_bin(t: f64) -> usize {
+    t.floor().clamp(0.0, 255.0) as usize
+}
+
+/// Otsu (1979): picks the cut `k` that maximizes the between-class variance
+/// `σ_B²(k) = (μ_T·ω(k) − μ(k))² / (ω(k)·(1 − ω(k)))`, with `ω(k)` the
+/// fraction of pixels in bins `0..=k`, `μ(k)` their first cumulative moment
+/// and `μ_T` the global mean. Maximizing `σ_B²` is equivalent to minimizing
+/// the within-class variance, i.e. the two classes are as compact and as far
+/// apart as possible. Only cuts leaving both classes non-empty are
+/// considered.
 ///
-/// - ImageJ searches the *full* `0..256` range, not `1..255`.
-/// - ImageJ's tie-break is strict (`max_bcv < bcv`), so the *first* bin to
-///   reach the maximum between-class variance wins - not the last.
-///
-/// That divergence mattered: a cleanly bimodal histogram (two populations
-/// with an empty run of bins between them) ties across that entire gap,
-/// since the running cumulative count/mean don't change while scanning
-/// empty bins. The old "last tie wins" behavior parked the cut just before
-/// the *upper* population starts; real ImageJ's "first tie wins" parks it
-/// at the *end of the lower* population instead. For a degenerate two-value
-/// histogram (all mass at bin 0 and bin 255, nothing between) the old
-/// version drifted all the way to bin 254 - one below the loop's excluded
-/// upper bound - which collided with `Threshold::execute`'s "+1" rescale
-/// landing exactly on `dmax` (see the `.min(254)` clamp there, still kept
-/// as a backstop for every *other* auto method, but no longer what protects
-/// Otsu itself). This version instead naturally returns bin 0 for that same
-/// input, matching real ImageJ.
+/// Ties go to the lowest bin. This matters for a cleanly bimodal histogram:
+/// `ω` and `μ` don't change across an empty gap, so every cut in the gap
+/// ties, and the cut lands at the end of the lower population - never at
+/// the top of the range, where the "+1" in `Threshold::execute` could reach
+/// the image maximum (the `.min(254)` clamp there stays as a backstop).
 fn thresh_otsu(hist: &[f32; 256]) -> usize {
-    let num_pixels: f64 = hist.iter().map(|&v| v as f64).sum();
-    if num_pixels == 0.0 {
-        return 0;
+    if let Err(t) = splittable_range(hist) {
+        return t;
     }
-    let term = 1.0 / num_pixels;
-
-    let mut histo = [0.0f64; 256];
-    for i in 0..256 {
-        histo[i] = term * hist[i] as f64;
-    }
-
-    // Cumulative normalized histogram.
-    let mut cnh = [0.0f64; 256];
-    cnh[0] = histo[0];
-    for i in 1..256 {
-        cnh[i] = cnh[i - 1] + histo[i];
-    }
-
-    // Cumulative mean gray level.
-    let mut mean = [0.0f64; 256];
-    mean[0] = 0.0;
-    for i in 1..256 {
-        mean[i] = mean[i - 1] + i as f64 * histo[i];
-    }
-
-    let total_mean = mean[255];
-
-    let mut threshold = 0usize;
-    let mut max_bcv = 0.0f64;
-    for i in 0..256 {
-        let mut bcv = total_mean * cnh[i] - mean[i];
-        // `cnh[255]` is always exactly 1.0 (the full cumulative sum), so
-        // this denominator is always exactly 0.0 at `i == 255` - the same
-        // `0.0 / 0.0 == NaN` every comparison below treats as "not greater",
-        // matching Java's own IEEE-754 comparison semantics - so the last
-        // bin can never win, same as ImageJ.
-        bcv = bcv * bcv / (cnh[i] * (1.0 - cnh[i]));
-        if max_bcv < bcv {
-            max_bcv = bcv;
-            threshold = i;
+    let (c, s) = prefix_sums(hist);
+    let n = c[256];
+    let mean = s[256] / n;
+    let mut best = 0usize;
+    let mut best_var = f64::NEG_INFINITY;
+    for k in 0..256 {
+        let w = c[k + 1];
+        let w_upper = n - w;
+        if w <= 0.0 || w_upper <= 0.0 {
+            continue;
+        }
+        // n²·σ_B²: the constant factor doesn't change the arg max.
+        let d = mean * w - s[k + 1];
+        let var = d * d / (w * w_upper);
+        if var > best_var {
+            best_var = var;
+            best = k;
         }
     }
-    threshold
+    best
 }
 
 /// Three-class Otsu: jointly searches for the two simultaneous cuts `(t1,
 /// t2)`, `t1 < t2`, that maximize the between-class variance across three
 /// populations (0..=t1, t1+1..=t2, t2+1..255). Otsu's variance criterion is
-/// additive across classes - `thresh_otsu`'s single-cut `bcv` is just
-/// `w0*mu0² + w1*mu1²` with the constant `n*muT²` term dropped, since it
+/// additive across classes - the single-cut between-class variance is,
+/// up to scaling, `w0*mu0² + w1*mu1²` minus the constant `n*muT²`, which
 /// doesn't affect which cut wins - so the three-class case is the same
 /// maximization one level deeper: `w0*mu0² + w1*mu1² + w2*mu2²`, searched
 /// over both cuts.
@@ -650,648 +668,574 @@ fn thresh_otsu_multi(hist: &[f32; 256]) -> (usize, usize) {
     best
 }
 
+/// Li's minimum cross entropy threshold (Li & Lee 1993), found with the
+/// iterative scheme of Li & Tam (1998). Li & Lee choose the cut whose
+/// two-level reconstruction (every pixel replaced by its class mean) has the
+/// smallest cross entropy to the original image. Setting the derivative of
+/// that cross entropy to zero gives the fixed-point condition
+/// `t = (μ_b − μ_a) / (ln μ_b − ln μ_a)`, with `μ_a`/`μ_b` the mean gray
+/// level of the pixels at/below and above `t`; Li & Tam iterate it from an
+/// initial guess, which reaches the minimum in a few steps instead of an
+/// exhaustive search.
+///
+/// Conventions: starts at the global mean, gray levels are the bin indices,
+/// stops once `t` moves by less than half a bin (or after 1000 steps), and
+/// returns `floor(t)`. A lower class whose mean is 0 (all of it in bin 0)
+/// sends `t` to 0, the limit of the update as `μ_a → 0`.
 fn thresh_li(hist: &[f32; 256]) -> usize {
-    let num_pixels: f64 = hist.iter().map(|&v| v as f64).sum();
-    if num_pixels == 0.0 {
-        return 0;
+    if let Err(t) = splittable_range(hist) {
+        return t;
     }
-    let mean: f64 = (1..256usize)
-        .map(|i| i as f64 * hist[i] as f64)
-        .sum::<f64>()
-        / num_pixels;
-
-    let mut new_thresh = mean;
-    loop {
-        let old_thresh = new_thresh;
-        let threshold = (old_thresh + 0.5).max(0.0) as usize;
-        let t = threshold.min(255);
-
-        let num_back: f64 = (0..=t).map(|i| hist[i] as f64).sum();
-        let sum_back: f64 = (0..=t).map(|i| i as f64 * hist[i] as f64).sum();
-        let mean_back = if num_back == 0.0 {
-            0.0
-        } else {
-            sum_back / num_back
-        };
-
-        let num_obj: f64 = ((t + 1)..256).map(|i| hist[i] as f64).sum();
-        let sum_obj: f64 = ((t + 1)..256).map(|i| i as f64 * hist[i] as f64).sum();
-        let mean_obj = if num_obj == 0.0 {
-            0.0
-        } else {
-            sum_obj / num_obj
-        };
-
-        let temp = if mean_back != 0.0 && mean_obj != 0.0 {
-            let div = mean_back.ln() - mean_obj.ln();
-            if div != 0.0 {
-                (mean_back - mean_obj) / div
-            } else {
-                0.0
-            }
+    let (c, s) = prefix_sums(hist);
+    let n = c[256];
+    let mut t = s[256] / n;
+    for _ in 0..1000 {
+        let b = boundary_bin(t);
+        let w_a = c[b + 1];
+        let w_b = n - w_a;
+        if w_a <= 0.0 || w_b <= 0.0 {
+            break;
+        }
+        let mean_a = s[b + 1] / w_a;
+        let mean_b = (s[256] - s[b + 1]) / w_b;
+        let next = if mean_a > 0.0 {
+            (mean_b - mean_a) / (mean_b.ln() - mean_a.ln())
         } else {
             0.0
         };
-        // Round half away from zero: cast toward zero after a ±0.5 shift
-        new_thresh = if temp < -2.220446049250313e-16 {
-            (temp - 0.5) as i64 as f64
-        } else {
-            (temp + 0.5) as i64 as f64
-        };
-
-        if (new_thresh - old_thresh).abs() <= 0.5 {
-            return threshold.min(255);
+        let converged = (next - t).abs() < 0.5;
+        t = next;
+        if converged {
+            break;
         }
     }
+    boundary_bin(t)
 }
 
+/// Kittler & Illingworth's (1986) minimum error threshold, using the
+/// iterative procedure from the same paper. The histogram is modelled as a
+/// mixture of two normal distributions; the Bayes-optimal (minimum error)
+/// boundary is where the two weighted densities are equal,
+/// `P₁/σ₁·exp(−(g−μ₁)²/2σ₁²) = P₂/σ₂·exp(−(g−μ₂)²/2σ₂²)`. Taking logs gives
+/// the quadratic
+/// `(g−μ₁)²/σ₁² + ln σ₁² − 2 ln P₁ = (g−μ₂)²/σ₂² + ln σ₂² − 2 ln P₂`.
+/// Each step estimates `P`, `μ`, `σ²` of both classes for the current cut,
+/// solves the quadratic, and moves the cut to the root lying between the two
+/// means, until the cut stops changing.
+///
+/// Conventions: starts at the global mean, uses population variances, and
+/// returns `floor(g)` of the final root. Stops early (keeping the current
+/// cut) when a class is empty or has zero variance - the normal model is
+/// undefined there - or no root lies between the means.
 fn thresh_min_error(hist: &[f32; 256]) -> usize {
-    // Helper: cumulative count
-    let a = |j: usize| -> f64 { (0..=j).map(|i| hist[i] as f64).sum() };
-    // Helper: cumulative intensity-weighted count
-    let b = |j: usize| -> f64 { (0..=j).map(|i| i as f64 * hist[i] as f64).sum() };
-    // Helper: cumulative intensity-squared-weighted count
-    let c = |j: usize| -> f64 { (0..=j).map(|i| (i * i) as f64 * hist[i] as f64).sum() };
-
-    // Initial estimate: mean
-    let tot: f64 = a(255);
-    let sum: f64 = b(255);
-    let mut threshold = (sum / tot).floor() as usize;
-    threshold = threshold.min(255);
-
-    let mut t_prev = usize::MAX;
-    let mut iters = 0usize;
-    while threshold != t_prev && iters < 10_000 {
-        iters += 1;
-        let a_t = a(threshold);
-        let a_all = a(255);
-        if a_t == 0.0 || a_all == a_t {
-            break;
-        }
-        let mu = b(threshold) / a_t;
-        let nu = (b(255) - b(threshold)) / (a_all - a_t);
-        let p = a_t / a_all;
-        let q = (a_all - a_t) / a_all;
-        let sigma2 = c(threshold) / a_t - mu * mu;
-        let tau2 = (c(255) - c(threshold)) / (a_all - a_t) - nu * nu;
-
-        if sigma2 <= 0.0 || tau2 <= 0.0 {
-            break;
-        }
-        let w0 = 1.0 / sigma2 - 1.0 / tau2;
-        let w1 = mu / sigma2 - nu / tau2;
-        let w2 = (mu * mu) / sigma2 - (nu * nu) / tau2 + (sigma2 * q * q / (tau2 * p * p)).log10();
-
-        let sqterm = w1 * w1 - w0 * w2;
-        if sqterm < 0.0 {
-            break;
-        }
-        t_prev = threshold;
-        let temp = (w1 + sqterm.sqrt()) / w0;
-        if temp.is_nan() {
-            break;
-        }
-        threshold = (temp.floor() as isize).clamp(0, 255) as usize;
+    if let Err(t) = splittable_range(hist) {
+        return t;
     }
-    threshold
+    let (c, s) = prefix_sums(hist);
+    let mut s2 = [0.0f64; 257];
+    for (i, &h) in hist.iter().enumerate() {
+        s2[i + 1] = s2[i] + (i * i) as f64 * h as f64;
+    }
+    let n = c[256];
+    let mut t = s[256] / n;
+    let mut prev_bin = usize::MAX;
+    for _ in 0..256 {
+        let b = boundary_bin(t);
+        if b == prev_bin {
+            break;
+        }
+        prev_bin = b;
+        let w1 = c[b + 1];
+        let w2 = n - w1;
+        if w1 <= 0.0 || w2 <= 0.0 {
+            break;
+        }
+        let m1 = s[b + 1] / w1;
+        let m2 = (s[256] - s[b + 1]) / w2;
+        let v1 = s2[b + 1] / w1 - m1 * m1;
+        let v2 = (s2[256] - s2[b + 1]) / w2 - m2 * m2;
+        if v1 <= 1e-12 || v2 <= 1e-12 {
+            break;
+        }
+        // a·g² + b·g + c = 0, from expanding the equal-density condition.
+        let qa = 1.0 / v1 - 1.0 / v2;
+        let qb = -2.0 * (m1 / v1 - m2 / v2);
+        let qc = m1 * m1 / v1 - m2 * m2 / v2 + (v1 / v2).ln() - 2.0 * (w1 / w2).ln();
+        let between = |g: f64| g >= m1 && g <= m2;
+        let root = if qa.abs() < 1e-12 {
+            // Equal variances: the quadratic degenerates to a line.
+            Some(-qc / qb).filter(|&g| between(g))
+        } else {
+            let disc = qb * qb - 4.0 * qa * qc;
+            if disc < 0.0 {
+                None
+            } else {
+                let r = disc.sqrt();
+                let g1 = (-qb - r) / (2.0 * qa);
+                let g2 = (-qb + r) / (2.0 * qa);
+                match (between(g1), between(g2)) {
+                    (true, true) => {
+                        // Both crossings between the means: take the one
+                        // nearer their midpoint.
+                        let mid = 0.5 * (m1 + m2);
+                        Some(if (g1 - mid).abs() <= (g2 - mid).abs() {
+                            g1
+                        } else {
+                            g2
+                        })
+                    }
+                    (true, false) => Some(g1),
+                    (false, true) => Some(g2),
+                    (false, false) => None,
+                }
+            }
+        };
+        match root {
+            Some(g) => t = g,
+            None => break,
+        }
+    }
+    boundary_bin(t)
 }
 
+/// Zack, Rogers & Latt's (1977) triangle method, a purely geometric rule
+/// for histograms with one dominant peak and a long tail on one side. A
+/// line is drawn from the peak to the far end of the longer tail; the
+/// threshold is the bin where the histogram lies furthest below that line,
+/// i.e. where the tail "bends away" from the peak's straight-line decay.
+/// Because the line is fixed, the perpendicular distance is the vertical gap
+/// times a constant, so the vertical gap is maximized directly.
+///
+/// Conventions: the peak is the lowest bin with the maximum count; the tail
+/// ends at the outermost occupied bin (with its own count); the longer side
+/// wins, the upper one on a tie. Ties in the gap go to the bin nearest the
+/// peak. For a tail on the dark side the returned bin still separates
+/// `0..=t` from the rest.
 fn thresh_triangle(hist: &[f32; 256]) -> usize {
-    // Work on a mutable copy so we can optionally reverse it.
-    let mut h = *hist;
-
-    let mut min_idx = 0usize;
-    let mut max_idx = 0usize;
-    let mut d_max = 0.0f32;
-    for i in 0..256 {
-        if h[i] > 0.0 {
-            min_idx = i;
-            break;
+    let (lo, hi) = match splittable_range(hist) {
+        Ok(r) => r,
+        Err(t) => return t,
+    };
+    let mut peak = lo;
+    for i in lo..=hi {
+        if hist[i] > hist[peak] {
+            peak = i;
         }
     }
-    if min_idx > 0 {
-        min_idx -= 1;
+    let h_peak = hist[peak] as f64;
+    let upper_tail = hi - peak >= peak - lo;
+    let end = if upper_tail { hi } else { lo };
+    if end == peak {
+        return peak;
     }
-    let mut min2 = 0usize;
-    for i in (0..256).rev() {
-        if h[i] > 0.0 {
-            min2 = i;
-            break;
+    let h_end = hist[end] as f64;
+    let span = end as f64 - peak as f64;
+    let mut best = peak;
+    let mut best_gap = f64::NEG_INFINITY;
+    let mut consider = |i: usize| {
+        let line = h_peak + (h_end - h_peak) * (i as f64 - peak as f64) / span;
+        let gap = line - hist[i] as f64;
+        if gap > best_gap {
+            best_gap = gap;
+            best = i;
         }
+    };
+    if upper_tail {
+        (peak + 1..end).for_each(&mut consider);
+    } else {
+        (end + 1..peak).rev().for_each(&mut consider);
     }
-    if min2 < 255 {
-        min2 += 1;
-    }
-    for i in 0..256 {
-        if h[i] > d_max {
-            max_idx = i;
-            d_max = h[i];
-        }
-    }
-
-    let inverted = (max_idx - min_idx) < (min2 - max_idx);
-    if inverted {
-        h.reverse();
-        min_idx = 255 - min2;
-        max_idx = 255 - max_idx;
-    }
-
-    if min_idx == max_idx {
-        return if inverted { 255 - min_idx } else { min_idx };
-    }
-
-    let nx = h[max_idx] as f64;
-    let ny = (min_idx as f64) - (max_idx as f64);
-    let d = (nx * nx + ny * ny).sqrt();
-    let nx = nx / d;
-    let ny = ny / d;
-    let d = nx * min_idx as f64 + ny * h[min_idx] as f64;
-
-    let mut split = min_idx;
-    let mut split_dist = 0.0f64;
-    for i in (min_idx + 1)..=max_idx {
-        let dist = nx * i as f64 + ny * h[i] as f64 - d;
-        if dist > split_dist {
-            split = i;
-            split_dist = dist;
-        }
-    }
-    if split > 0 {
-        split -= 1;
-    }
-
-    if inverted { 255 - split } else { split }
+    best
 }
 
+/// Tsai's (1985) moment-preserving threshold. The image is replaced by a
+/// two-level image (gray levels `z₀ < z₁`, a fraction `p₀` of the pixels at
+/// `z₀`) that keeps the first three moments `m₁, m₂, m₃` of the histogram
+/// (`m₀ = 1`). `z₀, z₁` are the roots of `z² + c₁z + c₀ = 0`, where
+/// `c₀, c₁` solve `c₀m₀ + c₁m₁ = −m₂` and `c₀m₁ + c₁m₂ = −m₃`, and
+/// `p₀ = (z₁ − m₁) / (z₁ − z₀)`. The threshold is the `p₀`-tile: the lowest
+/// bin whose cumulative fraction reaches `p₀` (with a `1e-9` tolerance so
+/// that an exactly reached `p₀` isn't lost to rounding).
 fn thresh_moments(hist: &[f32; 256]) -> usize {
-    let total: f64 = hist.iter().map(|&v| v as f64).sum();
-    if total == 0.0 {
-        return 0;
+    if let Err(t) = splittable_range(hist) {
+        return t;
     }
-    let mut m1 = 0.0f64;
-    let mut m2 = 0.0f64;
-    let mut m3 = 0.0f64;
-    for i in 0..256 {
-        let d = i as f64;
-        let h = hist[i] as f64 / total;
-        m1 += d * h;
-        m2 += d * d * h;
-        m3 += d * d * d * h;
+    let n: f64 = hist.iter().map(|&h| h as f64).sum();
+    let (mut m1, mut m2, mut m3) = (0.0f64, 0.0f64, 0.0f64);
+    for (i, &h) in hist.iter().enumerate() {
+        let p = h as f64 / n;
+        let z = i as f64;
+        m1 += z * p;
+        m2 += z * z * p;
+        m3 += z * z * z * p;
     }
-    let cd = m2 - m1 * m1;
-    if cd == 0.0 {
-        return 0;
-    }
-    let c0 = (-m2 * m2 + m1 * m3) / cd;
-    // c1 = (m0 * -m3 + m2 * m1) / cd  where m0 = 1
-    let c1 = (-m3 + m2 * m1) / cd;
-    let disc = c1 * c1 - 4.0 * c0;
-    if disc < 0.0 {
-        return 0;
-    }
-    let z1 = 0.5 * (-c1 + disc.sqrt());
-    let z0 = 0.5 * (-c1 - disc.sqrt());
+    let det = m2 - m1 * m1;
+    let c0 = (m1 * m3 - m2 * m2) / det;
+    let c1 = (m1 * m2 - m3) / det;
+    let r = (c1 * c1 - 4.0 * c0).max(0.0).sqrt();
+    let z0 = 0.5 * (-c1 - r);
+    let z1 = 0.5 * (-c1 + r);
     let p0 = (z1 - m1) / (z1 - z0);
-
-    let mut cumsum = 0.0f64;
-    for i in 0..256 {
-        cumsum += hist[i] as f64 / total;
-        if cumsum > p0 {
+    let mut cum = 0.0f64;
+    for (i, &h) in hist.iter().enumerate() {
+        cum += h as f64 / n;
+        if cum >= p0 - 1e-9 {
             return i;
         }
     }
     255
 }
 
+/// Shannon's function `S(μ) = −μ ln μ − (1 − μ) ln(1 − μ)`, with `0·ln 0 = 0`.
+fn shannon(mu: f64) -> f64 {
+    let term = |x: f64| if x > 0.0 { -x * x.ln() } else { 0.0 };
+    term(mu) + term(1.0 - mu)
+}
+
+/// Huang & Wang's (1995) fuzzy threshold. For a cut `t`, every gray level
+/// `g` belongs to its class with membership `μ(g) = 1 / (1 + |g − μ_k|/C)`,
+/// where `μ_k` is the mean of its class (`k = 0` for `g ≤ t`, `k = 1`
+/// above) and `C = g_max − g_min` keeps `μ` within `[0.5, 1]`. The cut is
+/// the one whose image is least fuzzy, i.e. that minimizes the entropy
+/// measure `E(t) = Σ_g h(g)·S(μ(g))` with Shannon's function `S` (the
+/// paper's `1/(MN ln 2)` normalization doesn't move the minimum). Only cuts
+/// leaving both classes non-empty are considered.
 fn thresh_huang(hist: &[f32; 256]) -> usize {
-    let first_bin = (0..256).find(|&i| hist[i] != 0.0).unwrap_or(0);
-    let last_bin = (0..256).rev().find(|&i| hist[i] != 0.0).unwrap_or(255);
-    if first_bin == last_bin {
-        return first_bin;
-    }
-    let term = 1.0 / (last_bin - first_bin) as f64;
-
-    // mu_0[i] = mean of pixels 0..=i (running forward)
-    let mut mu_0 = [0.0f64; 256];
-    let mut sum_pix = 0.0f64;
-    let mut num_pix = 0.0f64;
-    for i in first_bin..256 {
-        sum_pix += i as f64 * hist[i] as f64;
-        num_pix += hist[i] as f64;
-        mu_0[i] = sum_pix / num_pix;
-    }
-
-    // mu_1[i] = mean of pixels i+1..=255 (running backward, stored at i-1)
-    let mut mu_1 = [0.0f64; 256];
-    sum_pix = 0.0;
-    num_pix = 0.0;
-    for i in (1..=last_bin).rev() {
-        sum_pix += i as f64 * hist[i] as f64;
-        num_pix += hist[i] as f64;
-        mu_1[i - 1] = sum_pix / num_pix;
-    }
-
-    let mut min_ent = f64::MAX;
-    let mut threshold = 0usize;
-    for it in 0..256 {
-        let mut ent = 0.0f64;
-        for ih in 0..=it {
-            let mu_x = 1.0 / (1.0 + term * (ih as f64 - mu_0[it]).abs());
-            if mu_x >= 1e-6 && mu_x <= 0.999_999 {
-                ent += hist[ih] as f64 * (-mu_x * mu_x.ln() - (1.0 - mu_x) * (1.0 - mu_x).ln());
+    let (lo, hi) = match splittable_range(hist) {
+        Ok(r) => r,
+        Err(t) => return t,
+    };
+    let (c, s) = prefix_sums(hist);
+    let range = (hi - lo) as f64;
+    let mut best = lo;
+    let mut best_e = f64::INFINITY;
+    for t in lo..hi {
+        let w0 = c[t + 1] - c[lo];
+        let w1 = c[hi + 1] - c[t + 1];
+        if w0 <= 0.0 || w1 <= 0.0 {
+            continue;
+        }
+        let mu0 = (s[t + 1] - s[lo]) / w0;
+        let mu1 = (s[hi + 1] - s[t + 1]) / w1;
+        let mut e = 0.0f64;
+        for (g, &h) in hist.iter().enumerate().take(hi + 1).skip(lo) {
+            let h = h as f64;
+            if h > 0.0 {
+                let mean = if g <= t { mu0 } else { mu1 };
+                e += h * shannon(1.0 / (1.0 + (g as f64 - mean).abs() / range));
             }
         }
-        for ih in (it + 1)..256 {
-            let mu_x = 1.0 / (1.0 + term * (ih as f64 - mu_1[it]).abs());
-            if mu_x >= 1e-6 && mu_x <= 0.999_999 {
-                ent += hist[ih] as f64 * (-mu_x * mu_x.ln() - (1.0 - mu_x) * (1.0 - mu_x).ln());
-            }
-        }
-        if ent < min_ent {
-            min_ent = ent;
-            threshold = it;
-        }
-    }
-    threshold
-}
-
-fn bimodal_test(y: &[f64]) -> bool {
-    let mut modes = 0u32;
-    for k in 1..y.len().saturating_sub(1) {
-        if y[k - 1] < y[k] && y[k + 1] < y[k] {
-            modes += 1;
-            if modes > 2 {
-                return false;
-            }
-        }
-    }
-    modes == 2
-}
-
-fn thresh_intermodes(hist: &[f32; 256]) -> usize {
-    let min_bin = (0..256).find(|&i| hist[i] > 0.0).unwrap_or(0);
-    let max_bin = (0..256).rev().find(|&i| hist[i] > 0.0).unwrap_or(255);
-    let length = max_bin - min_bin + 1;
-
-    let mut h: Vec<f64> = (min_bin..=max_bin).map(|i| hist[i] as f64).collect();
-
-    let mut iters = 0u32;
-    while !bimodal_test(&h) {
-        // 3-point running mean over the *previous pass's* values, with
-        // implicit zero-padding at both ends - ImageJ's previous/current/next
-        // rolling window. Must read entirely from `h`
-        // and write into a separate buffer: writing into `h` in place would
-        // make later iterations of this same pass read already-smoothed
-        // neighbors instead of the pre-pass values.
-        let mut smoothed = vec![0.0f64; length];
-        for i in 0..length {
-            let prev = if i == 0 { 0.0 } else { h[i - 1] };
-            let next = if i + 1 < length { h[i + 1] } else { 0.0 };
-            smoothed[i] = (prev + h[i] + next) / 3.0;
-        }
-        h = smoothed;
-        iters += 1;
-        if iters > 10_000 {
-            return 0;
-        }
-    }
-
-    // Threshold = midpoint between the two peaks
-    let mut tt = 0usize;
-    for i in 1..length.saturating_sub(1) {
-        if h[i - 1] < h[i] && h[i + 1] < h[i] {
-            tt += i;
-        }
-    }
-    let t = (tt as f64 / 2.0).floor() as usize;
-    (t + min_bin).min(255)
-}
-
-fn thresh_isodata(hist: &[f32; 256]) -> usize {
-    let mut g = 0usize;
-    for i in 1..256 {
-        if hist[i] > 0.0 {
-            g = i + 1;
-            break;
-        }
-    }
-    loop {
-        let mut l = 0i64;
-        let mut totl = 0i64;
-        for i in 0..g {
-            totl += hist[i] as i64;
-            l += hist[i] as i64 * i as i64;
-        }
-        let mut h = 0.0f64;
-        let mut toth = 0.0f64;
-        for i in (g + 1)..256 {
-            toth += hist[i] as f64;
-            h += hist[i] as f64 * i as f64;
-        }
-        if totl > 0 && toth > 0.0 {
-            let l_mean = l as f64 / totl as f64;
-            let h_mean = h / toth;
-            if g == ((l_mean + h_mean) / 2.0).round() as usize {
-                break;
-            }
-        }
-        g += 1;
-        if g > 254 {
-            return 0;
-        }
-    }
-    g
-}
-
-fn thresh_max_entropy(hist: &[f32; 256]) -> usize {
-    let total: f64 = hist.iter().map(|&v| v as f64).sum();
-    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
-
-    let mut p1 = [0.0f64; 256];
-    let mut p2 = [0.0f64; 256];
-    p1[0] = norm[0];
-    p2[0] = 1.0 - p1[0];
-    for i in 1..256 {
-        p1[i] = p1[i - 1] + norm[i];
-        p2[i] = 1.0 - p1[i];
-    }
-
-    let first_bin = (0..256)
-        .find(|&i| p1[i].abs() >= 2.220446049250313e-16)
-        .unwrap_or(0);
-    let last_bin = (first_bin..256)
-        .rev()
-        .find(|&i| p2[i].abs() >= 2.220446049250313e-16)
-        .unwrap_or(255);
-
-    let mut max_ent = f64::MIN;
-    let mut threshold = 0usize;
-    for it in first_bin..=last_bin {
-        let ent_back: f64 = (0..=it)
-            .filter(|&ih| hist[ih] != 0.0)
-            .map(|ih| -(norm[ih] / p1[it]) * (norm[ih] / p1[it]).ln())
-            .sum();
-        let ent_obj: f64 = ((it + 1)..256)
-            .filter(|&ih| hist[ih] != 0.0)
-            .map(|ih| -(norm[ih] / p2[it]) * (norm[ih] / p2[it]).ln())
-            .sum();
-        let tot_ent = ent_back + ent_obj;
-        if tot_ent > max_ent {
-            max_ent = tot_ent;
-            threshold = it;
-        }
-    }
-    threshold
-}
-
-fn thresh_mean(hist: &[f32; 256]) -> usize {
-    let tot: f64 = hist.iter().map(|&v| v as f64).sum();
-    if tot == 0.0 {
-        return 0;
-    }
-    let sum: f64 = hist
-        .iter()
-        .enumerate()
-        .map(|(i, &v)| i as f64 * v as f64)
-        .sum();
-    (sum / tot).floor() as usize
-}
-
-fn thresh_minimum(hist: &[f32; 256]) -> usize {
-    let mut h: Vec<f64> = hist.iter().map(|&v| v as f64).collect();
-    let mut iters = 0u32;
-    while !bimodal_test(&h) {
-        let mut t = [0.0f64; 256];
-        t[0] = (h[0] + h[1]) / 3.0;
-        for i in 1..255 {
-            t[i] = (h[i - 1] + h[i] + h[i + 1]) / 3.0;
-        }
-        t[255] = (h[254] + h[255]) / 3.0;
-        h.copy_from_slice(&t);
-        iters += 1;
-        if iters > 10_000 {
-            return 0;
-        }
-    }
-    // First local minimum
-    for i in 1..255 {
-        if h[i - 1] > h[i] && h[i + 1] >= h[i] {
-            return i;
-        }
-    }
-    0
-}
-
-fn thresh_percentile(hist: &[f32; 256]) -> usize {
-    let ptile = 0.5f64;
-    let total: f64 = hist.iter().map(|&v| v as f64).sum();
-    if total == 0.0 {
-        return 0;
-    }
-    let mut best = 0usize;
-    let mut min_dist = f64::MAX;
-    let mut cumsum = 0.0f64;
-    for i in 0..256 {
-        cumsum += hist[i] as f64;
-        let d = (cumsum / total - ptile).abs();
-        if d < min_dist {
-            min_dist = d;
-            best = i;
+        if e < best_e {
+            best_e = e;
+            best = t;
         }
     }
     best
 }
 
-fn thresh_renyi_entropy(hist: &[f32; 256]) -> usize {
-    let total: f64 = hist.iter().map(|&v| v as f64).sum();
-    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
-
-    let mut p1 = [0.0f64; 256];
-    let mut p2 = [0.0f64; 256];
-    p1[0] = norm[0];
-    p2[0] = 1.0 - p1[0];
-    for i in 1..256 {
-        p1[i] = p1[i - 1] + norm[i];
-        p2[i] = 1.0 - p1[i];
-    }
-
-    let eps = 2.220446049250313e-16;
-    let first_bin = (0..256).find(|&i| p1[i].abs() >= eps).unwrap_or(0);
-    let last_bin = (first_bin..256)
-        .rev()
-        .find(|&i| p2[i].abs() >= eps)
-        .unwrap_or(255);
-
-    // Pass 1: alpha = 1.0  (equivalent to MaxEntropy)
-    let mut max_ent = 0.0f64;
-    let mut t_star2 = 0usize;
-    for it in first_bin..=last_bin {
-        let eb: f64 = (0..=it)
-            .filter(|&ih| hist[ih] != 0.0)
-            .map(|ih| -(norm[ih] / p1[it]) * (norm[ih] / p1[it]).ln())
-            .sum();
-        let eo: f64 = ((it + 1)..256)
-            .filter(|&ih| hist[ih] != 0.0)
-            .map(|ih| -(norm[ih] / p2[it]) * (norm[ih] / p2[it]).ln())
-            .sum();
-        if eb + eo > max_ent {
-            max_ent = eb + eo;
-            t_star2 = it;
+/// Counts the strict local maxima of `y` (`y[i-1] < y[i] > y[i+1]`), reading
+/// the histogram as zero outside `0..=255` (there are no pixels there), and
+/// writes the positions of the first two into `peaks`. A flat-topped plateau
+/// is not a strict maximum; it only becomes one once smoothing rounds it.
+fn local_maxima(y: &[f64; 256], peaks: &mut [usize; 2]) -> usize {
+    let mut count = 0;
+    for i in 0..256 {
+        let left = if i > 0 { y[i - 1] } else { 0.0 };
+        let right = if i < 255 { y[i + 1] } else { 0.0 };
+        if y[i] > left && y[i] > right {
+            if count < 2 {
+                peaks[count] = i;
+            }
+            count += 1;
         }
     }
+    count
+}
 
-    // Pass 2: alpha = 0.5
-    let alpha = 0.5f64;
-    let term = 1.0 / (1.0 - alpha);
-    max_ent = 0.0;
-    let mut t_star1 = 0usize;
-    for it in first_bin..=last_bin {
-        let eb: f64 = (0..=it).map(|ih| (norm[ih] / p1[it]).sqrt()).sum();
-        let eo: f64 = ((it + 1)..256).map(|ih| (norm[ih] / p2[it]).sqrt()).sum();
-        let tot = if eb * eo > 0.0 {
-            term * (eb * eo).ln()
-        } else {
-            0.0
-        };
-        if tot > max_ent {
-            max_ent = tot;
-            t_star1 = it;
-        }
+/// Smooths `hist` with a repeated three-bin running mean (the histogram
+/// read as zero outside `0..=255`, every pass computed from the previous
+/// pass' values) until it has exactly two strict local maxima - the
+/// procedure of Prewitt & Mendelsohn (1966) as formalized by Glasbey (1993).
+/// An already bimodal histogram is used unsmoothed. Returns the smoothed
+/// histogram and the two mode positions, or `None` when 10 000 passes don't
+/// produce a bimodal histogram (e.g. three modes merging straight into one).
+fn smooth_until_bimodal(hist: &[f32; 256]) -> Option<([f64; 256], [usize; 2])> {
+    let mut y = [0.0f64; 256];
+    for (dst, &h) in y.iter_mut().zip(hist.iter()) {
+        *dst = h as f64;
     }
-
-    // Pass 3: alpha = 2.0
-    let alpha = 2.0f64;
-    let term = 1.0 / (1.0 - alpha);
-    max_ent = 0.0;
-    let mut t_star3 = 0usize;
-    for it in first_bin..=last_bin {
-        let eb: f64 = (0..=it)
-            .map(|ih| norm[ih] * norm[ih] / (p1[it] * p1[it]))
-            .sum();
-        let eo: f64 = ((it + 1)..256)
-            .map(|ih| norm[ih] * norm[ih] / (p2[it] * p2[it]))
-            .sum();
-        let tot = if eb * eo > 0.0 {
-            term * (eb * eo).ln()
-        } else {
-            0.0
-        };
-        if tot > max_ent {
-            max_ent = tot;
-            t_star3 = it;
+    let mut next = [0.0f64; 256];
+    let mut peaks = [0usize; 2];
+    for _ in 0..10_000 {
+        if local_maxima(&y, &mut peaks) == 2 {
+            return Some((y, peaks));
         }
+        for i in 0..256 {
+            let left = if i > 0 { y[i - 1] } else { 0.0 };
+            let right = if i < 255 { y[i + 1] } else { 0.0 };
+            next[i] = (left + y[i] + right) / 3.0;
+        }
+        std::mem::swap(&mut y, &mut next);
     }
+    None
+}
 
-    // Sort t_star1 ≤ t_star2 ≤ t_star3
-    let mut stars = [t_star1, t_star2, t_star3];
-    stars.sort_unstable();
-    let [t_star1, t_star2, t_star3] = stars;
-
-    let (beta1, beta2, beta3) = if t_star2.abs_diff(t_star1) <= 5 {
-        if t_star3.abs_diff(t_star2) <= 5 {
-            (1, 2, 1)
-        } else {
-            (0, 1, 3)
-        }
-    } else if t_star3.abs_diff(t_star2) <= 5 {
-        (3, 1, 0)
-    } else {
-        (1, 2, 1)
+/// Prewitt & Mendelsohn's (1966) intermodes threshold: the histogram is
+/// smoothed until it is bimodal (see `smooth_until_bimodal`) and the
+/// threshold is the midpoint between the two modes, `floor((p₁ + p₂) / 2)`.
+/// Returns the lowest occupied bin when no bimodal smoothing exists.
+fn thresh_intermodes(hist: &[f32; 256]) -> usize {
+    let lo = match splittable_range(hist) {
+        Ok((lo, _)) => lo,
+        Err(t) => return t,
     };
-
-    let omega = p1[t_star3] - p1[t_star1];
-    let opt = t_star1 as f64 * (p1[t_star1] + 0.25 * omega * beta1 as f64)
-        + 0.25 * t_star2 as f64 * omega * beta2 as f64
-        + t_star3 as f64 * (p2[t_star3] + 0.25 * omega * beta3 as f64);
-    (opt as usize).min(255)
+    match smooth_until_bimodal(hist) {
+        Some((_, [p1, p2])) => (p1 + p2) / 2,
+        None => lo,
+    }
 }
 
+/// Ridler & Calvard's (1978) iterative selection ("IsoData", intermeans):
+/// starting from the global mean, the threshold is repeatedly replaced by
+/// the average of the two class means it induces,
+/// `t ← (μ_{≤t} + μ_{>t}) / 2`, until the split no longer changes. At the
+/// fixed point the threshold lies exactly halfway between the mean
+/// background and mean foreground level. Returns `floor(t)`; stops early if
+/// a class becomes empty, and after 256 steps at the latest.
+fn thresh_isodata(hist: &[f32; 256]) -> usize {
+    if let Err(t) = splittable_range(hist) {
+        return t;
+    }
+    let (c, s) = prefix_sums(hist);
+    let n = c[256];
+    let mut t = s[256] / n;
+    let mut prev_bin = usize::MAX;
+    for _ in 0..256 {
+        let b = boundary_bin(t);
+        if b == prev_bin {
+            break;
+        }
+        prev_bin = b;
+        let w1 = c[b + 1];
+        let w2 = n - w1;
+        if w1 <= 0.0 || w2 <= 0.0 {
+            break;
+        }
+        t = 0.5 * (s[b + 1] / w1 + (s[256] - s[b + 1]) / w2);
+    }
+    boundary_bin(t)
+}
+
+/// Arg max over the cut `t` of the summed Rényi entropies of order `alpha`
+/// of the two class distributions `{p_i / P_t}_{i ≤ t}` and
+/// `{p_i / (1 − P_t)}_{i > t}`. `alpha == 1.0` is the Shannon limit
+/// (Kapur et al. 1985). Only cuts leaving both classes non-empty count;
+/// ties go to the lowest bin.
+///
+/// Uses `Σ_{i≤t} (h_i/W)^α = Σ_{i≤t} h_i^α / W^α` (and the Shannon analogue
+/// `H = ln W − Σ h_i ln h_i / W`) on raw counts, so every cut is O(1) with
+/// prefix sums.
+fn max_renyi_entropy_cut(hist: &[f32; 256], alpha: f64) -> usize {
+    let shannon_limit = alpha == 1.0;
+    let mut c = [0.0f64; 257];
+    let mut f = [0.0f64; 257];
+    for (i, &h) in hist.iter().enumerate() {
+        let h = h as f64;
+        c[i + 1] = c[i] + h;
+        f[i + 1] = f[i]
+            + if h <= 0.0 {
+                0.0
+            } else if shannon_limit {
+                h * h.ln()
+            } else {
+                h.powf(alpha)
+            };
+    }
+    let n = c[256];
+    let entropy = |w: f64, sum: f64| {
+        if shannon_limit {
+            w.ln() - sum / w
+        } else {
+            (sum.ln() - alpha * w.ln()) / (1.0 - alpha)
+        }
+    };
+    let mut best = 0usize;
+    let mut best_h = f64::NEG_INFINITY;
+    for t in 0..256 {
+        let w = c[t + 1];
+        let w_upper = n - w;
+        if w <= 0.0 || w_upper <= 0.0 {
+            continue;
+        }
+        let h = entropy(w, f[t + 1]) + entropy(w_upper, f[256] - f[t + 1]);
+        if h > best_h {
+            best_h = h;
+            best = t;
+        }
+    }
+    best
+}
+
+/// Kapur, Sahoo & Wong's (1985) maximum entropy threshold: treats the
+/// background (`≤ t`) and foreground (`> t`) as two separate probability
+/// distributions and picks the cut whose summed Shannon entropies
+/// `H_b(t) + H_f(t)` are largest - the split that keeps the most
+/// information in both classes.
+fn thresh_max_entropy(hist: &[f32; 256]) -> usize {
+    match splittable_range(hist) {
+        Ok(_) => max_renyi_entropy_cut(hist, 1.0),
+        Err(t) => t,
+    }
+}
+
+/// Glasbey's (1993) mean threshold: the mean gray level, `floor(Σ i·p_i)`.
+fn thresh_mean(hist: &[f32; 256]) -> usize {
+    if let Err(t) = splittable_range(hist) {
+        return t;
+    }
+    let (c, s) = prefix_sums(hist);
+    boundary_bin(s[256] / c[256])
+}
+
+/// Minimum threshold (Prewitt & Mendelsohn 1966; Glasbey 1993): the
+/// histogram is smoothed until it is bimodal (see `smooth_until_bimodal`)
+/// and the threshold is the bin of the smallest smoothed count between the
+/// two modes - the bottom of the valley separating them. Returns the lowest
+/// occupied bin when no bimodal smoothing exists.
+fn thresh_minimum(hist: &[f32; 256]) -> usize {
+    let lo = match splittable_range(hist) {
+        Ok((lo, _)) => lo,
+        Err(t) => return t,
+    };
+    match smooth_until_bimodal(hist) {
+        Some((y, [p1, p2])) => {
+            let mut best = p1 + 1;
+            for i in p1 + 1..p2 {
+                if y[i] < y[best] {
+                    best = i;
+                }
+            }
+            best
+        }
+        None => lo,
+    }
+}
+
+/// Doyle's (1962) p-tile threshold with `p = 50 %`: the lowest bin at which
+/// the cumulative histogram reaches half of all pixels, i.e. the median gray
+/// level.
+fn thresh_percentile(hist: &[f32; 256]) -> usize {
+    if let Err(t) = splittable_range(hist) {
+        return t;
+    }
+    let n: f64 = hist.iter().map(|&h| h as f64).sum();
+    let mut cum = 0.0f64;
+    for (i, &h) in hist.iter().enumerate() {
+        cum += h as f64;
+        if cum >= 0.5 * n {
+            return i;
+        }
+    }
+    255
+}
+
+/// Sahoo, Wilkins & Yeager's (1997) Rényi entropy threshold. Maximizing the
+/// summed Rényi entropies of order `α` of the two classes (see
+/// `max_renyi_entropy_cut`) gives a cut `t(α)`; the paper evaluates
+/// `α = 0.5`, `α → 1` (Kapur's maximum entropy) and `α = 2` (Yen's
+/// criterion), sorts the three cuts into `t₁ ≤ t₂ ≤ t₃`, and combines them
+/// into one threshold
+/// `t* = t₁·(P(t₁) + ¼ωβ₁) + ¼·t₂·ωβ₂ + t₃·(1 − P(t₃) + ¼ωβ₃)`
+/// with `P` the cumulative fraction, `ω = P(t₃) − P(t₁)` and the weights
+/// `(β₁, β₂, β₃)` = `(0, 1, 3)` if only `t₁, t₂` are within 5 bins of each
+/// other, `(3, 1, 0)` if only `t₂, t₃` are, and `(1, 2, 1)` otherwise.
+/// The weights sum to 4, so `t*` is a weighted average of the three cuts; it
+/// is rounded to the nearest bin.
+fn thresh_renyi_entropy(hist: &[f32; 256]) -> usize {
+    if let Err(t) = splittable_range(hist) {
+        return t;
+    }
+    let mut cuts = [
+        max_renyi_entropy_cut(hist, 0.5),
+        max_renyi_entropy_cut(hist, 1.0),
+        max_renyi_entropy_cut(hist, 2.0),
+    ];
+    cuts.sort_unstable();
+    let [t1, t2, t3] = cuts;
+    let (c, _) = prefix_sums(hist);
+    let p = |t: usize| c[t + 1] / c[256];
+    let close12 = t2 - t1 <= 5;
+    let close23 = t3 - t2 <= 5;
+    let (b1, b2, b3) = match (close12, close23) {
+        (true, false) => (0.0, 1.0, 3.0),
+        (false, true) => (3.0, 1.0, 0.0),
+        _ => (1.0, 2.0, 1.0),
+    };
+    let omega = p(t3) - p(t1);
+    let t = t1 as f64 * (p(t1) + 0.25 * omega * b1)
+        + 0.25 * t2 as f64 * omega * b2
+        + t3 as f64 * (1.0 - p(t3) + 0.25 * omega * b3);
+    t.round().clamp(0.0, 255.0) as usize
+}
+
+/// Shanbhag's (1994) information-measure threshold. For a cut `t`, a gray
+/// level's membership in its class grows with the share of the class lying
+/// between it and the cut: `μ_b(g) = ½ + (P(t) − P(g − 1)) / (2P(t))` for
+/// `g ≤ t` and `μ_f(g) = ½ + (P(g) − P(t)) / (2(1 − P(t)))` for `g > t`
+/// (`P` cumulative), so a level right at the boundary is barely more than
+/// ½ certain and the outermost level is fully certain. Each class' average
+/// information `I = −Σ p(g) ln μ(g) / P_class` measures how uncertain its
+/// assignment is; the cut chosen is the one where both classes carry the
+/// same information, i.e. that minimizes `|I_b(t) − I_f(t)|`. Only cuts
+/// leaving both classes non-empty are considered.
 fn thresh_shanbhag(hist: &[f32; 256]) -> usize {
-    let total: f64 = hist.iter().map(|&v| v as f64).sum();
-    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
-
-    let mut p1 = [0.0f64; 256];
-    let mut p2 = [0.0f64; 256];
-    p1[0] = norm[0];
-    p2[0] = 1.0 - p1[0];
-    for i in 1..256 {
-        p1[i] = p1[i - 1] + norm[i];
-        p2[i] = 1.0 - p1[i];
-    }
-
-    let eps = 2.220446049250313e-16;
-    let first_bin = (0..256).find(|&i| p1[i].abs() >= eps).unwrap_or(0);
-    let last_bin = (first_bin..256)
-        .rev()
-        .find(|&i| p2[i].abs() >= eps)
-        .unwrap_or(255);
-
-    let mut min_ent = f64::MAX;
-    let mut threshold = 0usize;
-    for it in first_bin..=last_bin {
-        let term_back = 0.5 / p1[it];
-        let ent_back: f64 = (1..=it)
-            .map(|ih| -norm[ih] * (1.0 - term_back * p1[ih - 1]).ln())
-            .sum::<f64>()
-            * term_back;
-
-        let term_obj = 0.5 / p2[it];
-        let ent_obj: f64 = ((it + 1)..256)
-            .map(|ih| -norm[ih] * (1.0 - term_obj * p2[ih]).ln())
-            .sum::<f64>()
-            * term_obj;
-
-        let tot = (ent_back - ent_obj).abs();
-        if tot < min_ent {
-            min_ent = tot;
-            threshold = it;
+    let (lo, hi) = match splittable_range(hist) {
+        Ok(r) => r,
+        Err(t) => return t,
+    };
+    let (c, _) = prefix_sums(hist);
+    let mut best = lo;
+    let mut best_diff = f64::INFINITY;
+    for t in lo..hi {
+        let w_b = c[t + 1];
+        let w_f = c[256] - w_b;
+        if w_b <= 0.0 || w_f <= 0.0 {
+            continue;
+        }
+        let mut info_b = 0.0f64;
+        for g in lo..=t {
+            let h = hist[g] as f64;
+            if h > 0.0 {
+                info_b -= h * (0.5 + (w_b - c[g]) / (2.0 * w_b)).ln();
+            }
+        }
+        let mut info_f = 0.0f64;
+        for g in t + 1..=hi {
+            let h = hist[g] as f64;
+            if h > 0.0 {
+                info_f -= h * (0.5 + (c[g + 1] - w_b) / (2.0 * w_f)).ln();
+            }
+        }
+        let diff = (info_b / w_b - info_f / w_f).abs();
+        if diff < best_diff {
+            best_diff = diff;
+            best = t;
         }
     }
-    threshold
+    best
 }
 
+/// Yen, Chang & Chang's (1995) maximum correlation threshold. The
+/// "correlation" of a distribution, `−ln Σ p_i²`, measures how spread out it
+/// is; the cut maximizing the total correlation of the two class
+/// distributions, `−ln Σ_{i≤t} (p_i/P_t)² − ln Σ_{i>t} (p_i/(1 − P_t))²`,
+/// is chosen. This is the order-2 Rényi entropy of both classes, so it
+/// shares `max_renyi_entropy_cut` with Kapur's and Sahoo's methods.
 fn thresh_yen(hist: &[f32; 256]) -> usize {
-    let total: f64 = hist.iter().map(|&v| v as f64).sum();
-    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
-
-    let mut p1 = [0.0f64; 256];
-    p1[0] = norm[0];
-    for i in 1..256 {
-        p1[i] = p1[i - 1] + norm[i];
+    match splittable_range(hist) {
+        Ok(_) => max_renyi_entropy_cut(hist, 2.0),
+        Err(t) => t,
     }
-
-    let mut p1_sq = [0.0f64; 256];
-    p1_sq[0] = norm[0] * norm[0];
-    for i in 1..256 {
-        p1_sq[i] = p1_sq[i - 1] + norm[i] * norm[i];
-    }
-
-    let mut p2_sq = [0.0f64; 256];
-    p2_sq[255] = 0.0;
-    for i in (0..255).rev() {
-        p2_sq[i] = p2_sq[i + 1] + norm[i + 1] * norm[i + 1];
-    }
-
-    let mut max_crit = f64::MIN;
-    let mut threshold = 0usize;
-    for it in 0..256 {
-        let log_p1_sq = if p1_sq[it] * p2_sq[it] > 0.0 {
-            (p1_sq[it] * p2_sq[it]).ln()
-        } else {
-            0.0
-        };
-        let log_p1 = if p1[it] * (1.0 - p1[it]) > 0.0 {
-            (p1[it] * (1.0 - p1[it])).ln()
-        } else {
-            0.0
-        };
-        let crit = -log_p1_sq + 2.0 * log_p1;
-        if crit > max_crit {
-            max_crit = crit;
-            threshold = it;
-        }
-    }
-    threshold
 }
 
 /// The "Robust Background" threshold: sorts `data`,
@@ -1378,9 +1322,7 @@ fn median_of_sorted(sorted: &[f32]) -> f32 {
     }
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────
-
-// --- Citations of the automatic threshold methods ---
+// ── Citations of the automatic threshold methods ─────────────────────────────
 
 const OTSU: CitationMetadata = CitationMetadata {
     cite_key: "otsu1979threshold",
@@ -1525,26 +1467,50 @@ const YEN: CitationMetadata = CitationMetadata {
     pages: Some("370-378"),
 };
 
-/// The paper describing an automatic threshold method (as cited by ImageJ's
-/// AutoThresholder, which these are ported from); `None` for manual ones.
-fn method_citation(method: &ThresholdMethod) -> Option<&'static CitationMetadata> {
-    Some(match method {
-        ThresholdMethod::None | ThresholdMethod::Manual => return None,
-        ThresholdMethod::Li => &LI,
-        ThresholdMethod::MinError => &MIN_ERROR,
-        ThresholdMethod::Triangle => &TRIANGLE,
-        ThresholdMethod::Moments => &MOMENTS,
-        ThresholdMethod::Huang => &HUANG,
-        ThresholdMethod::Intermodes | ThresholdMethod::Minimum => &PREWITT,
-        ThresholdMethod::IsoData => &ISODATA,
-        ThresholdMethod::MaxEntropy | ThresholdMethod::RenyiEntropy => &KAPUR,
-        ThresholdMethod::Mean => &GLASBEY,
-        ThresholdMethod::Otsu { .. } => &OTSU,
-        ThresholdMethod::Percentile => &DOYLE,
-        ThresholdMethod::Shanbhag => &SHANBHAG,
-        ThresholdMethod::Yen => &YEN,
-        ThresholdMethod::RobustBackground { .. } => &CitationMetadata::CELLPROFILER,
-    })
+const LI_TAM: CitationMetadata = CitationMetadata {
+    cite_key: "li1998iterative",
+    title: "An iterative algorithm for minimum cross entropy thresholding",
+    authors: &["C. H. Li", "P. K. S. Tam"],
+    year: 1998,
+    container: Some("Pattern Recognition Letters"),
+    doi: Some("10.1016/S0167-8655(98)00057-9"),
+    url: Some("https://doi.org/10.1016/S0167-8655(98)00057-9"),
+    pages: Some("771-776"),
+};
+
+const SAHOO_RENYI: CitationMetadata = CitationMetadata {
+    cite_key: "sahoo1997threshold",
+    title: "Threshold selection using Renyi's entropy",
+    authors: &["Prasanna Sahoo", "Carrye Wilkins", "Jerry Yeager"],
+    year: 1997,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/S0031-3203(96)00065-9"),
+    url: Some("https://doi.org/10.1016/S0031-3203(96)00065-9"),
+    pages: Some("71-84"),
+};
+
+/// The papers an automatic threshold method is implemented from (the
+/// method's original paper first); empty for manual ones.
+fn method_citations(method: &ThresholdMethod) -> &'static [&'static CitationMetadata] {
+    match method {
+        ThresholdMethod::None | ThresholdMethod::Manual => &[],
+        ThresholdMethod::Li => &[&LI, &LI_TAM],
+        ThresholdMethod::MinError => &[&MIN_ERROR],
+        ThresholdMethod::Triangle => &[&TRIANGLE],
+        ThresholdMethod::Moments => &[&MOMENTS],
+        ThresholdMethod::Huang => &[&HUANG],
+        ThresholdMethod::Intermodes => &[&PREWITT],
+        ThresholdMethod::Minimum => &[&PREWITT, &GLASBEY],
+        ThresholdMethod::IsoData => &[&ISODATA],
+        ThresholdMethod::MaxEntropy => &[&KAPUR],
+        ThresholdMethod::RenyiEntropy => &[&SAHOO_RENYI],
+        ThresholdMethod::Mean => &[&GLASBEY],
+        ThresholdMethod::Otsu { .. } => &[&OTSU],
+        ThresholdMethod::Percentile => &[&DOYLE],
+        ThresholdMethod::Shanbhag => &[&SHANBHAG],
+        ThresholdMethod::Yen => &[&YEN],
+        ThresholdMethod::RobustBackground { .. } => &[&CitationMetadata::CELLPROFILER],
+    }
 }
 
 #[cfg(test)]
@@ -1622,33 +1588,32 @@ mod tests {
             averaging_method: Averaging::Mean,
             deviations_above_average: 2.0,
         };
-        let key = |m: &ThresholdMethod| method_citation(m).map(|c| c.cite_key);
-        assert_eq!(key(&ThresholdMethod::None), None);
-        assert_eq!(key(&ThresholdMethod::Manual), None);
-        assert_eq!(key(&robust), Some("mcquin2018cellprofiler"));
-        let expected = [
-            "li1993minimum",
-            "kittler1986minimum",
-            "zack1977automatic",
-            "tsai1985moment",
-            "huang1995image",
-            "prewitt1966analysis",
-            "ridler1978picture",
-            "kapur1985new",
-            "glasbey1993analysis",
-            "prewitt1966analysis",
-            "otsu1979threshold",
-            "otsu1979threshold",
-            "otsu1979threshold",
-            "doyle1962operations",
-            "kapur1985new",
-            "shanbhag1994utilization",
-            "yen1995new",
+        let keys = |m: &ThresholdMethod| -> Vec<&str> {
+            method_citations(m).iter().map(|c| c.cite_key).collect()
+        };
+        assert!(keys(&ThresholdMethod::None).is_empty());
+        assert!(keys(&ThresholdMethod::Manual).is_empty());
+        assert_eq!(keys(&robust), ["mcquin2018cellprofiler"]);
+        let expected: [&[&str]; 17] = [
+            &["li1993minimum", "li1998iterative"],
+            &["kittler1986minimum"],
+            &["zack1977automatic"],
+            &["tsai1985moment"],
+            &["huang1995image"],
+            &["prewitt1966analysis"],
+            &["ridler1978picture"],
+            &["kapur1985new"],
+            &["glasbey1993analysis"],
+            &["prewitt1966analysis", "glasbey1993analysis"],
+            &["otsu1979threshold"],
+            &["otsu1979threshold"],
+            &["otsu1979threshold"],
+            &["doyle1962operations"],
+            &["sahoo1997threshold"],
+            &["shanbhag1994utilization"],
+            &["yen1995new"],
         ];
-        let got: Vec<&str> = automatic_methods()
-            .iter()
-            .map(|m| key(m).unwrap())
-            .collect();
+        let got: Vec<Vec<&str>> = automatic_methods().iter().map(keys).collect();
         assert_eq!(got, expected);
     }
 
@@ -1678,7 +1643,10 @@ mod tests {
 
     #[test]
     fn cite_names_the_paper_of_every_automatic_method_once() {
-        assert_eq!(cite_keys(&[ThresholdMethod::Li]), ["li1993minimum"]);
+        assert_eq!(
+            cite_keys(&[ThresholdMethod::Li]),
+            ["li1993minimum", "li1998iterative"]
+        );
         assert_eq!(
             cite_keys(&[
                 ThresholdMethod::Manual,
@@ -1686,12 +1654,12 @@ mod tests {
                 ThresholdMethod::Li,
                 ThresholdMethod::Triangle,
             ]),
-            ["zack1977automatic", "li1993minimum"]
+            ["zack1977automatic", "li1993minimum", "li1998iterative"]
         );
-        // Intermodes and Minimum share one paper: cited once.
+        // Intermodes and Minimum share Prewitt & Mendelsohn: cited once.
         assert_eq!(
             cite_keys(&[ThresholdMethod::Intermodes, ThresholdMethod::Minimum]),
-            ["prewitt1966analysis"]
+            ["prewitt1966analysis", "glasbey1993analysis"]
         );
     }
 
@@ -1916,18 +1884,15 @@ mod tests {
 
     #[test]
     fn test_intermodes_multipass_smoothing_matches_reference() {
-        // Regression test for a real port bug: the smoothing pass used to
-        // write `h[i]` while still reading `h[i-1]` from the *same* pass,
-        // so later indices picked up already-smoothed neighbors instead of
-        // the pre-pass values (Gauss-Seidel instead of the reference's
-        // Jacobi update). This only shows up once more than one smoothing
-        // iteration is needed to reach a bimodal histogram - a noisy,
+        // Every smoothing pass must be computed from the previous pass'
+        // values only (a Jacobi update): writing `h[i]` while still reading
+        // `h[i-1]` from the *same* pass lets later bins pick up
+        // already-smoothed neighbours. This only shows up once more than one
+        // smoothing pass is needed to reach a bimodal histogram - a noisy,
         // multi-peak histogram like this one.
         //
-        // Expected value cross-checked against an independent, literal
-        // translation of ImageJ's previous/current/next rolling-window
-        // smoothing (Intermodes). The old
-        // buggy implementation returned 63 here instead of 64.
+        // 64 is ImageJ's Intermodes result on this histogram (a black-box
+        // reference value); an in-place (Gauss-Seidel) update returns 63.
         let raw: [f32; 25] = [
             2.0, 5.0, 9.0, 4.0, 7.0, 12.0, 6.0, 3.0, 8.0, 15.0, 20.0, 14.0, 9.0, 5.0, 3.0, 6.0,
             10.0, 18.0, 25.0, 22.0, 16.0, 10.0, 6.0, 3.0, 1.0,
@@ -2027,10 +1992,13 @@ mod tests {
     /// Shared bimodal histogram used by the per-method reference tests below:
     /// a dense, narrow cluster (bins 20-40, count 50 each) and a sparser,
     /// wider cluster (bins 160-200, count 20 each), separated by an empty
-    /// valley. Expected values were computed with an independent, literal
-    /// Rust translation of each ImageJ AutoThresholder method (kept
-    /// out-of-tree, not sharing code with this module), so a match here
-    /// means the port is faithful, not just "returns something in range".
+    /// valley. Unless a test says otherwise, the expected values are
+    /// ImageJ's AutoThresholder results on this same histogram, used as
+    /// black-box reference values, so a match means the method agrees with
+    /// that widely used implementation, not just "returns something in
+    /// range". Where the published definition legitimately lands on a
+    /// different bin, the test asserts the paper's result and explains the
+    /// difference.
     fn bimodal_reference_histogram() -> [f32; 256] {
         let mut h = [0.0f32; 256];
         for i in 20..=40 {
@@ -2042,14 +2010,12 @@ mod tests {
         h
     }
 
-    /// Verified directly against real ImageJ source (`ij.process
-    /// .AutoThresholder.Otsu`, fetched and run against this exact
-    /// histogram) rather than assumed: ImageJ's strict, first-tie-wins
-    /// scan over the full `0..256` range parks the cut at the *end of the
-    /// first cluster* (bin 40, the last bin of the 20-40 population) - not
-    /// at the edge of the second cluster's gap like the old `sk`/`n1`
-    /// running-sum port (which returned 159) - see `thresh_otsu`'s doc
-    /// comment for why that mattered beyond just this one number.
+    /// Every cut inside the empty gap between the clusters has the same
+    /// between-class variance; breaking the tie towards the lowest bin parks
+    /// the cut at the *end of the first cluster* (bin 40, the last bin of the
+    /// 20-40 population), which is also ImageJ's result here. A "last tie
+    /// wins" scan would return 159 instead - see `thresh_otsu`'s doc comment
+    /// for why that matters beyond just this one number.
     #[test]
     fn test_otsu_matches_reference() {
         assert_eq!(thresh_otsu(&bimodal_reference_histogram()), 40);
@@ -2189,19 +2155,31 @@ mod tests {
         Ok(())
     }
 
+    /// Class means 30 and 180 give the fixed point
+    /// `t = 150 / ln(180 / 30) ≈ 83.72`. Bins `0..=83` lie below that
+    /// boundary, so the paper's result is bin 83; ImageJ reports 84 (one bin
+    /// higher, i.e. rounded instead of floored).
     #[test]
     fn test_li_matches_reference() {
-        assert_eq!(thresh_li(&bimodal_reference_histogram()), 84);
+        assert_eq!(thresh_li(&bimodal_reference_histogram()), 83);
     }
 
+    /// For every cut in the gap the classes are the two uniform blocks
+    /// (`μ₁ = 30, σ₁² = 110/3, P₁ = 1050/1870`; `μ₂ = 180, σ₂² = 140`), and
+    /// the equal-density quadratic has its root between the means at
+    /// `g ≈ 81.2`, so the iteration settles on bin 81. ImageJ reports 80.
     #[test]
     fn test_min_error_matches_reference() {
-        assert_eq!(thresh_min_error(&bimodal_reference_histogram()), 80);
+        assert_eq!(thresh_min_error(&bimodal_reference_histogram()), 81);
     }
 
+    /// Peak at bin 20 (the lowest bin with the maximal count), line to the
+    /// last occupied bin 200: the histogram drops furthest below the line at
+    /// the first empty bin, 41. ImageJ reports 42, one bin further from the
+    /// peak than the maximum-distance bin itself.
     #[test]
     fn test_triangle_matches_reference() {
-        assert_eq!(thresh_triangle(&bimodal_reference_histogram()), 42);
+        assert_eq!(thresh_triangle(&bimodal_reference_histogram()), 41);
     }
 
     #[test]
@@ -2221,11 +2199,9 @@ mod tests {
 
     #[test]
     fn test_isodata_matches_reference() {
-        // ImageJ truncates its background-mean accumulator via integer
-        // division; this crate intentionally uses proper float division
-        // instead, so this value can drift by ~1 bin from ImageJ on other
-        // histograms.
-        // On this histogram both agree.
+        // Starting at the mean (≈95.8), the class means 30 and 180 give
+        // `t = 105` exactly, a fixed point. ImageJ's IsoData variant agrees
+        // here but can differ by about one bin on other histograms.
         assert_eq!(thresh_isodata(&bimodal_reference_histogram()), 105);
     }
 
@@ -2408,8 +2384,8 @@ mod tests {
     /// channel with no noise) ties every bin between the two populations
     /// for the same between-class variance.
     ///
-    /// Now covers both layers of the fix: `thresh_otsu` itself (matching
-    /// real ImageJ's first-tie-wins scan - see its doc comment) resolves
+    /// Now covers both layers of the fix: `thresh_otsu` itself (breaking
+    /// ties towards the lowest bin - see its doc comment) resolves
     /// this particular histogram's tie at bin 0 rather than drifting toward
     /// the top of the range, and `Threshold::execute`'s `.min(254)` clamp
     /// remains a backstop for every *other* auto method that can still
@@ -2476,10 +2452,14 @@ mod tests {
     /// making the threshold systematically one bin too permissive -
     /// letting background-adjacent noise through as foreground.
     ///
-    /// `RAW` and the expected foreground count are from a standalone
-    /// harness built directly against `autoThreshold` /
-    /// `scaleAndSetThreshold` / `ThresholdTriangle::calcThresholdValue`
-    /// in that file, run on this exact data.
+    /// `RAW` and the C++ numbers quoted below are from a standalone harness
+    /// built directly against `autoThreshold` / `scaleAndSetThreshold` /
+    /// `ThresholdTriangle::calcThresholdValue` in that file, run on this
+    /// exact data. Its triangle step (taken from ImageJ) picks bin 11; the
+    /// paper's maximum-distance bin used by `thresh_triangle` is bin 10 (see
+    /// `test_triangle_matches_reference` for the same one-bin offset), so
+    /// the binning/"+1"/comparison layers are checked against the C++
+    /// pipeline with that one bin accounted for.
     #[test]
     fn test_threshold_execute_matches_reference() -> Result<(), Box<dyn std::error::Error>> {
         const N: usize = 2000;
@@ -2620,11 +2600,16 @@ mod tests {
             .filter(|&&v| v != 0)
             .count();
 
-        // Reference: min=0.0 max=1449.0 triangleBin=11 finalThreshold=68,
-        // foreground_px(strict>)=658 of 2000.
+        // C++ reference: min=0.0 max=1449.0 triangleBin=11 finalThreshold=68,
+        // foreground_px(strict>)=658 of 2000. With the paper's triangle bin
+        // 10, the same pipeline gives the cut (10 + 1) / 255 · 1449 ≈ 62.5,
+        // and 660 pixels lie strictly above it.
+        let (hist, _, _) =
+            histogram_from_slice(&RAW.iter().map(|&v| v as f32 / 65535.0).collect::<Vec<_>>());
+        assert_eq!(thresh_triangle(&hist), 10);
         assert_eq!(
-            fg, 658,
-            "Threshold::execute foreground pixel count does not match the reference"
+            fg, 660,
+            "Threshold::execute foreground pixel count does not match the reference pipeline"
         );
         Ok(())
     }

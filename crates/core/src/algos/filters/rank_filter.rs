@@ -6,6 +6,7 @@
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+//! The kernel geometry is ported from ImageJ 1.x (public domain, https://imagej.net/ij/disclaimer.html).
 
 use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
@@ -509,7 +510,7 @@ impl SlidingMedian {
     }
 }
 
-// Port of your makeLineRadii logic
+// ImageJ 1.x RankFilters.makeLineRadii
 fn get_kernel_geometry(radius: f64) -> (Vec<i32>, i32, usize) {
     let mut r: f64 = radius;
     if r >= 1.5 && r < 1.75 {

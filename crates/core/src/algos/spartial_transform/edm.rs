@@ -6,6 +6,7 @@
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+//! Ported from ImageJ 1.x (public domain, https://imagej.net/ij/disclaimer.html).
 
 use crate::ImageDimensionality;
 use crate::{

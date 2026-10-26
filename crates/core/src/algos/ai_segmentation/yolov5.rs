@@ -153,17 +153,31 @@ impl ImageAlgorithm for Yolov5 {
         "YOLOv5"
     }
 
+    /// The model, and YOLACT for how its masks are assembled from
+    /// prototypes and coefficients.
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata {
-            cite_key: "jocher2022yolov5",
-            title: "ultralytics/yolov5: v7.0 - YOLOv5 SOTA Realtime Instance Segmentation",
-            authors: &["Glenn Jocher", "Ayush Chaurasia", "Alex Stoken"],
-            year: 2022,
-            container: Some("Zenodo"),
-            doi: Some("10.5281/zenodo.3908559"),
-            url: Some("https://doi.org/10.5281/zenodo.3908559"),
-            pages: None,
-        }]
+        vec![
+            &CitationMetadata {
+                cite_key: "jocher2022yolov5",
+                title: "ultralytics/yolov5: v7.0 - YOLOv5 SOTA Realtime Instance Segmentation",
+                authors: &["Glenn Jocher", "Ayush Chaurasia", "Alex Stoken"],
+                year: 2022,
+                container: Some("Zenodo"),
+                doi: Some("10.5281/zenodo.3908559"),
+                url: Some("https://doi.org/10.5281/zenodo.3908559"),
+                pages: None,
+            },
+            &CitationMetadata {
+                cite_key: "bolya2019yolact",
+                title: "YOLACT: Real-time Instance Segmentation",
+                authors: &["Daniel Bolya", "Chong Zhou", "Fanyi Xiao", "Yong Jae Lee"],
+                year: 2019,
+                container: Some("IEEE/CVF International Conference on Computer Vision (ICCV)"),
+                doi: Some("10.1109/ICCV.2019.00925"),
+                url: Some("https://doi.org/10.1109/ICCV.2019.00925"),
+                pages: None,
+            },
+        ]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -555,15 +569,15 @@ mod tests {
 
     #[cfg(feature = "libtorch-in-process")]
     /// The University of Salzburg brightfield YOLOv5-seg model on a 640x640
-    /// crop of `tests/cellpose_sam/B5_0009.jpg`, compared with YOLOv5's own
-    /// post-processing (`non_max_suppression` + `process_mask`), re-implemented
-    /// in `make_reference.py` next to the model. Model and data aren't in git
-    /// (190 MB); they live in `tests/university_of_sbg_brightfield_cell_segmentation_v3/`.
+    /// crop of `tests/cellpose_sam/B5_0009.jpg`, compared with the label
+    /// image stored next to the model (`test_crop_640_reference_labels.npy`).
+    /// Model and data aren't in git (190 MB); they live in
+    /// `tests/university_of_sbg_brightfield_cell_segmentation_v3/`.
     /// Run with:
     ///   cargo test -p evanalyzer_core --features libtorch-in-process --lib real_yolov5 -- --ignored
     #[test]
     #[ignore]
-    fn real_yolov5_seg_matches_the_yolov5_reference() {
+    fn real_yolov5_seg_matches_the_stored_reference() {
         let dir = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/university_of_sbg_brightfield_cell_segmentation_v3"
@@ -615,18 +629,17 @@ mod tests {
         assert_eq!(objects(instances), objects(&reference));
         assert_eq!(
             differing, 0,
-            "{differing} pixels differ from YOLOv5's own result"
+            "{differing} pixels differ from the reference labels"
         );
     }
 
     #[test]
-    fn yolov5_is_named_cites_its_paper_and_runs_per_tile() {
+    fn yolov5_is_named_cites_model_and_mask_method_and_runs_per_tile() {
         let cmd = yolo();
         assert_eq!(cmd.name(), "YOLOv5");
         assert_eq!(cmd.execution_scope(), ExecutionScope::Tile);
-        let cites = cmd.cite();
-        assert_eq!(cites.len(), 1);
-        assert_eq!(cites[0].cite_key, "jocher2022yolov5");
+        let keys: Vec<&str> = cmd.cite().iter().map(|c| c.cite_key).collect();
+        assert_eq!(keys, vec!["jocher2022yolov5", "bolya2019yolact"]);
     }
 
     #[test]

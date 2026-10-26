@@ -1,3 +1,6 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
 // @generated - do not edit by hand
 #[allow(unused_imports)]
 use crate::settings::modules::ParamValue;
@@ -2173,11 +2176,10 @@ impl Default for ConnectedComponentsSettings {
 ///
 /// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
 ///
-/// A direct port of ImageJ's `Process > Binary > Fill Holes` command
-/// (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
-/// Landini): a background pixel counts as a "hole" - and is turned into
-/// foreground - exactly when it cannot be reached from the image border by a
-/// path of background pixels using 4-connectivity.
+/// Same behaviour as ImageJ's `Process > Binary > Fill Holes`: a
+/// 4-connected flood fill of the background from the image border;
+/// every background pixel it doesn't reach is a hole and is turned into
+/// foreground.
 ///
 /// Which pixels count as a "hole" is decided the same way ImageJ does it:
 /// every non-background pixel is "foreground" regardless of its actual
