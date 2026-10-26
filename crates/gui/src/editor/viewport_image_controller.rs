@@ -19,7 +19,6 @@ use crate::{
 };
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_cfg::core_types::ImageDimensionality;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
@@ -713,7 +712,7 @@ impl ViewportImageController {
             IntensityProjection::Volume => (Some(z_stack..=z_stack), ZStackHandling::Volume3d),
         };
 
-        let plane_before = project.get_shown_z_plane();
+        let plane_before = project.get_shown_plane();
 
         // Between planes (2D) and volumes (3D) the size settings change
         // meaning (an area, a volume): the ones set need a look.
@@ -752,15 +751,10 @@ impl ViewportImageController {
             stack_handling: TStackHandling::AllStacks,
             frame_interval,
         });
-        // A volume's objects are drawn as their part on the plane shown:
-        // another plane, other parts (a plane's objects stay as they are).
-        let redraw_objects = project.get_shown_z_plane() != plane_before
-            && project
-                .get_objects()
-                .into_iter()
-                .flatten()
-                .chain(project.get_preview_objects())
-                .any(|o| o.dimensionality != ImageDimensionality::Planar);
+        // Another plane or frame shows other objects.
+        let redraw_objects = project.get_shown_plane() != plane_before
+            && (!project.get_objects().unwrap_or(&[]).is_empty()
+                || !project.get_preview_objects().is_empty());
         drop(project);
 
         self.viewport_controller
@@ -773,7 +767,9 @@ impl ViewportImageController {
         // nothing.
         let z = matches!(
             projection,
-            IntensityProjection::SingleStack | IntensityProjection::Volume
+            IntensityProjection::SingleStack
+                | IntensityProjection::AllStacks
+                | IntensityProjection::Volume
         )
         .then(|| z_stack.max(0) as u32);
         self.app_state.plane_changed(z, t_stack.max(0) as u32);
@@ -1171,6 +1167,9 @@ mod tests {
 
         for (projection, expected_handling, expects_range) in cases {
             let (ui_state, controller) = make_controller();
+            let told = Arc::new(Mutex::new(None));
+            let listener = told.clone();
+            ui_state.on_plane_changed(move |z, t| *listener.lock().unwrap() = Some((z, t)));
 
             controller.update_channel_options_in_project(vec![], 3, 0, projection, 1.0);
 
@@ -1182,6 +1181,13 @@ mod tests {
             } else {
                 assert_eq!(z.z_range, None);
             }
+            // E.g. the results' split view follows the one plane shown.
+            let shown = expects_range.then_some(3);
+            assert_eq!(
+                *told.lock().unwrap(),
+                Some((shown, 0)),
+                "{expected_handling:?}"
+            );
         }
     }
 

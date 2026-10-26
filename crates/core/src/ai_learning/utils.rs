@@ -7,7 +7,6 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::ZProjection;
 use crate::ai_learning::model::{
     Classifier, KnnModel,
     mlp::{predict_mlp, predict_mlp_with_certainty},
@@ -16,9 +15,7 @@ use crate::image::ImageTile;
 use crate::object::Object;
 use bitvec::prelude::{BitVec, Lsb0};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use smartcore::linalg::basic::matrix::DenseMatrix;
-use std::ops::RangeInclusive;
 
 // -- Shared training helpers, backend-agnostic over how `rows`/`labels` were
 // gathered (pixel samples or object feature vectors) --------------------
@@ -213,29 +210,6 @@ pub fn mask_pixels_in_tile(
     samples
 }
 
-/// Mirrors `JobExecutor::prepare_z_stack_iterator`'s handling table
-/// (`crates/core/src/job/job_executor.rs`), minus the project-configurable
-/// z-range `SingleStack` normally supports there - this job has no per-image
-/// `ZStackSettings`, so `SingleStack` here always means "just the first
-/// z-plane."
-pub fn resolve_z_projection(
-    handling: &ZStackHandling,
-    nr_z_stacks: i32,
-) -> (ZProjection, RangeInclusive<i32>) {
-    match handling {
-        ZStackHandling::SingleStack => (ZProjection::None, 0..=0),
-        ZStackHandling::AllStacks => (ZProjection::None, 0..=(nr_z_stacks - 1)),
-        ZStackHandling::MaxIntensity => (ZProjection::MaxIntensity, 0..=0),
-        ZStackHandling::MinIntensity => (ZProjection::MinIntensity, 0..=0),
-        ZStackHandling::AvgIntensity => (ZProjection::AvgIntensity, 0..=0),
-        ZStackHandling::SumIntensity => (ZProjection::SumIntensity, 0..=0),
-        ZStackHandling::TakeTheMiddle => (ZProjection::TakeTheMiddle, 0..=0),
-        // Every plane, as one volume - refused by the caller until training
-        // can run on volumes.
-        ZStackHandling::Volume3d => (ZProjection::None, 0..=(nr_z_stacks - 1)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,40 +351,6 @@ mod tests {
         let object = square_object(0, 0, 2);
         let pixels = masked_pixels_in_tile(&object, &tile(100, 100, 10, 10));
         assert!(pixels.is_empty());
-    }
-
-    // -- resolve_z_projection ---------------------------------------------------
-
-    #[test]
-    fn resolve_z_projection_maps_every_handling_variant() {
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::SingleStack, 5),
-            (ZProjection::None, 0..=0)
-        );
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::AllStacks, 5),
-            (ZProjection::None, 0..=4)
-        );
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::MaxIntensity, 5),
-            (ZProjection::MaxIntensity, 0..=0)
-        );
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::MinIntensity, 5),
-            (ZProjection::MinIntensity, 0..=0)
-        );
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::AvgIntensity, 5),
-            (ZProjection::AvgIntensity, 0..=0)
-        );
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::SumIntensity, 5),
-            (ZProjection::SumIntensity, 0..=0)
-        );
-        assert_eq!(
-            resolve_z_projection(&ZStackHandling::TakeTheMiddle, 5),
-            (ZProjection::TakeTheMiddle, 0..=0)
-        );
     }
 
     // `Classifier::predict` itself has no cheap default variant to construct

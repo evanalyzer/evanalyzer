@@ -70,12 +70,14 @@ mod settings {
             "/src/settings/classification_settings.rs"
         ));
     }
+    #[allow(dead_code)]
     pub mod object_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/settings/object_settings.rs"
         ));
     }
+    #[allow(dead_code)]
     pub mod images_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

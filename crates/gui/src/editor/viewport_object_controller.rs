@@ -302,7 +302,7 @@ impl ViewPortObjectController {
             let project = self.app_state.get_project();
             let z = ZOrder::new(&*project);
             let hide_unclassified = project.hide_unclassified_objects();
-            let shown_z = project.get_shown_z_plane();
+            let shown = project.get_shown_plane();
 
             // As drawn (`object_render::pick`); objects that aren't drawn
             // (hidden class, hidden unclassified) can't be picked.
@@ -314,7 +314,7 @@ impl ViewPortObjectController {
                 .filter(|o| is_object_drawn(&*project, hide_unclassified, &o.object_class))
                 .collect();
             pick(objects.iter().map(|o| {
-                let holds = o.is_part_of_on_plane(x1, y1, shown_z);
+                let holds = o.is_part_of_on_plane(x1, y1, shown);
                 (z.key(&o.object_class, false), holds)
             }))
             .map(|i| objects[i].id.clone())
@@ -587,11 +587,15 @@ impl ViewPortObjectController {
             let Some(selected) = project.get_selected_object() else {
                 return false;
             };
+            // Not into one of another plane or frame, which isn't shown.
+            let shown = project.get_shown_plane();
             let Some(index) = project
                 .get_objects()
                 .unwrap_or(&[])
                 .iter()
-                .position(|object| object.id == selected.id)
+                .position(|object| {
+                    object.id == selected.id && object.mask_on_plane(shown).is_some()
+                })
             else {
                 return false;
             };
@@ -613,6 +617,7 @@ impl ViewPortObjectController {
                 class,
             );
             painted.id = object.id.clone();
+            painted.z_projection = object.z_projection;
             painted.segmentation_class = object.segmentation_class;
             painted.object_class = object.object_class.clone();
             painted.exclude_from_training = object.exclude_from_training;
@@ -629,9 +634,9 @@ impl ViewPortObjectController {
         true
     }
 
-    /// Takes the pixels of `stroke` out of the hand-drawn objects of the open
-    /// image: an object left empty is deleted, the others measured again
-    /// (keeping their id and classes).
+    /// Takes the pixels of `stroke` out of the hand-drawn objects shown (of
+    /// the plane or z-projection and frame shown): an object left empty is
+    /// deleted, the others measured again (keeping their id and classes).
     fn erase(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
         let (_, read_context) = self.viewport_cache.get_image_references();
         if read_context.full_image_w == 0 {
@@ -639,11 +644,13 @@ impl ViewPortObjectController {
         }
         let changes: Vec<(usize, Option<_>)> = {
             let project = self.app_state.get_project();
+            let shown = project.get_shown_plane();
             project
                 .get_objects()
                 .unwrap_or(&[])
                 .iter()
                 .enumerate()
+                .filter(|(_, object)| object.mask_on_plane(shown).is_some())
                 .filter_map(|(i, object)| {
                     match erase_mask(&object.mask_data, object.bbox, stroke, stroke_bbox) {
                         Erased::Untouched => None,
@@ -665,6 +672,7 @@ impl ViewPortObjectController {
                                 class,
                             );
                             rest.id = object.id.clone();
+                            rest.z_projection = object.z_projection;
                             rest.segmentation_class = object.segmentation_class;
                             rest.object_class = object.object_class.clone();
                             rest.exclude_from_training = object.exclude_from_training;
@@ -706,9 +714,13 @@ impl ViewPortObjectController {
         if read_context.full_image_w == 0 {
             return; // no image shown
         }
-        let (object_class, plane) = {
+        let (object_class, plane, z_projection) = {
             let project = self.app_state.get_project();
-            (project.get_selected_object_class(), shown_plane(&project))
+            (
+                project.get_selected_object_class(),
+                shown_plane(&project),
+                project.get_shown_z_projection(),
+            )
         };
 
         if object_class == ObjectClass::Unset {
@@ -716,9 +728,10 @@ impl ViewPortObjectController {
             return;
         }
 
-        // On the plane shown; measured on the image file (all channels,
-        // full resolution), not on the pixels shown at this zoom.
-        let object = annotation_from_mask(
+        // On the plane (or z-projection) shown; measured on the image file
+        // (all channels, full resolution), not on the pixels shown at this
+        // zoom.
+        let mut object = annotation_from_mask(
             read_context.full_image_w,
             read_context.full_image_h,
             mask_data,
@@ -726,6 +739,7 @@ impl ViewPortObjectController {
             plane,
             object_class,
         );
+        object.z_projection = z_projection;
         self.app_state.get_project_write().add_object(&object);
         self.app_state.mark_dirty();
         self.annotation_controller
@@ -733,25 +747,25 @@ impl ViewPortObjectController {
     }
 }
 
-/// The plane of an annotation (it is edited and measured on it).
+/// The plane of an annotation (it is edited and measured on it). In no
+/// channel: an annotation marks the object in all of them.
 fn plane_of(object: &ObjectMetricSettings) -> ImagePlane {
     ImagePlane {
         z: object.z_stack,
-        c: object.c_stack,
+        c: 0,
         t: object.t_stack,
     }
 }
 
-/// The plane the viewer shows: the first slice of the z range, the frame,
-/// the selected channel.
+/// The plane the viewer shows: the plane shown (0 for a z-projection, see
+/// [`ObjectMetricSettings::z_projection`]) of the frame shown, in no
+/// channel.
 fn shown_plane(project: &ProjectWithRuntime) -> ImagePlane {
+    let shown = project.get_shown_plane();
     ImagePlane {
-        z: project
-            .get_z_stack()
-            .and_then(|z| z.z_range.as_ref().map(|r| *r.start()))
-            .unwrap_or(0),
-        c: project.get_selected_image_channel_idx(),
-        t: project.get_t_stack().map_or(0, |t| t.t_stack),
+        z: shown.z.unwrap_or(0),
+        c: 0,
+        t: shown.t,
     }
 }
 

@@ -79,6 +79,7 @@ pub mod global {
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::ColorScheme;
     pub use crate::workspace::settings::NavigatorMode;
+    pub use crate::workspace::settings::USER_FOLDER_NAME;
     pub use crate::workspace::settings::PanelSettings;
     pub use crate::workspace::settings::RecentProject;
     pub use crate::workspace::settings::RecentServer;
@@ -172,7 +173,7 @@ pub mod project {
     };
     pub use crate::workspace::extensions::annotations_ext::{AnnotationScope, AnnotationsExt};
     pub use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
-    pub use crate::workspace::extensions::object_ext::ObjectExt;
+    pub use crate::workspace::extensions::object_ext::{ObjectExt, ShownPlane};
     pub use crate::workspace::extensions::project_ext::ConfigValueSource;
     pub use crate::workspace::extensions::project_ext::ProjectExt;
     pub use crate::workspace::extensions::project_ext::SaveProjectActions;

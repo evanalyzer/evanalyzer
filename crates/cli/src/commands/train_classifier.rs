@@ -58,7 +58,6 @@ pub fn run(args: TrainClassifierArgs, backend: &dyn Backend) -> Result<(), Inter
 
     let pixel_params = PixelTrainingParams {
         channel: args.channel,
-        t_stack: args.t_stack,
         z_stack_handling: to_z_stack_handling(args.z_stack_handling),
     };
 
@@ -288,7 +287,6 @@ mod tests {
             settings: settings_path,
             model_name: Some("test-model".into()),
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -322,7 +320,6 @@ mod tests {
             settings: settings_path,
             model_name: None,
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -423,7 +420,6 @@ mod tests {
             settings: file.path.parent().unwrap().join("does_not_exist.json"),
             model_name: Some("test-model".into()),
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -445,7 +441,6 @@ mod tests {
             settings: settings_path,
             model_name: Some("test-model".into()),
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -475,7 +470,6 @@ mod tests {
             settings: settings_path,
             model_name: Some("   ".into()),
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -501,7 +495,6 @@ mod tests {
             settings: settings_path,
             model_name: Some("test-model".into()),
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -523,7 +516,6 @@ mod tests {
             settings: settings_path,
             model_name: Some("test-model".into()),
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
@@ -549,7 +541,6 @@ mod tests {
             settings: settings_path,
             model_name: None,
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 

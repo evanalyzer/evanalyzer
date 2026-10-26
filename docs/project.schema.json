@@ -2783,6 +2783,10 @@
         "track": {
           "$ref": "#/$defs/TrackSettings"
         },
+        "zProjection": {
+          "description": "The z-projection it was drawn on (a Max, Avg, ... view), measured on\nit - `None`: of plane `z_stack`. One drawn on a projection belongs to\nthe projections of frame `t_stack` (`z_stack` is 0 and not used): it\nis shown in projection views and used by analyses on a z-projection\nonly. An object of one plane is shown on that plane and in projection\nviews, and used by analyses of that plane and on a z-projection.",
+          "$ref": "#/$defs/ZProjection"
+        },
         "zStack": {
           "type": "integer",
           "format": "int32"
@@ -5312,6 +5316,18 @@
           "minimum": 0
         }
       }
+    },
+    "ZProjection": {
+      "description": "How the planes of a z-stack are combined into one image - `None`: they\naren't, one plane is read.",
+      "type": "string",
+      "enum": [
+        "None",
+        "MaxIntensity",
+        "MinIntensity",
+        "AvgIntensity",
+        "SumIntensity",
+        "TakeTheMiddle"
+      ]
     },
     "ZStackHandling": {
       "oneOf": [

@@ -90,7 +90,6 @@ fn build_training_job(
                 settings,
                 images,
                 channel: pixel_params.channel,
-                t_stack: pixel_params.t_stack,
                 z_stack_handling: pixel_params.z_stack_handling,
             }))
         }
@@ -102,7 +101,11 @@ fn build_training_job(
                     "Project has labeled objects but no image folder is set - set the project's image folder before training with intensity features".into(),
                 ));
             }
-            Ok(TrainingJob::Object(ObjectTrainingJob { settings, images }))
+            Ok(TrainingJob::Object(ObjectTrainingJob {
+                settings,
+                images,
+                z_stack_handling: pixel_params.z_stack_handling,
+            }))
         }
     }
 }

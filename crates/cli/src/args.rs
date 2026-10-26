@@ -84,11 +84,9 @@ pub struct TrainClassifierArgs {
     #[arg(long, default_value_t = 0)]
     pub channel: i32,
 
-    /// Time frame to read, alongside --channel (pixel classifiers only)
-    #[arg(long, default_value_t = 0)]
-    pub t_stack: i32,
-
-    /// How to handle z-stacks (pixel classifiers only)
+    /// How the analyses using the model handle z-stacks: each annotation is
+    /// trained on its own plane (single-/all-stacks) or on the projection
+    /// of its time frame
     #[arg(long, value_enum, default_value = "single-stack")]
     pub z_stack_handling: ZStackHandlingArg,
 }

@@ -788,7 +788,8 @@ impl<'a> JobExecutor {
             false => &[],
         };
         // With a z-projection the stacks loop sees one projected image, not
-        // individual z-planes, so annotations then match on t alone.
+        // individual z-planes: the annotations of every plane and those
+        // drawn on the projection (see `ObjectMetricSettings::belongs_to`).
         let per_z_plane = matches!(
             z_handling,
             ZStackHandling::AllStacks | ZStackHandling::SingleStack
@@ -805,7 +806,7 @@ impl<'a> JobExecutor {
                 let plane_annotations: Arc<Vec<ObjectMetricSettings>> = Arc::new(
                     series_annotations
                         .iter()
-                        .filter(|a| a.t_stack == t && (!per_z_plane || a.z_stack == z))
+                        .filter(|a| a.belongs_to(per_z_plane.then_some(z), t))
                         .cloned()
                         .collect(),
                 );

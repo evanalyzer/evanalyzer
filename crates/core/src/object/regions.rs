@@ -17,7 +17,7 @@ use crate::ai_learning::utils::{bbox_overlaps_tile, tile_grid};
 use crate::algos::libs::feature_transform::nearest_features;
 use crate::image::ImageChannel;
 use bitvec::prelude::{BitVec, Lsb0};
-use evanalyzer_cfg::core_types::{ImageTile, InternalErrors};
+use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use std::collections::BTreeMap;
 
@@ -59,27 +59,33 @@ pub(crate) fn plan_reads(
 }
 
 /// Measures `objects` of an image of `full_width` x `full_height`, each on
-/// its own z and t plane: every channel under each mask. `read(z, t,
-/// region)` reads all channels of a region at full resolution; only regions
-/// with masks are read, one at a time.
+/// its own image: plane `z_stack`, or its `z_projection` over every plane,
+/// of frame `t_stack` - every channel under each mask. `read(z_projection,
+/// z, t, region)` reads all channels of a region at full resolution (plane
+/// `z` for `ZProjection::None`, else the projection - `z` is 0 then); only
+/// regions with masks are read, one at a time.
 pub fn measure_on_planes(
     objects: &[ObjectMetricSettings],
     full_width: usize,
     full_height: usize,
-    mut read: impl FnMut(i32, i32, ImageTile) -> Result<Vec<ImageChannel>, InternalErrors>,
+    mut read: impl FnMut(ZProjection, i32, i32, ImageTile) -> Result<Vec<ImageChannel>, InternalErrors>,
 ) -> Result<Vec<IntensityAccumulator>, InternalErrors> {
-    // The objects of each plane together: one read per region and plane.
-    let mut by_plane: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
+    // The objects of each image together: one read per region and image.
+    let mut by_image: BTreeMap<(ZProjection, i32, i32), Vec<usize>> = BTreeMap::new();
     for (i, object) in objects.iter().enumerate() {
-        by_plane
-            .entry((object.z_stack.max(0), object.t_stack.max(0)))
+        let z = match object.z_projection {
+            ZProjection::None => object.z_stack.max(0),
+            _ => 0,
+        };
+        by_image
+            .entry((object.z_projection, z, object.t_stack.max(0)))
             .or_default()
             .push(i);
     }
     let mut sums = vec![IntensityAccumulator::default(); objects.len()];
-    for ((z, t), members) in &by_plane {
+    for ((z_projection, z, t), members) in &by_image {
         for region in plan_reads(objects, members, full_width, full_height) {
-            let channels = read(*z, *t, region)?;
+            let channels = read(*z_projection, *z, *t, region)?;
             let tiles: Vec<ChannelTile<'_>> = channels
                 .iter()
                 .filter_map(|c| ChannelTile::from_container(c.c_stack, region, &c.image))
@@ -159,6 +165,7 @@ pub fn ring_of(
         mask_data,
         z_stack: object.z_stack,
         t_stack: object.t_stack,
+        z_projection: object.z_projection,
         ..Default::default()
     }
 }

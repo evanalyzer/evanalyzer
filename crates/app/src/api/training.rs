@@ -17,14 +17,14 @@ use evanalyzer_core::SavedClassifier;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::Receiver;
 
-/// Extra parameters `PixelTrainingJob` needs that aren't part of the portable
-/// `AiLearningSettings` model descriptor - object training needs none of
-/// these: it measures each object on its own channel, z and t plane (see
-/// `ObjectTrainingJob`'s doc comment).
+/// Extra parameters training needs that aren't part of the portable
+/// `AiLearningSettings` model descriptor. `channel` is pixel training's
+/// only; `z_stack_handling` (how the analyses handle z-stacks) decides for
+/// both which image each annotation is trained on - its own plane, or the
+/// z-projection of its frame (see `ObjectMetricSettings::belongs_to`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PixelTrainingParams {
     pub channel: i32,
-    pub t_stack: i32,
     pub z_stack_handling: ZStackHandling,
 }
 
@@ -32,7 +32,6 @@ impl Default for PixelTrainingParams {
     fn default() -> Self {
         Self {
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandling::SingleStack,
         }
     }

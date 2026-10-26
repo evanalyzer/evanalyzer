@@ -1366,8 +1366,9 @@ impl ViewportController {
         };
         let auto_objects = project.get_preview_objects();
         let hide_unclassified = project.hide_unclassified_objects();
-        // A volume's object is drawn as its part on the plane shown.
-        let shown_z = project.get_shown_z_plane();
+        // The objects of the plane (or z-projection) and frame shown - a
+        // volume's object as its part on the plane shown.
+        let shown = project.get_shown_plane();
 
         // The results' split view: the analysis' objects instead.
         let results_overlay = self.results_overlay.read().expect("Poisoned").clone();
@@ -1434,7 +1435,7 @@ impl ViewportController {
             if !is_object_drawn(&*project, hide_unclassified, &object.object_class) {
                 continue;
             }
-            let Some(mask) = object.mask_on_plane(shown_z) else {
+            let Some(mask) = object.mask_on_plane(shown) else {
                 continue;
             };
 

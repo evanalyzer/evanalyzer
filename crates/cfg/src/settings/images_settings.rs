@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ops::RangeInclusive, path::PathBuf};
 
 use crate::settings::object_settings::ObjectMetricSettings;
+use crate::types::image::ZProjection;
 
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +77,21 @@ pub enum ZStackHandling {
     /// The planes as one volume (3D). Not supported yet: module checks
     /// reject it until the commands can run on volumes.
     Volume3d,
+}
+
+impl ZStackHandling {
+    /// The z-projection an analysis with this handling reads - `None` for
+    /// the per-plane ones (and volumes): plane by plane.
+    pub fn z_projection(&self) -> ZProjection {
+        match self {
+            Self::SingleStack | Self::AllStacks | Self::Volume3d => ZProjection::None,
+            Self::MaxIntensity => ZProjection::MaxIntensity,
+            Self::MinIntensity => ZProjection::MinIntensity,
+            Self::AvgIntensity => ZProjection::AvgIntensity,
+            Self::SumIntensity => ZProjection::SumIntensity,
+            Self::TakeTheMiddle => ZProjection::TakeTheMiddle,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
@@ -142,6 +158,28 @@ impl Default for PixelSizeSettings {
             x: 1.0,
             y: 1.0,
             z: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_plane_handlings_read_no_projection_and_projections_their_own() {
+        for handling in [ZStackHandling::SingleStack, ZStackHandling::AllStacks] {
+            assert_eq!(handling.z_projection(), ZProjection::None, "plane by plane");
+        }
+        let projections = [
+            (ZStackHandling::MaxIntensity, ZProjection::MaxIntensity),
+            (ZStackHandling::MinIntensity, ZProjection::MinIntensity),
+            (ZStackHandling::AvgIntensity, ZProjection::AvgIntensity),
+            (ZStackHandling::SumIntensity, ZProjection::SumIntensity),
+            (ZStackHandling::TakeTheMiddle, ZProjection::TakeTheMiddle),
+        ];
+        for (handling, projection) in projections {
+            assert_eq!(handling.z_projection(), projection);
         }
     }
 }

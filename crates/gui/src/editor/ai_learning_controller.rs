@@ -756,7 +756,6 @@ impl AiLearningController {
             // Not read: the features name their channels.
             channel: image_channels.first().copied().unwrap_or(0),
             z_stack_handling,
-            ..Default::default()
         };
 
         let classifier_settings = ai_settings.classifier.clone();

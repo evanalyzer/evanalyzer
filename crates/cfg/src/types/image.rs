@@ -65,7 +65,22 @@ pub struct ImageTile {
     pub height: usize,
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// How the planes of a z-stack are combined into one image - `None`: they
+/// aren't, one plane is read.
+#[derive(
+    Default,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 pub enum ZProjection {
     #[default]
     None,

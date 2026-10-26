@@ -14,14 +14,14 @@ use crate::workspace::ProjectTmpSettings;
 use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
-use crate::workspace::extensions::object_ext::ObjectExt;
+use crate::workspace::extensions::object_ext::{ObjectExt, ShownPlane};
 use crate::workspace::extensions::utils::{
     ASSIGNED_WAVELENGTHS, channel_colors, class_name_of_channel, get_relative_key, is_in_root,
     rgb_to_u32, wavelength_colors,
 };
 use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId, ZProjection};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackHandling,
@@ -158,6 +158,10 @@ pub trait ProjectExt {
     /// The z-plane the viewer shows - `None` for a z-projection (no one
     /// plane). A volume (3D) is shown plane by plane.
     fn get_shown_z_plane(&self) -> Option<i32>;
+    /// The plane (or z-projection) and frame the viewer shows.
+    fn get_shown_plane(&self) -> ShownPlane;
+    /// The z-projection the viewer shows - `None` for one plane.
+    fn get_shown_z_projection(&self) -> ZProjection;
     fn get_t_stack(&self) -> Option<&TStackSettings>;
     fn get_pixel_sizes(&self) -> PixelSizeSettings;
     fn get_selected_image_channel(&self) -> Option<&ChannelSettings>;
@@ -867,6 +871,18 @@ impl ProjectExt for ProjectWithRuntime {
             | ZStackHandling::AvgIntensity
             | ZStackHandling::SumIntensity
             | ZStackHandling::TakeTheMiddle => None,
+        }
+    }
+
+    fn get_shown_z_projection(&self) -> ZProjection {
+        self.get_z_stack()
+            .map_or(ZProjection::None, |z| z.z_projection.z_projection())
+    }
+
+    fn get_shown_plane(&self) -> ShownPlane {
+        ShownPlane {
+            z: self.get_shown_z_plane(),
+            t: self.get_t_stack().map_or(0, |t| t.t_stack),
         }
     }
 

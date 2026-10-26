@@ -13,9 +13,7 @@ use crate::helper::color_generators::{color_from_hex, get_colors_from_class};
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_app::project::{AnnotationsExt, ObjectExt, ProjectExt};
-use evanalyzer_cfg::core_types::{
-    ImageDimensionality, ObjectId, SegmentationClass, max_gray_value,
-};
+use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass, max_gray_value};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::warn;
@@ -109,23 +107,18 @@ impl ObjectListController {
                 .on_filter_changed(move || manager.sync_objects_to_slint());
         }
 
-        // Another plane: a volume's objects are listed on their planes only
-        // (a plane's are on every plane - nothing to do without volumes).
+        // Another plane or frame: its objects are listed.
         let manager = Arc::downgrade(self);
         self.app_state.on_plane_changed(move |_, _| {
             let Some(manager) = manager.upgrade() else {
                 return;
             };
-            let any_volume = {
+            let any_object = {
                 let project = manager.app_state.get_project();
-                project
-                    .get_objects()
-                    .unwrap_or(&[])
-                    .iter()
-                    .chain(project.get_preview_objects().iter())
-                    .any(|o| o.dimensionality != ImageDimensionality::Planar)
+                !project.get_objects().unwrap_or(&[]).is_empty()
+                    || !project.get_preview_objects().is_empty()
             };
-            if any_volume {
+            if any_object {
                 manager.sync_objects_to_slint();
             }
         });
@@ -299,15 +292,15 @@ fn compute_visible_rows(app_state: &Arc<UiState>, filter: &ObjectFilter) -> Vec<
     let hide_unclassified = project.hide_unclassified_objects();
     let manual = project.get_objects().unwrap_or(&[]);
     let preview = project.get_preview_objects();
-    let shown_z = project.get_shown_z_plane();
+    let shown = project.get_shown_plane();
 
     manual
         .iter()
         .chain(preview.iter())
         .enumerate()
         .filter(|(i, _)| filter.source.shows(*i < manual.len()))
-        // A volume's objects on the plane shown (a plane's are on every one).
-        .filter(|(_, object)| object.mask_on_plane(shown_z).is_some())
+        // The objects of the plane (or z-projection) and frame shown.
+        .filter(|(_, object)| object.mask_on_plane(shown).is_some())
         .filter(|(_, object)| !hide_unclassified || !object.object_class.is_empty())
         .filter(|(_, object)| filter.matches(object, &project))
         .map(|(i, _)| i)
@@ -1030,14 +1023,17 @@ mod tests {
         assert_eq!(rows(2), vec![1]);
     }
 
-    /// A volume's object (z-planes 2 to 3) is listed on its planes only, a
-    /// plane's object on every plane.
+    /// A volume's object (z-planes 2 to 3) is listed on its planes, a
+    /// plane's object (z-plane 2) on its plane only.
     #[test]
-    fn compute_visible_rows_lists_a_volumes_objects_on_their_planes() {
+    fn compute_visible_rows_lists_objects_on_their_planes() {
+        use evanalyzer_cfg::core_types::ImageDimensionality;
         use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
         let rows = |z: i32| {
             let mut project = project_with_one_image();
-            project.add_object(&object_with_class(1, 1, true)); // a plane's, index 0
+            let mut planar = object_with_class(1, 1, true); // index 0
+            planar.z_stack = 2;
+            project.add_object(&planar);
             let mut volume = object_with_class(2, 1, true); // index 1
             // A 1-pixel box, set on both planes.
             volume.bbox = [0, 0, 0, 0];
@@ -1054,10 +1050,10 @@ mod tests {
                 &ObjectFilter::default(),
             )
         };
-        assert_eq!(rows(1), vec![0]);
+        assert_eq!(rows(1), Vec::<usize>::new());
         assert_eq!(rows(2), vec![0, 1]);
-        assert_eq!(rows(3), vec![0, 1]);
-        assert_eq!(rows(4), vec![0]);
+        assert_eq!(rows(3), vec![1]);
+        assert_eq!(rows(4), Vec::<usize>::new());
     }
 
     #[test]

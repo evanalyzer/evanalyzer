@@ -162,6 +162,19 @@ export component AnnotateBar inherits Rectangle {
                         padding-left: 8px;
                         padding-right: 8px;
                         spacing: 6px;
+                        // The class's color, as in the menu: the selected
+                        // one's of the list, all in one 9px box.
+                        if root.has-class: Rectangle {
+                            width: 9px;
+                            for data in ClassificationState.classes_list: Rectangle {
+                                visible: data.id == ClassificationState.selected_class_id;
+                                y: (parent.height - self.height) / 2;
+                                width: 9px;
+                                height: 9px;
+                                border-radius: 2px;
+                                background: data.color;
+                            }
+                        }
                         Text {
                             horizontal-stretch: 1;
                             text: root.has-class ? ClassificationState.selected_class_name : "Pick a class";

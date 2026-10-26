@@ -21,6 +21,7 @@ use evanalyzer_cfg::settings::ai_learning_object_settings::{
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, AiLearningSettings, ObjectClassLabel,
 };
+use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use indexmap::IndexMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -94,6 +95,12 @@ pub struct ObjectTrainingJob {
     pub settings: AiLearningSettings,
     /// The labeled objects, with the image each is on.
     pub images: Vec<TrainingImage>,
+    /// How the analyses using the model handle z-stacks: each object is
+    /// measured on the image an analysis uses it on (see
+    /// `ObjectMetricSettings::belongs_to`) - plane by plane its own plane
+    /// (objects drawn on a z-projection are skipped), with a z-projection
+    /// that projection of its frame.
+    pub z_stack_handling: ZStackHandling,
 }
 
 impl ObjectTrainingJob {
@@ -118,6 +125,12 @@ impl ObjectTrainingJob {
                 "ObjectTrainingJob requires an Object classifier configuration".to_string(),
             ));
         };
+        if self.z_stack_handling == ZStackHandling::Volume3d {
+            return Err(InternalErrors::InvalidArgument(
+                "Training on z-stacks as volumes (3D) isn't supported yet".into(),
+            ));
+        }
+        let z_projection = self.z_stack_handling.z_projection();
         let needs_images = feature_spec.metrics.iter().any(|m| m.channel().is_some());
         let needs_ring = feature_spec.metrics.iter().any(ObjectMetric::uses_ring);
 
@@ -134,7 +147,11 @@ impl ObjectTrainingJob {
             }
             let objects = &image.labeled_objects;
             let measured = if needs_images {
-                match measure_image(image, needs_ring.then_some(feature_spec.ring_width)) {
+                match measure_image(
+                    image,
+                    needs_ring.then_some(feature_spec.ring_width),
+                    z_projection,
+                ) {
                     Ok(measured) => Some(measured),
                     Err(_) => {
                         let _ = progress.send(TrainingProgressEvent::ImageFailed {
@@ -154,10 +171,15 @@ impl ObjectTrainingJob {
                 let skip = |reason: String| {
                     let _ = progress.send(TrainingProgressEvent::ObjectSkipped { index, reason });
                 };
+                let per_z_plane = z_projection == ZProjection::None;
                 match (
                     resolve_label(class_labels, &object_settings.object_class),
                     &measured,
                 ) {
+                    _ if per_z_plane && object_settings.z_projection != ZProjection::None => skip(
+                        "drawn on a z-projection - analyses plane by plane don't use it"
+                            .to_string(),
+                    ),
                     (Err(reason), _) => skip(reason.to_string()),
                     (Ok(_), None) => skip("its image can't be read".to_string()),
                     (Ok(label), Some(measured)) => {
@@ -216,10 +238,12 @@ struct Measured {
 }
 
 /// Measures the objects of `image` - and, with a `ring_width`, the rings
-/// around them - on the image file.
+/// around them - on the image file: on their own planes, or with a
+/// `z_projection` (not `None`) on that projection of their frames.
 fn measure_image(
     image: &TrainingImage,
     ring_width: Option<u32>,
+    z_projection: ZProjection,
 ) -> Result<Measured, InternalErrors> {
     let reader = ImageReader::new(&image.path, ReadMode::Default)?;
     let meta = reader.get_image_meta();
@@ -233,20 +257,27 @@ fn measure_image(
     let (width, height) = (full.width as usize, full.height as usize);
     let objects = &image.labeled_objects;
     let mut masks = objects.clone();
+    if z_projection != ZProjection::None {
+        for mask in &mut masks {
+            mask.z_projection = z_projection;
+        }
+    }
     if let Some(ring_width) = ring_width {
         masks.extend(
-            objects
+            masks[..objects.len()]
                 .iter()
-                .map(|object| ring_of(object, ring_width, width, height)),
+                .map(|object| ring_of(object, ring_width, width, height))
+                .collect::<Vec<_>>(),
         );
     }
     let mut sums: Vec<IndexMap<i32, Intensity>> =
-        measure_on_planes(&masks, width, height, |z, t, tile| {
+        measure_on_planes(&masks, width, height, |z_projection, z, t, tile| {
             reader.read_image_tile_combined(
                 image.series,
                 0,
-                ZProjection::None,
-                &Some(z..=z),
+                z_projection,
+                // A projection over every plane, as the pipeline reads it.
+                &(z_projection == ZProjection::None).then_some(z..=z),
                 t,
                 None,
                 &tile,
@@ -409,6 +440,7 @@ mod tests {
                 series: 0,
                 labeled_objects: objects,
             }],
+            z_stack_handling: ZStackHandling::SingleStack,
         }
     }
 
@@ -446,6 +478,33 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TrainingProgressEvent::ObjectSkipped { index: 1, .. }))
         );
+    }
+
+    #[test]
+    fn plane_by_plane_objects_drawn_on_a_projection_are_skipped_and_used_otherwise() {
+        let mut on_projection = labeled_object(2, ObjectClass::Global(1), 2);
+        on_projection.z_projection = ZProjection::MaxIntensity;
+        let objects = vec![
+            labeled_object(1, ObjectClass::Global(1), 1),
+            on_projection,
+            labeled_object(3, ObjectClass::Global(2), 100),
+            labeled_object(4, ObjectClass::Global(2), 101),
+        ];
+        let skipped = |handling: ZStackHandling| {
+            let mut job = object_job(objects.clone());
+            job.z_stack_handling = handling;
+            let (tx, rx) = std::sync::mpsc::channel();
+            job.run(tx, Arc::new(AtomicBool::new(false))).unwrap();
+            rx.try_iter()
+                .filter_map(|e| match e {
+                    TrainingProgressEvent::ObjectSkipped { index, .. } => Some(index),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(skipped(ZStackHandling::AllStacks), [1]);
+        assert!(skipped(ZStackHandling::AvgIntensity).is_empty());
     }
 
     /// Shape features need no image: the job above trains although its
@@ -567,6 +626,7 @@ mod tests {
                 labeled_objects: vec![annotation.clone()],
             },
             Some(spec.ring_width),
+            ZProjection::None,
         )
         .unwrap();
         let mut trained = Object::from_object_settings(annotation.clone());

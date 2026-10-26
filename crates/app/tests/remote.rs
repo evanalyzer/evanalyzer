@@ -133,9 +133,13 @@ fn app_settings_are_kept_in_the_worker_s_user_home() {
     // Written on the worker's side, in the user's home - not on the client.
     let saved: Vec<_> = walk(home.path())
         .into_iter()
-        .filter(|path| path.ends_with("evanalyzer/settings.json"))
+        .filter(|path| path.ends_with("settings.json"))
         .collect();
-    assert_eq!(saved.len(), 1, "{saved:?}");
+    let expected = home
+        .path()
+        .join(evanalyzer_app::global::USER_FOLDER_NAME)
+        .join("settings.json");
+    assert_eq!(saved, [expected]);
 }
 
 /// Every file below `dir`.

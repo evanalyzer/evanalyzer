@@ -7,11 +7,10 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::ZProjection;
 use crate::ai_learning::model::SavedClassifier;
 use crate::ai_learning::training_job::{self, TrainingImage};
-use crate::ai_learning::utils::{
-    bbox_overlaps_tile, masked_pixels_in_tile, resolve_z_projection, tile_grid,
-};
+use crate::ai_learning::utils::{bbox_overlaps_tile, masked_pixels_in_tile, tile_grid};
 use crate::algos::EdgeDetectionSobel;
 use crate::algos::GaussianBlur;
 use crate::algos::Hessian;
@@ -33,7 +32,9 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, AiLearningSettings, PixelClassLabel, PixelInputColor,
 };
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
+use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use kornia_image::{Image, ImageSize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -266,18 +267,41 @@ pub struct PixelTrainingJob {
     /// RGB channel (channel 0) and split into R, G and B by
     /// `compute_pixel_features` itself.
     pub channel: i32,
-    /// Which time frame to read, alongside `channel`. No multi-t-stack
-    /// handling (unlike z) - a single scalar index; add a `TStackHandling`-
-    /// style mode later if that's ever needed.
-    pub t_stack: i32,
-    /// How to handle z-stacks - mirrors `JobExecutor::prepare_z_stack_iterator`'s
-    /// handling table. `SingleStack` reads just the first z-plane (no
-    /// project-configurable z-range like the main pipeline supports - a
-    /// deliberate simplification, since this job has no per-image
-    /// `ZStackSettings` concept). `AllStacks` reads every z-plane and treats
-    /// each one as its own training sample at the same (x, y) - so sample
-    /// count scales with z-depth for that mode, worth knowing going in.
+    /// How the analyses using the model handle z-stacks, which decides the
+    /// image each annotation is trained on - the one an analysis uses it on
+    /// (see `ObjectMetricSettings::belongs_to`): plane by plane
+    /// (`SingleStack`, `AllStacks`) its own plane of its frame - annotations
+    /// drawn on a z-projection are left out; with a z-projection (Max, …)
+    /// the projection of its frame, over every plane.
     pub z_stack_handling: ZStackHandling,
+}
+
+/// The labeled annotations by the image they are trained on, `(z, t)`:
+/// plane by plane (`per_z_plane`) each on its own plane `Some(z)` of its
+/// frame - those drawn on a z-projection left out -, else on the
+/// z-projection (`None`) of its frame. As an analysis uses them (see
+/// `ObjectMetricSettings::belongs_to`). Annotations without a class label
+/// are left out.
+fn annotations_by_plane(
+    annotations: &[ObjectMetricSettings],
+    per_z_plane: bool,
+    class_labels: &[PixelClassLabel],
+) -> BTreeMap<(Option<i32>, i32), Vec<(Object, usize)>> {
+    let mut groups: BTreeMap<(Option<i32>, i32), Vec<(Object, usize)>> = BTreeMap::new();
+    for settings in annotations {
+        let Some(label) = resolve_label(class_labels, settings.segmentation_class) else {
+            continue;
+        };
+        let z = per_z_plane.then_some(settings.z_stack);
+        if !settings.belongs_to(z, settings.t_stack) {
+            continue;
+        }
+        groups
+            .entry((z, settings.t_stack))
+            .or_default()
+            .push((Object::from_object_settings(settings.clone()), label));
+    }
+    groups
 }
 
 impl PixelTrainingJob {
@@ -320,16 +344,19 @@ impl PixelTrainingJob {
                 return Err(InternalErrors::Cancelled);
             }
 
-            let labeled_objects: Vec<(Object, usize)> = training_image
-                .labeled_objects
-                .iter()
-                .filter_map(|settings| {
-                    let label = resolve_label(class_labels, settings.segmentation_class)?;
-                    Some((Object::from_object_settings(settings.clone()), label))
-                })
-                .collect();
+            if self.z_stack_handling == ZStackHandling::Volume3d {
+                return Err(InternalErrors::InvalidArgument(
+                    "Training on z-stacks as volumes (3D) isn't supported yet".into(),
+                ));
+            }
+            let z_projection = self.z_stack_handling.z_projection();
+            let plane_groups = annotations_by_plane(
+                &training_image.labeled_objects,
+                z_projection == ZProjection::None,
+                class_labels,
+            );
 
-            if labeled_objects.is_empty() {
+            if plane_groups.is_empty() {
                 let _ = progress.send(TrainingProgressEvent::ItemCompleted {
                     index: image_index,
                     total: self.images.len(),
@@ -368,20 +395,13 @@ impl PixelTrainingJob {
                 height: full_height,
             };
 
-            if self.z_stack_handling == ZStackHandling::Volume3d {
-                return Err(InternalErrors::InvalidArgument(
-                    "Training on z-stacks as volumes (3D) isn't supported yet".into(),
-                ));
-            }
-            let (z_projection, z_range) =
-                resolve_z_projection(&self.z_stack_handling, series_info.nr_z_stacks);
-
             let tiles = tile_grid(full_width, full_height, MAX_TILE_SIZE);
             let relevant_tiles: Vec<&ImageTile> = tiles
                 .iter()
                 .filter(|t| {
-                    labeled_objects
-                        .iter()
+                    plane_groups
+                        .values()
+                        .flatten()
                         .any(|(o, _)| bbox_overlaps_tile(o.bbox, t))
                 })
                 .collect();
@@ -396,13 +416,22 @@ impl PixelTrainingJob {
                     return Err(InternalErrors::Cancelled);
                 }
 
-                for z in z_range.clone() {
+                // Only the planes (or projections) with annotations here.
+                for (&(z, t), labeled_objects) in &plane_groups {
+                    if !labeled_objects
+                        .iter()
+                        .any(|(o, _)| bbox_overlaps_tile(o.bbox, tile))
+                    {
+                        continue;
+                    }
+                    // Plane `z`, or the projection over every plane as the
+                    // pipeline reads it.
                     let loaded_channels = reader.read_image_tile_combined(
                         training_image.series,
                         0, // base resolution - pyramid levels beyond 0 not handled yet
-                        z_projection.clone(),
-                        &Some(z..=z),
-                        self.t_stack,
+                        z_projection,
+                        &z.map(|z| z..=z),
+                        t,
                         Some(&wanted_channels),
                         tile,
                     )?;
@@ -443,7 +472,7 @@ impl PixelTrainingJob {
 
                     let bank = compute_pixel_features_on(&ctx, feature_spec, &images)?;
 
-                    for (object, label) in &labeled_objects {
+                    for (object, label) in labeled_objects {
                         for (x, y) in masked_pixels_in_tile(object, tile) {
                             let local_x = x - tile.offset_x;
                             let local_y = y - tile.offset_y;
@@ -577,6 +606,75 @@ mod tests {
     }
 
     // -- resolve_label ---------------------------------------------------------
+
+    /// A one-pixel annotation of class 1 on plane `z` of frame `t`.
+    fn annotation(z: i32, t: i32, on_z_projection: bool) -> ObjectMetricSettings {
+        let z_projection = match on_z_projection {
+            true => ZProjection::MaxIntensity,
+            false => ZProjection::None,
+        };
+        ObjectMetricSettings {
+            segmentation_class: SegmentationClass(1),
+            bbox: [0, 0, 0, 0],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1],
+            z_stack: z,
+            t_stack: t,
+            z_projection,
+            ..Default::default()
+        }
+    }
+
+    fn cell_label() -> Vec<PixelClassLabel> {
+        vec![PixelClassLabel {
+            class: SegmentationClass(1),
+            name: "Cell".into(),
+        }]
+    }
+
+    fn group_sizes(
+        groups: &BTreeMap<(Option<i32>, i32), Vec<(Object, usize)>>,
+    ) -> Vec<((Option<i32>, i32), usize)> {
+        groups.iter().map(|(k, v)| (*k, v.len())).collect()
+    }
+
+    #[test]
+    fn plane_by_plane_each_annotation_trains_on_its_own_plane_and_frame() {
+        let annotations = [
+            annotation(2, 0, false),
+            annotation(2, 0, false),
+            annotation(5, 1, false),
+            annotation(0, 1, true),
+        ];
+
+        let groups = annotations_by_plane(&annotations, true, &cell_label());
+
+        assert_eq!(
+            group_sizes(&groups),
+            vec![((Some(2), 0), 2), ((Some(5), 1), 1)],
+            "the one drawn on a projection is left out"
+        );
+    }
+
+    #[test]
+    fn with_a_projection_every_annotation_trains_on_its_frame_s_projection() {
+        let annotations = [
+            annotation(2, 0, false),
+            annotation(5, 0, false),
+            annotation(0, 0, true),
+            annotation(3, 1, false),
+        ];
+
+        let groups = annotations_by_plane(&annotations, false, &cell_label());
+
+        assert_eq!(group_sizes(&groups), vec![((None, 0), 3), ((None, 1), 1)]);
+    }
+
+    #[test]
+    fn annotations_without_a_label_train_nothing() {
+        let mut unlabeled = annotation(0, 0, false);
+        unlabeled.segmentation_class = SegmentationClass(9);
+        assert!(annotations_by_plane(&[unlabeled], true, &cell_label()).is_empty());
+    }
 
     #[test]
     fn resolve_label_finds_the_matching_class() {
@@ -961,7 +1059,6 @@ mod tests {
             },
             images: vec![],
             channel: 0,
-            t_stack: 0,
             z_stack_handling: ZStackHandling::SingleStack,
         }
     }

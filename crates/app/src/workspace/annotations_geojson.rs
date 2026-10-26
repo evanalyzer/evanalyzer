@@ -34,7 +34,7 @@ use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::project_ext::ProjectExt;
 use crate::workspace::project_owner::ProjectWithRuntime;
 use bitvec::prelude::{BitVec, Lsb0};
-use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass};
+use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass, ZProjection};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_core::Object;
@@ -312,6 +312,11 @@ fn feature(
         "series": series,
         "plane": { "z": object.z_stack, "c": object.c_stack, "t": object.t_stack },
     });
+    // Drawn on a z-projection: of no one plane.
+    if object.z_projection != ZProjection::None {
+        properties["plane"] = json!({ "c": object.c_stack, "t": object.t_stack });
+        properties["zProjection"] = json!(object.z_projection);
+    }
     if let Some(first) = classes.first() {
         properties["classification"] = json!({ "name": first.name, "color": rgb(first.color) });
     }
@@ -666,14 +671,22 @@ pub fn read_image_geojson(
             &size,
             mask,
             bbox,
+            // An annotation marks the object in every channel: of none.
             ImagePlane {
                 z: plane_value("z"),
-                c: plane_value("c"),
+                c: 0,
                 t: plane_value("t"),
             },
             HashSet::new(),
         )
         .to_object_settings();
+        object.z_projection = properties
+            .get("zProjection")
+            .and_then(|p| serde_json::from_value(p.clone()).ok())
+            .unwrap_or(ZProjection::None);
+        if object.z_projection != ZProjection::None {
+            object.z_stack = 0;
+        }
         object.exclude_from_training = properties
             .get("excludeFromTraining")
             .and_then(Value::as_bool)
@@ -1122,8 +1135,11 @@ mod tests {
             .find(|c| c.name == "Nuclei")
             .unwrap()
             .id;
+        // Drawn on a z-projection, excluded from training.
         let mut excluded = annotation(2, &[".#.", "###", ".#."], 10, &[]);
         excluded.exclude_from_training = true;
+        excluded.z_projection = ZProjection::SumIntensity;
+        excluded.z_stack = 0;
         {
             let a = source
                 .settings
@@ -1179,6 +1195,9 @@ mod tests {
             value["features"][0]["properties"]["classification"]["color"],
             json!([0x30, 0x80, 0xf0])
         );
+        let projected = &value["features"][1]["properties"];
+        assert_eq!(projected["zProjection"], "SumIntensity");
+        assert!(projected["plane"].get("z").is_none(), "of no one plane");
 
         // Into another image of a project without classes: "Nuclei" is
         // created (the default for an unknown name).
@@ -1192,6 +1211,8 @@ mod tests {
         let source_objects = &source.settings.images.list[Path::new("a.tif")].series[&0].objects;
         for (back, original) in objects.iter().zip(source_objects) {
             assert!(same_shape(back, original), "same pixels and plane");
+            assert_eq!(back.z_projection, original.z_projection);
+            assert_eq!(back.c_stack, 0, "of no channel");
             assert_eq!(back.object_class.len(), original.object_class.len());
             assert_eq!(back.exclude_from_training, original.exclude_from_training);
         }

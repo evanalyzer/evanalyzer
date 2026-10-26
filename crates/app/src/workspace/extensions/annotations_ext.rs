@@ -17,7 +17,7 @@
 
 use crate::workspace::extensions::project_ext::ProjectExt;
 use crate::workspace::project_owner::ProjectWithRuntime;
-use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass};
+use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass, ZProjection};
 use evanalyzer_cfg::settings::object_settings::{ObjectMetricSettings, TrackSettings};
 
 /// Which manual annotations a bulk operation covers.
@@ -112,24 +112,33 @@ fn class_counts<'a>(
     counts
 }
 
-/// The same pixels on the same plane.
+/// The same pixels on the same plane (or z-projection) and frame - in any
+/// channel, which an annotation isn't tied to.
 pub(crate) fn same_shape(a: &ObjectMetricSettings, b: &ObjectMetricSettings) -> bool {
     a.bbox == b.bbox
-        && a.z_stack == b.z_stack
-        && a.c_stack == b.c_stack
+        && a.z_projection == b.z_projection
+        && (a.z_projection != ZProjection::None || a.z_stack == b.z_stack)
         && a.t_stack == b.t_stack
         && a.mask_data == b.mask_data
 }
 
 /// A manual annotation from a preview object: same pixels and measurements,
 /// a new id, without the links to other pipeline objects (colocalization,
-/// parents, track) - those objects aren't manual annotations.
+/// parents, track) - those objects aren't manual annotations. Found on a
+/// z-projection (`z_projection` not `None`), it is an annotation of that
+/// projection.
 fn manual_copy(
     object: &ObjectMetricSettings,
     object_class: Option<&ObjectClass>,
+    z_projection: ZProjection,
 ) -> ObjectMetricSettings {
     let mut copy = object.clone();
     copy.id = ObjectId::next();
+    copy.c_stack = 0;
+    copy.z_projection = z_projection;
+    if z_projection != ZProjection::None {
+        copy.z_stack = 0;
+    }
     copy.segmentation_class = SegmentationClass::MANUAL_ANNOTATED;
     if let Some(class) = object_class {
         copy.object_class = [class.clone()].into();
@@ -153,6 +162,8 @@ impl AnnotationsExt for ProjectWithRuntime {
         object_class: Option<ObjectClass>,
     ) -> Vec<ObjectId> {
         let preview = self.get_preview_objects();
+        // The preview is of the plane shown, or of the z-projection shown.
+        let z_projection = self.get_shown_z_projection();
         let picked: Vec<ObjectMetricSettings> = ids
             .iter()
             .filter_map(|id| preview.iter().find(|o| o.id == *id))
@@ -163,10 +174,10 @@ impl AnnotationsExt for ProjectWithRuntime {
         };
         let mut copied = Vec::new();
         for object in &picked {
-            if series.objects.iter().any(|o| same_shape(o, object)) {
+            let copy = manual_copy(object, object_class.as_ref(), z_projection);
+            if series.objects.iter().any(|o| same_shape(o, &copy)) {
                 continue;
             }
-            let copy = manual_copy(object, object_class.as_ref());
             copied.push(copy.id.clone());
             series.objects.push(copy);
         }
@@ -328,6 +339,38 @@ mod tests {
         assert!(copy.colocalized_with.is_empty());
         assert!(!copy.exclude_from_training, "a training sample");
         assert_eq!(project.get_preview_objects().len(), 1, "the original stays");
+    }
+
+    #[test]
+    fn a_copy_is_of_the_plane_or_the_projection_shown_and_of_no_channel() {
+        use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
+        let mut project = project();
+        let mut on_plane = object(1, &[A], 0);
+        (on_plane.z_stack, on_plane.c_stack, on_plane.t_stack) = (4, 2, 1);
+        project.tmp_settings.preview_objects = vec![on_plane.clone()];
+        project.copy_preview_objects_to_manual(&[ObjectId(1)], None);
+
+        let copy = &project.get_objects().unwrap()[0];
+        assert_eq!((copy.z_stack, copy.c_stack, copy.t_stack), (4, 0, 1));
+        assert_eq!(copy.z_projection, ZProjection::None);
+
+        // The same shape found on a projection is another annotation.
+        project.set_global_z_stack(&ZStackSettings {
+            z_projection: ZStackHandling::MaxIntensity,
+            z_range: None,
+        });
+        on_plane.id = ObjectId(2);
+        on_plane.z_stack = 0;
+        project.tmp_settings.preview_objects = vec![on_plane];
+        assert_eq!(
+            project
+                .copy_preview_objects_to_manual(&[ObjectId(2)], None)
+                .len(),
+            1
+        );
+        let copy = &project.get_objects().unwrap()[1];
+        assert_eq!(copy.z_projection, ZProjection::MaxIntensity);
+        assert_eq!((copy.z_stack, copy.t_stack), (0, 1));
     }
 
     #[test]

@@ -18,8 +18,9 @@ use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_core::measure_on_planes;
 
-/// Measures `objects` (annotations of `series`) on `source`, on each one's
-/// own z and t plane: replaces their intensities. Reads only the regions
+/// Measures `objects` (annotations of `series`) on `source`, each on its own
+/// image - its plane, or the z-projection it was drawn on, of its frame:
+/// replaces their intensities. Reads only the regions
 /// with annotations, one at a time.
 pub fn measure_on_source(
     source: &dyn ImageSource,
@@ -39,12 +40,13 @@ pub fn measure_on_source(
         objects,
         full.width as usize,
         full.height as usize,
-        |z, t, tile| {
+        |z_projection, z, t, tile| {
             source.read_tile(&TileRequest {
                 series,
                 resolution_idx: 0,
-                z_projection: ZProjection::None,
-                z_range: Some(z..=z),
+                z_projection,
+                // A projection over every plane, as the pipeline reads it.
+                z_range: (z_projection == ZProjection::None).then_some(z..=z),
                 t_stack: t,
                 tile,
             })

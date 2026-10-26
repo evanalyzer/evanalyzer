@@ -15,7 +15,7 @@ use crate::pipeline::scope::Scope;
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::{
-    core_types::{ObjectClass, ObjectId, SegmentationClass, TrackId},
+    core_types::{ObjectClass, ObjectId, SegmentationClass, TrackId, ZProjection},
     settings::object_settings::{ObjectMetricSettings, TrackSettings},
 };
 use indexmap::IndexMap;
@@ -881,6 +881,9 @@ impl Object {
             z_stack: self.plane.z,
             c_stack: self.plane.c,
             t_stack: self.plane.t,
+            // Set by whoever annotates on a projection; an object knows its
+            // plane only.
+            z_projection: ZProjection::None,
             dimensionality: self.dimensionality,
             sum_z: self.sum_z,
             sum_z2: self.sum_z2,

@@ -13,14 +13,26 @@ use evanalyzer_cfg::{
     settings::object_settings::ObjectMetricSettings,
 };
 
+/// What the viewer shows: plane `z` of frame `t`, or (`z: None`) the
+/// z-projection of frame `t`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShownPlane {
+    pub z: Option<i32>,
+    pub t: i32,
+}
+
 pub trait ObjectExt {
     fn is_part_of(&self, x: u32, y: u32) -> bool;
-    /// The object's mask on plane `z` (`None`: no one plane shown - a
-    /// z-projection): a plane's object's whole mask (shown on every plane);
-    /// a volume's object's part on `z` - `None` where it isn't on `z`.
-    fn mask_on_plane(&self, z: Option<i32>) -> Option<&BitSlice<u64, Lsb0>>;
-    /// [`Self::is_part_of`] on plane `z` (see [`Self::mask_on_plane`]).
-    fn is_part_of_on_plane(&self, x: u32, y: u32, z: Option<i32>) -> bool;
+    /// The object's mask where `shown`, `None` where it isn't shown - the
+    /// same objects an analysis of that plane uses (see
+    /// [`ObjectMetricSettings::z_projection`]), always of frame `t`:
+    /// - a plane's object: its whole mask on its own plane and in a
+    ///   z-projection;
+    /// - an object drawn on a z-projection: its mask in a z-projection only;
+    /// - a volume's object: its part on plane `z`, not in a z-projection.
+    fn mask_on_plane(&self, shown: ShownPlane) -> Option<&BitSlice<u64, Lsb0>>;
+    /// [`Self::is_part_of`] where `shown` (see [`Self::mask_on_plane`]).
+    fn is_part_of_on_plane(&self, x: u32, y: u32, shown: ShownPlane) -> bool;
     fn add_object_class(&mut self, object_class: ObjectClass);
     fn remove_object_class(&mut self, object_class: &ObjectClass);
     fn remove_all_object_classes(&mut self);
@@ -47,11 +59,16 @@ impl ObjectExt for ObjectMetricSettings {
         self.mask_data.get(bit_index).map(|b| *b).unwrap_or(false)
     }
 
-    fn mask_on_plane(&self, z: Option<i32>) -> Option<&BitSlice<u64, Lsb0>> {
+    fn mask_on_plane(&self, shown: ShownPlane) -> Option<&BitSlice<u64, Lsb0>> {
         match self.dimensionality {
-            ImageDimensionality::Planar => Some(&self.mask_data),
+            ImageDimensionality::Planar => self
+                .belongs_to(shown.z, shown.t)
+                .then_some(&self.mask_data[..]),
             ImageDimensionality::Volume { depth } => {
-                let plane = z? - self.z_stack;
+                if self.t_stack != shown.t {
+                    return None;
+                }
+                let plane = shown.z? - self.z_stack;
                 if plane < 0 || plane >= depth as i32 {
                     return None;
                 }
@@ -63,8 +80,8 @@ impl ObjectExt for ObjectMetricSettings {
         }
     }
 
-    fn is_part_of_on_plane(&self, x: u32, y: u32, z: Option<i32>) -> bool {
-        let Some(mask) = self.mask_on_plane(z) else {
+    fn is_part_of_on_plane(&self, x: u32, y: u32, shown: ShownPlane) -> bool {
+        let Some(mask) = self.mask_on_plane(shown) else {
             return false;
         };
         let [x_min, y_min, x_max, y_max] = self.bbox;
@@ -95,6 +112,7 @@ impl ObjectExt for ObjectMetricSettings {
 mod tests {
     use super::*;
     use bitvec::{order::Lsb0, vec::BitVec};
+    use evanalyzer_cfg::core_types::ZProjection;
 
     /// A 4x3 object (bbox x_min=10,y_min=20,x_max=13,y_max=22, so width=4,
     /// height=3) whose mask is true only at local (1,1) - global (11, 21).
@@ -130,7 +148,7 @@ mod tests {
         let object = volume_object();
         let on = |z| {
             object
-                .mask_on_plane(z)
+                .mask_on_plane(ShownPlane { z, t: 0 })
                 .map(|m| m.iter().by_vals().collect::<Vec<_>>())
         };
         assert_eq!(on(Some(4)), Some(vec![true, false]));
@@ -139,18 +157,42 @@ mod tests {
         assert_eq!(on(Some(3)), None, "before its first plane");
         assert_eq!(on(Some(7)), None, "after its last plane");
         assert_eq!(on(None), None, "a projection shows no one plane");
-        assert!(object.is_part_of_on_plane(10, 20, Some(4)));
-        assert!(!object.is_part_of_on_plane(10, 20, Some(6)));
-        assert!(object.is_part_of_on_plane(11, 20, Some(6)));
+        let plane = |z| ShownPlane { z: Some(z), t: 0 };
+        assert!(object.is_part_of_on_plane(10, 20, plane(4)));
+        assert!(!object.is_part_of_on_plane(10, 20, plane(6)));
+        assert!(object.is_part_of_on_plane(11, 20, plane(6)));
     }
 
     #[test]
-    fn a_planes_object_is_shown_on_every_plane() {
-        let object = single_pixel_object();
-        for z in [None, Some(0), Some(9)] {
-            assert_eq!(object.mask_on_plane(z).map(|m| m.len()), Some(12));
-            assert!(object.is_part_of_on_plane(11, 21, z));
-        }
+    fn a_planes_object_is_shown_on_its_plane_and_in_projections_of_its_frame() {
+        let object = ObjectMetricSettings {
+            z_stack: 3,
+            t_stack: 2,
+            ..single_pixel_object()
+        };
+        let shown = |z, t| object.mask_on_plane(ShownPlane { z, t }).map(|m| m.len());
+
+        assert_eq!(shown(Some(3), 2), Some(12), "its plane");
+        assert_eq!(shown(None, 2), Some(12), "a z-projection");
+        assert_eq!(shown(Some(4), 2), None, "another plane");
+        assert_eq!(shown(Some(3), 1), None, "another frame");
+        assert_eq!(shown(None, 0), None, "a projection of another frame");
+        assert!(object.is_part_of_on_plane(11, 21, ShownPlane { z: Some(3), t: 2 }));
+        assert!(!object.is_part_of_on_plane(11, 21, ShownPlane { z: Some(0), t: 2 }));
+    }
+
+    #[test]
+    fn an_object_drawn_on_a_projection_is_shown_in_projections_only() {
+        let object = ObjectMetricSettings {
+            z_projection: ZProjection::AvgIntensity,
+            t_stack: 1,
+            ..single_pixel_object()
+        };
+        let shown = |z, t| object.mask_on_plane(ShownPlane { z, t }).is_some();
+
+        assert!(shown(None, 1));
+        assert!(!shown(Some(0), 1), "not on plane 0, its unused z");
+        assert!(!shown(None, 0), "another frame");
     }
 
     #[test]
