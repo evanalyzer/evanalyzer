@@ -922,15 +922,6 @@ export component TopBar inherits Rectangle {
                     }
                 }
 
-                EvaMenuItem {
-                    icon: InkIcons.image;
-                    text: "Open image…";
-                    shortcut: "Ctrl I";
-                    clicked => {
-                        ToolbarState.open_image_clicked();
-                    }
-                }
-
                 recent-item := EvaMenuItem {
                     icon: InkIcons.project;
                     text: "Open recent";
@@ -948,7 +939,7 @@ export component TopBar inherits Rectangle {
                 // The images: their folder (as in the images panel).
                 EvaMenuItem {
                     icon: InkIcons.folder;
-                    text: "Open images folder…";
+                    text: "Select image folder…";
                     shortcut: "Ctrl Shift O";
                     clicked => {
                         ImagesListState.open_images_folder_clicked();

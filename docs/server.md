@@ -17,7 +17,7 @@ Clients connect with
 
 Each setting is taken from the first of these that sets it:
 
-1. command-line arguments: `--listen`, `--session-store`, `--log-level`;
+1. command-line arguments: `--listen`, `--data-dir`, `--log-level`;
 2. the `--config` file (TOML);
 3. the built-in defaults.
 
@@ -36,13 +36,38 @@ unsupported password format, …) stop the server at startup with an error
 that names the key. The server's tests parse both example files, so the
 examples always match the code.
 
+## Where things are stored
+
+Everything the server creates is in one folder, `data_dir` (`--data-dir`):
+
+```
+<data_dir>/              /var/lib/evanalyzer        as a system service (root, Linux)
+                         ~/.evanalyzer/server       otherwise, Linux
+                         ~/evanalyzer/server        otherwise, macOS and Windows
+├── tls/                 self-signed certificate and key - back it up
+├── sessions.json        the running workers
+└── single-user/         the single user's default home
+```
+
+The config file, the users file and your own certificate stay where you
+put them (`/etc/evanalyzer/` is the usual place). Each user's settings and
+templates are in the EVAnalyzer folder in their home - the same layout the
+desktop app uses on the user's own machine:
+
+```
+<home>/.evanalyzer/      Linux (evanalyzer/ on macOS and Windows)
+├── settings.json        app settings, incl. pinned server fingerprints
+├── templates/           the user's templates and modules
+└── logs/crash.log
+```
+
 ## Users
 
 `[users] source` chooses where accounts come from:
 
 | `source` | Accounts | Home folder | Worker runs as |
 |---|---|---|---|
-| `single` (default) | One account in `[users.single]`: `admin`, with a random password made up at every start and printed to the console unless `users.single.password` is set | `users.single.home`, default: a folder of its own (`/var/lib/evanalyzer/single-user` as a system service, otherwise `evanalyzer/single-user` in the server account's data folder) | the server's account |
+| `single` (default) | One account in `[users.single]`: `admin`, with a random password made up at every start and printed to the console unless `users.single.password` is set | `users.single.home`, default: a folder of its own, `<data_dir>/single-user` | the server's account |
 | `linux` | This machine's system users, checked against `/etc/shadow`. The server needs root or membership in the `shadow` group. | from `/etc/passwd` | the user's own account, if the server runs as root |
 | `file` | The `[[user]]` entries of a separate users file, `[users.file] path`. No system accounts needed. | `home` of each entry | the server's account |
 
@@ -104,7 +129,7 @@ Connections between clients and the server are encrypted by default
 (`wss://`). Workers listen on `127.0.0.1` only and are reached unencrypted.
 
 **Without any setup** the server creates a self-signed certificate on first
-start (in `tls.self_signed_dir`) and logs its fingerprint at every start:
+start (in `<data_dir>/tls`) and logs its fingerprint at every start:
 
 ```
 Clients connect with wss:// - certificate fingerprint 1E:0F:D0:…:23:5D
@@ -115,8 +140,8 @@ Give that fingerprint to your users. They pass it once per connection with
 Without it, the client refuses to connect and prints the fingerprint it was
 shown, so users can compare it with yours. If the fingerprint differs from
 the expected one, the client refuses as well: either the certificate was
-replaced (deleted `self_signed_dir`, new `cert`) or someone is intercepting
-the connection. Keep `self_signed_dir` (include it in backups) and
+replaced (deleted `<data_dir>/tls`, new `cert`) or someone is intercepting
+the connection. Keep `<data_dir>/tls` (include it in backups) and
 the fingerprint stays the same.
 
 For tests or a network you fully trust, clients can skip the check with
@@ -154,7 +179,8 @@ the same worker.
 
 **Lifetime.** A worker keeps running when its client disconnects or logs
 out, and when the server restarts (the server finds it again through
-`session_store`). It stops by itself once no client has been connected and
+`<data_dir>/sessions.json`; after a reboot the workers are gone and users
+log in again). It stops by itself once no client has been connected and
 no analysis has run for `workers.idle_timeout_minutes` (default 2 h).
 
 **Analyses run in the background.** An analysis belongs to the worker, not

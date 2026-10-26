@@ -4,7 +4,7 @@
 #
 # Every key is optional: the values below are the defaults unless noted, so
 # a real config only needs the lines that differ. Command-line arguments
-# (--listen, --session-store, --log-level) override this file. Misspelled or
+# (--listen, --data-dir, --log-level) override this file. Misspelled or
 # unknown keys stop the server with an error. Changes apply on restart.
 #
 # The reference for each key is the doc comment of its field in
@@ -15,10 +15,14 @@
 # 0.0.0.0:7400 accepts connections from every network.
 listen = "127.0.0.1:7400"
 
-# File the running workers are recorded in, so a restarted server finds them
-# again. Default: /run/evanalyzer/sessions.json for a system service,
-# otherwise in the temp folder.
-# session_store = "/run/evanalyzer/sessions.json"
+# Folder the server keeps everything it creates in:
+#   tls/          the self-signed certificate (keep it: same fingerprint)
+#   sessions.json the running workers, so a restarted server finds them again
+#   single-user/  the single user's default home
+# Absolute path. Default: /var/lib/evanalyzer for a system service (root on
+# Linux), otherwise ~/.evanalyzer/server (Linux) or ~/evanalyzer/server
+# (macOS, Windows) of the server's account.
+# data_dir = "/var/lib/evanalyzer"
 
 # What the server and its workers log: error, warn, info, debug, trace, off,
 # or per module, e.g. "info,evanalyzer_core=debug".
@@ -44,10 +48,8 @@ username = "admin"
 # password = "$argon2id$v=19$m=19456,t=2,p=1$..."
 # Home folder: the worker's working directory, where it keeps the user's
 # settings and templates. Absolute path. Default: a folder of its own,
-# created on start - /var/lib/evanalyzer/single-user for a system service,
-# otherwise evanalyzer/single-user in the server account's data folder
-# (~/.local/share on Linux, %LOCALAPPDATA% on Windows). With the default
-# allowed_dirs it is all the worker may read and write.
+# created on start - <data_dir>/single-user. With the default allowed_dirs
+# it is all the worker may read and write.
 # home = "/srv/evanalyzer/admin"
 # Default: users.default_allowed_dirs.
 # allowed_dirs = ["{home}", "/data/microscopy"]
@@ -76,14 +78,10 @@ passwd_file = "/etc/passwd"
 enabled = true
 # Certificate chain and private key (PEM), e.g. from Let's Encrypt or your
 # organisation's CA - clients then need no fingerprint. Both or neither.
-# Default: a self-signed certificate the server creates (see below).
+# Default: a self-signed certificate the server creates on first start in
+# <data_dir>/tls and keeps there, so its fingerprint stays the same.
 # cert = "/etc/evanalyzer/cert.pem"
 # key = "/etc/evanalyzer/key.pem"
-# Where the self-signed certificate is created on first start and kept, so
-# its fingerprint stays the same. Default: /var/lib/evanalyzer/tls for a
-# system service, otherwise .evanalyzer-server/tls in the server account's
-# home folder.
-# self_signed_dir = "/var/lib/evanalyzer/tls"
 
 [workers]
 # Each logged-in user gets a worker process. It stops by itself once no

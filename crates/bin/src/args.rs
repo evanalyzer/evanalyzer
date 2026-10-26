@@ -128,11 +128,12 @@ pub enum TopCommand {
         #[arg(long, value_name = "ADDRESS")]
         listen: Option<String>,
 
-        /// File the running workers are recorded in, so a restarted server
-        /// finds them again. Default: `/run/evanalyzer/sessions.json` for a
-        /// system service, otherwise in the temp folder.
-        #[arg(long, value_name = "FILE")]
-        session_store: Option<std::path::PathBuf>,
+        /// Folder the server keeps its state in (certificate, sessions, the
+        /// single user's home). Default: `/var/lib/evanalyzer` for a system
+        /// service, otherwise `~/.evanalyzer/server` (Linux) or
+        /// `~/evanalyzer/server` (macOS, Windows).
+        #[arg(long, value_name = "DIR")]
+        data_dir: Option<std::path::PathBuf>,
     },
     /// Print an Argon2id hash of a password, for `password = "..."` in the
     /// server's config or users file. Asks for the password twice (hidden),
@@ -236,13 +237,13 @@ mod tests {
         let Some(TopCommand::Server {
             config,
             listen,
-            session_store,
+            data_dir,
         }) = args.command
         else {
             panic!("expected the server command");
         };
         assert_eq!(config, Some("/etc/eva.toml".into()));
-        assert!(listen.is_none() && session_store.is_none());
+        assert!(listen.is_none() && data_dir.is_none());
     }
 
     #[test]

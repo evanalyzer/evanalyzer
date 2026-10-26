@@ -4,12 +4,12 @@
 //! user and records them in a session file, so a restarted server finds the
 //! still running workers again.
 //!
-//! The file lives wherever `evanalyzer server --session-store` says - by
-//! default in the runtime directory (`/run/evanalyzer/` when running as root,
-//! the temp folder otherwise, see [`default_store_path`]): runtime state that
-//! must not survive a reboot, just like the processes it describes. It is
-//! written atomically (temp file + rename) and readable by the server's user
-//! only, because it holds the worker tokens.
+//! The file lives in the server's data folder (`<data_dir>/sessions.json`,
+//! see [`crate::ServerConfig::session_store`]), which survives reboots - the
+//! workers it describes don't, so sessions started before the current boot
+//! are dropped on load: their PIDs and ports may belong to unrelated
+//! processes by now. It is written atomically (temp file + rename) and
+//! readable by the server's user only, because it holds the worker tokens.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10
@@ -29,7 +29,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::Mutex,
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// How long a freshly started worker may take until it accepts connections.
@@ -110,11 +110,13 @@ impl SessionManagement {
         Ok(sessions)
     }
 
-    /// Loads the session file and keeps the sessions whose worker still runs.
+    /// Loads the session file and keeps the sessions whose worker still
+    /// runs: started since the last boot, and its port answers.
     pub fn with_store(path_to_session_store: PathBuf, worker_command: PathBuf) -> io::Result<Self> {
         let mut sessions = load(&path_to_session_store);
         let before = sessions.len();
-        sessions.retain(|s| worker_responds(s.port));
+        let boot = last_boot();
+        sessions.retain(|s| s.start_date >= boot && worker_responds(s.port));
         info!(
             "Session store {}: {} running session(s), {} stale dropped",
             path_to_session_store.display(),
@@ -321,17 +323,13 @@ impl State {
     }
 }
 
-/// Where the session file goes unless `--session-store` says otherwise:
-/// `/run/evanalyzer/sessions.json` for a system service, otherwise the
-/// OS's temp folder.
-pub fn default_store_path() -> PathBuf {
-    let system = Path::new("/run/evanalyzer");
-    if create_private_dir(system).is_ok() {
-        return system.join("sessions.json");
-    }
-    std::env::temp_dir()
-        .join("evanalyzer")
-        .join("sessions.json")
+/// When this machine booted. A session started before it describes a
+/// worker that is gone, whatever its PID and port answer now. If the clock
+/// was set forward after a worker started (no real-time clock), that worker
+/// counts as gone too: the user's next login starts a new one, and the old
+/// one stops once it has been idle for `workers.idle_timeout_minutes`.
+fn last_boot() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(sysinfo::System::boot_time())
 }
 
 fn load(path: &Path) -> Vec<SessionEntry> {
@@ -671,6 +669,37 @@ pub(crate) mod tests {
         );
 
         sessions.close_session(&entry.session_token).unwrap();
+    }
+
+    #[test]
+    fn sessions_from_before_the_last_boot_are_dropped_even_if_their_port_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        // Whatever holds the PID and port now is not the recorded worker.
+        let mut unrelated = Command::new("sleep").arg("30").spawn().unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let stale = SessionEntry {
+            pid: unrelated.id(),
+            session_token: "stale".into(),
+            user_id: "id-alice".into(),
+            port: listener.local_addr().unwrap().port(),
+            start_date: last_boot() - Duration::from_secs(60),
+        };
+        let store = dir.path().join("run/sessions.json");
+        fs::create_dir_all(store.parent().unwrap()).unwrap();
+        fs::write(&store, serde_json::to_vec(&[stale]).unwrap()).unwrap();
+
+        let sessions = manager(dir.path());
+        assert!(sessions.state.lock().unwrap().sessions.is_empty());
+        let entry = sessions.open_or_create_session(&user("alice")).unwrap();
+
+        assert_ne!(entry.session_token, "stale", "a new worker");
+        assert!(
+            matches!(unrelated.try_wait(), Ok(None)),
+            "the process now holding the PID is left alone"
+        );
+        sessions.close_session(&entry.session_token).unwrap();
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
     }
 
     #[test]

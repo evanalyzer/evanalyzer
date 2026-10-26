@@ -56,16 +56,18 @@ component PlaceRow inherits Rectangle {
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
-    }
 
-    // On hover (over the row's touch area: no flicker): the user's own off.
-    if root.place.kind == 3 && ta.has-hover: InkIconButton {
-        x: parent.width - self.width - 3px;
-        y: (parent.height - self.height) / 2;
-        size: 26px;
-        icon: @image-url("../icons/regular-white/x.svg");
-        label: "Remove from the places";
-        clicked => { root.removed(); }
+        // On hover: the user's own off. Inside the row's touch area, so the
+        // row stays hovered while the mouse is on the button (outside, the
+        // button took the hover away and hid itself).
+        if root.place.kind == 3 && ta.has-hover: InkIconButton {
+            x: parent.width - self.width - 3px;
+            y: (parent.height - self.height) / 2;
+            size: 26px;
+            icon: @image-url("../icons/regular-white/x.svg");
+            label: "Remove from the places";
+            clicked => { root.removed(); }
+        }
     }
 }
 

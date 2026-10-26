@@ -469,32 +469,40 @@ impl AppSettings {
     }
 }
 
-/// Returns the application's per-user data directory (`<OS user data dir>/evanalyzer`),
-/// where user settings, templates, and other per-user state are stored.
+/// Name of the EVAnalyzer folder in a home folder: hidden on Linux, where
+/// that is the convention for per-user state, visible elsewhere so users
+/// find it in their file manager. Lower case everywhere, so it is the same
+/// folder on case-insensitive and case-sensitive file systems.
+pub const USER_FOLDER_NAME: &str = if cfg!(target_os = "linux") {
+    ".evanalyzer"
+} else {
+    "evanalyzer"
+};
+
+/// Returns this account's EVAnalyzer folder (`~/.evanalyzer` on Linux,
+/// `~/evanalyzer` on macOS and Windows), where user settings, templates, and
+/// other per-user state are stored - see [`user_folder_in`].
 ///
 /// The folder (and its parents) is created if it does not exist yet.
 pub fn get_user_folder() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(std::env::temp_dir);
-    let folder = base.join("evanalyzer");
+    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let folder = user_folder_in(&home);
     let _ = std::fs::create_dir_all(&folder);
     folder
 }
 
-/// The user folder for an explicitly given `home` - a worker's `--home` -
-/// at the place this platform's data folder has below a home folder, so a
-/// user finds the same folder whether they work on the machine directly or
-/// through a worker: `<home>/.local/share/evanalyzer` (Linux),
-/// `<home>/Library/Application Support/evanalyzer` (macOS),
-/// `<home>/AppData/Roaming/evanalyzer` (Windows).
+/// The EVAnalyzer folder in `home` - this account's home or a worker's
+/// `--home`, so a user finds the same folder whether they work on the
+/// machine directly or through a worker. Its layout:
+///
+/// ```text
+/// <home>/.evanalyzer/        (evanalyzer/ on macOS and Windows)
+/// ├── settings.json          app settings, incl. pinned server fingerprints
+/// ├── templates/             the user's templates and modules
+/// └── logs/crash.log
+/// ```
 pub fn user_folder_in(home: &Path) -> PathBuf {
-    let data = if cfg!(windows) {
-        home.join("AppData").join("Roaming")
-    } else if cfg!(target_os = "macos") {
-        home.join("Library").join("Application Support")
-    } else {
-        home.join(".local").join("share")
-    };
-    data.join("evanalyzer")
+    home.join(USER_FOLDER_NAME)
 }
 
 /// The settings file inside a user folder (`<user folder>/settings.json`).
@@ -661,15 +669,13 @@ mod tests {
     }
 
     #[test]
-    fn the_user_folder_of_an_explicit_home_follows_the_platform_layout() {
+    fn the_user_folder_is_hidden_on_linux_and_visible_elsewhere() {
         let folder = user_folder_in(Path::new("/home/alice"));
 
-        let expected = if cfg!(windows) {
-            Path::new("/home/alice/AppData/Roaming/evanalyzer").to_path_buf()
-        } else if cfg!(target_os = "macos") {
-            Path::new("/home/alice/Library/Application Support/evanalyzer").to_path_buf()
+        let expected = if cfg!(target_os = "linux") {
+            Path::new("/home/alice/.evanalyzer")
         } else {
-            Path::new("/home/alice/.local/share/evanalyzer").to_path_buf()
+            Path::new("/home/alice/evanalyzer")
         };
         assert_eq!(folder, expected);
     }
@@ -827,6 +833,6 @@ mod tests {
         let folder = get_user_folder();
 
         assert!(folder.is_dir());
-        assert_eq!(folder.file_name().unwrap(), "evanalyzer");
+        assert_eq!(folder.file_name().unwrap(), USER_FOLDER_NAME);
     }
 }

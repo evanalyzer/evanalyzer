@@ -24,11 +24,13 @@ use std::panic::PanicHookInfo;
 use std::path::{Path, PathBuf};
 
 fn crash_log_path() -> PathBuf {
-    get_user_folder().join("crash.log")
+    let logs = get_user_folder().join("logs");
+    let _ = std::fs::create_dir_all(&logs);
+    logs.join("crash.log")
 }
 
 /// Installs a panic hook that appends a timestamped entry (message,
-/// source location, backtrace) to `<user folder>/crash.log` for every panic,
+/// source location, backtrace) to `<user folder>/logs/crash.log` for every panic,
 /// anywhere in the process, in addition to running whatever hook was
 /// previously installed - by default, Rust's own stderr printer, so a
 /// developer running from a terminal still sees the usual output.

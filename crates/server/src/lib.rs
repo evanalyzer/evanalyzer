@@ -14,9 +14,8 @@ mod session_management;
 mod tls;
 mod user_management;
 
-pub use config::{ServerConfig, UserSource};
+pub use config::{ServerConfig, UserSource, default_data_dir};
 pub use server::serve;
-pub use session_management::default_store_path;
 
 pub use user_management::file_users::FileUsers;
 pub use user_management::linux_users::LinuxUsers;

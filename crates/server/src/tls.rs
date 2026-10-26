@@ -23,7 +23,7 @@ use log::info;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use std::{
     fs, io,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
@@ -39,9 +39,10 @@ pub struct Tls {
 }
 
 /// TLS as configured, `None` if `tls.enabled = false`. Loads `tls.cert` and
-/// `tls.key`, or else the self-signed certificate in `tls.self_signed_dir`
-/// (default [`default_self_signed_dir`]), creating it on first start.
-pub fn load(config: &TlsConfig) -> io::Result<Option<Tls>> {
+/// `tls.key`, or else the self-signed certificate in `self_signed_dir`
+/// (see [`crate::ServerConfig::self_signed_dir`]), creating it on first
+/// start.
+pub fn load(config: &TlsConfig, self_signed_dir: &Path) -> io::Result<Option<Tls>> {
     if !config.enabled {
         return Ok(None);
     }
@@ -49,12 +50,11 @@ pub fn load(config: &TlsConfig) -> io::Result<Option<Tls>> {
         (Some(cert), Some(key)) => (cert.clone(), key.clone()),
         // Both or neither - checked with the rest of the config.
         _ => {
-            let dir = config
-                .self_signed_dir
-                .clone()
-                .unwrap_or_else(default_self_signed_dir);
-            ensure_self_signed(&dir)?;
-            (dir.join(CERT_FILE), dir.join(KEY_FILE))
+            ensure_self_signed(self_signed_dir)?;
+            (
+                self_signed_dir.join(CERT_FILE),
+                self_signed_dir.join(KEY_FILE),
+            )
         }
     };
     let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cert)
@@ -101,26 +101,6 @@ pub fn fingerprint(cert: &[u8]) -> String {
         .map(|b| format!("{b:02X}"))
         .collect::<Vec<_>>()
         .join(":")
-}
-
-/// Where the self-signed certificate is kept unless `tls.self_signed_dir`
-/// says otherwise: `/var/lib/evanalyzer/tls` for a system service (running
-/// as root on Linux), otherwise `.evanalyzer-server/tls` in the server
-/// account's home folder. Must survive restarts and reboots, or every
-/// client has to pin a new fingerprint.
-pub fn default_self_signed_dir() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if fs::metadata("/proc/self").is_ok_and(|me| me.uid() == 0) {
-            return PathBuf::from("/var/lib/evanalyzer/tls");
-        }
-    }
-    crate::user_management::single_user::server_account_home()
-        .join(".local")
-        .join("share")
-        .join("evanalyzer")
-        .join("tls")
 }
 
 /// Creates a self-signed certificate and its key in `dir`, unless both are
@@ -177,20 +157,15 @@ fn pem_error(path: &Path, e: rustls::pki_types::pem::Error) -> io::Error {
 mod tests {
     use super::*;
 
-    fn self_signed_in(dir: &Path) -> TlsConfig {
-        TlsConfig {
-            self_signed_dir: Some(dir.to_path_buf()),
-            ..TlsConfig::default()
-        }
-    }
-
     #[test]
     fn disabled_tls_loads_nothing() {
         let config = TlsConfig {
             enabled: false,
             ..TlsConfig::default()
         };
-        assert!(load(&config).unwrap().is_none());
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load(&config, dir.path()).unwrap().is_none());
+        assert!(fs::read_dir(dir.path()).unwrap().next().is_none(), "nothing generated");
     }
 
     #[test]
@@ -198,8 +173,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tls_dir = dir.path().join("tls");
 
-        let first = load(&self_signed_in(&tls_dir)).unwrap().unwrap();
-        let again = load(&self_signed_in(&tls_dir)).unwrap().unwrap();
+        let first = load(&TlsConfig::default(), &tls_dir).unwrap().unwrap();
+        let again = load(&TlsConfig::default(), &tls_dir).unwrap().unwrap();
 
         assert_eq!(first.fingerprint, again.fingerprint, "same after a restart");
         assert_eq!(first.fingerprint.len(), 32 * 3 - 1);
@@ -220,12 +195,14 @@ mod tests {
         fs::write(&cert, generated.cert.pem()).unwrap();
         fs::write(&key, generated.signing_key.serialize_pem()).unwrap();
 
-        let tls = load(&TlsConfig {
-            cert: Some(cert),
-            key: Some(key),
-            self_signed_dir: Some(dir.path().join("unused")),
-            ..TlsConfig::default()
-        })
+        let tls = load(
+            &TlsConfig {
+                cert: Some(cert),
+                key: Some(key),
+                ..TlsConfig::default()
+            },
+            &dir.path().join("unused"),
+        )
         .unwrap()
         .unwrap();
 
@@ -238,11 +215,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cert = dir.path().join("cert.pem");
         fs::write(&cert, "not a certificate").unwrap();
-        let error = load(&TlsConfig {
-            cert: Some(cert),
-            key: Some(dir.path().join("missing.pem")),
-            ..TlsConfig::default()
-        })
+        let error = load(
+            &TlsConfig {
+                cert: Some(cert),
+                key: Some(dir.path().join("missing.pem")),
+                ..TlsConfig::default()
+            },
+            &dir.path().join("unused"),
+        )
         .err()
         .unwrap()
         .to_string();

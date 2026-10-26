@@ -10,7 +10,7 @@
 use crate::{
     api::{Request, Response},
     config::ServerConfig,
-    session_management::{SessionManagement, default_store_path},
+    session_management::SessionManagement,
     tls,
     user_management::{AuthenticationStatus, UserManagement},
 };
@@ -106,14 +106,12 @@ struct Connection {
 }
 
 /// `evanalyzer server`: listens on `config.listen`, logs users in through
-/// the configured user source, keeps its session file at
-/// `config.session_store` and starts workers logging at `config.log_level`.
+/// the configured user source, keeps its state in `config.data_dir` and
+/// starts workers logging at `config.log_level`.
 pub fn serve(config: ServerConfig) -> std::io::Result<()> {
-    let session_store = config
-        .session_store
-        .clone()
-        .unwrap_or_else(default_store_path);
-    let tls = tls::load(&config.tls)?;
+    info!("Data folder: {}", config.data_dir().display());
+    let session_store = config.session_store();
+    let tls = tls::load(&config.tls, &config.self_signed_dir())?;
     match &tls {
         Some(tls) => info!(
             "Clients connect with wss:// - certificate fingerprint {}",
@@ -744,10 +742,7 @@ mod tests {
     /// A self-signed server certificate in `dir`, as a server without a
     /// configured certificate makes it.
     pub(super) fn test_tls(dir: &std::path::Path) -> tls::Tls {
-        tls::load(&crate::config::TlsConfig {
-            self_signed_dir: Some(dir.join("tls")),
-            ..Default::default()
-        })
+        tls::load(&crate::config::TlsConfig::default(), &dir.join("tls"))
         .unwrap()
         .unwrap()
     }
@@ -1258,10 +1253,9 @@ mod tests {
             std::fs::create_dir_all(&home).unwrap();
             let mut config = ServerConfig::default();
             config.listen = format!("127.0.0.1:{port}");
-            config.session_store = Some(dir.join("sessions.json"));
+            config.data_dir = Some(dir.to_path_buf());
             config.users.single.password = Some("plain:1234".into());
             config.users.single.home = Some(home);
-            config.tls.self_signed_dir = Some(dir.join("tls"));
             config
         }
 

@@ -204,12 +204,12 @@ mod home_tests {
         let backend = LocalBackend::default().with_home(home.path()).unwrap();
 
         let templates = backend.template_folders().unwrap().user;
-        assert!(
-            templates.starts_with(home.path()),
-            "{}",
-            templates.display()
+        assert_eq!(
+            templates,
+            home.path()
+                .join(settings::USER_FOLDER_NAME)
+                .join("templates")
         );
-        assert!(templates.ends_with("evanalyzer/templates"));
         assert!(templates.is_dir(), "created on demand");
     }
 

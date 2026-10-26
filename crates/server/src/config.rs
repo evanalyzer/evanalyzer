@@ -25,7 +25,7 @@ use crate::user_management::{
     password::{
         SUPPORTED_FORMATS, hash_password, is_plain_text, is_supported_format, random_password,
     },
-    single_user::{self, SingleUser},
+    single_user::{SingleUser, server_account_home},
 };
 use serde::Deserialize;
 use std::{
@@ -35,6 +35,30 @@ use std::{
     sync::Arc,
 };
 
+/// Name of the EVAnalyzer folder in a home folder - the same as the app's
+/// `USER_FOLDER_NAME` (this crate doesn't depend on the app): hidden on
+/// Linux, visible elsewhere, lower case everywhere.
+const USER_FOLDER_NAME: &str = if cfg!(target_os = "linux") {
+    ".evanalyzer"
+} else {
+    "evanalyzer"
+};
+
+/// Where the server keeps its state unless `data_dir` says otherwise:
+/// `/var/lib/evanalyzer` for a system service (running as root on Linux),
+/// otherwise `server` in the server account's EVAnalyzer folder
+/// (`~/.evanalyzer/server` on Linux, `~/evanalyzer/server` elsewhere).
+pub fn default_data_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if std::fs::metadata("/proc/self").is_ok_and(|me| me.uid() == 0) {
+            return PathBuf::from("/var/lib/evanalyzer");
+        }
+    }
+    server_account_home().join(USER_FOLDER_NAME).join("server")
+}
+
 /// The whole server configuration.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -42,10 +66,13 @@ pub struct ServerConfig {
     /// Address and port to accept clients on. Default `127.0.0.1:7400`
     /// (this machine only); `0.0.0.0:7400` accepts every network.
     pub listen: String,
-    /// File the running workers are recorded in, so a restarted server finds
-    /// them again. Default: `/run/evanalyzer/sessions.json` for a system
-    /// service, otherwise in the temp folder.
-    pub session_store: Option<PathBuf>,
+    /// Folder the server keeps everything it creates in: `tls/` (the
+    /// self-signed certificate), `sessions.json` (the running workers) and
+    /// `single-user/` (the single user's default home). Absolute path.
+    /// Default: `/var/lib/evanalyzer` for a system service (root on Linux),
+    /// otherwise `server` in the server account's EVAnalyzer folder
+    /// (`~/.evanalyzer/server` on Linux, `~/evanalyzer/server` elsewhere).
+    pub data_dir: Option<PathBuf>,
     /// What the server and its workers log, in env_logger filter syntax: a
     /// level (`error`, `warn`, `info`, `debug`, `trace`, `off`) or per
     /// module, e.g. `info,evanalyzer_core=debug`. Default `info`.
@@ -104,7 +131,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: "127.0.0.1:7400".into(),
-            session_store: None,
+            data_dir: None,
             log_level: "info".into(),
             users: UsersConfig::default(),
             tls: TlsConfig::default(),
@@ -126,16 +153,11 @@ pub struct TlsConfig {
     /// machine - otherwise passwords and data cross the network readable.
     pub enabled: bool,
     /// Certificate chain (PEM), e.g. from Let's Encrypt or the
-    /// organisation's CA. Needs `key`. Default: a self-signed certificate in
-    /// `self_signed_dir`.
+    /// organisation's CA. Needs `key`. Default: a self-signed certificate the
+    /// server creates in `<data_dir>/tls` and keeps there.
     pub cert: Option<PathBuf>,
     /// Private key of `cert` (PEM). Needs `cert`.
     pub key: Option<PathBuf>,
-    /// Where the self-signed certificate is created and kept when no
-    /// `cert` is configured. Default `/var/lib/evanalyzer/tls` for a system
-    /// service, otherwise `.evanalyzer-server/tls` in the server account's
-    /// home folder.
-    pub self_signed_dir: Option<PathBuf>,
 }
 
 impl Default for TlsConfig {
@@ -144,7 +166,6 @@ impl Default for TlsConfig {
             enabled: true,
             cert: None,
             key: None,
-            self_signed_dir: None,
         }
     }
 }
@@ -206,9 +227,8 @@ pub struct SingleUserConfig {
     pub password: Option<String>,
     /// Home folder of the account: the worker's working directory and where
     /// it keeps the user's EVAnalyzer folder (settings, templates). Default:
-    /// a folder of its own, created for it (`/var/lib/evanalyzer/single-user`
-    /// for a system service, otherwise `evanalyzer/single-user` in the
-    /// server account's data folder) - by default all the worker may access.
+    /// a folder of its own, created for it: `<data_dir>/single-user` - by
+    /// default all the worker may access.
     pub home: Option<PathBuf>,
     /// Folders the worker may read and write (`{home}` = `home`). Default:
     /// `users.default_allowed_dirs`.
@@ -291,19 +311,38 @@ impl ServerConfig {
     pub fn with_overrides(
         mut self,
         listen: Option<String>,
-        session_store: Option<PathBuf>,
+        data_dir: Option<PathBuf>,
         log_level: Option<String>,
     ) -> Self {
         if let Some(listen) = listen {
             self.listen = listen;
         }
-        if let Some(session_store) = session_store {
-            self.session_store = Some(session_store);
+        if let Some(data_dir) = data_dir {
+            self.data_dir = Some(data_dir);
         }
         if let Some(log_level) = log_level {
             self.log_level = log_level;
         }
         self
+    }
+
+    /// The folder the server keeps its state in: `data_dir`, else
+    /// [`default_data_dir`].
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone().unwrap_or_else(default_data_dir)
+    }
+
+    /// The file the running workers are recorded in, so a restarted server
+    /// finds them again.
+    pub fn session_store(&self) -> PathBuf {
+        self.data_dir().join("sessions.json")
+    }
+
+    /// Where the self-signed certificate is created and kept when no
+    /// `tls.cert` is configured. Must survive restarts and reboots, or every
+    /// client has to pin a new fingerprint.
+    pub fn self_signed_dir(&self) -> PathBuf {
+        self.data_dir().join("tls")
     }
 
     /// The workers' AI device settings given on the command line replacing
@@ -347,6 +386,14 @@ impl ServerConfig {
                     home.display()
                 ));
             }
+        }
+        if let Some(data_dir) = &self.data_dir
+            && !data_dir.is_absolute()
+        {
+            return invalid(format!(
+                "data_dir must be an absolute path, got {}",
+                data_dir.display()
+            ));
         }
         if self.users.source == UserSource::File && self.users.file.path.is_none() {
             return invalid("users.source = \"file\" needs users.file.path".into());
@@ -397,7 +444,7 @@ impl ServerConfig {
                 let home = match &single.home {
                     Some(home) => home.clone(),
                     None => {
-                        let home = single_user::default_home();
+                        let home = self.data_dir().join("single-user");
                         crate::session_management::create_private_dir(&home).map_err(|err| {
                             io::Error::new(
                                 err.kind(),
@@ -625,6 +672,56 @@ mod tests {
     }
 
     #[test]
+    fn everything_the_server_creates_is_kept_in_its_data_dir() {
+        let config = parse("data_dir = \"/srv/eva\"").unwrap();
+
+        assert_eq!(config.data_dir(), Path::new("/srv/eva"));
+        assert_eq!(config.session_store(), Path::new("/srv/eva/sessions.json"));
+        assert_eq!(config.self_signed_dir(), Path::new("/srv/eva/tls"));
+    }
+
+    #[test]
+    fn the_default_data_dir_is_the_system_folder_or_in_the_evanalyzer_folder() {
+        let dir = default_data_dir();
+
+        assert_eq!(ServerConfig::default().data_dir(), dir);
+        assert!(dir.is_absolute(), "{}", dir.display());
+        let in_user_folder = dir.ends_with(Path::new(USER_FOLDER_NAME).join("server"));
+        assert!(
+            in_user_folder || dir == Path::new("/var/lib/evanalyzer"),
+            "{}",
+            dir.display()
+        );
+        assert_ne!(dir, server_account_home(), "not the account's home itself");
+    }
+
+    #[test]
+    fn a_relative_data_dir_is_rejected() {
+        let error = parse("data_dir = \"eva\"").unwrap_err();
+        assert!(error.contains("data_dir must be an absolute path"), "{error}");
+    }
+
+    #[test]
+    fn the_single_user_s_default_home_is_a_folder_of_its_own_and_all_they_may_access() {
+        use crate::user_management::AuthenticationStatus;
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ServerConfig::default();
+        config.data_dir = Some(dir.path().to_path_buf());
+        config.users.single.password = Some("plain:pw".into());
+
+        let users = config.user_management().unwrap();
+
+        let AuthenticationStatus::Authenticated(user) = users.login("admin".into(), "pw".into())
+        else {
+            panic!("expected a login");
+        };
+        let home = dir.path().join("single-user");
+        assert!(home.is_dir(), "created on start");
+        assert_eq!(user.home, home);
+        assert_eq!(user.allowed_dirs, [home]);
+    }
+
+    #[test]
     fn command_line_arguments_override_the_file() {
         let file = parse("listen = \"0.0.0.0:7400\"\nlog_level = \"info\"").unwrap();
 
@@ -634,7 +731,7 @@ mod tests {
 
         assert_eq!(config.listen, "127.0.0.1:9000");
         assert_eq!(config.log_level, "info", "not given on the command line");
-        assert_eq!(config.session_store, None);
+        assert_eq!(config.data_dir, None);
     }
 
     #[test]
@@ -694,16 +791,13 @@ mod tests {
         let config = ServerConfig::default()
             .with_overrides(
                 None,
-                Some("/run/eva/sessions.json".into()),
+                Some("/srv/eva".into()),
                 Some("debug".into()),
             )
             .with_worker_ai_overrides(Some("cpu".into()), None);
 
         assert_eq!(config.listen, "127.0.0.1:7400", "not given");
-        assert_eq!(
-            config.session_store,
-            Some(PathBuf::from("/run/eva/sessions.json"))
-        );
+        assert_eq!(config.data_dir, Some(PathBuf::from("/srv/eva")));
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.workers.ai_devices.as_deref(), Some("cpu"));
         assert_eq!(config.workers.gpu_slots, None);

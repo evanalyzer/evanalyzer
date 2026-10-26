@@ -35,12 +35,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(TopCommand::Server {
             config,
             listen,
-            session_store,
+            data_dir,
         }) => Some(
             server_config(
                 config.as_deref(),
                 listen.clone(),
-                session_store.clone(),
+                data_dir.clone(),
                 args.log_level.clone(),
                 &args.ai_devices,
                 args.gpu_slots,
@@ -225,7 +225,7 @@ fn start_worker(
 fn server_config(
     file: Option<&std::path::Path>,
     listen: Option<String>,
-    session_store: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
     log_level: Option<String>,
     ai_devices: &Option<AiDeviceSelection>,
     gpu_slots: Option<usize>,
@@ -235,7 +235,7 @@ fn server_config(
         None => ServerConfig::default(),
     };
     let config = config
-        .with_overrides(listen, session_store, log_level)
+        .with_overrides(listen, data_dir, log_level)
         .with_worker_ai_overrides(ai_devices.as_ref().map(ToString::to_string), gpu_slots);
     // Checked here, so a typo in the file fails at startup instead of in
     // every worker.
@@ -396,7 +396,7 @@ mod tests {
         let config = server_config(
             None,
             Some("0.0.0.0:9000".into()),
-            Some("/tmp/sessions.json".into()),
+            Some("/srv/eva".into()),
             Some("debug".into()),
             &Some(AiDeviceSelection::Cpu),
             Some(2),
@@ -404,7 +404,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.listen, "0.0.0.0:9000");
-        assert_eq!(config.session_store, Some("/tmp/sessions.json".into()));
+        assert_eq!(config.data_dir, Some("/srv/eva".into()));
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.workers.ai_devices.as_deref(), Some("cpu"));
         assert_eq!(config.workers.gpu_slots, Some(2));

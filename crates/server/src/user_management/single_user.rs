@@ -74,35 +74,6 @@ impl UserManagement for SingleUser {
     }
 }
 
-/// The single user's home when none is configured: a folder of its own,
-/// created for it, which is all its worker may access by default - nothing
-/// else of the machine is reachable. `/var/lib/evanalyzer/single-user` for a
-/// system service (root on Linux), otherwise below the server account's
-/// data folder: `~/.local/share/evanalyzer/single-user` on Linux,
-/// `%LOCALAPPDATA%\evanalyzer\single-user` on Windows,
-/// `~/Library/Application Support/evanalyzer/single-user` on macOS.
-pub(crate) fn default_home() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if std::fs::metadata("/proc/self").is_ok_and(|me| me.uid() == 0) {
-            return PathBuf::from("/var/lib/evanalyzer/single-user");
-        }
-        server_account_home()
-            .join(".local")
-            .join("share")
-            .join("evanalyzer")
-            .join("single-user")
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        dirs::data_local_dir()
-            .unwrap_or_else(server_account_home)
-            .join("evanalyzer")
-            .join("single-user")
-    }
-}
-
 /// The home folder of the account this server runs as. Not read from `HOME`
 /// (configuration comes from arguments, never the environment): on Linux
 /// it is the account's `/etc/passwd` entry, elsewhere the OS's profile
@@ -162,26 +133,5 @@ mod tests {
         };
         assert_eq!(user.username, "joachim");
         assert_eq!(user.user_id, SINGLE_USER_ID);
-    }
-
-    #[test]
-    fn the_default_home_is_a_folder_of_its_own_and_the_user_may_only_access_it() {
-        let home = default_home();
-        assert!(home.is_absolute(), "{}", home.display());
-        assert!(home.ends_with("single-user"), "{}", home.display());
-        assert_ne!(home, server_account_home(), "not the server account's home");
-
-        let users = SingleUser::new(
-            "admin".into(),
-            "plain:pw".into(),
-            home.clone(),
-            vec!["{home}".into()],
-        );
-        let AuthenticationStatus::Authenticated(user) = users.login("admin".into(), "pw".into())
-        else {
-            panic!("expected a login");
-        };
-        assert_eq!(user.home, home);
-        assert_eq!(user.allowed_dirs, [home]);
     }
 }

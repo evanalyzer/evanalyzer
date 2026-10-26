@@ -46,6 +46,55 @@ Get the latest version for Linux, Windows or macOS from the
 Unpack the archive and start `evanalyzer` - everything it needs is included.
 GPU (CUDA) builds for AI models are available for Linux and Windows.
 
+## Where EVAnalyzer stores its data
+
+**Your settings and templates** are in one folder in your home folder:
+
+| System | Folder |
+|---|---|
+| Linux | `~/.evanalyzer/` |
+| macOS | `~/evanalyzer/` |
+| Windows | `C:\Users\<name>\evanalyzer\` |
+
+```
+evanalyzer/
+├── settings.json      app settings, incl. the servers you trust
+├── templates/         your templates and modules
+└── logs/crash.log     details of crashes, for bug reports
+```
+
+Copy this folder to move your settings to another computer. When you work
+on a server, the same folder is in your home folder on the server.
+
+**A server** keeps everything it creates in its data folder - change it with
+`--data-dir` or `data_dir` in the config file:
+
+| Server runs | Data folder |
+|---|---|
+| as a system service (root, Linux) | `/var/lib/evanalyzer/` |
+| as a normal user, Linux | `~/.evanalyzer/server/` |
+| as a normal user, macOS / Windows | `~/evanalyzer/server/` |
+
+```
+<data folder>/
+├── tls/               self-signed certificate and key - back it up, or
+│                      clients have to trust a new fingerprint
+├── sessions.json      the running workers
+└── single-user/       home of the single user (default user setup)
+```
+
+Files you write yourself as the server admin are not in the data folder. The
+server reads them from the path you give it, so you can keep them anywhere
+(`/etc/evanalyzer/` is the usual place):
+
+| File | Path given by |
+|---|---|
+| server config | `evanalyzer server --config /etc/evanalyzer/server.toml` |
+| users file (optional) | `[users.file] path = "..."` in the server config |
+| your own TLS certificate and key (optional) | `[tls] cert = "..."` and `key = "..."` in the server config |
+
+See [docs/server.md](docs/server.md) for all settings.
+
 ## Documentation and help
 
 - **User guide:** [evanalyzer.org](https://evanalyzer.org) - getting started,
