@@ -440,12 +440,12 @@
           "default": false
         },
         "classForOverlappingAreas": {
-          "description": "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class",
+          "description": "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class.\nIt is the area all the objects share (A∩B∩C with three classes) - only\nmade where they really do: an A object overlapping a B and a C object\nthat don't touch each other is colocalized, but gets no overlap\nregion.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
         "classesToColoc": {
-          "description": "The classes whose objects must overlap (e.g. the ch1 and the ch2\nspots): each object overlapping an object of every other class\nrecords them as its partners - listed and counted in the results.",
+          "description": "The classes whose objects must overlap (e.g. the ch1 and the ch2\nspots): each object overlapping an object of every other class\nrecords them as its partners - listed and counted in the results.\n\nEach overlap counts on its own: with A, B and C, an A object\ncolocalizes when it overlaps a B object and a C object - also when\nthe B and the C object lie in different parts of it and don't touch\neach other. It doesn't mean all three share an area; that is the\noverlap region (\"Overlap regions as\").",
           "type": "array",
           "default": [],
           "items": {
@@ -469,7 +469,7 @@
           }
         },
         "markAs": {
-          "description": "Optional: the class the colocalizing objects get (e.g. \"ch1 with\nch2\") - to count them per image or relate them to cells. `Unset`:\nonly the partners are recorded.",
+          "description": "Optional: the class the colocalizing objects get (e.g. \"ch1 with\nch2\") - to count them per image or relate them to cells. `Unset`:\nonly the partners are recorded.\n\nMarked: the object overlaps an object of every other class, each on\nits own - not \"all of them share an area\" (see \"Colocalize\").",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },

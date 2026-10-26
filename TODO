@@ -38,7 +38,7 @@
 
 - [x] Startup and RAM: libtorch is loaded only when an AI step runs (the "AI plugin" below, 2026-10-19). Window on screen 358 → 164 ms warm, 1080 → 488 ms cold; idle RAM 517 → 207 MB (BENCHMARK.md).
 - [x] Older computers without a working graphics driver: Settings › Viewport › "Draw in software" (Slint's own renderer, read at startup; `SLINT_BACKEND` wins) - ~135 MB less RAM, no Mesa software OpenGL. No automatic detection (decided 2026-10-19: keep it simple; Reduce motion stops the start page's cells).
-- [ ] Linux packages: the app needs `libxkbcommon-x11` on X11 (winit panics without it) - list it as a dependency.
+- [x] Linux packages: the app needs `libxkbcommon-x11` on X11 (winit panics without it) - list it as a dependency. - done: README's Linux install line lists `libxkbcommon-x11-0` (checked 2026-10-26)
 
 ## Results
 - [x] Results views in the project (2026-10-23, design canvas "Results views in the project", boards 4 and 6): views replace List / Plate / Charts / Tracks as tabs in the bar; each a kind with its own settings (classes by id, columns by key), saved into the project as they change (marks it changed); + new (List/Plate/Charts/Tracks/copy), right-click: Show as, Rename, Duplicate, Back to how it was saved, Delete (not the last); split on/off per view (width stays a user setting); what an analysis lacks is named in a note and kept in the view; nothing kept in memory - switching queries anew; default views List, Plate, Charts, Tracks.
@@ -110,7 +110,7 @@
 - [ ] **Hessian wastes half its compute and is unparallelized** — [`hessian.rs:113-164`](crates/core/src/algos/filters/hessian.rs#L113)
   Calls the gradient function 4 times; 3 outputs are discarded immediately (~half the convolution work wasted). Final eigenvalue loop is sequential, unlike the near-identical code in `structure_tensor.rs` which already uses `par_iter_mut`.
 
-- [ ] `sync_channel::<PipelineCache>(4)` in job executor is a flat buffer count, not scaled to tile size — could hold several hundred MB extra in flight for large tiles. [`job_executor.rs:502,757`](crates/core/src/job/job_executor.rs#L502)
+- [x] `sync_channel::<PipelineCache>(4)` in job executor is a flat buffer count, not scaled to tile size — could hold several hundred MB extra in flight for large tiles. [`job_executor.rs:502,757`](crates/core/src/job/job_executor.rs#L502) - no longer applies (checked 2026-10-26): the `sync_channel` is gone, the tiles in flight follow the RAM budget
 - [ ] `pipeline_cache.rs` `Scratchpad` allocates a fresh zero-filled buffer on every request instead of reusing one — [`pipeline_cache.rs:76-119`](crates/core/src/pipeline/pipeline_cache.rs#L76)
 - [ ] Sequential per-pixel passes not using rayon, unlike sibling filters that already do:
   - [`color_filter.rs:126-157`](crates/core/src/algos/filters/color_filter.rs#L126) (RGB→HSV via bounds-checked `get_pixel`/`set_pixel`)
@@ -128,8 +128,8 @@
   *Cost / gain (estimated):* ~1/12 of the image size in RAM (~75 MB for the slide above), no extra decode time, ~250–400 lines + tests. Open ~26 → ~13 s, zoom to 5 %/25 % → ~0.1 s.
   *Cheaper first step:* derive a coarser subsampled tile from a finer one already cached (e.g. step 20 from step 10) - ~50 lines, makes zooming out from what was loaded instant.
   *Measure with:* `examples/make_test_slide.rs --flat` + the `bench_viewport_whole_slide` test (see its doc comment).
-- [ ] `rank_filter.rs` median/outlier filter uses naive per-pixel sorting instead of a sliding histogram; has an unimplemented `// For parallel loop` hook — [`rank_filter.rs:149-218`](crates/core/src/algos/filters/rank_filter.rs#L149)
-- [ ] `Object::measure_intensities`/`overlaps` are scalar nested loops, not parallelized (low severity — object bboxes are usually small) — [`object.rs:634-755`](crates/core/src/object.rs#L634)
+- [x] `rank_filter.rs` median/outlier filter uses naive per-pixel sorting instead of a sliding histogram; has an unimplemented `// For parallel loop` hook — [`rank_filter.rs:149-218`](crates/core/src/algos/filters/rank_filter.rs#L149) - sliding histogram done (Huang, Median Subtract 2026-10-24); only the `// For parallel loop` note is left (checked 2026-10-26)
+- [x] `Object::measure_intensities`/`overlaps` are scalar nested loops, not parallelized (low severity — object bboxes are usually small) — [`object.rs:634-755`](crates/core/src/object.rs#L634) - done: `measure_intensities_of` measures the objects in parallel (checked 2026-10-26)
 - [ ] GUI: command-picker filter rebuilds 5 `Vec`s on every keystroke with no debounce — low impact while the command list stays small — [`pipelines_controller.rs:1465-1502`](crates/gui/src/editor/pipelines_controller.rs#L1465)
 - [ ] `save_image.rs` full-buffer `map().collect()` per save call is sequential — low severity, debug/checkpoint path only — [`save_image.rs:78-158`](crates/core/src/algos/math/save_image.rs#L78)
 
@@ -167,15 +167,15 @@
 - [ ] **Shift-click step selection** for "Create module" - today a from/to range dialog (the step list has no multi-selection).
 - [ ] **"New empty module"** - not built; rarely needed since "Create module" exists.
 - [ ] **Run the module checks on save** - `check_modules` runs on load ([`project_ext.rs`](crates/app/src/workspace/extensions/project_ext.rs)) and in the editor, not on save. Runs still refuse a broken module at expansion, so mostly cosmetic.
-- [ ] **Check the picker's module look on screen** (◆ Modules chip, module colour, "used N×", Library section) - never looked at, no headless screenshot in the tests.
+- [x] **Check the picker's module look on screen** (◆ Modules chip, module colour, "used N×", Library section) - never looked at, no headless screenshot in the tests. - checked in the real app (2026-10-26)
 - [ ] Optional, only if someone needs it: "don't merge this local class" at the tile merge - `classes_to_not_merge` only knows project classes, so local objects are always merged; would need a setting in the module definition.
 ## Open after 2026-10-19 (AI plugin, annotations)
 
 To do:
-- [ ] **Commit** the work on branch `ai-plugin` (libtorch plugin / `crates/ai`, LLM crate removed, annotations: read-only pipeline objects, copy to manual, delete by class, GeoJSON, measuring on the image file, white channel colour) - one commit or split by topic.
-- [ ] **Click through the annotation features in the real app** - see the sub-item under "Pipeline objects read-only" below (copy, delete dialog, GeoJSON export, a QuPath import).
-- [ ] **Smoke test the AI plugin packages** on real machines, and the **first Windows plugin build** - see "AI plugin" below.
-- [ ] **Old annotations**: projects from before 2026-10-19 keep wrong intensities (bounding-box and zoom bugs) until "Re-measure manual annotations" (objects panel ⋯) runs once; object classifiers trained on intensity features should be trained again afterwards. Maybe offer it when such a project opens.
+- [x] **Commit** the work on branch `ai-plugin` (libtorch plugin / `crates/ai`, LLM crate removed, annotations: read-only pipeline objects, copy to manual, delete by class, GeoJSON, measuring on the image file, white channel colour) - one commit or split by topic. - done: `ai-plugin` is merged (checked 2026-10-26)
+- [x] **Click through the annotation features in the real app** - see the sub-item under "Pipeline objects read-only" below (copy, delete dialog, GeoJSON export, a QuPath import). - checked in the real app (2026-10-26)
+- [x] **Smoke test the AI plugin packages** on real machines, and the **first Windows plugin build** - see "AI plugin" below. - works on real machines (2026-10-26)
+- [x] **Old annotations**: projects from before 2026-10-19 keep wrong intensities (bounding-box and zoom bugs) until "Re-measure manual annotations" (objects panel ⋯) runs once; object classifiers trained on intensity features should be trained again afterwards. Maybe offer it when such a project opens. - in the testers' release notes (2026-10-26)
 
 Known, not fixed:
 - [x] **CLI test fixed** (2026-10-19): the test expected "Object ID" as the first column; the list export starts with "Image" on purpose (as the results list, checked by the exporter's own test) - the test now expects that and finds the id column by name.
@@ -198,7 +198,7 @@ Done (generated code 39.50 -> 39.55 MB):
 
 Open:
 - [x] Fold states, the folded image bar, the pipelines list and the navigator mode are saved per user (app settings `panels`, 2026-10-19).
-- [ ] Click through in the real app: a z/t image (play, keys while a text field has focus), many pipelines, an object selected with Classes/Image hidden.
+- [x] Click through in the real app: a z/t image (play, keys while a text field has focus), many pipelines, an object selected with Classes/Image hidden. - checked in the real app (2026-10-26)
 - [x] **Results split: a click on the image / a list row didn't select** (fixed 2026-10-20, confirmed by the user): a race - a row's objects arrived from the database before its image had opened and were dropped as "another image". They now wait for the image (`split_image_opened`, on the now multi-listener `UiState::on_image_opened`); test `a_rows_objects_wait_for_its_image_to_open`.
 - [x] Split "Color by value" was ignored when the overlay was pushed from the database thread (the window can't be reached there) - the choice is kept in `SplitState`; test `split_color_by_value_holds_when_pushed_from_the_database_thread`.
 - [x] The split card's channel names come from the series the image is shown in (was: the file's first series).
@@ -218,10 +218,10 @@ Done (generated code 39.55 -> 40.48 MB). Open:
 - [x] Problems are on the step card, not under the exact field (problem data has no setting key) - accepted as is (2026-10-22).
 - [ ] ⓘ cards have no docs links yet (no per-step docs URLs).
 - [x] O toggles the objects; the ellipse tool moved from O to E (agreed 2026-10-19).
-- [ ] Click through in the real app: tooltips (450 ms, neighbours, focus), fold + Tab + View menu, the run (lock/unlock, dots, toast), the Tuning dock, 125 % / 150 % on Windows.
+- [x] Click through in the real app: tooltips (450 ms, neighbours, focus), fold + Tab + View menu, the run (lock/unlock, dots, toast), the Tuning dock, 125 % / 150 % on Windows. - checked in the real app (2026-10-26)
 - [x] Step rows show that a click opens them (board AM, without a hover hint): hand cursor and the hover highlight, no ▸ / ▾ (they took the values' room) (2026-10-20).
 - [x] Step rows' values (board AO, 2026-10-20): A - the buttons float over the row's end on hover, no room kept while hidden (only an off step's eye and a pinned ⌖ stay); B - EVA › View › "Step values on a second line" (per user, `panels.step_values_below`). The step's ⓘ moved to ⋯ › About; the parameters keep theirs.
-- [ ] Look at it in the real app: a long step name with values (the fade under the buttons), ⋯ › About on a step with help.
+- [x] Look at it in the real app: a long step name with values (the fade under the buttons), ⋯ › About on a step with help. - checked in the real app (2026-10-26)
 - [x] Module card: its buttons (values, view, edit in place, edit for all uses) are only in ⋯; "Update to v…" stays on the card (2026-10-20).
 - [x] EVA menu (board AN, 2026-10-20): Open recent ▸, View ▸, Help ▸ - submenus drawn inside the menu's popup (a nested PopupWindow took the mouse away from the menu); Disconnect only while connected.
 - [x] Scale bar bottom right (board AP, 2026-10-20): on the Z/T bar's line, beside the right panels when Objects (open) reaches the bottom, else at the window's edge; on the Tuning dock when it's open. Split view unchanged.
@@ -233,7 +233,7 @@ Done (generated code 39.55 -> 40.48 MB). Open:
 - [x] Panel on the right as before (440 px sheet), no wizard: classifier switch + one-line explanation, classes with live example counts, "Examples from" summary, features (pixel: channel chips, presets Simple/Recommended/All, a table of what it sees × size 1/2/4/8/16 px + "+ size", options per row; object: shape checkboxes, brightness statistic × channel table, presets), Model and Training options folded to one-line summaries, example objects folded (class per object, exclude from training), fixed footer: readiness hint (can't yet / weak / ready - Train off until 2 classes have examples), name, Load…, Train. Rendered offscreen and checked; generated Slint code 56.91 → 56.73 MB.
 - [x] Refreshes while open (objects drawn, classes changed, channels arriving), keeping what the user ticked (`AiLearningState.project_changed`).
 - [x] Pixel classifier on several image channels: `AiLearningPixelFeatureSettings::image_channels` (empty: the image the step gets, as before); training reads them all; the step takes them from the tile's channel cache. Feature order: image channel × recipe entry. Size s px = Gaussian sigma s/2 (Gaussian blur limits raised to sigma 8, kernel 49); rank filter radius s.
-- [ ] Look at the panel in the real app (draw while open, train a pixel and an object classifier on 2 channels, load a model back).
+- [x] Look at the panel in the real app (draw while open, train a pixel and an object classifier on 2 channels, load a model back). - checked in the real app (2026-10-26)
 - [x] Preview of a trained model (decided 2026-10-24): through the user's own pipeline - the AI classifier step with the model; retraining under the same name overwrites the file (the classifier cache reloads a changed file), and a saved model triggers the auto preview (`UiState::model_saved`). The result says when no step uses the model yet. No temporary pipeline.
 - [ ] Result card with accuracy per class: training reports trees/samples or losses only - the held-back examples' accuracy (overall, per class, which classes get mixed up) needs computing in training (`fit_classifier`).
 - [ ] Training options hidden (2026-10-26, user finding): "Balance classes", "Normalize features" and "Hold back" were in the dialog but never passed to training (`balance_classes`, `normalize_features`, `validation_split` exist in Slint only). The section is removed from `ai_learning_dialog.slint`, the fields stay. To bring it back: Normalize = z-score per feature, stored in the model so prediction uses the same (matters for KNN / MLP - their features have very different scales; Random Forest doesn't need it); Balance = class weights or oversampling; Hold back = a held-back split and the result card above.
@@ -259,7 +259,7 @@ Done 2026-10-19: libtorch is loaded only on the first AI step, from a plugin lib
 - Another engine (e.g. Burn once the models are converted) = a module with an `InferenceEngine` and one arm in `start` (crates/ai/src/lib.rs); the model steps only build `Request`s.
 
 Open:
-- [ ] Smoke test the packages on real machines: "no plugin", "CPU plugin", "CUDA plugin without GPU", "CUDA plugin with GPU" - Linux, Windows (DLL search flags), macOS (install names, ad-hoc signing of `ai/cpu`).
+- [x] Smoke test the packages on real machines: "no plugin", "CPU plugin", "CUDA plugin without GPU", "CUDA plugin with GPU" - Linux, Windows (DLL search flags), macOS (install names, ad-hoc signing of `ai/cpu`). - works on real machines (2026-10-26)
 - [x] **No more `torch_cuda` relink** (2026-10-19): the app loads `libtorch_cuda.so` / `torch_cuda.dll` from the plugin's folder right after the plugin, before its first libtorch call (it registers CUDA when loaded; the CPU build has none) - `crates/ai/build.rs` is gone, the release checks now check that the CUDA library is packaged in `ai/cuda`. Test: `the_cuda_library_next_to_the_plugin_is_loaded_with_it`. Still to confirm on a GPU machine (smoke test above): CUDA available, engine "libtorch (CUDA)". Note: with libtorch linked into a test binary (`torch` feature) CUDA is no longer registered there - those tests run on the CPU.
 - [ ] The Windows plugin build (`cargo xwin rustc … --crate-type cdylib`) has not run yet - first release CI run.
 - [ ] **Windows CUDA: "Cannot load symbol cudnnGetVersion"** (user report 2026-10-19, Cellpose-SAM) - fixed, not yet confirmed: libtorch loads cuDNN / nvrtc only at the first inference, with the process' DLL search, which didn't include `ai\cuda`. The plugin folder is now added for every later load (`SetDllDirectoryW` + `AddDllDirectory`, `search_later_loads_in` in crates/ai/src/runtime/plugin.rs). Linux is safe by construction (libtorch_cuda NEEDs libcudnn; every cudnn lib has RUNPATH $ORIGIN); macOS has no CUDA.
@@ -281,7 +281,7 @@ Kept private on purpose (one screen's own, not a copy of an Ink piece): the step
 - [ ] Add magic wand
 - [ ] Allow to modify shape of still drawed elements
 - [x] **Pipeline objects read-only, copied to manual annotations for training** (done 2026-10-19): a pipeline (preview) object shows "From the pipeline · read-only" and only "Copy to manual" (objects panel and object card; Set class, Delete, class-chip remove and the Delete key are off for it). Copy one (the copy is selected, its class can be changed) or, from the objects panel's ⋯ menu, all of the open image's pipeline objects of the ticked classes (their own classes or one class for all); the pipeline object stays visible, the same shape is not copied twice. "Delete manual annotations…" by this image / all images and class. GeoJSON export/import (one `<image>.geojson` per image, QuPath's layout, pixel-exact outlines with holes; import adds or replaces, creates missing classes, matches files by path or name). Code: `crates/app/src/workspace/extensions/annotations_ext.rs`, `crates/app/src/workspace/annotations_geojson.rs`, `crates/gui/src/editor/annotations_controller.rs`.
-  - [ ] Click through it once in the real app (copy, delete dialog, export, import of a QuPath file) - checked by tests and screenshots only.
+  - [x] Click through it once in the real app (copy, delete dialog, export, import of a QuPath file) - checked by tests and screenshots only. - checked in the real app (2026-10-26)
   - Imported annotations are measured on their image file (every channel, full resolution, only the tiles they touch) as if drawn; an unreadable image is reported and its annotations stay unmeasured.
 - [x] **Drawn annotations got wrong intensities on large/zoomed images** (fixed 2026-10-19): drawn shapes (and brush/eraser changes, imports) are now measured on the image file through the backend (`measure_on_source`: every channel, full resolution, only the regions with annotations; this computer or the server), in the background; the values shown at the current zoom are no longer used. "Re-measure manual annotations" (objects panel ⋯) measures old annotations again. Drawing builds its objects from the mask alone (`annotation_from_mask` / `Object::from_mask_geometry`, on the plane shown); the old image-based `Object::from_mask`/`update_object_metrics` (wrong integer-zoom mapping) is gone. Cost of measuring a drawn shape on a 60000 x 40000 slide (release): 40 px 3 ms, 400 px 11 ms, 2000 px 166 ms, in the background (`bench_measure_drawn` in crates/app/src/workspace/annotation_measure.rs). One intensity implementation for pipeline objects and annotations: `evanalyzer_core::{IntensityAccumulator, MaskIntensities}` (crates/core/src/object/intensities.rs); the app only plans and reads the regions.
 
@@ -316,7 +316,7 @@ Decided - to build, in this order:
   - [ ] Plate colour scale from the measurement's `range` (Pearson -1..1); today Auto.
   - [ ] An empty cell says why (e.g. "a channel doesn't vary").
   - [ ] Benchmark object measurements on a big analysis (the value is a correlated subquery per object - DuckDB decorrelates it, unmeasured).
-  - [ ] Look at the picker's "Measurements" group in the real app.
+  - [x] Look at the picker's "Measurements" group in the real app. - checked in the real app (2026-10-26)
 - [x] Export (2026-10-22): measurement columns in the existing kinds (the dialog's column picker lists them; per image / plate / well the same values as the views; not in the image heatmap). New: "Measurements - one row per value" (`ResultExport::with_measurements`, `measurements.{csv,xlsx}`; the `measurements` table's columns, filtered by the chosen images, planes and measurement columns - none chosen: all; only offered when the analysis has measurements, `ResultsState.has-measurements`). Parquet also writes `measurements.parquet`. CLI: `export csv|xlsx --measurements`.
 - [x] Preview: a "Measurements" panel on the right (before Objects; foldable, closable, Alt+5, in View, open/fold state per user) with every measurement of the preview - all pipelines, steps inside modules too, by step; an image's value or the median of objects'; a click jumps to the step (opens the module). The preview brings the measurements back like its objects (`MemoryExporter.out_measurements` → `PreviewOutput` → `JobOutput.preview_measurements`, also over the network).
   - [ ] The step being edited highlighted in the panel.
@@ -338,11 +338,11 @@ Decided - to build, in this order:
   - [x] Expand objects without growing into neighbours - "CellProfiler parity - next" (5), 2026-10-24.
   - [x] More object intensity statistics: std, median, quartiles, MAD - "CellProfiler parity - next" (2), 2026-10-24; edge intensity, center of mass / mass displacement (niche, later).
   - [x] Image Quality (focus score, power log-log slope, % maximal/minimal - identical to CellProfiler's code, fixture `crates/core/tests/image_quality_cellprofiler.py`; noise σ Immerkær) + Exclude Image (rules on any image measurement, any/all; the run disables the whole image with the reason, keeps analysing; a new run decides afresh; manual re-enable clears the reason) - 2026-10-22.
-    - [ ] Look at the rule editor (measurement dropdown) and the "Excluded" banners (preview panel, results image card) in the real app.
+    - [x] Look at the rule editor (measurement dropdown) and the "Excluded" banners (preview panel, results image card) in the real app. - checked in the real app (2026-10-26)
     - [ ] A module exposing a rule's measurement as a parameter: the module parameter is a plain text field (no dropdown yet).
     - [x] List: a disabled image's rows dimmed + struck through also with a row per image; an "Excluded" (pipeline, reason on hover) / "Left out" (by hand) marker; Images selector All / Only enabled / Only disabled - 2026-10-22.
     - [x] Leave images out / take them back in from the List: C1 (eye on the hovered row) + C2 (checkbox column, Shift range, header box for the page, bar "Take back in / Leave out / Clear") - 2026-10-22. Acts on whole images (also with a row per object).
-    - [ ] Look at the list's eye, checkboxes and bar in the real app (screenshot).
+    - [x] Look at the list's eye, checkboxes and bar in the real app (screenshot). - checked in the real app (2026-10-26)
     - [ ] The reason in the plate's image list too.
     - [ ] CellProfiler's local focus score (per window) if the global one isn't robust enough.
   - [x] Texture (Haralick) - "Measure Texture", 2026-10-24 (see "CellProfiler parity - next" 6). Object neighbours done (4).
@@ -368,21 +368,21 @@ Order:
   - [x] AI object classifier features (2026-10-24): `ObjectMetric::IntensityStd/Median/LowerQuartile/UpperQuartile/Mad(channel)`, in the training dialog per channel. Annotations store the spread (`IntensitySettings.*_intensity: Option<f64>`, left out when none); an annotation stored before has none - training skips it with a reason (draw/import it again). No trained models exist yet: no compatibility kept.
 - [x] 5. Transform Objects › "Expand Without Overlap" (2026-10-24): a new function (not an option on Expand - no project migration): every background pixel within the margin goes to the nearest object, CellProfiler's ExpandOrShrinkObjects (SciPy `distance_transform_edt` indices) pixel for pixel - fixture `crates/core/tests/expand_objects_cellprofiler.py` (12 cases incl. ties, also in 7 px blocks). SciPy's feature transform ported (`algos/libs/feature_transform.rs`). Whole image in 2048² blocks + margin. 8192², 42k objects: 1.3 s / 255 MB (margin 8; 2.4 s / 376 MB before the feature transform kept 8 bytes per pixel). Fractional margins count (not `to_pixel`).
   - [ ] "Until touching" without a margin (CellProfiler's Expand until touching): today a large margin.
-  - [ ] Look at it in the real app.
+  - [x] Look at it in the real app. - checked in the real app (2026-10-26)
 - [x] 1. Measure Colocalization (2026-10-24, `algos/measure/colocalization.rs`; named so beside the object step "Colocalization"): Pearson, slope, Manders M1/M2 (threshold % of max, default 15), overlap, K1/K2, RWC 1/2, Manders M1/M2 with Costes thresholds (Faster = bisection by default, Fast, Accurate, Off) - per image and, with "Per object of", per object (no slope per object, as CellProfiler). CellProfiler's arithmetic exactly incl. its quirks (`>` per image, `>=` per object; RWC ranks over the image / all objects; per-object Costes uses the image's thresholds; Python float `//` in Costes) - fixture `crates/core/tests/colocalization_cellprofiler.py` (6 cases, 103 objects, every Costes method). Citations checked on Crossref. 2048², 2601 objects: 35 ms (no Costes) / 211 ms (Faster) / 749 ms (Fast), ~90 MB.
-  - [ ] Look at the step and its values in the real app.
+  - [x] Look at the step and its values in the real app. - checked in the real app (2026-10-26)
   - [x] The old "Pearson Correlation" step is removed (2026-10-24) - Measure Colocalization measures Pearson (key `<id>/pearson`). Projects with a Pearson step won't load (unreleased: the step existed 2026-10-22..24).
   - [ ] Inside a class region (`MeasurementRegion::Class`) - CellProfiler doesn't have it (only per object); later if wanted.
 - [x] 4. Measure Object Neighbors (2026-10-24, `algos/measure/object_neighbors.rs`): neighbours (expand until adjacent / adjacent / within a distance), percent touching, first/second closest distance (centre to centre, `related_object_id` = that object), angle between them; neighbours of the same or another class. CellProfiler's MeasureObjectNeighbors exactly (fixture `crates/core/tests/object_neighbors_cellprofiler.py`, 7 cases, 229 objects incl. the closest objects) - except: no closest object → no value (CellProfiler writes 0). Per object on patches (whole slides fine); "expand until adjacent" grows the whole image (≤ 128 MP). 8192², 42k objects: adjacent 0.27 s, within 35 px 5.5 s, expand 3.1 s / 925 MB.
   - [x] Measure Distance To Parent (`algos/measure/distance_to_parent.rs`): child centre → parent centre and → parent edge (CellProfiler RelateObjects' distances, fixture `crates/core/tests/distance_to_parent_cellprofiler.py`), `related_object_id` = the parent; a separate measure step (Relate is an object step).
   - [x] Results (2026-10-24): `Column::MeasurementObject` ("‹step› · ‹name› · object": the id the value names) for measurements declared `naming_objects()` (`measurement_info.related_objects`); a click on it opens that object (`RelatedTo::RelatedOf`), a click on a parent's id too (`RelatedTo::ParentOf`, was not clickable).
-  - [ ] Look at both steps in the real app.
+  - [x] Look at both steps in the real app. - checked in the real app (2026-10-26)
 - [x] 6. Measure Texture (2026-10-24, `algos/measure/texture.rs`): Haralick's 13 features (CellProfiler's MeasureTexture → mahotas.features.haralick) at a scale (default 3) and gray levels (default 256), over the image and, with "Per object of", per object (pixels outside the object and at 0 left out, as CellProfiler). Value for value (1e-9) - fixture `crates/core/tests/texture_cellprofiler.py`, 37 objects × 3 scale/level cases, image split over 2 tiles; incl. mahotas' difference variance (variance of the n values of P(|i-j|)). 8192², 74k objects: 0.82 s.
   - Deviations: "Directions" = mean of the 4 (default; keys `<id>/<feature>`) or each (`<feature>_<0|45|90|135>`, CellProfiler's 4 columns); an object with no pixel pair in a direction gets no values (CellProfiler writes 0). Values in 8 bits over the image's bit depth (CellProfiler: over the file type's range).
-  - [ ] Look at the step and its values in the real app.
+  - [x] Look at the step and its values in the real app. - checked in the real app (2026-10-26)
   - [ ] Several scales in one step (CellProfiler allows a list); today one step per scale.
 - [x] Reproducible results + whole-slide speed (2026-10-24, from the performance-check project): ties in Coloc (best partner), Voronoi (equidistant pixels) and Relate went by `ObjectId` (UUID v7, random within a ms) - now by position (`Object::position_cmp`, first pixel in reading order = CellProfiler's label order); runs give identical objects (before: 9-15 / 1,657 rows differed). Whole slide 131 → 76 s, 9.2 → 8 GB: Tile Merge and Voronoi measure tile by tile (`Object::measure_intensities_of`); the median/quartile histogram now works on raw gray values. Debug-level timings per step/phase. BENCHMARK.md.
-  - [ ] The other whole-image steps that measure one object at a time (Object Math, Transform Objects, Coloc overlap regions, Propagation, Load Annotated Objects): `measure_intensities_of` too.
+  - [x] The other whole-image steps that measure one object at a time (Object Math, Transform Objects, Coloc overlap regions, Propagation, Load Annotated Objects): `measure_intensities_of` too. - done: Object Math, Transform Objects, Coloc, Propagation, Load Annotated Objects use it (checked 2026-10-26)
   - [x] Whole slide's tile phase (2026-10-24): reading is 35-41 of ~55 s per tile - JPEG 2000 (5 z × 5 channels, ~8 ms per 512² tile in the image reader; its part, not EVAnalyzer's). Median Subtract 174-183 → 33 s CPU (sliding histogram, bit-identical); whole slide 76 → 68 s.
   - [ ] Rolling Ball is now the biggest step (69 s CPU, 3.3 s per tile).
   - [x] A test that runs a project twice and with 1 / 4 / 8 threads and expects identical objects (`a_run_gives_the_same_objects_every_time_and_with_any_number_of_threads`: Voronoi, Coloc and Relate ties; fails without the tie-break fixes).
@@ -392,7 +392,7 @@ Order:
   - [x] `Column::MaxFeret/MinFeret/MajorAxis/MinorAxis/EquivalentDiameter/Extent`: Max/Min Feret, Major/Minor axis (already = CellProfiler's), and computed in SQL (no column): Extent (area / box area), Equivalent diameter (√(4A/π)).
   - [x] New step "Measure Object Shape" (`algos/measure/object_shape.rs`): convex area (scikit-image's convex hull image), solidity as CellProfiler (area / convex area), Euler number (8-connected), max/mean/median radius (exact distance transform, integer Felzenszwalb-Huttenlocher) - a step, not fixed columns: ~10 µs per 24 px object (writing 3.8M objects took 180 s instead of 54 s with them in every export).
   - [x] Decided 2026-10-24: keep ImageJ's perimeter / circularity / roundness (traced perimeter, documented) and EVA's solidity (hull over pixel corners). They differ from CellProfiler's: FormFactor uses scikit-image's perimeter, which counts a ring's hole edge (ring 0.53 vs EVA 0.83; a single pixel: EVA circularity 1.57); CellProfiler's solidity = area / convex area in pixels (in Measure Object Shape). Mention in the docs/help so CellProfiler users aren't surprised.
-  - [ ] Tell the testers: Feret changed (see above) - Feret filters in Classify Objects can let other objects through.
+  - [x] Tell the testers: Feret changed (see above) - Feret filters in Classify Objects can let other objects through. - in the testers' release notes (2026-10-26)
   - [ ] Orientation (CellProfiler: degrees, scikit-image's convention) - EVA's `major_axis_angle` is radians in another convention; not offered as a column.
   - [ ] Compactness: EVA P²/A vs CellProfiler P²/(4πA) with its perimeter - not offered.
   - [ ] Zernike moments (later).
@@ -424,7 +424,7 @@ Coloc (one job: mark by overlap + record who touches whom):
 - [x] Coloc "All combinations" (off by default): every overlapping pair is recorded, also of objects not overlapping every class - one step with A, B, C shows A∩B, A∩C, B∩C and A∩B∩C in the partner columns; "As" and the overlap regions still need every class. Replaces chaining 2-way and 3-way steps (which overwrote each other's partner lists) - 2026-10-23.
 - [x] Partners: all by default, stored on both sides (today's "Allow multi"); option "only the best-overlapping partner" (today's 1:1). The hidden 1:1 default that capped cells at 1 spot goes.
 - [x] Multiplicity "Multi coloc only for selected" (`MultiFor`): stays in Advanced for now, to be removed later (Relate covers it).
-- [ ] Help text: "marked" (A overlaps B and C, each on its own) is not "all three share an area" (the overlap region of A∩B∩C, only where it exists).
+- [x] Help text: "marked" (A overlaps B and C, each on its own) is not "all three share an area" (the overlap region of A∩B∩C, only where it exists). - done 2026-10-26: "Colocalize", "Overlap regions as" and "As" say it (`coloc_objects.rs`)
 - [x] ClassifyObjects "Intersecting With" (`overlapping_with`): stays in Advanced for now, to be removed later (Coloc's marking covers it; "bright and overlapping" = Coloc marks, then Classify on that class).
 
 Results (aggregates computed by the queries, nothing stored):
@@ -438,7 +438,7 @@ Results (aggregates computed by the queries, nothing stored):
 - [x] Editor object details: "Parent: Cell", "Children: Spot · 7", "Coloc with" → "Touches" - 2026-10-23. In the editor's viewer too: the selected object's children light blue, its parent yellow, lines to them, the rest dimmed.
 - [x] Export: the new values are ordinary `Column` variants (child aggregates, parent columns, partner count) with `key()`/`from_key()`, so every export kind, the CLI `--columns`/`--view` and Plate/Charts get them; the export dialog's column picker gets the Children and Linked objects groups; the Objects export follows the row type (pairs replace the "List (Coloc Details)" sheet / `list_coloc_details.csv`).
 - [x] CLI: `export --colocalized` and `--split-colocalized` (always failed: "isn't supported by the current results backend") removed - 2026-10-23.
-- [ ] Tell the alpha testers: "spots per cell" with Coloc 1:1 (the default) counted at most 1 spot per cell - redo it with Relate.
+- [x] Tell the alpha testers: "spots per cell" with Coloc 1:1 (the default) counted at most 1 spot per cell - redo it with Relate. - in the testers' release notes (2026-10-26)
 - [x] `get_centroid()` is the centre of mass (was the bbox centre, now `get_bbox_center()`); both stored (`centroid_*`, `bbox_center_*`) - 2026-10-23, BENCHMARK.md.
 - [ ] Linked objects: the parent's columns are the ticked ones (one picker less than board U1's "Its columns"); a picker of its own if users need other columns.
 - [x] Editor viewer: the selected object was drawn magenta-ish, not yellow - `Color::from_argb_u8(0xfc, 0xe9, 0x03, alpha)` had the alpha last (Slint: alpha first) - 2026-10-23.
@@ -489,7 +489,7 @@ Project schema (folded into the unreleased v3 → v4):
 - [x] Size filters: `min_area`/`max_area`/`min_intersection_area` (Classify Objects), `min_overlap_area` (Object Math), `min_coloc_area` (Colocalize Objects) -> `…_size`, renamed in v3 → v4 (commands and module bindings); descriptions "area in 2D, volume in 3D". `min_size` (Connected Components) / `min_object_size` were already neutral. Open: a project already saved as v4 (your own test projects) with one of these steps doesn't load ("missing field `minSize`") - the v3 -> v4 step doesn't run on it. Decide: rename the keys in those files by hand, or a v4 -> v5 step.
 - [x] Size filters, switching (2026-10-25): switching the Z selector between 2D and 3D shows "Check the size settings" with the size settings changed from their default (`module_insights::size_settings_set`). Still open: the UI showing µm² / µm³ by the image.
 - [x] Module files (`.evamodule`): not migrated by design ("updated by hand"); none in the repo.
-- [ ] **Release blocker** (found 2026-10-25): the templates (repo evanalyzer-templates) still have the old size keys - 5 of 7 don't load ("missing field `minIntersectionSize`"): cell_area_brightfield, cellpose_sam, ev_detection, ev_in_cell_detection, nuclei_detection. Rename `minArea`/`maxArea`/`minIntersectionArea`/`minOverlapArea`/`minColocArea` -> `minSize`/`maxSize`/`minIntersectionSize`/`minOverlapSize`/`minColocSize`, and in the parameter bindings `min_area`/`max_area`/`min_intersection_area` -> `min_size`/`max_size`/`min_intersection_size`; then CI's `check_templates` passes again.
+- [x] **Release blocker** (found 2026-10-25): the templates (repo evanalyzer-templates) still have the old size keys - 5 of 7 don't load ("missing field `minIntersectionSize`"): cell_area_brightfield, cellpose_sam, ev_detection, ev_in_cell_detection, nuclei_detection. Rename `minArea`/`maxArea`/`minIntersectionArea`/`minOverlapArea`/`minColocArea` -> `minSize`/`maxSize`/`minIntersectionSize`/`minOverlapSize`/`minColocSize`, and in the parameter bindings `min_area`/`max_area`/`min_intersection_area` -> `min_size`/`max_size`/`min_intersection_size`; then CI's `check_templates` passes again. - done: the template repo was fixed 2026-10-25 ("chore: Fixed templates"), `check_templates` passes (checked 2026-10-26)
 
 Internal types (`core`):
 - [x] `ImageDimensionality { Planar, Volume { depth } }` (cfg `types/image.rs`, `depth()`, `ndim()`); `ManagedImage.dimensionality` + `ImageContainer::dimensionality()`, `ManagedImage::plane_size()` / `plane_slice(z)`. Every construction says it (`Planar`), copies and scratch pads inherit it.
@@ -513,7 +513,7 @@ Check at the end of phase 1:
 
 ### Phase 3 - first 3D algorithm (3D blur)
 Decided 2026-10-25: the existing commands are extended to volumes (as scipy.ndimage / scikit-image / ITK / CellProfiler 3+ - one command, its input's dimensionality picks the path); an own command only where the operation itself differs (e.g. something meaningful only in 3D). Slice by slice stays the project's `ZStackHandling::AllStacks`, no per-command switch.
-- [ ] Each command declares what it supports (2D only / 2D + 3D); module checks reject a volume into a 2D-only command with a clear message - never a silent per-plane fallback.
+- [x] Each command declares what it supports (2D only / 2D + 3D); module checks reject a volume into a 2D-only command with a clear message - never a silent per-plane fallback. - done: `PipelineCommand::supports_volumes`, the checks refuse a 2D-only command on volumes (checked 2026-10-26)
 - [ ] Per command with its 3D path, decide what "whole image" means - e.g. automatic thresholds (Otsu, …) from the histogram of the whole volume (as CellProfiler), not per plane.
 - [ ] Gaussian blur in 3D: the existing xy pass per plane + a 1D pass along z (separable); sigma in z = sigma × xy pixel size / z spacing (the project's pixel sizes, no setting of its own).
 - [ ] Tests against a reference 3D Gaussian (anisotropic and isotropic), benchmark speed + RAM (BENCHMARK.md).
@@ -552,8 +552,8 @@ Guiding principles:
 
 ## Phase 1: Foundations (useful even without AI)
 
-- [ ] Fix the license inconsistency: README/LICENSE say AGPL-3.0 + commercial,
-      `crates/cfg/examples/check_templates.rs` says PolyForm Noncommercial 1.0.0.
+- [x] Fix the license inconsistency: README/LICENSE say AGPL-3.0 + commercial,
+      `crates/cfg/examples/check_templates.rs` says PolyForm Noncommercial 1.0.0. - done: README and LICENSE say PolyForm Noncommercial 1.0.0 (checked 2026-10-26)
 - [ ] Move overlay rendering (`crates/gui/src/editor/results_overlay.rs`,
       `object_render.rs`) into core so it can run without the GUI.
 - [ ] CLI: `evanalyzer render-overlay <project> --image <name> --out overlay.png`.

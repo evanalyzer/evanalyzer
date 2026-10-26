@@ -95,6 +95,12 @@ pub struct ColocalizeObjects {
     /// The classes whose objects must overlap (e.g. the ch1 and the ch2
     /// spots): each object overlapping an object of every other class
     /// records them as its partners - listed and counted in the results.
+    ///
+    /// Each overlap counts on its own: with A, B and C, an A object
+    /// colocalizes when it overlaps a B object and a C object - also when
+    /// the B and the C object lie in different parts of it and don't touch
+    /// each other. It doesn't mean all three share an area; that is the
+    /// overlap region ("Overlap regions as").
     #[cmdsmeta(summary = true, optional = true, display_name = "Colocalize")]
     pub classes_to_coloc: Vec<ObjectClass>,
 
@@ -132,7 +138,11 @@ pub struct ColocalizeObjects {
 
     /// Class of the overlapping area if needed
     ///
-    /// If defined the overlapping coloc area is added as new object and labeled with this class
+    /// If defined the overlapping coloc area is added as new object and labeled with this class.
+    /// It is the area all the objects share (A∩B∩C with three classes) - only
+    /// made where they really do: an A object overlapping a B and a C object
+    /// that don't touch each other is colocalized, but gets no overlap
+    /// region.
     #[cmdsmeta(display_name = "Overlap regions as")]
     pub class_for_overlapping_areas: ObjectClass,
 
@@ -145,6 +155,9 @@ pub struct ColocalizeObjects {
     /// Optional: the class the colocalizing objects get (e.g. "ch1 with
     /// ch2") - to count them per image or relate them to cells. `Unset`:
     /// only the partners are recorded.
+    ///
+    /// Marked: the object overlaps an object of every other class, each on
+    /// its own - not "all of them share an area" (see "Colocalize").
     #[cmdsmeta(optional = true, display_name = "As")]
     pub mark_as: ObjectClass,
 
