@@ -59,7 +59,7 @@ burn = { version = "0.21", default-features = false, features = ["ndarray", "aut
 clru = "0.6.3"
 sysinfo = "0.39.6"
 petname = "3.2.0"
-tch =  "0.24.0"
+tch =  "0.26.0"
 libloading = "0.8.9"
 smartcore = "0.5.5"
 approx = "0.5"

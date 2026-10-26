@@ -12,8 +12,8 @@
 //! ai/cuda/  evanalyzer_ai (the plugin) + libtorch (CUDA)  - CUDA packages only
 //! ```
 //!
-//! The CUDA one is tried first where the NVIDIA driver sees a GPU (and the
-//! CPU is not asked for), else the CPU one; a package with only the CUDA
+//! The CUDA one is tried first where the NVIDIA driver sees a GPU new enough
+//! for this build (and the CPU is not asked for), else the CPU one; a package with only the CUDA
 //! one uses it on the CPU too (CUDA libtorch runs without a GPU, just
 //! larger). A plugin
 //! next to the program itself (a `cargo build` of the workspace) or at

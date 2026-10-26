@@ -13,7 +13,13 @@
 # Zoo models) runs through it. Verified against the real libtorch
 # distribution's PE/ELF import tables, not guessed - see chat history for
 # the full per-file reasoning if this needs revisiting.
-# One exception, marked at its entry: libtorch_cuda_linalg.so.
+#
+# On Linux the NVIDIA libraries don't come from libtorch's zip (it has none
+# since 2.13) but from NVIDIA's wheels, and libs/download.sh takes only the
+# ones that are needed - so on Linux this list only trims libtorch's own
+# libraries. NVSHMEM, cuFile and cuSPARSELt are linked by the Linux
+# libtorch_cuda.so (it doesn't load without them), only the Windows DLLs
+# below can go.
 #
 # Deliberately NOT excluded here, despite being large:
 #   - libcudnn_*.so.9 / cudnn_*.dll (~946MB): cuDNN 9 dlopen()s these by
@@ -34,20 +40,15 @@ torch_python.dll
 
 # Multi-GPU/multi-node distributed communication (NVSHMEM) - this app runs
 # single-process, single-GPU inference only.
-libnvshmem_host-*.so.*
 nvshmem_host*.dll
 
 # Profiling-only instrumentation (Nsight Compute counters / NVTX markers) -
 # never invoked by any code path in this app.
-libnvperf_host-*.so
-libnvToolsExt-*.so.*
 nvperf_host*.dll
 nvToolsExt*.dll
 
 # GPUDirect Storage (direct disk<->GPU DMA) - not used; this app reads
 # pixel data through normal file I/O.
-libcufile-*.so.*
-libcufile_rdma-*.so.*
 cufile*.dll
 
 # PyTorch's own internal test fixtures, bundled in the redistributable by
@@ -71,13 +72,3 @@ nnapi_backend.dll
 libaoti_custom_ops.so
 aoti_custom_ops.dll
 
-# cuSPARSELt (2:4 structured-sparse weights) - in the Linux cu130 libtorch
-# nothing links it and nothing opens it by name (checked with readelf and
-# the libraries' strings); the Windows one ships no such DLL.
-libcusparseLt-*.so.*
-
-# GPU linear algebra (inverse, SVD, eig, ...) - libtorch_cuda.so opens it by
-# name on the first such op only; none of the segmentation models has one.
-# Its cuSOLVER isn't shipped on Linux (see libs/download.sh), so it couldn't
-# load anyway. Windows keeps it (inside torch_cuda.dll, with cuSOLVER).
-libtorch_cuda_linalg.so

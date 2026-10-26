@@ -117,8 +117,10 @@ See [docs/server.md](docs/server.md) for all settings.
   libs/download.sh linux-cpu      # or linux-cuda | win-cpu | win-cuda | win-arm64-cpu | mac-cpu
   ```
 
-  `linux-cuda` also puts CUDA libraries the libtorch zip leaves out into
-  `libs/nvidia-cu13/lib` - add that folder to `LD_LIBRARY_PATH` too.
+  Then unpack libtorch: `unzip libs/libtorch-*.zip -d libs` (gives
+  `libs/libtorch`). `linux-cuda` also puts NVIDIA's CUDA libraries into
+  `libs/nvidia-cu13/lib` (the Linux libtorch zip has none) - see
+  [AI models: the libtorch plugin](#ai-models-the-libtorch-plugin).
 
 - **Linux system libraries** for the GUI:
 
@@ -151,11 +153,6 @@ cargo build --no-default-features    # the app without AI model support
 cargo run -p evanalyzer_bin -- --project my.evaproj   # start the GUI with a project
 ```
 
-A plugin next to the binary (as in `target/debug`) is found first;
-`EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai.so` points at another
-one. Release packages put it in `ai/cpu` or `ai/cuda` with its libtorch (see
-`.github/workflows/release.yml`).
-
 Release builds per platform (aliases in `.cargo/config.toml`):
 
 | Target | Command | Notes |
@@ -165,6 +162,106 @@ Release builds per platform (aliases in `.cargo/config.toml`):
 | Windows x86-64 / ARM64 | `cargo build-win` / `cargo build-win-arm` | cross-compiled with [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) |
 | macOS Apple Silicon | `cargo build-mac` | native; set `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (see `libs/download.sh mac-cpu`) |
 
+### AI models: the libtorch plugin
+
+The AI model steps (Cellpose, StarDist, U-Net, YOLOv5) run on libtorch, but
+the app never links it: libtorch lives in a separate library, the **AI
+plugin** - the `evanalyzer_ai` crate built as a cdylib with its `torch`
+feature (`cargo build-ai-plugin`). The app loads it on the first model run;
+without it everything else works and model steps report the plugin as not
+installed.
+
+| | Version | Where it is set |
+|---|---|---|
+| libtorch | 2.13.0 | `LIBTORCH_VERSION` in `libs/download.sh` |
+| tch (Rust bindings) | 0.26 - built for exactly libtorch 2.13 | `tch` in `Cargo.toml` |
+| CUDA | 13.0 (`cu130`): NVIDIA GPUs with compute capability 7.5+ (RTX 20xx / GTX 16xx and newer), driver 580+ | `CUDA_VARIANT` in `libs/download.sh`, `MIN_COMPUTE_CAPABILITY` in `crates/ai/src/runtime/cuda_probe.rs` |
+| NVIDIA libraries (Linux) | the versions torch 2.13 pins on PyPI | `NVIDIA_WHEELS` in `libs/download.sh` |
+
+The plugin is compiled against `libs/libtorch` (`LIBTORCH` in
+`.cargo/config.toml`), and must run with exactly that libtorch.
+
+**Where the app looks for it** (first found wins):
+
+1. `EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai.so`
+2. next to the `evanalyzer` binary
+3. `ai/cuda/` next to the binary - first when the NVIDIA driver sees a GPU new
+   enough for this build
+4. `ai/cpu/` next to the binary
+5. `ai/cuda/` otherwise (CUDA libtorch runs on the CPU too)
+
+The plugin's libtorch must be in the plugin's own folder (its RUNPATH is
+`$ORIGIN`; on Windows the app searches the plugin's folder); the CUDA part
+(`libtorch_cuda.so` / `torch_cuda.dll`) is loaded from there by the app. GPUs
+older than the build supports are skipped - models run on the CPU.
+
+**Development (CPU):**
+
+```sh
+libs/download.sh linux-cpu && unzip -q libs/libtorch-*.zip -d libs
+cargo build-ai-plugin                # target/debug/libevanalyzer_ai.so, next to the binary
+LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo run -p evanalyzer_bin
+```
+
+**A runnable build with GPU support** - the package layout, in the target
+folder:
+
+```sh
+libs/download.sh linux-cuda && unzip -q libs/libtorch-*.zip -d libs
+cargo build-linux
+cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
+
+R=target/x86_64-unknown-linux-gnu/release
+mkdir -p $R/ai/cuda
+mv $R/libevanalyzer_ai.so $R/ai/cuda/          # not next to the binary: that copy would win
+cp libs/libtorch/lib/*.so* libs/nvidia-cu13/lib/*.so* $R/ai/cuda/
+ldd $R/ai/cuda/libtorch_cuda.so | grep "not found"   # only libcuda/libnvidia-ml may show: the driver's
+$R/evanalyzer
+```
+
+After rebuilding the plugin, move the new `libevanalyzer_ai.so` into
+`ai/cuda` again.
+
+**Shipping.** The release pipeline (`.github/workflows/release.yml`)
+builds and packages every platform; a tag (`v0.2.0` or `0.2.0`) publishes
+a GitHub release, each platform's files added as soon as its build is done.
+Pushing to the `pipeline_start` branch runs the same builds without a
+release. Package layout:
+
+```text
+evanalyzer(.exe)            the app
+duckdb.dll / libduckdb.dylib  Windows / macOS only (Linux has DuckDB built in)
+templates/                  project and module templates
+ai/cpu/  or  ai/cuda/       the plugin + its libtorch (+ NVIDIA's libraries in ai/cuda)
+```
+
+| Package | AI | Built from |
+|---|---|---|
+| Linux / Windows x86-64 | CPU (`ai/cpu`) | `download.sh linux-cpu` / `win-cpu` |
+| Linux / Windows x86-64 CUDA | GPU (`ai/cuda`), one `.7z` < 2 GiB | `download.sh linux-cuda` / `win-cuda` |
+| Windows ARM64 | CPU | `download.sh win-arm64-cpu` |
+| macOS Apple Silicon | CPU, dylibs relinked to `@loader_path` and ad-hoc signed | `download.sh mac-cpu` |
+| Linux ARM64 | none - PyTorch publishes no libtorch for it | - |
+
+Files in `.github/NOT_SHIP_LIST.txt` (Python bindings, test fixtures,
+profiler and multi-GPU libraries) are left out of the CUDA packages, and the
+Linux CUDA job fails if `ldd` finds a library libtorch needs missing, or if
+the archive reaches GitHub's 2 GiB limit.
+
+**Updating libtorch:**
+
+1. Pick a version a `tch` release supports (its CHANGELOG: "PyTorch v2.x
+   support") and for which pytorch.org has every zip we use (CPU, `cu130`
+   Linux/Windows, Windows ARM64, macOS).
+2. Set `tch` in `Cargo.toml` and `LIBTORCH_VERSION` in `libs/download.sh`.
+3. Update `NVIDIA_WHEELS` in `libs/download.sh` to the versions that torch
+   version pins on PyPI (`requires_dist` of `torch` and of its
+   `cuda-toolkit`), and check with `readelf -d libs/libtorch/lib/*.so` that
+   every NVIDIA library libtorch links is in the list.
+4. Delete `libs/libtorch` and any old libtorch copies (e.g. in
+   `target/debug/deps` - `cargo test` puts that folder first on the library
+   path), download again, run the AI tests (below) and one model on a GPU.
+
 ### Testing
 
 ```sh
@@ -172,6 +269,8 @@ cargo test                           # everything except the AI model steps
 LD_LIBRARY_PATH=$PWD/libs/libtorch/lib \
   cargo test --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
 ```
+
+With the CUDA libtorch add `libs/nvidia-cu13/lib` to `LD_LIBRARY_PATH`.
 
 `libtorch-in-process` links libtorch into the test process for the AI model
 steps' tests; `libtorch` adds the plugin loader, whose test builds and loads

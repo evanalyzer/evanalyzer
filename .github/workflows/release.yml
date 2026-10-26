@@ -338,13 +338,12 @@ jobs:
           mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # The AI plugin with its CUDA libtorch in ai/cuda (it runs on the CPU
-          # too where there is no GPU). CUDA libtorch ships its runtime as
-          # versioned objects (libcudart-<hash>.so.13, libcudnn*.so.9,
-          # libgomp-<hash>.so.1, …), so the glob must be *.so* to catch the
-          # .so.N files - a plain *.so would ship none of the CUDA libs and the
-          # plugin would fail to load. Beside them the CUDA libraries the
-          # libtorch zip leaves out (cuFFT, cuRAND, cuSPARSE, nvJitLink - see
-          # libs/download.sh).
+          # too where there is no GPU), and beside it the NVIDIA libraries
+          # libtorch needs - its zip has none, they come from NVIDIA's wheels
+          # (see libs/download.sh). Most are versioned objects
+          # (libcudart.so.13, libcudnn*.so.9, libgomp.so.1, …), so the globs
+          # must be *.so* - a plain *.so would ship none of them and the
+          # plugin would fail to load.
           mkdir -p dist/ai/cuda
           cp target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai.so dist/ai/cuda/
           cp libs/libtorch/lib/*.so*                               dist/ai/cuda/ 2>/dev/null || true
@@ -369,11 +368,16 @@ jobs:
           # registers itself - nothing links it): without it the build runs
           # CPU-only.
           [ -f dist/ai/cuda/libtorch_cuda.so ] || { echo "::error::dist/ai/cuda/libtorch_cuda.so missing - the CUDA build would run CPU-only"; exit 1; }
-          # Every library libtorch_cuda needs is in the package (its RUNPATH
-          # is $ORIGIN) - a missing one only shows on a user's GPU machine.
-          if ldd dist/ai/cuda/libtorch_cuda.so | grep "not found"; then
-            echo "::error::libraries libtorch_cuda.so needs are missing from dist/ai/cuda"; exit 1
-          fi
+          # Every library libtorch's CUDA part needs is in the package (its
+          # RUNPATH is $ORIGIN) - a missing one only shows on a user's GPU
+          # machine. libtorch_cuda_linalg is opened on the first GPU linear-
+          # algebra op. Not the driver's own (libcuda, NVML): they come with
+          # the user's NVIDIA driver.
+          for lib in libtorch_cuda.so libtorch_cuda_linalg.so; do
+            if ldd "dist/ai/cuda/$lib" | grep "not found" | grep -v -e "libcuda\.so" -e "libnvidia-ml\.so"; then
+              echo "::error::libraries $lib needs are missing from dist/ai/cuda"; exit 1
+            fi
+          done
           # 7-Zip at maximum compression (-mx=9) keeps it one file below
           # GitHub's 2 GiB release asset limit.
           command -v 7z >/dev/null || { apt-get update -qq && apt-get install -y -qq p7zip-full; }

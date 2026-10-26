@@ -1,4 +1,4 @@
-FROM rust:1.96-trixie AS live
+FROM rust:1.99-trixie AS live
 
 RUN curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/latest/download/cargo-dist-installer.sh | sh
 
@@ -31,6 +31,7 @@ RUN cargo install cargo-auditable
 RUN cargo install cargo-about
 RUN cargo install cargo-cyclonedx
 RUN cargo install cargo-outdated
+RUN cargo install cargo-edit
 RUN rustup component add llvm-tools-preview
 
 # Cross build
