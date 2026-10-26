@@ -13,6 +13,7 @@
 # Zoo models) runs through it. Verified against the real libtorch
 # distribution's PE/ELF import tables, not guessed - see chat history for
 # the full per-file reasoning if this needs revisiting.
+# One exception, marked at its entry: libtorch_cuda_linalg.so.
 #
 # Deliberately NOT excluded here, despite being large:
 #   - libcudnn_*.so.9 / cudnn_*.dll (~946MB): cuDNN 9 dlopen()s these by
@@ -20,17 +21,11 @@
 #     in the static import graph references them, but they are required.
 #     Dropping any one risks a crash the first time some model's specific
 #     op hits that engine.
-#   - libnvrtc*.so.12, libnvrtc-builtins.so, libcaffe2_nvrtc.so /
+#   - libnvrtc*.so.13, libnvrtc-builtins.so, libcaffe2_nvrtc.so /
 #     nvrtc*.dll, caffe2_nvrtc.dll (~106MB): TorchScript's automatic CUDA
 #     operator fusion can invoke NVRTC for *any* loaded model - this is
 #     default PyTorch behavior, not something the model or app opts into,
 #     so it can't be ruled out for arbitrary user-supplied models.
-#   - libcusparseLt-*.so.0 / cusparseLt*.dll (~432MB): only needed for
-#     structured-sparse models. Lower risk than the two above (requires a
-#     deliberate export-time choice, not an automatic runtime heuristic),
-#     but still model-content-gated - left in by default since this app
-#     accepts arbitrary external models. Trim manually if you want to
-#     accept that risk for the extra ~432MB saved.
 
 # Python C-extension bindings - tch (Rust) links libtorch's C++ API
 # directly and never touches PyTorch's Python layer.
@@ -75,3 +70,14 @@ nnapi_backend.dll
 # TorchScript (.pt) models this app actually loads.
 libaoti_custom_ops.so
 aoti_custom_ops.dll
+
+# cuSPARSELt (2:4 structured-sparse weights) - in the Linux cu130 libtorch
+# nothing links it and nothing opens it by name (checked with readelf and
+# the libraries' strings); the Windows one ships no such DLL.
+libcusparseLt-*.so.*
+
+# GPU linear algebra (inverse, SVD, eig, ...) - libtorch_cuda.so opens it by
+# name on the first such op only; none of the segmentation models has one.
+# Its cuSOLVER isn't shipped on Linux (see libs/download.sh), so it couldn't
+# load anyway. Windows keeps it (inside torch_cuda.dll, with cuSOLVER).
+libtorch_cuda_linalg.so

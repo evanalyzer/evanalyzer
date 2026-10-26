@@ -115,8 +115,11 @@ See [docs/server.md](docs/server.md) for all settings.
   downloaded once into `libs/`:
 
   ```sh
-  libs/download.sh linux-cpu      # or linux-cuda | win-cpu | win-cuda | mac-cpu
+  libs/download.sh linux-cpu      # or linux-cuda | win-cpu | win-cuda | win-arm64-cpu | mac-cpu
   ```
+
+  `linux-cuda` also puts CUDA libraries the libtorch zip leaves out into
+  `libs/nvidia-cu13/lib` - add that folder to `LD_LIBRARY_PATH` too.
 
 - **Linux system libraries** for the GUI:
 
@@ -159,7 +162,7 @@ Release builds per platform (aliases in `.cargo/config.toml`):
 | Target | Command | Notes |
 |---|---|---|
 | Linux x86-64 | `cargo build-linux` | plugin: `cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu` |
-| Linux ARM64 | `cargo build-linux-arm` | `apt install gcc-aarch64-linux-gnu`, `rustup target add aarch64-unknown-linux-gnu` |
+| Linux ARM64 | `cargo build-linux-arm` | no AI plugin (no libtorch for Linux ARM64); cross-compiling needs an arm64 sysroot with fontconfig - release builds run on an ARM runner |
 | Windows x86-64 / ARM64 | `cargo build-win` / `cargo build-win-arm` | cross-compiled with [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) |
 | macOS Apple Silicon | `cargo build-mac` | native; set `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (see `libs/download.sh mac-cpu`) |
 

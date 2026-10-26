@@ -58,7 +58,7 @@ pub(crate) fn load(config: &EngineConfig) -> Result<Box<dyn InferenceEngine>, St
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let wants_gpu = config.devices != DeviceSelection::Cpu && cuda_probe::gpu_count() > 0;
+    let wants_gpu = config.devices != DeviceSelection::Cpu && !cuda_probe::usable_gpus().is_empty();
     let candidates = candidates(
         std::env::var_os(PLUGIN_ENV).map(PathBuf::from),
         exe_dir.as_deref(),

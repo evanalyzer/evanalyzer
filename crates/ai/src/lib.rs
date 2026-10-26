@@ -61,10 +61,11 @@ pub fn infer(
     engine.infer(request, image)
 }
 
-/// Whether a CUDA GPU can run models: the NVIDIA driver finds one, and this
-/// build can use it. Slow (loads the driver) - not for a UI startup path.
+/// Whether a CUDA GPU can run models: the NVIDIA driver finds one new enough
+/// for this build, and the build can use it. Slow (loads the driver) - not
+/// for a UI startup path.
 pub fn cuda_is_available() -> bool {
-    if runtime::cuda_probe::gpu_count() == 0 {
+    if runtime::cuda_probe::usable_gpus().is_empty() {
         return false;
     }
     #[cfg(feature = "torch")]

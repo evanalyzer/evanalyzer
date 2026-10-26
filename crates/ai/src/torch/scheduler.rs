@@ -112,8 +112,8 @@ impl TorchScheduler {
         }
     }
 
-    /// The devices `config` selects out of the GPUs libtorch finds (the CPU
-    /// when none).
+    /// The devices `config` selects out of the GPUs libtorch finds and this
+    /// build has kernels for (the CPU when none).
     pub(crate) fn from_config(config: &EngineConfig) -> Self {
         let cores = config.cores.max(1);
         let gpu_count = if tch::Cuda::is_available() {
@@ -121,7 +121,11 @@ impl TorchScheduler {
         } else {
             0
         };
-        let gpus = selected_gpus(&config.devices, gpu_count);
+        let gpus = selected_gpus(
+            &config.devices,
+            gpu_count,
+            crate::runtime::cuda_probe::usable_gpus(),
+        );
         let devices: Vec<(Device, usize)> = if gpus.is_empty() {
             vec![(Device::Cpu, 1)]
         } else {
@@ -273,11 +277,12 @@ fn pick_slot(slots: &[SlotState]) -> Option<usize> {
     best.map(|(index, _)| index)
 }
 
-/// The GPU indexes to use out of `gpu_count`; selected ones that don't
-/// exist are ignored (with a warning).
-fn selected_gpus(selection: &DeviceSelection, gpu_count: usize) -> Vec<usize> {
+/// The GPU indexes to use out of `gpu_count`, only `usable` ones (new
+/// enough for this build); selected ones that don't exist or are too old
+/// are ignored (with a warning).
+fn selected_gpus(selection: &DeviceSelection, gpu_count: usize, usable: &[usize]) -> Vec<usize> {
     match selection {
-        DeviceSelection::Auto => (0..gpu_count).collect(),
+        DeviceSelection::Auto => (0..gpu_count).filter(|g| usable.contains(g)).collect(),
         DeviceSelection::Cpu => Vec::new(),
         DeviceSelection::Gpus(gpus) => {
             let (exist, missing): (Vec<usize>, Vec<usize>) =
@@ -285,7 +290,12 @@ fn selected_gpus(selection: &DeviceSelection, gpu_count: usize) -> Vec<usize> {
             if !missing.is_empty() {
                 warn!("GPUs {missing:?} don't exist ({gpu_count} found); ignoring them");
             }
-            exist
+            let (new, old): (Vec<usize>, Vec<usize>) =
+                exist.into_iter().partition(|g| usable.contains(g));
+            if !old.is_empty() {
+                warn!("GPUs {old:?} are too old for this build's CUDA; ignoring them");
+            }
+            new
         }
     }
 }
@@ -475,14 +485,39 @@ mod tests {
 
     #[test]
     fn gpu_selection() {
-        assert_eq!(selected_gpus(&DeviceSelection::Auto, 3), vec![0, 1, 2]);
-        assert_eq!(selected_gpus(&DeviceSelection::Cpu, 2), Vec::<usize>::new());
+        let all = [0, 1, 2];
         assert_eq!(
-            selected_gpus(&DeviceSelection::Gpus(vec![2, 0, 9]), 3),
+            selected_gpus(&DeviceSelection::Auto, 3, &all),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            selected_gpus(&DeviceSelection::Cpu, 2, &all),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            selected_gpus(&DeviceSelection::Gpus(vec![2, 0, 9]), 3, &all),
             vec![2, 0]
         );
         assert_eq!(
-            selected_gpus(&DeviceSelection::Auto, 0),
+            selected_gpus(&DeviceSelection::Auto, 0, &[]),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn gpus_too_old_for_the_build_are_not_selected() {
+        // GPU 1 is too old (e.g. a GTX 1060 beside an RTX 3060).
+        assert_eq!(
+            selected_gpus(&DeviceSelection::Auto, 3, &[0, 2]),
+            vec![0, 2]
+        );
+        assert_eq!(
+            selected_gpus(&DeviceSelection::Gpus(vec![1, 2]), 3, &[0, 2]),
+            vec![2]
+        );
+        // Only old GPUs: the CPU.
+        assert_eq!(
+            selected_gpus(&DeviceSelection::Auto, 1, &[]),
             Vec::<usize>::new()
         );
     }
