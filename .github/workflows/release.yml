@@ -551,7 +551,9 @@ jobs:
       - name: Install cargo-edit
         # Runs on the macOS runner, not in the toolchain image, so
         # `cargo set-version` (below) isn't preinstalled here.
-        uses: taiki-e/install-action@cargo-edit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
 
       - name: Set version
         run: |
@@ -691,6 +693,13 @@ jobs:
         with:
           key: linux-arm64
 
+      - name: Install cargo-edit
+        # The plain Rust image (not the toolchain image) has no
+        # `cargo set-version` (below).
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+
       - name: Set version
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
@@ -809,8 +818,12 @@ jobs:
 
       - name: Build
         # The app, then the libtorch plugin it loads on the first AI step.
+        # The app uses cargo-xwin's `clang` mode: ring always compiles with
+        # plain clang on aarch64-pc-windows-msvc, which can't read the
+        # clang-cl style flags (/imsvc) of the default mode. The plugin keeps
+        # clang-cl, which the torch-sys shim above relies on.
         run: |
-          cargo build-win-arm
+          cargo build-win-arm --cross-compiler clang
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target aarch64-pc-windows-msvc
 
       - name: Download templates
@@ -986,6 +999,11 @@ jobs:
       - name: Run tests with coverage instrumentation
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
+          # The instrumented build got OOM-killed (exit 137) on the runner.
+          # Coverage needs no debug info, and fewer parallel rustc/linker
+          # processes keep the peak below the runner's RAM.
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_BUILD_JOBS: "2"
         run: >-
           cargo llvm-cov --workspace --no-report
           --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
