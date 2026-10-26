@@ -715,7 +715,7 @@
           ]
         },
         {
-          "description": "How the pixel values spread in the channel (CellProfiler's\nMeasureObjectIntensity).",
+          "description": "How the pixel values spread in the channel (standard deviation).",
           "type": "object",
           "properties": {
             "INTENSITY_STD": {

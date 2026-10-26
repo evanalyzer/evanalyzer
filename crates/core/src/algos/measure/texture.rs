@@ -7,16 +7,15 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! Haralick's texture features - CellProfiler's MeasureTexture
-//! (cellprofiler/modules/measuretexture.py, CellProfiler 4.2.8, which calls
-//! mahotas.features.haralick), value for value: the channel as 8 bits
-//! (its normalized 0..1 values, as CellProfiler loads the image, × 255),
+//! Haralick's texture features (as computed by mahotas.features.haralick):
+//! the channel as 8 bits (its values normalized to 0..1 by the bit depth's
+//! maximum, × 255, so the result doesn't depend on the bit depth),
 //! rescaled to the gray levels; per direction
 //! the symmetric co-occurrence matrix of the pixel pairs that far apart and
 //! the 13 features of it - over the whole image (Measure Image Texture) or
 //! per object of a class (Measure Object Texture), where the pixels outside
 //! the object and the pixels at 0 are left out. An object with no pair in
-//! one of the directions gets no values (CellProfiler stores 0 then).
+//! one of the directions gets no values (its features are stored as 0).
 
 use crate::ImageDimensionality;
 use crate::algos::GlobalPipelineCache;
@@ -39,8 +38,8 @@ pub enum TextureDirections {
     /// The mean of the four directions - one value per feature.
     #[cmdsmeta(display_name = "Mean of the directions")]
     Mean,
-    /// A value per direction (0°, 45°, 90°, 135°), as CellProfiler stores
-    /// them - four times as many values.
+    /// A value per direction (0°, 45°, 90°, 135°) - four times as many
+    /// values.
     #[cmdsmeta(display_name = "Each direction")]
     Each,
 }
@@ -79,7 +78,7 @@ const FEATURES: [(&str, &str, Option<(f64, f64)>); 13] = [
 ];
 
 /// The directions, in mahotas' order: (row, column) step and the angle
-/// CellProfiler gives it.
+/// it is reported under.
 const DIRECTIONS: [((isize, isize), u32); 4] =
     [((0, 1), 0), ((1, 1), 135), ((1, 0), 90), ((1, -1), 45)];
 
@@ -164,8 +163,8 @@ impl Texture {
         }
     }
 
-    /// The features over the whole image (CellProfiler's run_image: every
-    /// pixel, zeros included). The tiles are counted in parallel; pairs
+    /// The features over the whole image (every pixel, zeros included -
+    /// there is no mask to tell background from a dark pixel). The tiles are counted in parallel; pairs
     /// across a tile border take the neighbour from the tile it lies in.
     pub(super) fn image_features(
         &self,
@@ -249,8 +248,9 @@ impl Texture {
         Ok(counts.features(max as usize + 1))
     }
 
-    /// `object`'s features (CellProfiler's run_one: the pixels of its bounding
-    /// box, those outside it at 0, the zeros left out).
+    /// `object`'s features (the pixels of its bounding box, those outside
+    /// it set to 0, the zeros left out so only the object's own pixels
+    /// form pairs).
     pub(super) fn object_features(
         &self,
         object: &Object,
@@ -552,7 +552,7 @@ mod tests {
 
     const CELL: ObjectClass = ObjectClass::Global(1);
 
-    /// One case of `tests/texture_cellprofiler.json`.
+    /// One case of `tests/texture.json`.
     #[derive(serde::Deserialize)]
     struct Case {
         width: usize,
@@ -566,7 +566,7 @@ mod tests {
     }
 
     /// The 16-bit image as the image reader stores it - normalized to 0..1
-    /// (÷ 65535), as CellProfiler loads it too - split into a left and a
+    /// (÷ 65535) - split into a left and a
     /// right tile, the labels as objects.
     fn cache_of(case: &Case) -> GlobalPipelineCache {
         let mut cache = GlobalPipelineCache::default();
@@ -687,18 +687,15 @@ mod tests {
     }
 
     fn cases() -> Vec<Case> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/texture_cellprofiler.json"
-        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/texture.json");
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
-    /// Every feature of every direction, over the image and per object, as
-    /// CellProfiler's MeasureTexture gives it (fixture from
-    /// `tests/texture_cellprofiler.py`) - at three scales and gray levels.
+    /// Every feature of every direction, over the image and per object, matches
+    /// the reference values (fixture from
+    /// `tests/texture.json`) - at three scales and gray levels.
     #[test]
-    fn values_are_cellprofilers() {
+    fn values_match_reference() {
         let cases = cases();
         assert_eq!(cases.len(), 3);
         for case in &cases {

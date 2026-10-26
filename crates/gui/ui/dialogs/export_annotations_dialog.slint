@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // dialogs/export_annotations_dialog.slint — the open image's objects as
-// GeoJSON (QuPath reads it): its manual annotations and the pipeline objects
+// GeoJSON (readable by other tools): its manual annotations and the pipeline objects
 // shown on it, of the classes ticked; then where to save it.
 
 import { Places } from "../api/layout.slint";
@@ -25,7 +25,7 @@ export component ExportAnnotationsDialog inherits InkDialog {
     VerticalLayout {
         spacing: 8px;
         Text {
-            text: AnnotationState.export-classes.length == 0 ? "This image has no objects." : "Every object of these classes - drawn ones and the pipeline's - as GeoJSON (QuPath reads it):";
+            text: AnnotationState.export-classes.length == 0 ? "This image has no objects." : "Every object of these classes - drawn ones and the pipeline's - as GeoJSON:";
             wrap: word-wrap;
             color: Ink.text;
             font-size: Ink.fs-secondary;

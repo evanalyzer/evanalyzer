@@ -4,8 +4,9 @@
 //! `ndimage.distance_transform_edt(..., return_indices=True)`
 //! (scipy/ndimage/src/ni_morphology.c: `_ComputeFT` / `_VoronoiFT`, Maurer,
 //! Qi & Raghavan 2003), 2D, keeping its arithmetic and the order it settles
-//! ties in - so objects expanded with it get CellProfiler's pixels
-//! (ExpandOrShrinkObjects expands with exactly that SciPy call).
+//! ties in - so objects expanded with it get exactly the pixels of that
+//! SciPy call, and a pixel equally far from two objects always goes to the
+//! same one, deterministically.
 //!
 //! First every column is scanned on its own (the nearest feature in the
 //! column), then every row picks among its columns' candidates the lower

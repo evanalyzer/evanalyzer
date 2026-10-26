@@ -1,8 +1,7 @@
 //! # shape
 //!
-//! An object's shape measurements as CellProfiler's MeasureObjectSizeShape
-//! gives them (cellprofiler/modules/measureobjectsizeshape.py, CellProfiler
-//! 4.2.8, with scikit-image's `regionprops` and centrosome): the Feret
+//! An object's shape measurements, defined as scikit-image's `regionprops`
+//! defines them so the values are comparable to the common tools: the Feret
 //! diameters, the convex area, the Euler number and the radii - computed
 //! from the mask when asked for (at export), not kept on the object.
 //!
@@ -118,7 +117,7 @@ impl Object {
 
     /// The number of pixels whose centre lies in (or on) the convex hull of
     /// the object's pixels - scikit-image's `convex_hull_image` sum
-    /// ("ConvexArea" in CellProfiler).
+    /// (the usual "ConvexArea").
     pub fn convex_area(&self) -> usize {
         convex_area_from_rows(&self.row_extremes(), self.bbox, self.area, &mut Vec::new())
     }
@@ -130,8 +129,9 @@ impl Object {
     }
 
     /// The radii: each pixel's Euclidean distance to the nearest pixel not
-    /// in the object (the image edge doesn't count - CellProfiler pads the
-    /// object's image), their maximum, mean and median.
+    /// in the object (the image edge doesn't count - the object's image is
+    /// padded, so a cut-off object isn't measured as thin at the edge),
+    /// their maximum, mean and median.
     pub fn radii(&self) -> Option<Radii> {
         self.shape().radii
     }
@@ -545,15 +545,12 @@ mod tests {
     }
 
     /// Feret, convex area, Euler number, radii, extent and equivalent
-    /// diameter as CellProfiler's MeasureObjectSizeShape (fixture from
-    /// `tests/object_shape_cellprofiler.py`); the axes and eccentricity
+    /// diameter match the reference values (fixture from
+    /// `tests/object_shape.json`); the axes and eccentricity
     /// too (stored as f32).
     #[test]
-    fn shape_values_are_cellprofilers() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/object_shape_cellprofiler.json"
-        );
+    fn shape_values_match_reference() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/object_shape.json");
         let cases: Vec<Case> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let case = &cases[0];
@@ -624,7 +621,7 @@ mod tests {
         // pixel corners) - printed to see by how much.
         for (i, o) in objects.iter().enumerate().take(5) {
             eprintln!(
-                "object {}: perimeter {:.2} (CellProfiler {:?}), circularity {:.3} (form factor {:?}), solidity {:.3} ({:?})",
+                "object {}: perimeter {:.2} (reference {:?}), circularity {:.3} (form factor {:?}), solidity {:.3} ({:?})",
                 i + 1,
                 o.get_perimeter(),
                 case.perimeter[i],

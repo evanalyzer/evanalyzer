@@ -250,8 +250,8 @@ pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
     Background,
 }
 
-/// How Costes' automatic thresholds are searched for (CellProfiler's
-/// "Method for Costes thresholding").
+/// How Costes' automatic thresholds are searched for - a trade-off between
+/// speed and how exactly the threshold is found.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MeasureColocalizationCostesMethodSettings {
@@ -260,15 +260,14 @@ pub enum MeasureColocalizationCostesMethodSettings {
     #[serde(alias = "off")]
     Off,
     /// A shrinking window of candidates - a few passes over the image, also
-    /// for 16-bit images (CellProfiler's "Faster").
+    /// for 16-bit images.
     #[serde(alias = "faster")]
     Faster,
-    /// Candidates from the top down, skipping while far off (CellProfiler's
-    /// "Fast" - slow on 16-bit images).
+    /// Candidates from the top down, skipping while far off (slow on 16-bit
+    /// images).
     #[serde(alias = "fast")]
     Fast,
-    /// Every candidate from the top down (CellProfiler's "Accurate" - very
-    /// slow on 16-bit images).
+    /// Every candidate from the top down (very slow on 16-bit images).
     #[serde(alias = "accurate")]
     Accurate,
 }
@@ -446,8 +445,8 @@ pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
     Close,
 }
 
-/// Which objects count as neighbours (CellProfiler's "Method to determine
-/// neighbors").
+/// Which objects count as neighbours (how the neighbourhood of an object
+/// is determined).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MeasureObjectNeighborsNeighborMethodSettings {
@@ -802,8 +801,8 @@ pub enum MeasureTextureTextureDirectionsSettings {
     #[default]
     #[serde(alias = "mean")]
     Mean,
-    /// A value per direction (0°, 45°, 90°, 135°), as CellProfiler stores
-    /// them - four times as many values.
+    /// A value per direction (0°, 45°, 90°, 135°) - four times as many
+    /// values.
     #[serde(alias = "each")]
     Each,
 }
@@ -856,9 +855,10 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     /// `Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly
     /// finds two simultaneous cuts (Otsu's variance criterion is additive across
     /// classes, so this is the same search one level deeper - see `thresh_otsu_multi`)
-    /// and returns whichever cut `middle_class` selects. Mirrors CellProfiler's
-    /// "Two-class or three-class thresholding?" + "Assign pixels in the middle
-    /// intensity class to the foreground or the background?" pair.
+    /// and returns whichever cut `middle_class` selects: the lower cut puts
+    /// the middle intensity class into the foreground, the upper cut into the
+    /// background - useful when dim structures sit between object and
+    /// background.
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "otsu")]
     Otsu {
@@ -882,8 +882,8 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     Yen,
     /// Trims outliers from both ends of the sorted pixel distribution, then
     /// sets the threshold at `deviations_above_average` standard deviations
-    /// (or MADs) above the trimmed mean (or median). A port of CellProfiler's
-    /// "Robust Background" method - well suited to images with a clean, low
+    /// (or MADs) above the trimmed mean (or median). Well suited to images
+    /// with a clean, low
     /// background and sparse foreground, since the outlier trim keeps bright
     /// foreground pixels from dragging the background estimate upward.
     #[serde(rename_all = "camelCase")]
@@ -906,10 +906,11 @@ impl Default for SegmentationThresholdThresholdMethodSettings {
     }
 }
 
-/// Which image the threshold *value* is calculated from. Mirrors CellProfiler's
-/// ability to calculate a threshold on one image (e.g. the raw, unblurred
-/// image) and apply it to another (the blurred image actually being
-/// segmented): the cut-off computed here is always applied against the
+/// Which image the threshold *value* is calculated from. Allows calculating a
+/// threshold on one image (e.g. the raw, unblurred image, whose histogram is
+/// not flattened by the blur) and applying it to another (the blurred image
+/// actually being segmented): the cut-off computed here is always applied
+/// against the
 /// pipeline's actual current image - see [`ThresholdEntry::value_source`].
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -1005,9 +1006,9 @@ pub enum ObjectTransformObjectsTransformFunctionSettings {
         unit: SizeUnits,
     },
     /// Grows the objects outward by `margin` without growing into each other: every
-    /// background pixel within `margin` of an object goes to the nearest object (as
-    /// CellProfiler's ExpandOrShrinkObjects "Expand objects by a specified number of
-    /// pixels"). With a large margin the objects grow until they touch.
+    /// background pixel within `margin` of an object goes to the nearest object, so
+    /// neighbouring objects split the space between them instead of overlapping.
+    /// With a large margin the objects grow until they touch.
     #[serde(rename_all = "camelCase")]
     #[serde(
         alias = "expand-without-overlap",
@@ -1326,8 +1327,8 @@ impl Default for HsvRangeSettings {
 /// Flat-field ("illumination") correction: estimates a smooth, slowly-varying
 /// gain/offset field caused by uneven illumination (vignetting, dust on the
 /// condenser, uneven excitation) and removes it in a single calculate+apply
-/// step - equivalent to CellProfiler's `CorrectIlluminationCalculate` and
-/// `CorrectIlluminationApply` modules combined into one.
+/// step, so the field never has to be stored as an intermediate image
+/// and re-read.
 ///
 /// Unlike `RollingBall`, which estimates a *local* per-object background
 /// baseline via a rolling structural element, this estimates one *global*,
@@ -2213,8 +2214,8 @@ fn _serde_default_watershed_seed_source() -> SegmentationWatershedSeedSourceSett
 #[serde(rename_all = "camelCase")]
 pub struct WatershedSettings {
     /// Prominence tolerance for the maximum finder, in pixels of distance -
-    /// **or**, when `seed_source == Intensity`, CellProfiler's "typical
-    /// object diameter"-derived maxima-suppression radius, in pixels (its
+    /// **or**, when `seed_source == Intensity`, the maxima-suppression
+    /// radius in pixels, derived from the typical object diameter (the
     /// disk-shaped local-maximum search footprint is `max(1, this - 0.5)`).
     /// Same field, two meanings depending on which surface seeds come from -
     /// both are fundamentally a spatial scale over the *seed-finding*
@@ -2235,8 +2236,9 @@ pub struct WatershedSettings {
     /// Standard deviation (px) of an optional Gaussian blur applied *before*
     /// seed-finding, to the surface `seed_source` seeds from - the distance
     /// map for `DistanceMap`, or the grayscale intensity image for
-    /// `Intensity` (matching CellProfiler's own smoothing step ahead of its
-    /// "Intensity" unclumping). `0` disables it. The watershed *flood*
+    /// `Intensity` (smoothing the intensity image keeps noise from creating
+    /// spurious brightness peaks, each of which would become its own seed).
+    /// `0` disables it. The watershed *flood*
     /// always runs on the (unsmoothed-by-this-field) distance map either way.
     ///
     /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
@@ -2252,16 +2254,15 @@ pub struct WatershedSettings {
     pub min_object_size: i32,
     /// What surface local maxima are seeded from. The watershed *flood*
     /// itself is unaffected either way - it always runs on the distance
-    /// map, matching CellProfiler's "Shape" watershed method.
+    /// map (the "Shape" watershed: boundaries follow the objects' geometry
+    /// even when the seeds come from brightness).
     ///
     /// `DistanceMap` (default) emulates ImageJ's watershed implementation:
     /// seeds and flood both come from the distance map. `Intensity` instead
     /// finds seeds as local maxima of the (optionally smoothed) grayscale
-    /// image, restricted to each object's own footprint - a faithful port
-    /// of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
-    /// method,
-    /// the fix for diffusely-connected regions whose *shape* has no separate
-    /// peaks but whose *brightness* clearly does.
+    /// image, restricted to each object's own footprint ("Intensity"
+    /// unclumping) - the fix for diffusely-connected regions whose *shape*
+    /// has no separate peaks but whose *brightness* clearly does.
     #[serde(default = "_serde_default_watershed_seed_source")]
     pub seed_source: SegmentationWatershedSeedSourceSettings,
 }
@@ -3037,7 +3038,7 @@ pub struct MeasureImageAreaOccupiedSettings {
 }
 
 /// Measures how two channels go together over the whole image -
-/// CellProfiler's MeasureColocalization, per image.
+/// colocalization of the whole image as one region.
 ///
 /// Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel
 /// A's intensity where channel B is bright too (M2 the other way round),
@@ -3098,7 +3099,7 @@ pub struct MeasureImageIntensitySettings {
 /// Focus score (the variance over the mean - low: blurry), power log-log
 /// slope (how fast fine detail fades - more negative: blurrier), the
 /// percent of pixels at the image's maximum and minimum (high: saturated or
-/// clipped) - all as CellProfiler gives them - and the noise (σ in gray
+/// clipped) - all by their standard definitions - and the noise (σ in gray
 /// values, Immerkær's estimate). Use them with "Exclude Image" to leave bad
 /// images out of the results.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
@@ -3112,7 +3113,7 @@ pub struct MeasureImageQualitySettings {
 }
 
 /// Measures the texture of a channel over the whole image - Haralick's
-/// features (CellProfiler's MeasureTexture, per image).
+/// features of the gray-level co-occurrence matrix, per image.
 ///
 /// The pixel pairs the scale apart in a direction say how the gray levels
 /// go together: e.g. contrast is high where neighbours differ a lot, the
@@ -3153,7 +3154,7 @@ impl Default for MeasureImageTextureSettings {
 }
 
 /// Measures how two channels go together in each object of a class -
-/// CellProfiler's MeasureColocalization, per object.
+/// colocalization of every object as its own region.
 ///
 /// The values of Measure Image Colocalization (but the slope) of the
 /// object's pixels: the threshold is a percentage of the object's maximum,
@@ -3246,8 +3247,9 @@ impl Default for MeasureObjectNeighborsSettings {
     }
 }
 
-/// For each object: its convex area and solidity as CellProfiler gives them
-/// (the pixels whose centre lies in the convex hull; area / convex area),
+/// For each object: its convex area and solidity (the convex area counts
+/// the pixels whose centre lies in the convex hull, so a convex object has
+/// a solidity of exactly 1; solidity = area / convex area),
 /// its Euler number (1 - holes, 8-connected) and its radii (the distance of
 /// its pixels to the nearest pixel outside it: maximum, mean, median).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
@@ -3261,7 +3263,7 @@ pub struct MeasureObjectShapeSettings {
 }
 
 /// Measures the texture of a channel in each object of a class - Haralick's
-/// features (CellProfiler's MeasureTexture, per object).
+/// features of the gray-level co-occurrence matrix, per object.
 ///
 /// The same values as Measure Image Texture, of the object's pixels only.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]

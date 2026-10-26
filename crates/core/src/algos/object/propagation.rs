@@ -17,9 +17,9 @@
 //! a large λ approaches a distance-only split, 0 one by brightness only.
 //! Only pixels inside the optional mask are assigned.
 //!
-//! The growth is a port of CellProfiler's (`centrosome/_propagate.pyx`,
-//! BSD-3-Clause, Broad Institute): the same step cost, 8 neighbours and
-//! order of equally cheap pixels, so the same image gives the same regions.
+//! The growth follows `centrosome/_propagate.pyx` (BSD-3-Clause, Broad
+//! Institute): a fixed step cost, 8 neighbours and a fixed order of equally
+//! cheap pixels, so the same image always gives the same regions.
 
 use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
@@ -185,7 +185,7 @@ impl Propagation {
     }
 }
 
-/// Where the method was published (CellProfiler's "Propagation").
+/// Where the method was published.
 const JONES_2005: CitationMetadata = CitationMetadata {
     cite_key: "jones2005voronoi",
     title: "Voronoi-Based Segmentation of Cells on Image Manifolds",
@@ -375,12 +375,12 @@ struct Region {
 /// Grows the seeds (pixel index, label > 0; where seeds overlap, the first
 /// wins) into the `allowed` pixels of a `width` × `height` image: each pixel
 /// gets the label that reaches it cheapest (see [`step_cost`]); equally
-/// cheap ones go to the lower label, then the earlier pixel - CellProfiler's
-/// heap order. Seed pixels keep their label, also outside `allowed`; only
-/// seeds inside it grow.
+/// cheap ones go to the lower label, then the earlier pixel - a total heap
+/// order, so ties never depend on insertion order. Seed pixels keep their
+/// label, also outside `allowed`; only seeds inside it grow.
 ///
-/// Per pixel: its label (4 bytes) and cheapest cost (8 - an `f64` like
-/// CellProfiler's, so sums and ties come out the same).
+/// Per pixel: its label (4 bytes) and cheapest cost (8 - an `f64`, so
+/// summed costs keep their precision and ties are exact).
 fn propagate(
     values: &[f32],
     width: usize,
@@ -450,14 +450,14 @@ fn propagate(
     labels
 }
 
-/// CellProfiler's cost of the step between neighbours `a` and `b` (row,
+/// The cost of the step between neighbours `a` and `b` (row,
 /// column): the summed absolute difference of their 3×3 neighbourhoods
 /// (pixels past the border repeat the border's) combined with their
 /// Manhattan distance weighted by `weight`²:
 /// `sqrt(diff² + manhattan · weight²)`.
 ///
-/// Summed in CellProfiler's order (rows, then columns), so the result is
-/// the same to the last bit.
+/// Summed in a fixed order (rows, then columns), so the result is the same
+/// to the last bit every run.
 fn step_cost(
     values: &[f32],
     width: usize,
@@ -526,7 +526,7 @@ mod tests {
             .collect()
     }
 
-    // The cases of CellProfiler's own tests (centrosome `test_propagate.py`).
+    // The cases of centrosome's own tests (`test_propagate.py`).
 
     #[test]
     fn nothing_grows_without_seeds() {
@@ -619,11 +619,11 @@ mod tests {
         assert!((cost - 1.0).abs() < 1e-12, "{cost}");
     }
 
-    /// Pixel for pixel what CellProfiler's own code gives
-    /// (`centrosome.propagate` 1.3.4 on Gaussian "cells" with noise; made by
-    /// `tests/propagation_centrosome.py`).
+    /// Pixel for pixel the reference result
+    /// (`centrosome.propagate` 1.3.4 on Gaussian "cells" with noise; fixture
+    /// `tests/propagation.json`).
     #[test]
-    fn same_regions_as_cellprofiler() {
+    fn regions_match_reference() {
         #[derive(serde::Deserialize)]
         struct Case {
             name: String,
@@ -639,16 +639,13 @@ mod tests {
         struct Fixture {
             cases: Vec<Case>,
         }
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/propagation_centrosome.json"
-        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/propagation.json");
         let fixture: Fixture =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(fixture.cases.len(), 5);
         for case in fixture.cases {
             let values: Vec<f32> = case.image.iter().map(|&v| v as f32).collect();
-            // CellProfiler's seed image as a list of seed pixels.
+            // The reference's seed image as a list of seed pixels.
             let seeds: Vec<(usize, u32)> = case
                 .seeds
                 .iter()

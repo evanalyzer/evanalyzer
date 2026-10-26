@@ -21,7 +21,7 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 
 /// Measures how two channels go together in each object of a class -
-/// CellProfiler's MeasureColocalization, per object.
+/// colocalization of every object as its own region.
 ///
 /// The values of Measure Image Colocalization (but the slope) of the
 /// object's pixels: the threshold is a percentage of the object's maximum,

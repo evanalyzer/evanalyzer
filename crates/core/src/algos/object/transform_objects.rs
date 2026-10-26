@@ -93,9 +93,9 @@ pub enum TransformFunction {
     },
 
     /// Grows the objects outward by `margin` without growing into each other: every
-    /// background pixel within `margin` of an object goes to the nearest object (as
-    /// CellProfiler's ExpandOrShrinkObjects "Expand objects by a specified number of
-    /// pixels"). With a large margin the objects grow until they touch.
+    /// background pixel within `margin` of an object goes to the nearest object, so
+    /// neighbouring objects split the space between them instead of overlapping.
+    /// With a large margin the objects grow until they touch.
     ExpandWithoutOverlap {
         /// How far the objects grow at most
         #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
@@ -246,7 +246,7 @@ impl ImageAlgorithm for TransformObjects {
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         match self.function {
-            // As CellProfiler's ExpandOrShrinkObjects, with the feature transform.
+            // Nearest-object expansion, computed with the exact feature transform.
             TransformFunction::ExpandWithoutOverlap { .. } => vec![
                 &CitationMetadata::DANMAYR,
                 &CitationMetadata::CELLPROFILER,
@@ -328,12 +328,12 @@ const EXPAND_BLOCK: usize = 2048;
 
 /// The grown shape of each of `objects` (same order): every background
 /// pixel - covered by none of them - within `margin` pixels (Euclidean) of
-/// an object pixel goes to the object of the nearest such pixel. As
-/// CellProfiler's ExpandOrShrinkObjects (`expand` in
-/// cellprofiler/library/functions/object_processing.py: SciPy's
-/// `distance_transform_edt` with its indices, `distance <= margin`), with
-/// the same feature transform and so the same pixel where two objects are
-/// equally near. Where objects overlap, a pixel counts as the later one's.
+/// an object pixel goes to the object of the nearest such pixel
+/// (`distance <= margin`). The nearest pixel comes from the exact Euclidean
+/// feature transform, which resolves ties the same way as SciPy's
+/// `distance_transform_edt` indices, so a pixel two objects are equally
+/// near goes to a well-defined one. Where objects overlap, a pixel counts as
+/// the later one's.
 ///
 /// Worked out in blocks of `EXPAND_BLOCK`², each with `margin` around it:
 /// the nearest object pixel of a pixel that is within `margin` of one lies
@@ -999,7 +999,7 @@ mod tests {
         );
     }
 
-    /// One case of `tests/expand_objects_cellprofiler.json`.
+    /// One case of `tests/expand_objects.json`.
     #[derive(serde::Deserialize)]
     struct ExpandCase {
         name: String,
@@ -1061,15 +1061,12 @@ mod tests {
         out
     }
 
-    /// The same pixels as CellProfiler's ExpandOrShrinkObjects (fixture from
-    /// `tests/expand_objects_cellprofiler.py`) - also when worked out in
+    /// The same pixels as the reference (fixture from
+    /// `tests/expand_objects.json`) - also when worked out in
     /// small blocks, so the blocks' borders change nothing.
     #[test]
-    fn expanding_without_overlap_gives_cellprofilers_pixels() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/expand_objects_cellprofiler.json"
-        );
+    fn expanding_without_overlap_matches_reference() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/expand_objects.json");
         let cases: Vec<ExpandCase> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(cases.len(), 12);

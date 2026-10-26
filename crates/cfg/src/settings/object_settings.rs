@@ -31,7 +31,7 @@ pub struct IntensitySettings {
     /// Average pixel intensity in the object
     #[serde(default)]
     pub avg_intensity: f64,
-    /// How the pixel values spread (CellProfiler's MeasureObjectIntensity) -
+    /// How the pixel values spread (standard deviation) -
     /// none where not measured (an annotation stored before 2026-10-24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub std_intensity: Option<f64>,

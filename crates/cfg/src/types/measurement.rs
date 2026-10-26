@@ -22,7 +22,7 @@ pub enum MeasurementUnit {
     None,
     /// 0..1 (Manders, the part of the image occupied).
     Fraction,
-    /// 0..100 (the pixels at the image's maximum, as CellProfiler gives it).
+    /// 0..100 (the percent of pixels at the image's maximum).
     Percent,
     /// Gray values.
     Intensity,

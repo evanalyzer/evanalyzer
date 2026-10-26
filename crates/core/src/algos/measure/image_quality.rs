@@ -10,10 +10,12 @@
 //! ## Overview
 //! Values to tell a usable image from a blurry, noisy or overexposed one.
 //! Focus score, power log-log slope and the percent of pixels at the
-//! maximum/minimum are CellProfiler's (MeasureImageQuality,
-//! `cellprofiler_library/functions/measurement.py` and centrosome's
-//! `radial_power_spectrum.py`, BSD-3-Clause, Broad Institute) - the same
-//! image gives the same numbers. The noise is Immerkær's estimate.
+//! maximum/minimum follow the established definitions (Bray et al. 2012),
+//! so values stay comparable with other tools and published thresholds.
+//! The noise is Immerkær's estimate.
+//!
+//! Parts of the calculations are ported from BSD-3-Clause code, Copyright
+//! (c) Broad Institute.
 
 use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
@@ -34,7 +36,7 @@ use rustfft::{FftPlanner, num_complex::Complex};
 /// Focus score (the variance over the mean - low: blurry), power log-log
 /// slope (how fast fine detail fades - more negative: blurrier), the
 /// percent of pixels at the image's maximum and minimum (high: saturated or
-/// clipped) - all as CellProfiler gives them - and the noise (σ in gray
+/// clipped) - all by their standard definitions - and the noise (σ in gray
 /// values, Immerkær's estimate). Use them with "Exclude Image" to leave bad
 /// images out of the results.
 #[derive(CommandsMeta)]
@@ -155,7 +157,7 @@ impl ImageAlgorithm for MeasureImageQuality {
     }
 }
 
-/// CellProfiler's image quality measures: how they were chosen and tested.
+/// The image quality measures: how they were chosen and tested.
 const BRAY_2012: CitationMetadata = CitationMetadata {
     cite_key: "bray2012workflow",
     title: "Workflow and metrics for image quality control in large-scale high-content screens",
@@ -298,8 +300,8 @@ impl TileStats {
         }
     }
 
-    /// CellProfiler's focus score: the variance over the mean (0 for a
-    /// black image).
+    /// The focus score: the variance over the mean (0 for a black image,
+    /// where the ratio is undefined).
     fn focus_score(&self) -> Option<f64> {
         (self.n > 0.0).then(|| {
             if self.mean > 0.0 {
@@ -373,14 +375,14 @@ fn spectrum_window<P: AsRef<ImageContainer>>(
     })
 }
 
-/// CellProfiler's power log-log slope: the slope of log(power) over
-/// log(radius) of the radial power spectrum, radii 2 .. min(side)/8 (the
-/// lowest frequencies and the noisy highest ones left out). `None` for an
-/// image without any variation (CellProfiler gives 0 there).
+/// The power log-log slope: the slope of log(power) over log(radius) of
+/// the radial power spectrum, radii 2 .. min(side)/8 (the lowest
+/// frequencies and the noisy highest ones left out). `None` for an image
+/// without any variation (the spectrum is empty, so there is no slope).
 ///
-/// CellProfiler first divides the image by its median absolute deviation;
-/// that scales every power alike and leaves the slope as it is, so it is
-/// left out here.
+/// No normalization of the image (e.g. dividing by its median absolute
+/// deviation) is done: that scales every power alike and leaves the slope
+/// as it is.
 fn power_log_log_slope(plane: &Plane) -> Option<f64> {
     let (w, h) = (plane.width, plane.height);
     let values = &plane.values;
@@ -403,7 +405,8 @@ fn power_log_log_slope(plane: &Plane) -> Option<f64> {
     drop(data);
     planner.plan_fft_forward(h).process(&mut columns);
 
-    // The radius of frequency (row i, column j) as CellProfiler mirrors it:
+    // The radius of frequency (row i, column j), with the frequencies
+    // mirrored about the centre so negative ones fold onto positive ones:
     // min(i, h-1-i), min(j, w-1-j); labels floor(r) + 1 in 2 .. max_width.
     let max_width = (w.min(h) as f64 / 8.0).floor() as usize;
     if max_width <= 2 {
@@ -468,10 +471,7 @@ mod tests {
         struct Fixture {
             cases: Vec<Case>,
         }
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/image_quality_cellprofiler.json"
-        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/image_quality.json");
         let fixture: Fixture =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         fixture.cases
@@ -481,11 +481,11 @@ mod tests {
         (a - b).abs() <= 1e-9 * b.abs().max(1.0)
     }
 
-    /// The numbers CellProfiler's own code gives for the same images (made
-    /// by `tests/image_quality_cellprofiler.py`: sharp, blurred, clipped
+    /// The reference values for the same images (fixture
+    /// `tests/image_quality.json`: sharp, blurred, clipped
     /// 8-bit, odd size); the noise against SciPy's convolution.
     #[test]
-    fn same_values_as_cellprofiler() {
+    fn values_match_reference() {
         let cases = cases();
         assert_eq!(cases.len(), 4);
         for case in cases {

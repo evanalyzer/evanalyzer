@@ -99,8 +99,7 @@ pub enum Column {
     IntensitySum(u32),
     IntensityMin(u32),
     IntensityMax(u32),
-    /// How the pixel values spread in a channel (CellProfiler's
-    /// MeasureObjectIntensity).
+    /// How the pixel values spread in a channel (standard deviation).
     IntensityStd(u32),
     IntensityMedian(u32),
     IntensityLowerQuartile(u32),

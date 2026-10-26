@@ -19,7 +19,7 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 
 /// Measures how two channels go together over the whole image -
-/// CellProfiler's MeasureColocalization, per image.
+/// colocalization of the whole image as one region.
 ///
 /// Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel
 /// A's intensity where channel B is bright too (M2 the other way round),

@@ -3,17 +3,17 @@
 //! Manual annotations as GeoJSON - one image at a time, read and written
 //! through the backend's [`FileSystem`] (this computer, or the server the
 //! project is on): a `FeatureCollection` of `Polygon`/`MultiPolygon`
-//! features in image pixel coordinates (y down) - the layout QuPath reads
-//! and writes, no schema of our own.
+//! features in image pixel coordinates (y down) - the common layout other
+//! annotation tools read and write, no schema of our own.
 //!
 //! Properties written: `objectType: "annotation"`, `classification`
-//! (`{name, color: [r, g, b]}`, the first class - QuPath's), `classes` (all
+//! (`{name, color: [r, g, b]}`, the first class), `classes` (all
 //! class names, when there are several), `series`, `plane` (`{z, c, t}`),
 //! `excludeFromTraining` (only when set). Export: the annotations of the
 //! chosen classes. Import: the same properties (without `classes` the
 //! `classification` name); each class name found goes where the user maps
 //! it - a project class, a new one, no class, or not imported - so files
-//! from other tools (QuPath) whose classes are named differently fit.
+//! from other tools whose classes are named differently fit.
 //!
 //! Outlines run along the pixel edges, holes included: exporting and
 //! importing again gives back exactly the same pixels. Outlines from other
@@ -383,8 +383,8 @@ pub struct PipelineObjects<'a> {
 }
 
 /// Writes the objects of image `rel_path` that have one of `classes`
-/// (`None`: those without a class) to `file`, a `FeatureCollection` QuPath
-/// reads: its manual annotations (every series) and the `pipeline` objects
+/// (`None`: those without a class) to `file`, a `FeatureCollection` other
+/// tools can read: its manual annotations (every series) and the `pipeline` objects
 /// shown on it. How many were written.
 pub fn export_image_geojson(
     project: &ProjectWithRuntime,
@@ -589,7 +589,7 @@ impl PendingImport {
     }
 }
 
-/// Step 1: reads `file` (from EVAnalyzer, QuPath or another tool) as the
+/// Step 1: reads `file` (from EVAnalyzer or another tool) as the
 /// annotations of image `rel_path`: shapes, class names, planes. A shape's
 /// series is the file's (EVAnalyzer writes it) when the image has it, else
 /// `series` - the one shown. Measures nothing yet.
@@ -612,7 +612,7 @@ pub fn read_image_geojson(
     let text = String::from_utf8_lossy(&bytes);
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("{}: not GeoJSON: {e}", file.display()))?;
-    // A FeatureCollection, a list of features (older QuPath), or one.
+    // A FeatureCollection, a bare list of features (some older exports), or one.
     let features: Vec<Value> = match &value {
         Value::Array(list) => list.clone(),
         v if v.get("type").and_then(Value::as_str) == Some("FeatureCollection") => v
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn foreign_outlines_are_filled_by_pixel_centre() {
-        // A triangle with fractional corners, as QuPath draws.
+        // A triangle with fractional corners, as other tools draw.
         let ring = vec![[0.2, 0.2], [4.7, 0.2], [0.2, 4.7], [0.2, 0.2]];
         let (mask, bbox) = rings_to_mask(&[ring], 0, 0).unwrap();
         assert_eq!(bbox, [0, 0, 3, 3]);
@@ -1044,7 +1044,7 @@ mod tests {
         series: 0,
     };
 
-    /// The pipeline objects of the ticked classes go out too, as QuPath
+    /// The pipeline objects of the ticked classes go out too, as
     /// "detection"s; the manual annotations as "annotation"s.
     #[test]
     fn pipeline_objects_of_the_chosen_classes_are_exported_too() {
@@ -1298,7 +1298,7 @@ mod tests {
         );
     }
 
-    /// A QuPath file: a JSON list, a point, classes named differently -
+    /// A file from another tool: a JSON list, a point, classes named differently -
     /// mapped onto the project's, one class left out.
     #[test]
     fn qupath_classes_are_mapped_onto_the_projects_and_points_skipped() {

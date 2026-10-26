@@ -20,7 +20,7 @@ use macros::CommandsMeta;
 use rayon::prelude::*;
 
 /// Measures the texture of a channel in each object of a class - Haralick's
-/// features (CellProfiler's MeasureTexture, per object).
+/// features of the gray-level co-occurrence matrix, per object.
 ///
 /// The same values as Measure Image Texture, of the object's pixels only.
 #[derive(CommandsMeta)]

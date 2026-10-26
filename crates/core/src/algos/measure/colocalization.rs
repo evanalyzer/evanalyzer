@@ -7,16 +7,15 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! How two channels go together - CellProfiler's MeasureColocalization
-//! (cellprofiler/modules/measurecolocalization.py, CellProfiler 4.2.8),
-//! value for value: Pearson and the slope, Manders M1/M2, the overlap
-//! coefficient with K1/K2 and the rank-weighted colocalization (RWC) above a
-//! percentage of each channel's maximum, and Manders M1/M2 above Costes'
-//! automatic thresholds - over the whole image (Measure Image
+//! How two channels go together: Pearson and the slope, Manders M1/M2, the
+//! overlap coefficient with K1/K2 and the rank-weighted colocalization (RWC)
+//! above a percentage of each channel's maximum, and Manders M1/M2 above
+//! Costes' automatic thresholds - over the whole image (Measure Image
 //! Colocalization) or per object of a class (Measure Object Colocalization).
-//! The rules CellProfiler applies differently there are kept: over the
-//! image a pixel counts when it is *above* the threshold, in an object when
-//! it is *at or above* it; RWC ranks the values of the whole image or of
+//! The image and the objects follow slightly different rules, so the values
+//! stay comparable with the established definitions: over the image a pixel
+//! counts when it is *above* the threshold, in an object when it is *at or
+//! above* it; RWC ranks the values of the whole image or of
 //! all the objects; an object's Costes values use the whole image's Costes
 //! thresholds (Measure Object Colocalization searches for them itself).
 
@@ -34,23 +33,22 @@ use macros::CommandsMeta;
 use rayon::prelude::*;
 use std::sync::Arc;
 
-/// How Costes' automatic thresholds are searched for (CellProfiler's
-/// "Method for Costes thresholding").
+/// How Costes' automatic thresholds are searched for - a trade-off between
+/// speed and how exactly the threshold is found.
 #[derive(CommandsMeta, Debug, Clone, Copy, PartialEq)]
 pub enum CostesMethod {
     /// No Costes values.
     #[cmdsmeta(display_name = "Off")]
     Off,
     /// A shrinking window of candidates - a few passes over the image, also
-    /// for 16-bit images (CellProfiler's "Faster").
+    /// for 16-bit images.
     #[cmdsmeta(display_name = "Faster")]
     Faster,
-    /// Candidates from the top down, skipping while far off (CellProfiler's
-    /// "Fast" - slow on 16-bit images).
+    /// Candidates from the top down, skipping while far off (slow on 16-bit
+    /// images).
     #[cmdsmeta(display_name = "Fast")]
     Fast,
-    /// Every candidate from the top down (CellProfiler's "Accurate" - very
-    /// slow on 16-bit images).
+    /// Every candidate from the top down (very slow on 16-bit images).
     #[cmdsmeta(display_name = "Accurate")]
     Accurate,
 }
@@ -121,7 +119,8 @@ static VALUES: [Value; 11] = [
 /// The two Costes values come last in [`VALUES`].
 const COSTES_VALUES: usize = 2;
 
-/// The slope (in [`VALUES`]): only over the whole image, as in CellProfiler.
+/// The slope (in [`VALUES`]): only measured over the whole image, objects
+/// don't get it.
 pub(super) const SLOPE: usize = 1;
 
 /// One value per entry of [`VALUES`] (NaN: none).
@@ -355,7 +354,7 @@ impl Sums {
     }
 }
 
-/// The whole image's values (CellProfiler's `run_image_pair_images`).
+/// The whole image's values (every pixel of the two channels).
 pub(super) fn image_values(
     tiles: &[TilePair],
     threshold_percent: f64,
@@ -515,7 +514,7 @@ fn costes_thresholds_with(
 }
 
 /// Every value's rank among the different values of a channel (0 for the
-/// smallest), as CellProfiler's RWC numbers them.
+/// smallest; equal values share a rank), as the RWC weights need them.
 enum DenseRanks {
     /// Through 65535 levels (exact for 8/16-bit values: each level holds
     /// one value): the rank of each level.
@@ -697,7 +696,8 @@ fn costes_line(tiles: &[TilePair]) -> (f64, f64) {
     (a, my - a * mx)
 }
 
-/// Python's float `//`, as CellProfiler's Costes code computes with it.
+/// Floor division with Python's float `//` semantics, so the Costes
+/// candidate thresholds step exactly like the reference values.
 fn py_floordiv(x: f64, y: f64) -> f64 {
     let mut m = x % y;
     let mut div = (x - m) / y;
@@ -717,7 +717,7 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
     }
 }
 
-/// CellProfiler's `bisection_costes` ("Faster"): candidates in a window
+/// The bisection Costes search ("Faster"): candidates in a window
 /// that shrinks around the highest threshold whose remaining pixels still
 /// correlate positively.
 fn bisection_costes(tiles: &[TilePair], scale_max: f64) -> (f64, f64) {
@@ -755,7 +755,7 @@ fn bisection_costes(tiles: &[TilePair], scale_max: f64) -> (f64, f64) {
     (thr_x, a * thr_x + b)
 }
 
-/// CellProfiler's `linear_costes` ("Fast" / "Accurate"): candidates from
+/// The linear Costes search ("Fast" / "Accurate"): candidates from
 /// the top down until the remaining pixels stop correlating positively.
 fn linear_costes(
     tiles: &[TilePair],
@@ -814,7 +814,7 @@ fn linear_costes(
     (thr_x, thr_y)
 }
 
-/// Each object's values (CellProfiler's `run_image_pair_objects`) from its
+/// Each object's values (the pixels inside each object only) from its
 /// (A, B) pixels; `costes` the whole image's Costes thresholds (NaN: off).
 pub(super) fn object_values(
     objects: &[&[(f32, f32)]],
@@ -911,7 +911,7 @@ pub(super) fn object_values(
 
         if !cx.is_nan() {
             // Above the whole image's Costes thresholds - the totals count
-            // a pixel at the threshold too, as CellProfiler does.
+            // a pixel at the threshold too (the object rule: at or above).
             let (mut tot_x, mut tot_y) = (0.0, 0.0);
             let mut comb = Sums::default();
             for p in pixels.iter() {
@@ -1009,7 +1009,7 @@ mod tests {
 
     const CELL: ObjectClass = ObjectClass::Global(1);
 
-    /// One case of `tests/colocalization_cellprofiler.json`.
+    /// One case of `tests/colocalization.json`.
     #[derive(serde::Deserialize)]
     struct Case {
         name: String,
@@ -1095,15 +1095,12 @@ mod tests {
         }
     }
 
-    /// Every value over the image and per object as CellProfiler's
-    /// MeasureColocalization gives it (fixture from
-    /// `tests/colocalization_cellprofiler.py`), with each Costes method.
+    /// Every value over the image and per object matches the
+    /// reference values (fixture from
+    /// `tests/colocalization.json`), with each Costes method.
     #[test]
-    fn values_are_cellprofilers() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/colocalization_cellprofiler.json"
-        );
+    fn values_match_reference() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/colocalization.json");
         let cases: Vec<Case> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(cases.len(), 6);

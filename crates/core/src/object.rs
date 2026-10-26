@@ -32,9 +32,9 @@ pub mod regions;
 pub mod shape;
 
 /// An object's intensities in one channel. How the values spread (std to
-/// MAD, as CellProfiler's MeasureObjectIntensity - see
-/// [`Intensity::set_spread`]) is NaN where the pixel values weren't at hand
-/// (a stored annotation's intensities) - the results show no value then.
+/// MAD - see [`Intensity::set_spread`]) is NaN where the pixel values
+/// weren't at hand (a stored annotation's intensities) - the results show
+/// no value then.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Intensity {
     /// Sum of all pixel intensities in the object
@@ -303,7 +303,7 @@ impl Object {
 
     /// An order by where the object lies: its first pixel in reading order
     /// (top to bottom, left to right - the order scipy/scikit-image number
-    /// labels, so CellProfiler's "lower label" ties come out the same), then
+    /// labels, so "lower label" tie-breaks on label images agree), then
     /// box, area and mask. The same in every run, unlike the ids (random
     /// within a millisecond). For tie-breaks: two objects differ here unless
     /// they cover the very same pixels.
@@ -769,7 +769,7 @@ impl Object {
     }
 
     /// The centroid: the mean position of the object's pixels (its centre
-    /// of mass, not weighted by intensity) - as CellProfiler's and Fiji's.
+    /// of mass, not weighted by intensity) - the common definition.
     /// The bounding box's centre for an object without pixels. Precomputed
     /// by [`finalize_geometry`](Self::finalize_geometry).
     pub fn get_centroid(&self) -> (f32, f32) {
@@ -832,15 +832,15 @@ impl Object {
     }
 
     /// Returns Feret diameter (longest distance between boundary points):
-    /// the largest distance between two pixel centres, as CellProfiler's
-    /// MaxFeretDiameter (see [`Object::feret_diameters`]). Was the bounding
+    /// the largest distance between two pixel centres (see
+    /// [`Object::feret_diameters`]). Was the bounding
     /// box's diagonal until 2026-10-24.
     pub fn get_feret_diameter(&self) -> f32 {
         self.feret_diameters().1 as f32
     }
 
     /// Returns minimum Feret diameter: the smallest caliper width over the
-    /// pixel centres, as CellProfiler's MinFeretDiameter. Was the fitted
+    /// pixel centres (see [`Object::feret_diameters`]). Was the fitted
     /// ellipse's minor axis until 2026-10-24.
     pub fn get_min_feret_diameter(&self) -> f32 {
         self.feret_diameters().0 as f32

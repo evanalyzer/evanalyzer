@@ -7,9 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! The shape values of CellProfiler's MeasureObjectSizeShape the objects
-//! don't carry anyway (they have area, perimeter, Feret, axes, ...): the
-//! convex area and CellProfiler's solidity, the Euler number and the radii -
+//! The shape values the objects don't carry anyway (they have area,
+//! perimeter, Feret, axes, ...): the convex area and the solidity, the
+//! Euler number and the radii -
 //! a step of its own because the radii need a distance transform of every
 //! object (~10 µs for a 24 px object), too much to pay in every analysis.
 
@@ -21,8 +21,9 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 use rayon::prelude::*;
 
-/// For each object: its convex area and solidity as CellProfiler gives them
-/// (the pixels whose centre lies in the convex hull; area / convex area),
+/// For each object: its convex area and solidity (the convex area counts
+/// the pixels whose centre lies in the convex hull, so a convex object has
+/// a solidity of exactly 1; solidity = area / convex area),
 /// its Euler number (1 - holes, 8-connected) and its radii (the distance of
 /// its pixels to the nearest pixel outside it: maximum, mean, median).
 #[derive(CommandsMeta)]

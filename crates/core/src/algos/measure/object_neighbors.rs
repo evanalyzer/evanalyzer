@@ -7,16 +7,14 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! How many objects are near each object and how close the nearest are -
-//! CellProfiler's MeasureObjectNeighbors
-//! (cellprofiler/modules/measureobjectneighbors.py, CellProfiler 4.2.8):
+//! How many objects are near each object and how close the nearest are:
 //! the number of neighbours (objects a disk-shaped dilation of the object
 //! reaches), the percentage of its outline touching them, the distance to
 //! the first and second closest object (centre to centre - the result also
 //! names that object) and the angle between those two.
 //!
-//! Worked out per object on label rasters of its surroundings (like
-//! CellProfiler's patches), so whole slides need no raster of their size -
+//! Worked out per object on label rasters of its surroundings only, so
+//! whole slides need no raster of their size -
 //! except "Expand until adjacent", which first grows every object over the
 //! whole image.
 
@@ -30,8 +28,8 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 use std::collections::{BTreeSet, HashMap};
 
-/// Which objects count as neighbours (CellProfiler's "Method to determine
-/// neighbors").
+/// Which objects count as neighbours (how the neighbourhood of an object
+/// is determined).
 #[derive(CommandsMeta, Debug, Clone, Copy, PartialEq)]
 pub enum NeighborMethod {
     /// Every object first grows over the background until it meets the
@@ -352,7 +350,7 @@ fn paint(indexed: &Indexed, window: [usize; 4]) -> Vec<u32> {
     labels
 }
 
-/// CellProfiler's `strel_disk(radius)` as offsets: x² + y² <= radius².
+/// A disk-shaped structuring element as offsets: x² + y² <= radius².
 fn disk(radius: f64) -> Vec<(i64, i64)> {
     let r = radius as i64;
     let r2 = radius * radius;
@@ -404,7 +402,7 @@ fn dilate(
     out
 }
 
-/// Every object's values (CellProfiler's `MeasureObjectNeighbors.run`);
+/// Every object's neighbour values;
 /// `others`: the neighbours when they aren't the objects themselves.
 fn neighbors(
     objects: &Indexed,
@@ -609,8 +607,8 @@ fn is_outline(patch: &Patch, x: usize, y: usize, (width, height): (usize, usize)
 }
 
 /// The objects' labels over the whole image, every background pixel given
-/// the label of its nearest object pixel (CellProfiler expands with SciPy's
-/// `distance_transform_edt` indices).
+/// the label of its nearest object pixel (the exact Euclidean feature
+/// transform, so ties resolve like SciPy's `distance_transform_edt` indices).
 fn grown(objects: &Indexed, width: usize, height: usize) -> Vec<u32> {
     let labels = paint(objects, [0, 0, width, height]);
     let ft = nearest_features(width, height, |x, y| labels[y * width + x] != 0);
@@ -656,7 +654,7 @@ impl<'a> PointGrid<'a> {
     }
 
     /// The two nearest points to `p` (not `exclude`), nearest first; equally
-    /// near: the lower index first (as CellProfiler's sort).
+    /// near: the lower index first (a stable sort, so ties are deterministic).
     fn nearest_two(&self, p: (f64, f64), exclude: Option<usize>) -> [Option<usize>; 2] {
         let (kx, ky) = (
             (p.0 / self.cell).floor() as i64,
@@ -716,7 +714,7 @@ mod tests {
     /// Neighbour objects' ids: this plus their label.
     const SPOT_IDS: u128 = 1000;
 
-    /// One case of `tests/object_neighbors_cellprofiler.json`.
+    /// One case of `tests/object_neighbors.json`.
     #[derive(serde::Deserialize)]
     struct Case {
         name: String,
@@ -776,15 +774,12 @@ mod tests {
         );
     }
 
-    /// Every value as CellProfiler's MeasureObjectNeighbors gives it
-    /// (fixture from `tests/object_neighbors_cellprofiler.py`); the closest
-    /// distances name CellProfiler's closest objects.
+    /// Every value matches the reference values
+    /// (fixture from `tests/object_neighbors.json`); the closest
+    /// distances name the reference's closest objects.
     #[test]
-    fn values_are_cellprofilers() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/object_neighbors_cellprofiler.json"
-        );
+    fn values_match_reference() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/object_neighbors.json");
         let cases: Vec<Case> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(cases.len(), 7);
@@ -888,8 +883,8 @@ mod tests {
         }
     }
 
-    /// One object alone: no neighbours, no closest object (no value - not
-    /// CellProfiler's 0).
+    /// One object alone: no neighbours, no closest object (no value rather
+    /// than 0, which would read as a real distance).
     #[test]
     fn a_lone_object_has_no_closest_one() {
         let mut cache = GlobalPipelineCache::default();

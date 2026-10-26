@@ -102,9 +102,9 @@ pub fn watershed_segment_from_seeds(
     out
 }
 
-/// Finds CellProfiler `IdentifyPrimaryObjects` "Intensity" unclumping seeds:
-/// local maxima of `intensity` within a disk-shaped neighborhood of
-/// `suppression_size` pixels, restricted to each pixel's own
+/// Finds "Intensity" unclumping seeds, to split touching objects at their
+/// brightness peaks: local maxima of `intensity` within a disk-shaped
+/// neighborhood of `suppression_size` pixels, restricted to each pixel's own
 /// `instance_labels` blob (so a maximum can never be "stolen" by a brighter
 /// pixel belonging to an already-separate object). A faithful port of
 /// centrosome's `is_local_maximum` run over `strel_disk`: same disk
@@ -1181,9 +1181,8 @@ mod reference_tests {
 
 /// Unit tests for [`find_intensity_seeds`] and [`watershed_segment_from_seeds`]
 /// - the two building blocks behind `Watershed`'s `SeedSource::Intensity`,
-/// a port of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
-/// method (`centrosome.cpmorphology.is_local_maximum` over a `strel_disk`
-/// footprint). These test the seed-finding/flooding primitives directly,
+/// the "Intensity" unclumping method (local maxima within a disk-shaped
+/// footprint, `centrosome.cpmorphology.is_local_maximum` over a `strel_disk`). These test the seed-finding/flooding primitives directly,
 /// independent of the `Watershed` command; `watershed::tests` covers the
 /// same algorithm through the real `Watershed::execute` entry point.
 #[cfg(test)]
@@ -1281,8 +1280,8 @@ mod intensity_seeding_tests {
     /// The profile between the peaks is a genuine monotonic ramp down to a
     /// valley and back up (not a flat plateau) - a wide *flat* middle
     /// region would itself be "locally maximal" within its own footprint
-    /// (correctly, matching CellProfiler: nothing nearby is strictly
-    /// higher), which is a real property of the algorithm, not something
+    /// (correctly: nothing nearby is strictly higher, and an equal
+    /// neighbor never disqualifies a pixel), which is a real property of the algorithm, not something
     /// this test is trying to exercise.
     #[test]
     fn two_separated_peaks_in_one_label_each_get_a_seed() {

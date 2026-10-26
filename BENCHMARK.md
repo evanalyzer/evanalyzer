@@ -385,7 +385,7 @@ text layout.
 nucleus (7 × 7 px) every 40 px, λ 0.05, no mask, 22 cores. CellProfiler's
 code (centrosome 1.3.4, `propagate()` on the same image and seeds, script
 in the session scratchpad) for comparison; its regions are identical
-(`same_regions_as_cellprofiler`).
+(`regions_match_reference`).
 
 | Image | Nuclei | EVA | Peak RAM (before) | CellProfiler | Its peak RAM |
 |---|---|---|---|---|---|
@@ -419,7 +419,7 @@ now ~18.5 bytes per pixel on top of the image at 8192²; the costs (`f64`,
 (one rule per process): a cell (40 × 40 px) every 40 px on an 8192² image,
 10 spots (3 × 3 px) per cell along its diagonal, the last one across the
 border. "It overlaps the parent most" gives the same parents as
-CellProfiler's RelateObjects (`largest_overlap_matches_cellprofiler`).
+CellProfiler's RelateObjects (`largest_overlap_matches_reference`).
 
 | Rule | Cells | Spots | Time | Peak RAM (objects before) |
 |---|---|---|---|---|
@@ -583,7 +583,7 @@ of 10 values adds 109 MB to `objects` (1719 → 1828 MB, written fresh);
 ### Intensity spread (std, median, quartiles, MAD per channel)
 
 CellProfiler's MeasureObjectIntensity numbers (fixture
-`crates/core/tests/object_intensity_cellprofiler.py`), computed for every
+`crates/core/tests/object_intensity.json`), computed for every
 object; stored as `intensity_{std,median,lower_quartile,upper_quartile,mad}_gray`.
 
 | Benchmark | base | new |

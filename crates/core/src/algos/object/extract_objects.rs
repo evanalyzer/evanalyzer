@@ -479,13 +479,13 @@ mod tests {
         assert!(object1.mask_data[3]);
     }
 
-    /// Each extracted object's intensities are CellProfiler's (fixture from
-    /// `tests/object_intensity_cellprofiler.py`).
+    /// Each extracted object's intensities match the reference (fixture from
+    /// `tests/object_intensity.json`).
     #[test]
-    fn extracted_intensities_are_cellprofilers() {
-        use crate::object::intensities::tests::{assert_as_cellprofiler, cellprofiler_cases};
+    fn extracted_intensities_match_reference() {
+        use crate::object::intensities::tests::{assert_matches_reference, reference_cases};
         let mut compared = 0;
-        for case in cellprofiler_cases() {
+        for case in reference_cases() {
             let size = ImageSize {
                 width: case.width,
                 height: case.height,
@@ -515,7 +515,7 @@ mod tests {
                 let x = object.bbox[0] as usize + first % width;
                 let y = object.bbox[1] as usize + first / width;
                 let label = case.labels[y * case.width + x] as usize;
-                assert_as_cellprofiler(&object.intensities[&0], &case, label);
+                assert_matches_reference(&object.intensities[&0], &case, label);
                 compared += 1;
             }
         }

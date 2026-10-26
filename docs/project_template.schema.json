@@ -1179,7 +1179,7 @@
       }
     },
     "IlluminationCorrectionSettings": {
-      "description": "Use this when your images are brighter in the middle and dimmer toward\nthe edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse **Rolling Ball** instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
+      "description": "Use this when your images are brighter in the middle and dimmer toward\nthe edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse **Rolling Ball** instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep, so the field never has to be stored as an intermediate image\nand re-read.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
       "type": "object",
       "properties": {
         "applyMethod": {
@@ -1533,7 +1533,7 @@
       ]
     },
     "MeasureColocalizationCostesMethodSettings": {
-      "description": "How Costes' automatic thresholds are searched for (CellProfiler's\n\"Method for Costes thresholding\").",
+      "description": "How Costes' automatic thresholds are searched for - a trade-off between\nspeed and how exactly the threshold is found.",
       "oneOf": [
         {
           "description": "No Costes values.",
@@ -1541,17 +1541,17 @@
           "const": "OFF"
         },
         {
-          "description": "A shrinking window of candidates - a few passes over the image, also\nfor 16-bit images (CellProfiler's \"Faster\").",
+          "description": "A shrinking window of candidates - a few passes over the image, also\nfor 16-bit images.",
           "type": "string",
           "const": "FASTER"
         },
         {
-          "description": "Candidates from the top down, skipping while far off (CellProfiler's\n\"Fast\" - slow on 16-bit images).",
+          "description": "Candidates from the top down, skipping while far off (slow on 16-bit\nimages).",
           "type": "string",
           "const": "FAST"
         },
         {
-          "description": "Every candidate from the top down (CellProfiler's \"Accurate\" - very\nslow on 16-bit images).",
+          "description": "Every candidate from the top down (very slow on 16-bit images).",
           "type": "string",
           "const": "ACCURATE"
         }
@@ -1606,7 +1606,7 @@
       ]
     },
     "MeasureImageColocalizationSettings": {
-      "description": "Measures how two channels go together over the whole image -\nCellProfiler's MeasureColocalization, per image.\n\nPearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
+      "description": "Measures how two channels go together over the whole image -\ncolocalization of the whole image as one region.\n\nPearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
       "type": "object",
       "properties": {
         "channelA": {
@@ -1658,7 +1658,7 @@
       ]
     },
     "MeasureImageQualitySettings": {
-      "description": "Measures how usable a channel of the image is: sharp, not noisy, not\noverexposed.\n\nFocus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all as CellProfiler gives them - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
+      "description": "Measures how usable a channel of the image is: sharp, not noisy, not\noverexposed.\n\nFocus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all by their standard definitions - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
       "type": "object",
       "properties": {
         "channel": {
@@ -1676,7 +1676,7 @@
       ]
     },
     "MeasureImageTextureSettings": {
-      "description": "Measures the texture of a channel over the whole image - Haralick's\nfeatures (CellProfiler's MeasureTexture, per image).\n\nThe pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
+      "description": "Measures the texture of a channel over the whole image - Haralick's\nfeatures of the gray-level co-occurrence matrix, per image.\n\nThe pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
       "type": "object",
       "properties": {
         "channel": {
@@ -1713,7 +1713,7 @@
       }
     },
     "MeasureObjectColocalizationSettings": {
-      "description": "Measures how two channels go together in each object of a class -\nCellProfiler's MeasureColocalization, per object.\n\nThe values of Measure Image Colocalization (but the slope) of the\nobject's pixels: the threshold is a percentage of the object's maximum,\nRWC ranks the values of all the objects, and Costes uses the whole\nimage's Costes thresholds.",
+      "description": "Measures how two channels go together in each object of a class -\ncolocalization of every object as its own region.\n\nThe values of Measure Image Colocalization (but the slope) of the\nobject's pixels: the threshold is a percentage of the object's maximum,\nRWC ranks the values of all the objects, and Costes uses the whole\nimage's Costes thresholds.",
       "type": "object",
       "properties": {
         "channelA": {
@@ -1775,7 +1775,7 @@
       ]
     },
     "MeasureObjectNeighborsNeighborMethodSettings": {
-      "description": "Which objects count as neighbours (CellProfiler's \"Method to determine\nneighbors\").",
+      "description": "Which objects count as neighbours (how the neighbourhood of an object\nis determined).",
       "oneOf": [
         {
           "description": "Every object first grows over the background until it meets the\nothers; then the ones it touches.",
@@ -1829,7 +1829,7 @@
       }
     },
     "MeasureObjectShapeSettings": {
-      "description": "For each object: its convex area and solidity as CellProfiler gives them\n(the pixels whose centre lies in the convex hull; area / convex area),\nits Euler number (1 - holes, 8-connected) and its radii (the distance of\nits pixels to the nearest pixel outside it: maximum, mean, median).",
+      "description": "For each object: its convex area and solidity (the convex area counts\nthe pixels whose centre lies in the convex hull, so a convex object has\na solidity of exactly 1; solidity = area / convex area),\nits Euler number (1 - holes, 8-connected) and its radii (the distance of\nits pixels to the nearest pixel outside it: maximum, mean, median).",
       "type": "object",
       "properties": {
         "id": {
@@ -1847,7 +1847,7 @@
       ]
     },
     "MeasureObjectTextureSettings": {
-      "description": "Measures the texture of a channel in each object of a class - Haralick's\nfeatures (CellProfiler's MeasureTexture, per object).\n\nThe same values as Measure Image Texture, of the object's pixels only.",
+      "description": "Measures the texture of a channel in each object of a class - Haralick's\nfeatures of the gray-level co-occurrence matrix, per object.\n\nThe same values as Measure Image Texture, of the object's pixels only.",
       "type": "object",
       "properties": {
         "channel": {
@@ -1897,7 +1897,7 @@
           "const": "MEAN"
         },
         {
-          "description": "A value per direction (0°, 45°, 90°, 135°), as CellProfiler stores\nthem - four times as many values.",
+          "description": "A value per direction (0°, 45°, 90°, 135°) - four times as many\nvalues.",
           "type": "string",
           "const": "EACH"
         }
@@ -2642,7 +2642,7 @@
           ]
         },
         {
-          "description": "Grows the objects outward by `margin` without growing into each other: every\nbackground pixel within `margin` of an object goes to the nearest object (as\nCellProfiler's ExpandOrShrinkObjects \"Expand objects by a specified number of\npixels\"). With a large margin the objects grow until they touch.",
+          "description": "Grows the objects outward by `margin` without growing into each other: every\nbackground pixel within `margin` of an object goes to the nearest object, so\nneighbouring objects split the space between them instead of overlapping.\nWith a large margin the objects grow until they touch.",
           "type": "object",
           "properties": {
             "margin": {
@@ -4038,7 +4038,7 @@
           ]
         },
         {
-          "description": "Minimizes intra-class variance (maximizes inter-class variance).\n\n`Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly\nfinds two simultaneous cuts (Otsu's variance criterion is additive across\nclasses, so this is the same search one level deeper - see `thresh_otsu_multi`)\nand returns whichever cut `middle_class` selects. Mirrors CellProfiler's\n\"Two-class or three-class thresholding?\" + \"Assign pixels in the middle\nintensity class to the foreground or the background?\" pair.",
+          "description": "Minimizes intra-class variance (maximizes inter-class variance).\n\n`Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly\nfinds two simultaneous cuts (Otsu's variance criterion is additive across\nclasses, so this is the same search one level deeper - see `thresh_otsu_multi`)\nand returns whichever cut `middle_class` selects: the lower cut puts\nthe middle intensity class into the foreground, the upper cut into the\nbackground - useful when dim structures sit between object and\nbackground.",
           "type": "object",
           "properties": {
             "classes": {
@@ -4107,7 +4107,7 @@
           ]
         },
         {
-          "description": "Trims outliers from both ends of the sorted pixel distribution, then\nsets the threshold at `deviations_above_average` standard deviations\n(or MADs) above the trimmed mean (or median). A port of CellProfiler's\n\"Robust Background\" method - well suited to images with a clean, low\nbackground and sparse foreground, since the outlier trim keeps bright\nforeground pixels from dragging the background estimate upward.",
+          "description": "Trims outliers from both ends of the sorted pixel distribution, then\nsets the threshold at `deviations_above_average` standard deviations\n(or MADs) above the trimmed mean (or median). Well suited to images\nwith a clean, low\nbackground and sparse foreground, since the outlier trim keeps bright\nforeground pixels from dragging the background estimate upward.",
           "type": "object",
           "properties": {
             "averagingMethod": {
@@ -4141,7 +4141,7 @@
       ]
     },
     "SegmentationThresholdThresholdValueSourceSettings": {
-      "description": "Which image the threshold *value* is calculated from. Mirrors CellProfiler's\nability to calculate a threshold on one image (e.g. the raw, unblurred\nimage) and apply it to another (the blurred image actually being\nsegmented): the cut-off computed here is always applied against the\npipeline's actual current image - see [`ThresholdEntry::value_source`].",
+      "description": "Which image the threshold *value* is calculated from. Allows calculating a\nthreshold on one image (e.g. the raw, unblurred image, whose histogram is\nnot flattened by the blur) and applying it to another (the blurred image\nactually being segmented): the cut-off computed here is always applied\nagainst the\npipeline's actual current image - see [`ThresholdEntry::value_source`].",
       "oneOf": [
         {
           "description": "Calculate the threshold from the pipeline's current image - the same\nimage the threshold is applied to. This is the historical behavior.",
@@ -4479,7 +4479,7 @@
       "type": "object",
       "properties": {
         "maximumFinderTolerance": {
-          "description": "Prominence tolerance for the maximum finder, in pixels of distance -\n**or**, when `seed_source == Intensity`, CellProfiler's \"typical\nobject diameter\"-derived maxima-suppression radius, in pixels (its\ndisk-shaped local-maximum search footprint is `max(1, this - 0.5)`).\nSame field, two meanings depending on which surface seeds come from -\nboth are fundamentally a spatial scale over the *seed-finding*\nsurface, only the surface itself changes.\n\nFor `DistanceMap`: a local maximum of the distance map is treated as\na separate object only if it protrudes more than this value above\nthe ridge connecting it to a higher maximum. This is ImageJ's\n\"prominence\"/\"noise tolerance\" parameter.\n\n* **Low values**: more sensitive; may over-segment ragged objects.\n* **High values**: more robust; may fail to split genuinely touching objects.\n\nImageJ's default of `0.5` works well for most distance maps; raise it if a\nsingle object is being split into several pieces.",
+          "description": "Prominence tolerance for the maximum finder, in pixels of distance -\n**or**, when `seed_source == Intensity`, the maxima-suppression\nradius in pixels, derived from the typical object diameter (the\ndisk-shaped local-maximum search footprint is `max(1, this - 0.5)`).\nSame field, two meanings depending on which surface seeds come from -\nboth are fundamentally a spatial scale over the *seed-finding*\nsurface, only the surface itself changes.\n\nFor `DistanceMap`: a local maximum of the distance map is treated as\na separate object only if it protrudes more than this value above\nthe ridge connecting it to a higher maximum. This is ImageJ's\n\"prominence\"/\"noise tolerance\" parameter.\n\n* **Low values**: more sensitive; may over-segment ragged objects.\n* **High values**: more robust; may fail to split genuinely touching objects.\n\nImageJ's default of `0.5` works well for most distance maps; raise it if a\nsingle object is being split into several pieces.",
           "type": "number",
           "format": "float",
           "default": 0.5,
@@ -4495,12 +4495,12 @@
           "minimum": 0
         },
         "seedSource": {
-          "description": "What surface local maxima are seeded from. The watershed *flood*\nitself is unaffected either way - it always runs on the distance\nmap, matching CellProfiler's \"Shape\" watershed method.\n\n`DistanceMap` (default) emulates ImageJ's watershed implementation:\nseeds and flood both come from the distance map. `Intensity` instead\nfinds seeds as local maxima of the (optionally smoothed) grayscale\nimage, restricted to each object's own footprint - a faithful port\nof CellProfiler `IdentifyPrimaryObjects`' \"Intensity\" unclumping\nmethod,\nthe fix for diffusely-connected regions whose *shape* has no separate\npeaks but whose *brightness* clearly does.",
+          "description": "What surface local maxima are seeded from. The watershed *flood*\nitself is unaffected either way - it always runs on the distance\nmap (the \"Shape\" watershed: boundaries follow the objects' geometry\neven when the seeds come from brightness).\n\n`DistanceMap` (default) emulates ImageJ's watershed implementation:\nseeds and flood both come from the distance map. `Intensity` instead\nfinds seeds as local maxima of the (optionally smoothed) grayscale\nimage, restricted to each object's own footprint (\"Intensity\"\nunclumping) - the fix for diffusely-connected regions whose *shape*\nhas no separate peaks but whose *brightness* clearly does.",
           "$ref": "#/$defs/SegmentationWatershedSeedSourceSettings",
           "default": "DISTANCE_MAP"
         },
         "smoothingSigma": {
-          "description": "Standard deviation (px) of an optional Gaussian blur applied *before*\nseed-finding, to the surface `seed_source` seeds from - the distance\nmap for `DistanceMap`, or the grayscale intensity image for\n`Intensity` (matching CellProfiler's own smoothing step ahead of its\n\"Intensity\" unclumping). `0` disables it. The watershed *flood*\nalways runs on the (unsmoothed-by-this-field) distance map either way.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed for `DistanceMap`; for extremely\nnoisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.",
+          "description": "Standard deviation (px) of an optional Gaussian blur applied *before*\nseed-finding, to the surface `seed_source` seeds from - the distance\nmap for `DistanceMap`, or the grayscale intensity image for\n`Intensity` (smoothing the intensity image keeps noise from creating\nspurious brightness peaks, each of which would become its own seed).\n`0` disables it. The watershed *flood*\nalways runs on the (unsmoothed-by-this-field) distance map either way.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed for `DistanceMap`; for extremely\nnoisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.",
           "type": "number",
           "format": "float",
           "default": 0.0,

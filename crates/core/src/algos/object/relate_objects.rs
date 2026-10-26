@@ -12,8 +12,8 @@
 //! (e.g. its cell): at most one parent per parent class, so a spot can
 //! belong to a cell and to a tissue region at the same time. This is the
 //! one step that links objects - the counts and means per parent are
-//! computed from these links when the results are read, as in
-//! CellProfiler's RelateObjects.
+//! computed from these links when the results are read, so they are never
+//! stored twice or out of date.
 //!
 //! A child belongs to the parent its centre of mass lies in, or to the
 //! parent it overlaps most. Equal candidates go to the lower object id, so
@@ -466,12 +466,11 @@ mod tests {
         }
     }
 
-    /// "It overlaps the parent most" gives each child the parent
-    /// CellProfiler's RelateObjects gives it (`relate_labels`, its own code:
-    /// fixture from `tests/relate_objects_cellprofiler.py`), including ties
+    /// "It overlaps the parent most" gives each child the same parent
+    /// as the reference (fixture from `tests/relate_objects.json`), including ties
     /// and children outside every parent.
     #[test]
-    fn largest_overlap_matches_cellprofiler() {
+    fn largest_overlap_matches_reference() {
         #[derive(serde::Deserialize)]
         struct Case {
             name: String,
@@ -480,10 +479,7 @@ mod tests {
             children: Vec<u32>,
             parent_of_child: Vec<u32>,
         }
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/relate_objects_cellprofiler.json"
-        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/relate_objects.json");
         let cases: Vec<Case> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(cases.len(), 7);
@@ -512,10 +508,7 @@ mod tests {
     /// parent-child pair of a fixture case (irregular shapes).
     #[test]
     fn overlap_area_is_the_area_of_the_intersection() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/relate_objects_cellprofiler.json"
-        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/relate_objects.json");
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let labels =

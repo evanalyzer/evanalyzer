@@ -7,12 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! How far each child lies from the parent Relate Objects linked it to - the
-//! distances of CellProfiler's RelateObjects ("Calculate child-parent
-//! distances", `calculate_centroid_distances` / `calculate_minimum_distances`
-//! in cellprofiler/modules/relateobjects.py, CellProfiler 4.2.8): from the
-//! child's centre of mass to the parent's centre of mass, and to the
-//! nearest pixel of the parent's edge.
+//! How far each child lies from the parent Relate Objects linked it to:
+//! from the child's centre of mass to the parent's centre of mass, and to
+//! the nearest pixel of the parent's edge.
 
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::object::Object;
@@ -150,8 +147,9 @@ fn center_of_mass(object: &Object) -> (f64, f64) {
 
 /// The distance from `point` to the nearest edge pixel of `parent`: a pixel
 /// of it with a pixel beside it (4-neighbourhood, inside the image) that
-/// isn't - scikit-image's `find_boundaries(mode="inner")` as CellProfiler
-/// uses it (beyond the image edge counts as the same, its "reflect");
+/// isn't - scikit-image's `find_boundaries(mode="inner")` (beyond the image
+/// edge counts as the same, its "reflect", so a parent cut by the image
+/// edge has no edge there);
 /// `image`: the image's width and height.
 fn distance_to_edge(point: (f64, f64), parent: &Object, (width, height): (i64, i64)) -> f64 {
     let [x0, y0, x1, y1] = parent.bbox;
@@ -239,15 +237,12 @@ mod tests {
             .collect()
     }
 
-    /// Both distances as CellProfiler's RelateObjects gives them (fixture
-    /// from `tests/distance_to_parent_cellprofiler.py`); none without a
+    /// Both distances match the reference values (fixture
+    /// from `tests/distance_to_parent.json`); none without a
     /// parent; each names the parent.
     #[test]
-    fn distances_are_cellprofilers() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/distance_to_parent_cellprofiler.json"
-        );
+    fn distances_match_reference() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/distance_to_parent.json");
         let cases: Vec<Case> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let case = &cases[0];

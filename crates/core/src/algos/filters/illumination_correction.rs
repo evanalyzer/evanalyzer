@@ -88,8 +88,8 @@ pub enum ApplyMethod {
 /// Flat-field ("illumination") correction: estimates a smooth, slowly-varying
 /// gain/offset field caused by uneven illumination (vignetting, dust on the
 /// condenser, uneven excitation) and removes it in a single calculate+apply
-/// step - equivalent to CellProfiler's `CorrectIlluminationCalculate` and
-/// `CorrectIlluminationApply` modules combined into one.
+/// step, so the field never has to be stored as an intermediate image
+/// and re-read.
 ///
 /// Unlike `RollingBall`, which estimates a *local* per-object background
 /// baseline via a rolling structural element, this estimates one *global*,

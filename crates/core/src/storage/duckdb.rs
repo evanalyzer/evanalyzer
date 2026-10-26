@@ -1158,7 +1158,7 @@ CREATE TABLE IF NOT EXISTS objects (
     -- channel c is at position c + 1 (DuckDB lists are 1-based), NULL for a
     -- channel that wasn't measured. In gray values, as in ImageJ/Fiji (0..1:
     -- divided by 2^image_bit_depth - 1). Then how the values spread
-    -- (CellProfiler's MeasureObjectIntensity): standard deviation, median,
+    -- (dispersion and robust location): standard deviation, median,
     -- quartiles, median absolute deviation - NULL where not measured (a
     -- stored annotation's).
     intensity_sum_gray             DOUBLE[],

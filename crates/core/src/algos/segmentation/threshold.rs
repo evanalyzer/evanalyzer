@@ -57,9 +57,10 @@ pub enum ThresholdMethod {
     /// `Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly
     /// finds two simultaneous cuts (Otsu's variance criterion is additive across
     /// classes, so this is the same search one level deeper - see `thresh_otsu_multi`)
-    /// and returns whichever cut `middle_class` selects. Mirrors CellProfiler's
-    /// "Two-class or three-class thresholding?" + "Assign pixels in the middle
-    /// intensity class to the foreground or the background?" pair.
+    /// and returns whichever cut `middle_class` selects: the lower cut puts
+    /// the middle intensity class into the foreground, the upper cut into the
+    /// background - useful when dim structures sit between object and
+    /// background.
     Otsu {
         #[cmdsmeta(default = OtsuClasses::Two)]
         classes: OtsuClasses,
@@ -74,8 +75,8 @@ pub enum ThresholdMethod {
     Yen,
     /// Trims outliers from both ends of the sorted pixel distribution, then
     /// sets the threshold at `deviations_above_average` standard deviations
-    /// (or MADs) above the trimmed mean (or median). A port of CellProfiler's
-    /// "Robust Background" method - well suited to images with a clean, low
+    /// (or MADs) above the trimmed mean (or median). Well suited to images
+    /// with a clean, low
     /// background and sparse foreground, since the outlier trim keeps bright
     /// foreground pixels from dragging the background estimate upward.
     RobustBackground {
@@ -118,10 +119,11 @@ pub enum Averaging {
     Median,
 }
 
-/// Which image the threshold *value* is calculated from. Mirrors CellProfiler's
-/// ability to calculate a threshold on one image (e.g. the raw, unblurred
-/// image) and apply it to another (the blurred image actually being
-/// segmented): the cut-off computed here is always applied against the
+/// Which image the threshold *value* is calculated from. Allows calculating a
+/// threshold on one image (e.g. the raw, unblurred image, whose histogram is
+/// not flattened by the blur) and applying it to another (the blurred image
+/// actually being segmented): the cut-off computed here is always applied
+/// against the
 /// pipeline's actual current image - see [`ThresholdEntry::value_source`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThresholdValueSource {
@@ -214,9 +216,9 @@ impl ImageAlgorithm for Threshold {
         // exactly on bin 0.
         //
         // Each entry's `value_source` picks which image that histogram (and
-        // therefore the computed cut-off) is built from - mirroring
-        // CellProfiler's ability to calculate a threshold on one image (e.g.
-        // the raw, unblurred image) and apply it to another. The cut-off
+        // therefore the computed cut-off) is built from, so a threshold can be
+        // calculated on one image (e.g. the raw, unblurred image) and applied
+        // to another. The cut-off
         // itself is always applied against `actual_slice` below, never the
         // source image, so entries sharing a `value_source` share one
         // memoized histogram instead of rebuilding it per entry.
@@ -231,13 +233,12 @@ impl ImageAlgorithm for Threshold {
                 ThresholdMethod::None | ThresholdMethod::Manual => floor,
                 // Unlike every other auto method below, `RobustBackground` is
                 // computed directly from the sorted pixel population rather
-                // than a 256-bin histogram - CellProfiler's own
-                // `get_robust_background_threshold` (`centrosome/threshold.py`)
-                // sorts and trims the *exact* pixel values, and quantizing
-                // through the shared histogram first (which many distinct
-                // values collapse into the same bin) would lose the precision
-                // needed to reproduce its output bit-for-bit. No `+1`/rescale
-                // step either: the trimmed-mean-plus-deviations formula
+                // than a 256-bin histogram - the method sorts and trims the
+                // *exact* pixel values, and quantizing through the shared
+                // histogram first (which many distinct values collapse into
+                // the same bin) would shift the trim boundaries and the
+                // mean/spread, so the threshold would no longer be exact. No
+                // `+1`/rescale step either: the trimmed-mean-plus-deviations formula
                 // already yields a threshold value in the same relative units
                 // as `actual_slice`, not a bin index to map back.
                 ThresholdMethod::RobustBackground {
@@ -1293,15 +1294,14 @@ fn thresh_yen(hist: &[f32; 256]) -> usize {
     threshold
 }
 
-/// CellProfiler's "Robust Background" method
-/// (`centrosome.threshold.get_robust_background_threshold`): sorts `data`,
+/// The "Robust Background" threshold: sorts `data`,
 /// trims `lower_outlier_fraction`/`upper_outlier_fraction` of the population
 /// off each end, then returns the trimmed population's average plus
 /// `deviations_above_average` times its spread. `averaging_method` picks
-/// *both* halves of that pair at once, exactly as CellProfiler does: `Mean`
-/// pairs with the standard deviation, `Median` pairs with the median
-/// absolute deviation (no `1.4826` normal-consistency scaling - CellProfiler
-/// uses the raw MAD).
+/// *both* halves of that pair at once: `Mean` pairs with the standard
+/// deviation, `Median` pairs with the median absolute deviation (the raw
+/// MAD, no `1.4826` normal-consistency scaling, so `deviations_above_average`
+/// counts plain MADs).
 ///
 /// Deliberately operates on the raw pixel population instead of a
 /// pre-binned histogram - see the call site in `Threshold::execute` for why.
@@ -2115,17 +2115,15 @@ mod tests {
         );
     }
 
-    /// End-to-end regression for CellProfiler's "Three-class thresholding" +
-    /// "Assign pixels in the middle intensity class to the foreground or the
-    /// background?" pair: with three roughly equal-sized populations, setting
+    /// End-to-end regression for three-class thresholding with the middle
+    /// intensity class assigned to the foreground or the background: with three roughly equal-sized populations, setting
     /// `middle_class` to `Background` must classify only the *brightest*
     /// population as foreground (~1/3 of pixels), while `Foreground` must
     /// classify the middle *and* brightest populations as foreground (~2/3) -
-    /// exactly mirroring how CellProfiler's middle-class assignment changes
+    /// because the middle-class assignment changes
     /// which of the two jointly-optimized cuts becomes the final threshold.
     #[test]
-    fn test_otsu_three_class_middle_assignment_mirrors_cellprofiler()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_otsu_three_class_middle_assignment() -> Result<(), Box<dyn std::error::Error>> {
         // Three equal-sized, well-separated populations: dark, mid, bright.
         let per_cluster = 100;
         let mut input_data = Vec::with_capacity(per_cluster * 3);
@@ -2266,8 +2264,8 @@ mod tests {
         assert_eq!(thresh_yen(&bimodal_reference_histogram()), 164);
     }
 
-    /// Bit-exact regression for `Averaging::Mean` against CellProfiler's
-    /// `centrosome.threshold.get_robust_background_threshold`:
+    /// Bit-exact regression for `Averaging::Mean` against the reference
+    /// implementation `centrosome.threshold.get_robust_background_threshold`:
     ///
     /// ```python
     /// def get_robust_background_threshold(data, lower_frac, upper_frac, k):
@@ -2294,7 +2292,7 @@ mod tests {
     /// expected result (`5.0 + 5.0 * 2.0 == 15.0`) rather than one that only
     /// matches within some epsilon.
     #[test]
-    fn test_robust_background_mean_matches_cellprofiler_reference() {
+    fn test_robust_background_mean_matches_reference() {
         let mut data = vec![-100.0f32];
         data.extend(std::iter::repeat_n(0.0f32, 9));
         data.extend(std::iter::repeat_n(10.0f32, 9));
@@ -2302,12 +2300,12 @@ mod tests {
 
         let result = thresh_robust_background(&data, 0.05, 0.05, Averaging::Mean, 2.0);
 
-        assert_eq!(result, 15.0, "must match CellProfiler's reference exactly");
+        assert_eq!(result, 15.0, "must match the reference exactly");
     }
 
     /// Bit-exact regression for `Averaging::Median`, same reference formula
     /// as above but with `avg = median(trimmed)` and `sd =
-    /// median(abs(trimmed - avg))` (CellProfiler's raw MAD, no `1.4826`
+    /// median(abs(trimmed - avg))` (the raw MAD, no `1.4826`
     /// normal-consistency scaling).
     ///
     /// 20 pixels, values 1..=20. `int(20 * 0.05) == 1` trims the single
@@ -2322,12 +2320,12 @@ mod tests {
     /// Cross-checked against an independent Python re-implementation of the
     /// reference formula on this exact input, which likewise prints `19.5`.
     #[test]
-    fn test_robust_background_median_matches_cellprofiler_reference() {
+    fn test_robust_background_median_matches_reference() {
         let data: Vec<f32> = (1..=20).map(|v| v as f32).collect();
 
         let result = thresh_robust_background(&data, 0.05, 0.05, Averaging::Median, 2.0);
 
-        assert_eq!(result, 19.5, "must match CellProfiler's reference exactly");
+        assert_eq!(result, 19.5, "must match the reference exactly");
     }
 
     /// Fewer than 3 pixels short-circuits to `0.0`, matching the reference's
@@ -2345,7 +2343,7 @@ mod tests {
     /// pixel population (not the shared 256-bin histogram every other
     /// method uses) and apply it with the same
     /// exclusive-lower/inclusive-upper comparison as the rest of `Threshold`.
-    /// Reuses `test_robust_background_mean_matches_cellprofiler_reference`'s
+    /// Reuses `test_robust_background_mean_matches_reference`'s
     /// dataset (threshold value 15.0) scaled into a tiny image so pixels
     /// above 15.0 land in one class and everything else in another.
     #[test]

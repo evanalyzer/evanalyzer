@@ -19,7 +19,7 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 
 /// Measures the texture of a channel over the whole image - Haralick's
-/// features (CellProfiler's MeasureTexture, per image).
+/// features of the gray-level co-occurrence matrix, per image.
 ///
 /// The pixel pairs the scale apart in a direction say how the gray levels
 /// go together: e.g. contrast is high where neighbours differ a lot, the

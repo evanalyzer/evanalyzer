@@ -39,8 +39,8 @@ use std::sync::Arc;
 #[cmdsmeta(category = "instance_segmentation", next = "extract")]
 pub struct Watershed {
     /// Prominence tolerance for the maximum finder, in pixels of distance -
-    /// **or**, when `seed_source == Intensity`, CellProfiler's "typical
-    /// object diameter"-derived maxima-suppression radius, in pixels (its
+    /// **or**, when `seed_source == Intensity`, the maxima-suppression
+    /// radius in pixels, derived from the typical object diameter (the
     /// disk-shaped local-maximum search footprint is `max(1, this - 0.5)`).
     /// Same field, two meanings depending on which surface seeds come from -
     /// both are fundamentally a spatial scale over the *seed-finding*
@@ -62,8 +62,9 @@ pub struct Watershed {
     /// Standard deviation (px) of an optional Gaussian blur applied *before*
     /// seed-finding, to the surface `seed_source` seeds from - the distance
     /// map for `DistanceMap`, or the grayscale intensity image for
-    /// `Intensity` (matching CellProfiler's own smoothing step ahead of its
-    /// "Intensity" unclumping). `0` disables it. The watershed *flood*
+    /// `Intensity` (smoothing the intensity image keeps noise from creating
+    /// spurious brightness peaks, each of which would become its own seed).
+    /// `0` disables it. The watershed *flood*
     /// always runs on the (unsmoothed-by-this-field) distance map either way.
     ///
     /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
@@ -81,16 +82,15 @@ pub struct Watershed {
 
     /// What surface local maxima are seeded from. The watershed *flood*
     /// itself is unaffected either way - it always runs on the distance
-    /// map, matching CellProfiler's "Shape" watershed method.
+    /// map (the "Shape" watershed: boundaries follow the objects' geometry
+    /// even when the seeds come from brightness).
     ///
     /// `DistanceMap` (default) emulates ImageJ's watershed implementation:
     /// seeds and flood both come from the distance map. `Intensity` instead
     /// finds seeds as local maxima of the (optionally smoothed) grayscale
-    /// image, restricted to each object's own footprint - a faithful port
-    /// of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
-    /// method,
-    /// the fix for diffusely-connected regions whose *shape* has no separate
-    /// peaks but whose *brightness* clearly does.
+    /// image, restricted to each object's own footprint ("Intensity"
+    /// unclumping) - the fix for diffusely-connected regions whose *shape*
+    /// has no separate peaks but whose *brightness* clearly does.
     #[cmdsmeta(default = SeedSource::DistanceMap, optional = true, visibility = Advanced)]
     pub seed_source: SeedSource,
 }
@@ -1477,8 +1477,8 @@ mod tests {
         ctx
     }
 
-    /// The CellProfiler `IdentifyPrimaryObjects` "Intensity unclumping +
-    /// Shape watershed" scenario this feature exists for: one diffusely-
+    /// The "Intensity unclumping + Shape watershed" scenario this feature
+    /// exists for: one diffusely-
     /// connected region (a solid rectangle - its distance map is a flat
     /// ridge along most of its width, with no separable peak to split on)
     /// whose *brightness* has two clear, well-separated peaks.
@@ -1555,8 +1555,8 @@ mod tests {
         assert_ne!(
             label1, label2,
             "Intensity seeding must split the diffuse blob at its two \
-             brightness peaks, matching CellProfiler's Intensity-unclumping \
-             + Shape-watershed combination"
+             brightness peaks (Intensity-unclumping + Shape-watershed \
+             combination)"
         );
 
         let intensity_unique: HashSet<u32> = out.iter().copied().filter(|&v| v > 0).collect();

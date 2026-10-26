@@ -136,8 +136,8 @@ pub(crate) struct Spread {
 
 impl Spread {
     /// The spread of `values` (put in order here), whose mean is `mean` -
-    /// `None` without values. The same numbers as CellProfiler's
-    /// MeasureObjectIntensity (cellprofiler/modules/measureobjectintensity.py):
+    /// `None` without values. Uses the conventions of the established
+    /// object-intensity statistics, so results stay comparable to them:
     /// the population standard deviation; quartiles and median at position
     /// n·f of the sorted values, between the two values around it (the
     /// value there alone at the top end - not numpy's (n-1)·f); the MAD the
@@ -332,7 +332,7 @@ fn selected_quantile<T>(
     })
 }
 
-/// CellProfiler's quantile of `n` (> 0) sorted values (`at(i)`: the i-th):
+/// The quantile of `n` (> 0) sorted values (`at(i)`: the i-th):
 /// at q = n·`fraction` between the values at ⌊q⌋ and ⌊q⌋ + 1, the value at
 /// ⌊q⌋ alone when no value follows it.
 fn quantile(n: usize, fraction: f64, mut at: impl FnMut(usize) -> f64) -> f64 {
@@ -346,8 +346,8 @@ fn quantile(n: usize, fraction: f64, mut at: impl FnMut(usize) -> f64) -> f64 {
     }
 }
 
-/// [`quantile`] 0.5 of the distances of `sorted` from `median`, in f64 as
-/// CellProfiler computes them - in order without sorting them: walking out
+/// [`quantile`] 0.5 of the distances of `sorted` from `median`, in f64 (so
+/// ties and rounding are stable) - in order without sorting them: walking out
 /// from the median, the distances on both sides grow, so merging the two
 /// sides gives them smallest first.
 fn median_distance(sorted: &[f32], median: f64) -> f64 {
@@ -681,10 +681,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// One case of `tests/object_intensity_cellprofiler.json`: a label
-    /// image, its pixel values, and CellProfiler's statistics per label.
+    /// One case of `tests/object_intensity.json`: a label
+    /// image, its pixel values, and the reference statistics per label.
     #[derive(serde::Deserialize)]
-    pub(crate) struct CellProfilerCase {
+    pub(crate) struct ReferenceCase {
         pub name: String,
         pub width: usize,
         pub height: usize,
@@ -701,17 +701,14 @@ pub(crate) mod tests {
         pub mad: Vec<f64>,
     }
 
-    pub(crate) fn cellprofiler_cases() -> Vec<CellProfilerCase> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/object_intensity_cellprofiler.json"
-        );
+    pub(crate) fn reference_cases() -> Vec<ReferenceCase> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/object_intensity.json");
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
-    /// Asserts `got` has CellProfiler's statistics of label `label` (1-based)
+    /// Asserts `got` has the reference statistics of label `label` (1-based)
     /// of `case`: sums to rounding, the order statistics exactly.
-    pub(crate) fn assert_as_cellprofiler(got: &Intensity, case: &CellProfilerCase, label: usize) {
+    pub(crate) fn assert_matches_reference(got: &Intensity, case: &ReferenceCase, label: usize) {
         let i = label - 1;
         let what = format!("{} label {label}", case.name);
         let close = |a: f64, b: f64, name: &str| {
@@ -738,13 +735,13 @@ pub(crate) mod tests {
         assert_eq!(got.mad_intensity, case.mad[i], "{what} MAD");
     }
 
-    /// Std, quartiles, median and MAD of each label as CellProfiler's
-    /// MeasureObjectIntensity gives them (fixture from
-    /// `tests/object_intensity_cellprofiler.py`).
+    /// Std, quartiles, median and MAD of each label match the
+    /// reference values (fixture from
+    /// `tests/object_intensity.json`).
     #[test]
-    fn the_spread_is_cellprofilers() {
+    fn spread_matches_reference() {
         let mut compared = 0;
-        for case in cellprofiler_cases() {
+        for case in reference_cases() {
             let labels = case.labels.iter().copied().max().unwrap_or(0) as usize;
             for label in 1..=labels {
                 // The label's box and its mask in it.
@@ -767,7 +764,7 @@ pub(crate) mod tests {
                     [x0, y0, x1, y1].map(|v| v as u32),
                     &[tile(0, 0, 0, case.width, case.height, &case.image)],
                 );
-                assert_as_cellprofiler(&acc.finish()[&0], &case, label);
+                assert_matches_reference(&acc.finish()[&0], &case, label);
                 compared += 1;
             }
         }

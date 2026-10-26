@@ -46,8 +46,7 @@ pub enum ObjectMetric {
     IntensityMin(i32),
     IntensityMax(i32),
     IntensityAvg(i32),
-    /// How the pixel values spread in the channel (CellProfiler's
-    /// MeasureObjectIntensity).
+    /// How the pixel values spread in the channel (standard deviation).
     IntensityStd(i32),
     IntensityMedian(i32),
     IntensityLowerQuartile(i32),
