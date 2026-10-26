@@ -377,6 +377,9 @@ component ParamListRow inherits Rectangle {
     accessible-role: list-item;
     accessible-label: root.param.label;
     accessible-item-selected: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -605,6 +608,15 @@ export component ModuleSettingsDialog inherits InkDialog {
             horizontal-stretch: 1;
             content-width: self.visible-width;
             VerticalLayout {
+                // Typing into a field ends its binding to the row (what was
+                // typed is applied as it's typed); another parameter
+                // chosen: its values in the fields.
+                property <string> shown-key: root.param.key;
+                changed shown-key => {
+                    name-edit.text = root.param.label;
+                    section-edit.text = root.param.section;
+                    help-edit.text = root.param.description;
+                }
                 width: parent.width;
                 alignment: start;
                 padding: 14px;
@@ -647,7 +659,7 @@ export component ModuleSettingsDialog inherits InkDialog {
                     FormLabel {
                         text: "Name";
                     }
-                    LineEdit {
+                    name-edit := LineEdit {
                         text: root.param.label;
                         placeholder-text: "Name on the module card";
                         accessible-label: "Parameter name";
@@ -662,7 +674,7 @@ export component ModuleSettingsDialog inherits InkDialog {
                     FormLabel {
                         text: "Section";
                     }
-                    LineEdit {
+                    section-edit := LineEdit {
                         text: root.param.section;
                         placeholder-text: "e.g. Detection (optional)";
                         accessible-label: "Parameter section";
@@ -680,7 +692,7 @@ export component ModuleSettingsDialog inherits InkDialog {
                     }
                     VerticalLayout {
                         spacing: 4px;
-                        TextEdit {
+                        help-edit := TextEdit {
                             height: 56px;
                             text: root.param.description;
                             wrap: word-wrap;
@@ -698,6 +710,7 @@ export component ModuleSettingsDialog inherits InkDialog {
                                 text: "Use the setting's own help";
                                 clicked => {
                                     ModuleSettingsState.parameter-help-reset(root.param.key);
+                                    help-edit.text = "";
                                 }
                             }
                         }

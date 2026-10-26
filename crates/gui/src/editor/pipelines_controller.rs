@@ -1326,48 +1326,54 @@ impl PipelinesController {
                     }
                 });
 
-            // A parameter renamed or its help text edited - no refill either.
+            // A parameter renamed or its help text edited - no refill either
+            // (the field keeps the text typed); only its row follows, so the
+            // list and the form show it when it's chosen again.
             let manager = self.clone();
             ui.global::<ModuleSettingsState>()
                 .on_parameter_name_edited(move |id, label| {
-                    manager.edit_open_module_definition(|definition| {
-                        let id = ModuleParamKey::from(id.as_str());
+                    let key = ModuleParamKey::from(id.as_str());
+                    if manager.edit_open_module_definition(|definition| {
                         let Some(description) = definition
                             .parameters
                             .iter()
-                            .find(|p| p.key == id)
+                            .find(|p| p.key == key)
                             .map(|p| p.description.clone())
                         else {
                             return false;
                         };
                         evanalyzer_app::modules::edit_parameter(
                             definition,
-                            &id,
+                            &key,
                             &label,
                             &description,
                         )
-                    });
+                    }) {
+                        manager.update_parameter_row(&id, |row| row.label = label);
+                    }
                 });
             let manager = self.clone();
             ui.global::<ModuleSettingsState>()
                 .on_parameter_help_edited(move |id, description| {
-                    manager.edit_open_module_definition(|definition| {
-                        let id = ModuleParamKey::from(id.as_str());
+                    let key = ModuleParamKey::from(id.as_str());
+                    if manager.edit_open_module_definition(|definition| {
                         let Some(label) = definition
                             .parameters
                             .iter()
-                            .find(|p| p.key == id)
+                            .find(|p| p.key == key)
                             .map(|p| p.label.clone())
                         else {
                             return false;
                         };
                         evanalyzer_app::modules::edit_parameter(
                             definition,
-                            &id,
+                            &key,
                             &label,
                             &description,
                         )
-                    });
+                    }) {
+                        manager.update_parameter_row(&id, |row| row.description = description);
+                    }
                 });
 
             // The parameter's section on the module card - no refill while
@@ -1375,13 +1381,16 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<ModuleSettingsState>()
                 .on_parameter_section_edited(move |id, section| {
-                    manager.edit_open_module_definition(|definition| {
+                    if manager.edit_open_module_definition(|definition| {
                         evanalyzer_app::modules::set_parameter_section(
                             definition,
                             &ModuleParamKey::from(id.as_str()),
                             &section,
                         )
-                    });
+                    }) {
+                        let section = section.trim().into();
+                        manager.update_parameter_row(&id, |row| row.section = section);
+                    }
                 });
 
             // ↑/↓: the parameter's place on the module card.
@@ -3813,6 +3822,25 @@ impl PipelinesController {
         let state = ui.global::<ModuleSettingsState>();
         state.set_focus_index(focus_index);
         state.set_parameters(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// Changes the settings dialog's row of parameter `key` in place,
+    /// keeping the other rows and what the fields show.
+    fn update_parameter_row(&self, key: &str, change: impl FnOnce(&mut ModuleParamRow)) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let rows = ui.global::<ModuleSettingsState>().get_parameters();
+        let Some(index) =
+            (0..rows.row_count()).find(|&i| rows.row_data(i).is_some_and(|r| r.key == key))
+        else {
+            return;
+        };
+        let Some(mut row) = rows.row_data(index) else {
+            return;
+        };
+        change(&mut row);
+        rows.set_row_data(index, row);
     }
 
     /// The row of the opened module's parameter `key` in the settings
@@ -10567,6 +10595,51 @@ mod tests {
             ui.global::<PipelinesPanelState>().get_open_module_name(),
             "Smoothing"
         );
+    }
+
+    /// Typing into a field ends its binding: choosing another parameter
+    /// must show that one's values, and the typed text must come back with
+    /// its own parameter.
+    #[test]
+    fn the_parameter_form_follows_the_chosen_parameter_after_typing() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, ui_state, _controller) = with_two_parameters();
+        ui.global::<PipelinesPanelState>()
+            .invoke_open_module_settings();
+        drain_ui_queue();
+        let one = |label: &str| {
+            ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("no {label}"))
+        };
+        one("Parameters").invoke_accessible_default_action();
+        drain_ui_queue();
+        let rows = settings_rows(&ui);
+        let second_label = rows[1].label.to_string();
+        let field = |label: &str| one(label).accessible_value().unwrap_or_default();
+
+        one("Parameter name").set_accessible_value("Radius");
+        one("Parameter section").set_accessible_value("Detection");
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.get_project().modules[0].parameters[0].label,
+            "Radius"
+        );
+        assert_eq!(settings_rows(&ui)[0].label, "Radius", "the list follows");
+
+        // `changed` handlers run with the event loop.
+        let choose = |label: &str| {
+            one(label).invoke_accessible_default_action();
+            drain_ui_queue();
+            slint::platform::update_timers_and_animations();
+        };
+        choose(&second_label);
+        assert_eq!(field("Parameter name"), second_label);
+        assert_eq!(field("Parameter section"), "");
+
+        choose("Radius");
+        assert_eq!(field("Parameter name"), "Radius");
+        assert_eq!(field("Parameter section"), "Detection");
     }
 
     /// What a parameter sets is edited in the settings dialog: "Also set…"

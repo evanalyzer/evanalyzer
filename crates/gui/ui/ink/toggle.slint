@@ -336,6 +336,12 @@ export component InkTab inherits Rectangle {
 
     height: 30px;
     width: tab-row.preferred-width;
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
 
     tab-row := HorizontalLayout {
         padding-left: 2px;

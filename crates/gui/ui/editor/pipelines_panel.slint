@@ -1215,140 +1215,140 @@ component LeafParamRow inherits Rectangle {
     // ⓘ and 📌 (unless pinned) only while the row is hovered; the row
     // inside, so over the field or 📌 it stays hovered.
     leaf-row-ta := TouchArea {
-    leaf-row := HorizontalLayout {
-    spacing: 6px;
+        leaf-row := HorizontalLayout {
+            spacing: 6px;
 
-    HorizontalLayout {
-        width: 104px;
-        spacing: 3px;
-        alignment: start;
+            HorizontalLayout {
+                width: 104px;
+                spacing: 3px;
+                alignment: start;
 
-        if root.in-module: Rectangle {
-            y: (parent.height - self.height) / 2;
-            width: 14px;
-            height: 14px;
-            border-radius: 3px;
-            background: leaf-expose-ta.has-hover ? Ink.hover : transparent;
-            accessible-role: button;
-            accessible-label: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
-            Text {
-                text: root.p.exposed ? "◆" : "◇";
-                font-size: Ink.fs-caption;
-                color: root.p.exposed ? Ink.cat-module : Ink.text-mute;
-            }
+                if root.in-module: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 3px;
+                    background: leaf-expose-ta.has-hover ? Ink.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
+                    Text {
+                        text: root.p.exposed ? "◆" : "◇";
+                        font-size: Ink.fs-caption;
+                        color: root.p.exposed ? Ink.cat-module : Ink.text-mute;
+                    }
 
-            leaf-expose-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.toggle-exposed();
+                    leaf-expose-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.toggle-exposed();
+                        }
+                    }
+
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: leaf-expose-ta.has-hover && !leaf-expose-ta.pressed;
+                        text: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
+                    }
+                }
+                if root.in-module && root.p.exposed: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 3px;
+                    background: leaf-edit-ta.has-hover ? Ink.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Edit \{root.p.display-name}";
+                    Text {
+                        text: "✎";
+                        font-size: 9px;
+                        color: Ink.cat-module;
+                    }
+
+                    leaf-edit-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.edit-exposed();
+                        }
+                    }
+
+                    InkTipZone {
+                        width: 100%;
+                        height: 100%;
+                        wanted: leaf-edit-ta.has-hover && !leaf-edit-ta.pressed;
+                        text: "Edit \{root.p.display-name}";
+                    }
+                }
+                Text {
+                    text: root.p.display-name == "" ? root.p.name : root.p.display-name;
+                    font-size: Ink.fs-secondary;
+                    color: root.p.exposed ? Ink.cat-module : Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                if root.p.description != "": InkInfoButton {
+                    shown: leaf-row-ta.has-hover;
+                    title: root.p.display-name == "" ? root.p.name : root.p.display-name;
+                    text: root.p.description;
                 }
             }
 
-            InkTipZone {
-                width: 100%;
-                height: 100%;
-                wanted: leaf-expose-ta.has-hover && !leaf-expose-ta.pressed;
-                text: root.p.exposed ? "Don't expose \{root.p.display-name}" : "Expose \{root.p.display-name}";
-            }
-        }
-        if root.in-module && root.p.exposed: Rectangle {
-            y: (parent.height - self.height) / 2;
-            width: 14px;
-            height: 14px;
-            border-radius: 3px;
-            background: leaf-edit-ta.has-hover ? Ink.hover : transparent;
-            accessible-role: button;
-            accessible-label: "Edit \{root.p.display-name}";
-            Text {
-                text: "✎";
-                font-size: 9px;
-                color: Ink.cat-module;
-            }
-
-            leaf-edit-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.edit-exposed();
+            ScalarControls {
+                horizontal-stretch: 1;
+                p: {
+                    name: root.p.name,
+                    display-name: root.p.display-name,
+                    description: root.p.description,
+                    value: root.p.value,
+                    param-type: root.p.param-type,
+                    options: root.p.options,
+                    min: root.p.min,
+                    max: root.p.max,
+                    step: root.p.step,
+                    exposed: root.p.exposed,
+                    pinned: root.p.pinned,
+                };
+                changed(v) => {
+                    root.changed(v);
                 }
             }
 
-            InkTipZone {
-                width: 100%;
-                height: 100%;
-                wanted: leaf-edit-ta.has-hover && !leaf-edit-ta.pressed;
-                text: "Edit \{root.p.display-name}";
-            }
-        }
-        Text {
-            text: root.p.display-name == "" ? root.p.name : root.p.display-name;
-            font-size: Ink.fs-secondary;
-            color: root.p.exposed ? Ink.cat-module : Ink.text-dim;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-
-        if root.p.description != "": InkInfoButton {
-            shown: leaf-row-ta.has-hover;
-            title: root.p.display-name == "" ? root.p.name : root.p.display-name;
-            text: root.p.description;
-        }
-    }
-
-    ScalarControls {
-        horizontal-stretch: 1;
-        p: {
-            name: root.p.name,
-            display-name: root.p.display-name,
-            description: root.p.description,
-            value: root.p.value,
-            param-type: root.p.param-type,
-            options: root.p.options,
-            min: root.p.min,
-            max: root.p.max,
-            step: root.p.step,
-            exposed: root.p.exposed,
-            pinned: root.p.pinned,
-        };
-        changed(v) => {
-            root.changed(v);
-        }
-    }
-
-    // Into the Tuning panel.
+            // Into the Tuning panel.
         Rectangle {
-        y: (parent.height - self.height) / 2;
-        width: 20px;
-        height: 20px;
-        border-radius: Ink.radius-sm;
-        background: leaf-pin-ta.has-hover ? Ink.hover : transparent;
-        accessible-role: button;
-        accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
-        accessible-checked: root.p.pinned;
-        accessible-action-default => {
-            root.toggle-pin();
-        }
-        Image {
-            visible: root.p.pinned || leaf-row-ta.has-hover;
-            source: InkIcons.pin;
-            width: 12px;
-            colorize: root.p.pinned ? Ink.focus : leaf-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
-        }
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                border-radius: Ink.radius-sm;
+                background: leaf-pin-ta.has-hover ? Ink.hover : transparent;
+                accessible-role: button;
+                accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+                accessible-checked: root.p.pinned;
+                accessible-action-default => {
+                    root.toggle-pin();
+                }
+                Image {
+                    visible: root.p.pinned || leaf-row-ta.has-hover;
+                    source: InkIcons.pin;
+                    width: 12px;
+                    colorize: root.p.pinned ? Ink.focus : leaf-pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
+                }
 
-        leaf-pin-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.toggle-pin();
+                leaf-pin-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-pin();
+                    }
+                }
+
+                InkTipZone {
+                    width: 100%;
+                    height: 100%;
+                    wanted: leaf-pin-ta.has-hover && !leaf-pin-ta.pressed;
+                    text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+                }
             }
         }
-
-        InkTipZone {
-            width: 100%;
-            height: 100%;
-            wanted: leaf-pin-ta.has-hover && !leaf-pin-ta.pressed;
-            text: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
-        }
-    }
-    }
     }
 }
 
@@ -1812,53 +1812,52 @@ component InlineParamRow inherits VerticalLayout {
 
         // The row inside it: over the field it stays hovered.
         row-ta := TouchArea {
-        inline := HorizontalLayout {
-        spacing: 6px;
-        HorizontalLayout {
-            width: root.label-width;
-            alignment: start;
-            ParamLabel {
-                p: root.p;
-                show-info: row-ta.has-hover;
-                toggle-exposed => {
-                    root.toggle-exposed();
+            inline := HorizontalLayout {
+                spacing: 6px;
+                HorizontalLayout {
+                    width: root.label-width;
+                    alignment: start;
+                    ParamLabel {
+                        p: root.p;
+                        show-info: row-ta.has-hover;
+                        toggle-exposed => {
+                            root.toggle-exposed();
+                        }
+                        edit-exposed => {
+                            root.edit-exposed();
+                        }
+                    }
                 }
-                edit-exposed => {
-                    root.edit-exposed();
+
+                ParamControls {
+                    horizontal-stretch: 1;
+                    p: root.p;
+                    changed(v) => {
+                        root.changed(v);
+                    }
+                    item-field-changed(i, n, v) => {
+                        root.item-field-changed(i, n, v);
+                    }
+                    add-item => {
+                        root.add-item();
+                    }
+                    remove-item(i) => {
+                        root.remove-item(i);
+                    }
+                    show-model-info => {
+                        root.show-model-info();
+                    }
+                    toggle-item-exposed(i, n) => {
+                        root.toggle-item-exposed(i, n);
+                    }
+                    toggle-item-pin(i, n) => {
+                        root.toggle-item-pin(i, n);
+                    }
+                    edit-item-exposed(i, n) => {
+                        root.edit-item-exposed(i, n);
+                    }
                 }
             }
-        }
-
-        ParamControls {
-            horizontal-stretch: 1;
-            p: root.p;
-            changed(v) => {
-                root.changed(v);
-            }
-            item-field-changed(i, n, v) => {
-                root.item-field-changed(i, n, v);
-            }
-            add-item => {
-                root.add-item();
-            }
-            remove-item(i) => {
-                root.remove-item(i);
-            }
-            show-model-info => {
-                root.show-model-info();
-            }
-            toggle-item-exposed(i, n) => {
-                root.toggle-item-exposed(i, n);
-            }
-            toggle-item-pin(i, n) => {
-                root.toggle-item-pin(i, n);
-            }
-            edit-item-exposed(i, n) => {
-                root.edit-item-exposed(i, n);
-            }
-        }
-
-        }
         }
 
         // Into the Tuning panel - with the settings of other steps.
@@ -2002,38 +2001,37 @@ component CardTableView inherits VerticalLayout {
 
         // The row inside it: over a cell it stays hovered.
         row-ta := TouchArea {
-        HorizontalLayout {
-        spacing: 4px;
-        Text {
-            width: 64px;
-            text: row.name;
-            font-size: Ink.fs-secondary;
-            font-weight: 600;
-            color: row.problem == 2 ? Ink.err : row.problem == 1 ? Ink.warn : Ink.text;
-            overflow: elide;
-            vertical-alignment: center;
-        }
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    width: 64px;
+                    text: row.name;
+                    font-size: Ink.fs-secondary;
+                    font-weight: 600;
+                    color: row.problem == 2 ? Ink.err : row.problem == 1 ? Ink.warn : Ink.text;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
 
-        for cell in row.cells: Rectangle {
-            horizontal-stretch: 1;
-            preferred-width: 1px;
-            min-width: 0px;
-            border-radius: 5px;
-            border-width: cell.problem != "" ? 1px : 0px;
-            border-color: cell.problem-error ? Ink.err : Ink.warn;
-            ParamControls {
-                x: 1px;
-                y: (parent.height - self.height) / 2;
-                width: parent.width - 2px;
-                p: cell;
-                compact: true;
-                changed(v) => {
-                    root.changed(cell.name, v);
+                for cell in row.cells: Rectangle {
+                    horizontal-stretch: 1;
+                    preferred-width: 1px;
+                    min-width: 0px;
+                    border-radius: 5px;
+                    border-width: cell.problem != "" ? 1px : 0px;
+                    border-color: cell.problem-error ? Ink.err : Ink.warn;
+                    ParamControls {
+                        x: 1px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 2px;
+                        p: cell;
+                        compact: true;
+                        changed(v) => {
+                            root.changed(cell.name, v);
+                        }
+                    }
                 }
             }
-        }
-
-        }
         }
 
         // The row's settings into the Tuning panel.
@@ -2707,6 +2705,23 @@ component StepRow inherits Rectangle {
                 }
             }
 
+            InkMenuSeparator { }
+
+            if root.step.category == StepCategory.module: InkMenuItem {
+                text: "Look into module";
+                clicked => {
+                    root.view-module();
+                }
+            }
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
+                text: "Edit this module";
+                clicked => {
+                    root.edit-in-place();
+                }
+            }
+
+            InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.module;
                 text: "Create module";
@@ -2716,21 +2731,8 @@ component StepRow inherits Rectangle {
                 }
             }
 
-            if root.step.category == StepCategory.module: InkMenuItem {
-                text: "View";
-                clicked => {
-                    root.view-module();
-                }
-            }
             if root.step.category == StepCategory.module && root.editable: InkMenuItem {
-                text: "Edit in place";
-                clicked => {
-                    root.edit-in-place();
-                }
-            }
-            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
-                icon: InkIcons.module;
-                text: "Edit module";
+                text: "Edit modules";
                 clicked => {
                     root.open-module();
                 }
@@ -2741,6 +2743,7 @@ component StepRow inherits Rectangle {
                     root.expand-module();
                 }
             }
+
             if root.step.category == StepCategory.module && PipelinesPanelState.open-module-name == "": InkMenuItem {
                 icon: InkIcons.save;
                 text: "Save as";

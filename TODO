@@ -528,4 +528,97 @@ Decided 2026-10-25: the existing commands are extended to volumes (as scipy.ndim
 
 ## Usability
 
-- Allow to open evanalyzer modules using the open dialog
+- [x] Allow to open evanalyzer modules using the open dialog
+
+---
+
+# TODO: AI-assisted pipeline building
+
+Goal: users describe what they want in plain language ("detect nuclei in channel 0"),
+an AI model builds a pipeline, EVAnalyzer runs it locally, and the user verifies and
+fine-tunes the result in the normal pipeline editor.
+
+Guiding principles:
+- Image pixels stay local by default. Only prompts, pipeline settings and numbers leave the machine.
+- The analysis stays deterministic and reproducible. The AI only builds and edits pipelines.
+- The model is replaceable (cloud API today, local or on-premise model later).
+- Every AI change is a normal, undoable edit.
+
+---
+
+## Phase 1: Foundations (useful even without AI)
+
+- [ ] Fix the license inconsistency: README/LICENSE say AGPL-3.0 + commercial,
+      `crates/cfg/examples/check_templates.rs` says PolyForm Noncommercial 1.0.0.
+- [ ] Move overlay rendering (`crates/gui/src/editor/results_overlay.rs`,
+      `object_render.rs`) into core so it can run without the GUI.
+- [ ] CLI: `evanalyzer render-overlay <project> --image <name> --out overlay.png`.
+- [ ] CLI: `evanalyzer preview <project> --image <name> --json`
+      (run the pipeline on one image, print summary stats).
+- [ ] CLI: `evanalyzer template validate <file.evatemplate>` using the real serde types
+      (reuse the logic from `check_templates`).
+- [ ] Keep `docs/project_template.schema.json` generated in CI so it never drifts from the code.
+- [ ] Add documentation per pipeline command aimed at both humans and models:
+      purpose, typical order, parameter ranges, common mistakes
+      (e.g. "raise watershed tolerance if objects are over-split").
+
+## Phase 2: Shared tool layer
+
+One Rust module, used by both the chat panel and the MCP server.
+
+- [ ] `get_schema`: the pipeline/template schema (or a compact version of it).
+- [ ] `get_project_info`: channels, image count, image size, pixel size, z/t dimensions.
+      No file names or paths by default.
+- [ ] `get_pipeline` / `set_pipeline`: read and replace the steps of one pipeline.
+- [ ] `validate_pipeline`: return precise, human-readable errors.
+- [ ] `run_preview`: run on one image, return summary statistics only:
+  - [ ] object count per class
+  - [ ] size histogram (min, median, max, percentiles)
+  - [ ] intensity summary per channel
+  - [ ] objects touching the border
+  - [ ] objects removed per filter/classify step
+- [ ] `render_overlay`: return a PNG. Disabled for cloud models unless the user enables it.
+- [ ] Log every tool call with its input and result (for debugging and transparency).
+
+## Phase 3: Chat panel in the GUI (Option A)
+
+- [ ] Chat panel next to the pipeline editor.
+- [ ] Model backend abstraction: Claude API first, later local/on-premise models.
+- [ ] Settings: API key (stored in the OS keychain), model choice, endpoint URL.
+- [ ] Agent loop: send prompt + tool definitions, execute tool calls locally, repeat
+      until the model answers, with a maximum number of steps.
+- [ ] Pipeline editor updates live when `set_pipeline` is called.
+- [ ] Undo/redo for every AI change. Show a diff of what changed.
+- [ ] Clear indicator of what is sent to the cloud (prompt, settings, statistics, images yes/no).
+- [ ] "Share overlay with AI" toggle, off by default, per message or per session.
+
+## Phase 4: Structured user feedback
+
+Lets the user act as the AI's eyes without sending pixels.
+
+- [ ] Click objects in the overlay and mark them: "should be split", "should be merged",
+      "missed object here", "not an object".
+- [ ] Send feedback as structured data: object IDs, area, centroid, intensity, class.
+- [ ] Quick buttons for common problems: over-segmentation, under-segmentation,
+      background detected, dim objects missed.
+
+## Phase 5: MCP server (Option B)
+
+- [ ] `evanalyzer mcp` subcommand: local MCP server over stdio, wrapping the tool layer.
+- [ ] Connect to the running GUI so changes appear live (or work on a project file headless).
+- [ ] Optional: expose the same tools over HTTP from `crates/server`,
+      using its existing TLS, users and sessions.
+- [ ] Setup docs for Claude Desktop / Claude Code.
+
+## Phase 6: Trust and validation
+
+- [ ] Reference image set with ground truth (nuclei, cells, spots, 2D and 3D).
+- [ ] Benchmark: given a prompt, does the AI-built pipeline reach a target accuracy?
+- [ ] Run the benchmark in CI for template and tool changes.
+- [ ] Save prompt + final pipeline + model name in the project, so results stay traceable.
+
+## Later
+
+- [ ] Local/on-premise vision model that can check overlays itself (no data leaves the institute).
+- [ ] Suggest existing templates from `evanalyzer-templates` before building from scratch.
+- [ ] Explain an existing pipeline in plain language ("what does this pipeline do?").
