@@ -19564,7 +19564,7 @@ GPL-3.0 with GCC Runtime Library Exception 3.1 - libgomp
 Used by: libgomp
 ==============================================================================
 
-libgomp, the GNU OpenMP runtime library from GCC (https://gcc.gnu.org), ships with libtorch. It is licensed under the GNU General Public License version 3 with the GCC Runtime Library Exception 3.1; its source code is available from https://gcc.gnu.org.
+libgomp, the GNU OpenMP runtime library from GCC (https://gcc.gnu.org), ships with libtorch. It is licensed under the GNU General Public License version 3 with the GCC Runtime Library Exception 3.1; The libgomp shipped here is the one in the libtorch 2.13.0 download from pytorch.org, built with GCC 8.5.0 (Red Hat 8.5.0-28, the gcc package of RHEL 8 / AlmaLinux 8 that PyTorch's manylinux_2_28 build image uses); its source code is that package's source RPM (gcc-8.5.0-28), based on GCC 8.5.0 from https://gcc.gnu.org.
 
 Written offer (GPLv3 section 6(b)): for at least three years after we last ship libgomp, anyone who has a copy of it from an EVAnalyzer download may ask for its Corresponding Source - the GCC source of the exact version shipped - by opening an issue at https://github.com/evanalyzer/evanalyzer/issues. We provide it for no more than the cost of physically performing the transfer.
 
