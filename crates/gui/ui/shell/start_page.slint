@@ -292,7 +292,7 @@ export component StartPage inherits Rectangle {
                 spacing: 16px;
                 padding-bottom: 26px;
                 Image {
-                    source: @image-url("../icons/icon-orange.svg");
+                    source: @image-url("../icons/icon.svg");
                     width: 56px;
                     height: 56px;
                     accessible-role: image;
@@ -302,15 +302,28 @@ export component StartPage inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     spacing: 2px;
-                    Text {
-                        text: "EVAnalyzer";
-                        font-size: Ink.fs-display;
-                        font-weight: 700;
-                        color: Ink.text;
+                    // "EVA" in the icon's ring colour.
+                    HorizontalLayout {
+                        alignment: start;
+                        accessible-role: text;
+                        accessible-label: "EVAnalyzer";
+                        Text {
+                            text: "EVA";
+                            font-size: Ink.fs-display;
+                            font-weight: 700;
+                            color: Ink.brand;
+                        }
+
+                        Text {
+                            text: "nalyzer";
+                            font-size: Ink.fs-display;
+                            font-weight: 700;
+                            color: Ink.text;
+                        }
                     }
 
                     Text {
-                        text: "Enhanced Visual Image Analyzer";
+                        text: "Enhanced Visual Analyzer";
                         font-size: Ink.fs-dialog-title;
                         color: Ink.text-dim;
                     }
@@ -390,110 +403,110 @@ export component StartPage inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: start;
-        Rectangle {
-            background: Ink.panel;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            clip: true;
+            Rectangle {
+                background: Ink.panel;
+                border-radius: Ink.radius-lg;
+                border-width: 1px;
+                border-color: Ink.border;
+                clip: true;
 
-            VerticalLayout {
-                Rectangle {
-                    height: 52px;
-                    HorizontalLayout {
-                        padding-left: 18px;
-                        padding-right: 12px;
-                        spacing: 10px;
-                        Text {
-                            text: "Recent projects";
-                            font-size: Ink.fs-heading;
-                            font-weight: 600;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: StartState.recent.length > 0 ? StartState.recent.length : "";
-                            font-size: Ink.fs-secondary;
-                            font-family: Ink.font-mono;
-                            color: Ink.text-mute;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                    }
-
+                VerticalLayout {
                     Rectangle {
-                        y: parent.height - 1px;
-                        height: 1px;
-                        background: Ink.border-soft;
-                    }
-                }
+                        height: 52px;
+                        HorizontalLayout {
+                            padding-left: 18px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            Text {
+                                text: "Recent projects";
+                                font-size: Ink.fs-heading;
+                                font-weight: 600;
+                                color: Ink.text;
+                                vertical-alignment: center;
+                            }
 
-                if StartState.recent.length == 0: VerticalLayout {
-                    padding: 24px;
-                    min-height: 120px;
-                    Text {
-                        text: "Projects you open or save show here, to pick up where you left off.";
-                        font-size: Ink.fs-dialog-title;
-                        color: Ink.text-mute;
-                        wrap: word-wrap;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-                if StartState.recent.length > 0: VerticalLayout {
-                    padding: 6px;
-                    for row[i] in StartState.recent: RecentRow {
-                        project: row;
-                        open => {
-                            StartState.open-recent(i);
-                        }
-                        locate => {
-                            StartState.locate-recent(i);
-                        }
-                        forget => {
-                            StartState.forget-recent(i);
-                        }
-                    }
-                }
-
-                Rectangle {
-                    height: 48px;
-                    Rectangle {
-                        y: 0;
-                        height: 1px;
-                        background: Ink.border-soft;
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 18px;
-                        padding-right: 18px;
-                        spacing: 10px;
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            InkSwitch {
-                                text: "Open the last project when EVAnalyzer starts";
-                                checked: StartState.open-last;
-                                toggled(on) => {
-                                    StartState.open-last = on;
-                                    StartState.open-last-changed(on);
-                                }
+                            Text {
+                                text: StartState.recent.length > 0 ? StartState.recent.length : "";
+                                font-size: Ink.fs-secondary;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-mute;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
                             }
                         }
 
-                        if StartState.recent.length > 0: StartLink {
-                            text: "Clear list";
-                            color: Ink.text-dim;
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Ink.border-soft;
+                        }
+                    }
+
+                    if StartState.recent.length == 0: VerticalLayout {
+                        padding: 24px;
+                        min-height: 120px;
+                        Text {
+                            text: "Projects you open or save show here, to pick up where you left off.";
+                            font-size: Ink.fs-dialog-title;
+                            color: Ink.text-mute;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
                             vertical-alignment: center;
-                            clicked => {
-                                StartState.clear-recent();
+                        }
+                    }
+                    if StartState.recent.length > 0: VerticalLayout {
+                        padding: 6px;
+                        for row[i] in StartState.recent: RecentRow {
+                            project: row;
+                            open => {
+                                StartState.open-recent(i);
+                            }
+                            locate => {
+                                StartState.locate-recent(i);
+                            }
+                            forget => {
+                                StartState.forget-recent(i);
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 48px;
+                        Rectangle {
+                            y: 0;
+                            height: 1px;
+                            background: Ink.border-soft;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 18px;
+                            padding-right: 18px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                InkSwitch {
+                                    text: "Open the last project when EVAnalyzer starts";
+                                    checked: StartState.open-last;
+                                    toggled(on) => {
+                                        StartState.open-last = on;
+                                        StartState.open-last-changed(on);
+                                    }
+                                }
+                            }
+
+                            if StartState.recent.length > 0: StartLink {
+                                text: "Clear list";
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                                clicked => {
+                                    StartState.clear-recent();
+                                }
                             }
                         }
                     }
                 }
             }
-        }
         }
     }
 }
