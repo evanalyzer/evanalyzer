@@ -43,14 +43,43 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
 /// Where the folders the user added to the places are kept (the user
-/// settings) - see [`FileBrowser::set_user_places`].
+/// settings), and the open project's folders - see
+/// [`FileBrowser::set_user_places`].
 pub trait UserPlaces: Send + Sync {
     fn load(&self) -> Vec<PathBuf>;
     fn save(&self, places: Vec<PathBuf>);
+    fn project_folders(&self) -> ProjectFolders {
+        ProjectFolders::default()
+    }
 }
 
-/// [`FileBrowserPlace::kind`] of a folder the user added.
+/// The open project's file (none while unsaved) and its images' folder.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectFolders {
+    pub project_file: Option<PathBuf>,
+    pub images: Option<PathBuf>,
+}
+
+impl ProjectFolders {
+    fn project_dir(&self) -> Option<PathBuf> {
+        self.project_file
+            .as_ref()
+            .and_then(|f| f.parent())
+            .filter(|d| !d.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+    }
+
+    fn images_dir(&self) -> Option<PathBuf> {
+        self.images.clone().filter(|d| !d.as_os_str().is_empty())
+    }
+}
+
+/// [`FileBrowserPlace::kind`]s: a folder the user added, and the project's,
+/// its images' and the templates folder.
 const USER_PLACE: i32 = 3;
+const PROJECT_PLACE: i32 = 4;
+const IMAGES_PLACE: i32 = 5;
+const TEMPLATES_PLACE: i32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileMode {
@@ -165,8 +194,12 @@ struct Session {
     /// Bumped per navigation, so a slow listing that finishes after the
     /// user already moved on is ignored.
     generation: u64,
-    /// Where the next dialog opens if the request doesn't say.
-    last_dir: Option<PathBuf>,
+    /// Where the next dialog opens if the request doesn't say - for the
+    /// project (its file) open then; another project starts in its own
+    /// folder.
+    last_dir: Option<(Option<PathBuf>, PathBuf)>,
+    /// The backend's templates folder, if it exists - read with the places.
+    templates: Option<PathBuf>,
     /// Save target waiting for the user to confirm replacing it.
     pending_overwrite: Option<PathBuf>,
     /// The backend's places (home, drives, …), as last read.
@@ -207,33 +240,60 @@ where
         self.user_places.lock().unwrap().as_ref()?.upgrade()
     }
 
-    /// The places shown: the backend's, then the user's.
+    fn project_folders(&self) -> ProjectFolders {
+        self.user_places()
+            .map(|s| s.project_folders())
+            .unwrap_or_default()
+    }
+
+    /// The places shown: the project's folders and the templates folder,
+    /// the backend's places, then the user's.
     fn place_rows(&self) -> Vec<FileBrowserPlace> {
-        let builtin = self.session.lock().unwrap().places.clone();
+        let (builtin, templates) = {
+            let s = self.session.lock().unwrap();
+            (s.places.clone(), s.templates.clone())
+        };
         let user = self.user_places().map(|s| s.load()).unwrap_or_default();
-        builtin
-            .iter()
-            .map(|p| FileBrowserPlace {
-                name: p.name.as_str().into(),
-                path: p.path.to_string_lossy().as_ref().into(),
-                kind: match p.kind {
-                    PlaceKind::Home => 0,
-                    PlaceKind::Drive => 1,
-                    PlaceKind::Folder => 2,
-                },
-            })
-            .chain(user.iter().map(|path| {
-                FileBrowserPlace {
-                    name: path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.to_string_lossy().into_owned())
-                        .into(),
-                    path: path.to_string_lossy().as_ref().into(),
-                    kind: USER_PLACE,
-                }
-            }))
-            .collect()
+        let folders = self.project_folders();
+        let project = folders.project_dir();
+        let images = folders.images_dir().filter(|d| Some(d) != project.as_ref());
+        let row = |name: &str, path: &Path, kind: i32| FileBrowserPlace {
+            name: name.into(),
+            path: path.to_string_lossy().as_ref().into(),
+            kind,
+        };
+        [
+            project.map(|d| row("Project", &d, PROJECT_PLACE)),
+            images.map(|d| row("Images", &d, IMAGES_PLACE)),
+            templates.map(|d| row("Templates", &d, TEMPLATES_PLACE)),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(
+            builtin
+                .iter()
+                .map(|p| FileBrowserPlace {
+                    name: p.name.as_str().into(),
+                    path: p.path.to_string_lossy().as_ref().into(),
+                    kind: match p.kind {
+                        PlaceKind::Home => 0,
+                        PlaceKind::Drive => 1,
+                        PlaceKind::Folder => 2,
+                    },
+                })
+                .chain(user.iter().map(|path| {
+                    FileBrowserPlace {
+                        name: path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                            .into(),
+                        path: path.to_string_lossy().as_ref().into(),
+                        kind: USER_PLACE,
+                    }
+                })),
+        )
+        .collect()
     }
 
     fn show_places(&self) {
@@ -351,6 +411,7 @@ where
         if self.session.lock().unwrap().request.is_some() {
             self.close(None);
         }
+        let folders = self.project_folders();
         let start = {
             let mut s = self.session.lock().unwrap();
             s.filter = 0;
@@ -360,7 +421,17 @@ where
             s.file_name = request.file_name.clone().unwrap_or_default();
             s.listing.clear();
             s.shown.clear();
-            let start = request.start_dir.clone().or_else(|| s.last_dir.clone());
+            let start = request
+                .start_dir
+                .clone()
+                .or_else(|| {
+                    s.last_dir
+                        .as_ref()
+                        .filter(|(project, _)| *project == folders.project_file)
+                        .map(|(_, dir)| dir.clone())
+                })
+                .or_else(|| folders.project_dir())
+                .or_else(|| folders.images_dir());
             s.on_done = Some(Box::new(on_done));
             s.request = Some(request.clone());
             start
@@ -400,7 +471,8 @@ where
             state.set_places_loading(true);
             state.set_visible(true);
         });
-        // The user's places right away, the backend's when read.
+        // The user's and the project's places right away, the backend's
+        // when read.
         self.show_places();
         self.update_can_accept();
 
@@ -422,6 +494,13 @@ where
             }
             let started = std::time::Instant::now();
             let places = this.backend().files().places();
+            // Where saved templates go - the server's in remote mode.
+            let templates = this
+                .backend()
+                .template_folders()
+                .ok()
+                .map(|f| f.user)
+                .filter(|d| matches!(this.backend().files().stat(d), Ok(Some(e)) if e.is_dir));
             log_if_slow("reading the places (drives, home folders)", started);
             let fallback = places
                 .as_ref()
@@ -432,6 +511,7 @@ where
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 ui_this.with_state(|s| s.set_places_loading(false));
+                ui_this.session.lock().unwrap().templates = templates;
                 match places {
                     Ok(places) => {
                         ui_this.session.lock().unwrap().places = places;
@@ -769,10 +849,11 @@ where
 
     /// Hides the dialog; runs the callback with `path` if one was chosen.
     fn close(self: &Arc<Self>, path: Option<PathBuf>) {
+        let project_file = self.project_folders().project_file;
         let on_done = {
             let mut s = self.session.lock().unwrap();
             if !s.current_dir.as_os_str().is_empty() {
-                s.last_dir = Some(s.current_dir.clone());
+                s.last_dir = Some((project_file, s.current_dir.clone()));
             }
             s.request = None;
             s.generation += 1;
@@ -1335,9 +1416,10 @@ mod tests {
         assert!(f.shown().is_empty());
     }
 
-    /// Places kept in memory, like the app settings keep them.
+    /// Places kept in memory, like the app settings keep them, and the
+    /// project's folders.
     #[derive(Default)]
-    struct MemoryPlaces(Mutex<Vec<PathBuf>>);
+    struct MemoryPlaces(Mutex<Vec<PathBuf>>, Mutex<ProjectFolders>);
 
     impl UserPlaces for MemoryPlaces {
         fn load(&self) -> Vec<PathBuf> {
@@ -1346,6 +1428,30 @@ mod tests {
         fn save(&self, places: Vec<PathBuf>) {
             *self.0.lock().unwrap() = places;
         }
+        fn project_folders(&self) -> ProjectFolders {
+            self.1.lock().unwrap().clone()
+        }
+    }
+
+    fn rows_of_kind(f: &Fixture, kinds: &[i32]) -> Vec<(String, String)> {
+        let places = f.state().get_places();
+        (0..places.row_count())
+            .map(|i| places.row_data(i).unwrap())
+            .filter(|p| kinds.contains(&p.kind))
+            .map(|p| (p.name.to_string(), p.path.to_string()))
+            .collect()
+    }
+
+    /// A store whose project file is `dir/p.evaproj`, images in `images`.
+    fn project_store(f: &Fixture, images: Option<PathBuf>) -> Arc<MemoryPlaces> {
+        let store = Arc::new(MemoryPlaces::default());
+        *store.1.lock().unwrap() = ProjectFolders {
+            project_file: Some(f.dir.path().join("p.evaproj")),
+            images,
+        };
+        let weak: Weak<dyn UserPlaces> = Arc::downgrade(&(store.clone() as Arc<dyn UserPlaces>));
+        f.browser.set_user_places(weak);
+        store
     }
 
     fn user_rows(f: &Fixture) -> Vec<(String, String)> {
@@ -1410,5 +1516,92 @@ mod tests {
         let _rx = f.open(FileRequest::open_file("Open"));
         f.state().invoke_add_place();
         assert!(user_rows(&f).is_empty());
+    }
+
+    #[test]
+    fn the_project_and_its_images_folder_come_first_in_the_places() {
+        let f = fixture();
+        let sub = f.dir.path().join("sub");
+        let _store = project_store(&f, Some(sub.clone()));
+        let _rx = f.open(FileRequest::open_file("Open"));
+        let text = |p: &Path| p.to_string_lossy().to_string();
+        assert_eq!(
+            rows_of_kind(&f, &[PROJECT_PLACE, IMAGES_PLACE]),
+            [
+                ("Project".to_string(), text(f.dir.path())),
+                ("Images".to_string(), text(&sub)),
+            ]
+        );
+        let first = f.state().get_places().row_data(0).unwrap();
+        assert_eq!(first.kind, PROJECT_PLACE, "above the backend's places");
+        assert!(
+            f.state().get_current_is_place(),
+            "opened in the project folder"
+        );
+    }
+
+    #[test]
+    fn images_inside_the_project_folder_show_once() {
+        let f = fixture();
+        let _store = project_store(&f, Some(f.dir.path().to_path_buf()));
+        let _rx = f.open(FileRequest::open_file("Open"));
+        assert_eq!(rows_of_kind(&f, &[PROJECT_PLACE, IMAGES_PLACE]).len(), 1);
+    }
+
+    #[test]
+    fn without_a_saved_project_there_is_no_project_place() {
+        let f = fixture();
+        let store = project_store(&f, None);
+        store.1.lock().unwrap().project_file = None;
+        let _rx = f.open(FileRequest::open_file("Open"));
+        assert!(rows_of_kind(&f, &[PROJECT_PLACE, IMAGES_PLACE]).is_empty());
+    }
+
+    /// No folder of its own: the project folder, then the last one chosen
+    /// for this project; another project starts in its own folder again.
+    #[test]
+    fn a_dialog_starts_in_the_project_folder_then_where_the_last_ended() {
+        let f = fixture();
+        let store = project_store(&f, None);
+        let open = || {
+            let (tx, rx) = mpsc::channel();
+            f.browser
+                .open(FileRequest::open_file("Open"), move |p| tx.send(p).unwrap());
+            drain_ui_queue();
+            rx
+        };
+        let _rx = open();
+        assert_eq!(
+            sorted(f.shown()),
+            ["a.evaproj", "notes.txt", "sub"],
+            "the project folder"
+        );
+
+        f.state()
+            .invoke_navigate(f.dir.path().join("sub").to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        f.state().invoke_cancel();
+        let _rx = open();
+        assert_eq!(f.shown(), ["b.evaproj"], "where the last one ended");
+        f.state().invoke_cancel();
+
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("c.evaproj"), "{}").unwrap();
+        store.1.lock().unwrap().project_file = Some(other.path().join("c.evaproj"));
+        let _rx = open();
+        assert_eq!(f.shown(), ["c.evaproj"], "another project: its folder");
+    }
+
+    #[test]
+    fn a_dialogs_own_start_folder_wins_over_the_project_folder() {
+        let f = fixture();
+        let _store = project_store(&f, None);
+        let (tx, _rx) = mpsc::channel();
+        f.browser.open(
+            FileRequest::open_file("Open").start_in(f.dir.path().join("sub")),
+            move |p| tx.send(p).unwrap(),
+        );
+        drain_ui_queue();
+        assert_eq!(f.shown(), ["b.evaproj"]);
     }
 }

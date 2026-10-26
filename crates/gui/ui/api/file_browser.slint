@@ -6,7 +6,8 @@
 
 export enum FileBrowserMode { open-file, open-folder, save-file }
 
-// kind: 0 home, 1 drive, 2 folder, 3 a folder the user added
+// kind: 0 home, 1 drive, 2 folder, 3 a folder the user added, 4 the project's
+// folder, 5 its images' folder, 6 the templates folder
 export struct FileBrowserPlace {
     name: string,
     path: string,

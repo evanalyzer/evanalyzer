@@ -37,6 +37,9 @@ component PlaceRow inherits Rectangle {
             source: root.place.kind == 0 ? @image-url("../icons/regular-white/house.svg")
                   : root.place.kind == 1 ? @image-url("../icons/regular-white/hard-drives.svg")
                   : root.place.kind == 3 ? @image-url("../icons/regular-white/folder-simple-star.svg")
+                  : root.place.kind == 4 ? @image-url("../icons/regular-white/file-text.svg")
+                  : root.place.kind == 5 ? @image-url("../icons/regular-white/images.svg")
+                  : root.place.kind == 6 ? @image-url("../icons/regular-white/copy.svg")
                   : @image-url("../icons/regular-white/folder-simple.svg");
             colorize: root.current ? Ink.focus : Ink.text-dim;
         }

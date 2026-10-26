@@ -472,6 +472,62 @@ component AutoPreviewToggle inherits Rectangle {
     }
 }
 
+// The preview, in one group: refresh what is shown, preview the whole
+// image, and "● Auto preview" (not while an analysis runs).
+component PreviewGroup inherits Rectangle {
+    in property <bool> running;
+    width: group.preferred-width;
+    height: 30px;
+    border-radius: Ink.radius-md;
+    border-width: 1px;
+    border-color: Ink.border;
+    background: Ink.field;
+
+    group := HorizontalLayout {
+        padding-left: 1px;
+        padding-right: 1px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            InkIconButton {
+                size: 28px;
+                icon: InkIcons.refresh;
+                label: "Refresh preview";
+                keys: ["F5"];
+                clicked => {
+                    PipelinesPanelState.dry-run();
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            InkIconButton {
+                size: 28px;
+                icon: InkIcons.preview-whole;
+                label: "Preview the whole image";
+                keys: ["Shift", "F5"];
+                clicked => {
+                    PipelinesPanelState.preview-whole-image();
+                }
+            }
+        }
+        if !root.running: VerticalLayout {
+            alignment: center;
+            padding-left: 4px;
+            padding-right: 4px;
+            Rectangle {
+                width: 1px;
+                height: 16px;
+                background: Ink.border;
+            }
+        }
+        if !root.running: VerticalLayout {
+            alignment: center;
+            AutoPreviewToggle { }
+        }
+    }
+}
+
 // An analysis running: in place of Auto preview and Run - progress, the
 // count and the time left, Stop.
 export global RunText {
@@ -667,25 +723,8 @@ export component TopBar inherits Rectangle {
                     }
                 }
 
-                if root.editing: InkIconButton {
-                    size: 30px;
-                    icon: InkIcons.refresh;
-                    label: "Refresh preview";
-                    keys: ["F5"];
-                    clicked => {
-                        PipelinesPanelState.dry-run();
-                    }
-                }
-                if root.editing: InkIconButton {
-                    size: 30px;
-                    icon: InkIcons.preview-whole;
-                    tint: Ink.info;
-                    label: "Preview the whole image";
-                    keys: ["Shift", "F5"];
-                    clicked => {
-                        PipelinesPanelState.preview-whole-image();
-                    }
-                }
+                // The image tools: annotating, and AI training learning
+                // from the annotations.
                 if root.editing: InkIconButton {
                     size: 30px;
                     icon: InkIcons.annotate;
@@ -694,6 +733,14 @@ export component TopBar inherits Rectangle {
                     active: LayoutState.annotate;
                     clicked => {
                         LayoutState.annotate = !LayoutState.annotate;
+                    }
+                }
+                if root.editing: InkIconButton {
+                    size: 30px;
+                    icon: InkIcons.ai;
+                    label: "AI training…";
+                    clicked => {
+                        AiLearningState.open_requested();
                     }
                 }
             }
@@ -744,18 +791,9 @@ export component TopBar inherits Rectangle {
                         ViewportObjectState.compare = !ViewportObjectState.compare;
                     }
                 }
-                // AI training - used far more than debug mode (that one,
-                // for power users, is in the EVA menu).
-                InkIconButton {
-                    size: 28px;
-                    icon: InkIcons.ai;
-                    label: "AI training…";
-                    clicked => {
-                        AiLearningState.open_requested();
-                    }
+                PreviewGroup {
+                    running: root.running;
                 }
-
-                if !root.running: AutoPreviewToggle { }
                 if !root.running: InkButton {
                     text: "Run";
                     kind: InkButtonKind.primary;

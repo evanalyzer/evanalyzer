@@ -1737,4 +1737,12 @@ impl file_browser::UserPlaces for UiState {
     fn save(&self, places: Vec<PathBuf>) {
         self.update_app_settings(|s| s.file_places = places);
     }
+
+    fn project_folders(&self) -> file_browser::ProjectFolders {
+        let project = self.get_project();
+        file_browser::ProjectFolders {
+            project_file: project.tmp_settings.current_project.clone(),
+            images: project.images.root.clone(),
+        }
+    }
 }
