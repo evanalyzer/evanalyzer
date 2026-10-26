@@ -73,7 +73,7 @@ impl ImageAlgorithm for MeasureImageTexture {
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let texture = self.texture();
-        let levels = texture.levels(cache)?;
+        let levels = texture.levels()?;
         let features = texture.image_features(cache, &levels)?;
         for (feature, value) in texture.values(&features).into_iter().enumerate() {
             cache.add_image_measurement(

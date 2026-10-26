@@ -315,7 +315,6 @@ export component AiLearningDialog inherits InkDialog {
     property <bool> classes-open: true;
     property <bool> features-open: true;
     property <bool> model-open: false;
-    property <bool> options-open: false;
     property <bool> objects-open: false;
     property <bool> adding-size: false;
     property <int> shape-rows: floor((AiLearningState.shape_metrics.length + 2) / 3);
@@ -1034,49 +1033,10 @@ export component AiLearningDialog inherits InkDialog {
                         }
                     }
 
-                    // -- Training options (folded) --
-                    VerticalLayout {
-                        spacing: 8px;
-                        SectionHead {
-                            top-line: true;
-                            title: "TRAINING OPTIONS";
-                            summary: (AiLearningState.settings.balance_classes ? "balanced · " : "")
-                                + round(AiLearningState.settings.validation_split * 100) + " % check";
-                            open <=> root.options-open;
-                        }
-                        if root.options-open: VerticalLayout {
-                            spacing: 8px;
-                            CheckBox {
-                                text: "Balance classes with few examples";
-                                checked <=> AiLearningState.settings.balance_classes;
-                            }
-                            CheckBox {
-                                text: "Normalize features (nearest neighbours, neural network)";
-                                checked <=> AiLearningState.settings.normalize_features;
-                            }
-                            HorizontalLayout {
-                                spacing: 12px;
-                                alignment: start;
-                                FormLabel {
-                                    text: "Hold back";
-                                }
-                                LineEdit {
-                                    width: 60px;
-                                    text: AiLearningState.settings.validation_split;
-                                    edited(v) => {
-                                        AiLearningState.settings.validation_split = v.to-float();
-                                    }
-                                }
-                                Text {
-                                    text: "of the examples (0–1) to check how well it works";
-                                    color: Ink.text-mute;
-                                    font-size: Ink.fs-secondary;
-                                    vertical-alignment: center;
-                                    wrap: word-wrap;
-                                }
-                            }
-                        }
-                    }
+                    // "Training options" (Balance classes, Normalize features,
+                    // Hold back) is hidden: training doesn't use them yet
+                    // (`balance_classes`, `normalize_features`,
+                    // `validation_split` are never read) - see TODO.
 
                     // -- The examples one by one (folded): class, use or not --
                     VerticalLayout {

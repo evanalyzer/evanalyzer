@@ -10,7 +10,8 @@
 //! Haralick's texture features - CellProfiler's MeasureTexture
 //! (cellprofiler/modules/measuretexture.py, CellProfiler 4.2.8, which calls
 //! mahotas.features.haralick), value for value: the channel as 8 bits
-//! (0..255 over the bit depth), rescaled to the gray levels; per direction
+//! (its normalized 0..1 values, as CellProfiler loads the image, × 255),
+//! rescaled to the gray levels; per direction
 //! the symmetric co-occurrence matrix of the pixel pairs that far apart and
 //! the 13 features of it - over the whole image (Measure Image Texture) or
 //! per object of a class (Measure Object Texture), where the pixels outside
@@ -25,7 +26,6 @@ use crate::pipeline::pipeline_measure::Outputs;
 use crate::{ImageTile, image::ImageContainer};
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, MeasurementUnit,
-    max_gray_value,
 };
 use macros::CommandsMeta;
 use rayon::prelude::*;
@@ -99,20 +99,14 @@ pub(super) struct Texture {
 }
 
 impl Texture {
-    /// The gray levels of the image's bit depth - checking the settings.
-    pub(super) fn levels(&self, cache: &GlobalPipelineCache) -> Result<Levels, InternalErrors> {
+    /// The gray levels - checking the settings.
+    pub(super) fn levels(&self) -> Result<Levels, InternalErrors> {
         if self.scale == 0 || !(2..=256).contains(&self.gray_levels) {
             return Err(InternalErrors::InvalidArgument(
                 "Measure texture: the scale must be at least 1, the gray levels 2 to 256".into(),
             ));
         }
-        let scale = max_gray_value(cache.image_meta.nr_of_bits).ok_or_else(|| {
-            InternalErrors::InvalidArgument(format!(
-                "Measure texture: implausible bit depth {}",
-                cache.image_meta.nr_of_bits
-            ))
-        })?;
-        Ok(Levels::new(scale, self.gray_levels))
+        Ok(Levels::new(self.gray_levels))
     }
 
     /// How many values per image (or per object).
@@ -335,16 +329,15 @@ thread_local! {
     static SCRATCH: RefCell<Cooccurrences> = RefCell::new(Cooccurrences::new());
 }
 
-/// A raw value → its gray level: the value in 8 bits as scikit-image's
-/// img_as_ubyte rounds it (0..255 over the bit depth's maximum), then
+/// A channel value → its gray level: the normalized (0..1) value the image
+/// reader stores in 8 bits as scikit-image's img_as_ubyte rounds it, then
 /// rescaled to the gray levels as rescale_intensity and a cast to uint8 do.
 pub(super) struct Levels {
-    scale: f64,
     rescaled: [u8; 256],
 }
 
 impl Levels {
-    fn new(scale: f64, gray_levels: u32) -> Self {
+    fn new(gray_levels: u32) -> Self {
         let mut rescaled = [0u8; 256];
         for (u, level) in rescaled.iter_mut().enumerate() {
             *level = if gray_levels == 256 {
@@ -353,13 +346,11 @@ impl Levels {
                 (u as f64 / 255.0 * (gray_levels - 1) as f64) as u8
             };
         }
-        Self { scale, rescaled }
+        Self { rescaled }
     }
 
     fn of(&self, value: f32) -> u8 {
-        let byte = (value as f64 / self.scale * 255.0)
-            .round_ties_even()
-            .clamp(0.0, 255.0);
+        let byte = (value as f64 * 255.0).round_ties_even().clamp(0.0, 255.0);
         self.rescaled[byte as usize]
     }
 }
@@ -574,15 +565,16 @@ mod tests {
         object_features: Vec<Option<f64>>,
     }
 
-    /// The 16-bit image split into a left and a right tile, the labels as
-    /// objects.
+    /// The 16-bit image as the image reader stores it - normalized to 0..1
+    /// (÷ 65535), as CellProfiler loads it too - split into a left and a
+    /// right tile, the labels as objects.
     fn cache_of(case: &Case) -> GlobalPipelineCache {
         let mut cache = GlobalPipelineCache::default();
         cache.image_meta.nr_of_bits = 16;
         let split = case.width / 2;
         for (x0, x1) in [(0, split), (split, case.width)] {
             let samples: Vec<f32> = (0..case.height)
-                .flat_map(|y| (x0..x1).map(move |x| case.image[y * case.width + x]))
+                .flat_map(|y| (x0..x1).map(move |x| case.image[y * case.width + x] / 65535.0))
                 .collect();
             let size = ImageSize {
                 width: x1 - x0,
@@ -819,7 +811,8 @@ mod tests {
                 } else {
                     0.0
                 };
-                signal + noise()
+                // Normalized, as the image reader stores it.
+                (signal + noise()) / 65535.0
             })
             .collect();
         let mut cache = GlobalPipelineCache::default();

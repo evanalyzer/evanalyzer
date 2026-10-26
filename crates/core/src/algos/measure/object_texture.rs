@@ -80,7 +80,7 @@ impl ImageAlgorithm for MeasureObjectTexture {
             ));
         }
         let texture = self.texture();
-        let levels = texture.levels(cache)?;
+        let levels = texture.levels()?;
         let objects: Vec<_> = cache
             .object_cache
             .iter()
