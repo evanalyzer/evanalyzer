@@ -15,7 +15,6 @@ use crate::{
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use macros::CommandsMeta;
-use std::i32;
 
 /// A point marker used in bit-packing coordinates (x | y << 16)
 const NO_POINT: i32 = -1;

@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_ai"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "libloading",
  "log",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_app"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "bitvec",
  "calamine",
@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_bin"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "clap",
  "env_logger",
@@ -2531,7 +2531,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_cfg"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "bitvec",
  "chrono",
@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_cli"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "calamine",
  "clap",
@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_core"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "approx",
  "bitvec",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_gui"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "bitvec",
  "chrono",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_gui_slint"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "slint",
  "slint-build",
@@ -2636,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "evanalyzer_server"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "argon2",
  "bcrypt",
@@ -4584,7 +4584,7 @@ checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 
 [[package]]
 name = "macros"
-version = "0.1.0"
+version = "0.0.0-dev"
 dependencies = [
  "syn 2.0.119",
 ]

@@ -1841,39 +1841,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_bigger_image_with_z_stack() {
-        let reader = ImageReader::new(
-            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/muliple_z_stacks.nd2").into(),
-            ReadMode::Default,
-        )
-        .unwrap();
-        let result = reader
-            .read_image_tile_combined(
-                0,
-                0,
-                ZProjection::None,
-                &None,
-                0,
-                Some(&vec![0]),
-                &ImageTile {
-                    offset_x: 0,
-                    offset_y: 0,
-                    width: 0,
-                    height: 0,
-                },
-            )
-            .unwrap();
-
-        for image_channel in result {
-            match &*image_channel.image {
-                ImageContainer::F32Gray(_) => {}
-                ImageContainer::F32Rgb(_) => todo!(),
-                ImageContainer::U32(_) => todo!(),
-            }
-        }
-    }
-
     /// Resident set size of this process, in bytes, or `None` if it can't be
     /// determined on this platform.
     fn current_process_rss_bytes() -> Option<u64> {

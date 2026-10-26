@@ -13,7 +13,6 @@ use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use macros::CommandsMeta;
-use std::f32::NAN;
 use std::sync::Arc;
 
 /// Specifies the statistical operation to perform on the local pixel neighborhood.
@@ -212,7 +211,7 @@ impl RankFilter {
                         }
                         let pixel_idx = (y * width + x) * C + c;
                         out_row[x * C + c] = match window.median() {
-                            None => NAN,
+                            None => f32::NAN,
                             Some(level) => match (self.filter_type, levels.value[level]) {
                                 (RankFilterType::Outliers(t), med) => {
                                     let cur = src_data[pixel_idx];
@@ -294,7 +293,7 @@ impl RankFilter {
                     let pixel_idx = (y * width + x) * C + c;
 
                     if window.is_empty() {
-                        out_slice[pixel_idx] = NAN;
+                        out_slice[pixel_idx] = f32::NAN;
                         continue;
                     }
 
