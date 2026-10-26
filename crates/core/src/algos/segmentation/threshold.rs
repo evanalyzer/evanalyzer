@@ -720,13 +720,13 @@ fn thresh_li(hist: &[f32; 256]) -> usize {
 /// the quadratic
 /// `(g−μ₁)²/σ₁² + ln σ₁² − 2 ln P₁ = (g−μ₂)²/σ₂² + ln σ₂² − 2 ln P₂`.
 /// Each step estimates `P`, `μ`, `σ²` of both classes for the current cut,
-/// solves the quadratic, and moves the cut to the root lying between the two
-/// means, until the cut stops changing.
+/// solves the quadratic and moves the cut to its root as given by Glasbey
+/// (1993, MINERROR(I)), until the cut stops changing.
 ///
 /// Conventions: starts at the global mean, uses population variances, and
 /// returns `floor(g)` of the final root. Stops early (keeping the current
 /// cut) when a class is empty or has zero variance - the normal model is
-/// undefined there - or no root lies between the means.
+/// undefined there - or the quadratic has no real root.
 fn thresh_min_error(hist: &[f32; 256]) -> usize {
     if let Err(t) = splittable_range(hist) {
         return t;
@@ -761,34 +761,15 @@ fn thresh_min_error(hist: &[f32; 256]) -> usize {
         let qa = 1.0 / v1 - 1.0 / v2;
         let qb = -2.0 * (m1 / v1 - m2 / v2);
         let qc = m1 * m1 / v1 - m2 * m2 / v2 + (v1 / v2).ln() - 2.0 * (w1 / w2).ln();
-        let between = |g: f64| g >= m1 && g <= m2;
+        // Glasbey (1993): the new cut is the root `(w₁ + √(w₁² − w₀w₂)) / w₀`
+        // of `w₀g² − 2w₁g + w₂ = 0` (here `qa = w₀`, `qb = −2w₁`, `qc = w₂`);
+        // the iteration ends when the quadratic has no real root.
         let root = if qa.abs() < 1e-12 {
             // Equal variances: the quadratic degenerates to a line.
-            Some(-qc / qb).filter(|&g| between(g))
+            Some(-qc / qb)
         } else {
             let disc = qb * qb - 4.0 * qa * qc;
-            if disc < 0.0 {
-                None
-            } else {
-                let r = disc.sqrt();
-                let g1 = (-qb - r) / (2.0 * qa);
-                let g2 = (-qb + r) / (2.0 * qa);
-                match (between(g1), between(g2)) {
-                    (true, true) => {
-                        // Both crossings between the means: take the one
-                        // nearer their midpoint.
-                        let mid = 0.5 * (m1 + m2);
-                        Some(if (g1 - mid).abs() <= (g2 - mid).abs() {
-                            g1
-                        } else {
-                            g2
-                        })
-                    }
-                    (true, false) => Some(g1),
-                    (false, true) => Some(g2),
-                    (false, false) => None,
-                }
-            }
+            (disc >= 0.0).then(|| (-qb + disc.sqrt()) / (2.0 * qa))
         };
         match root {
             Some(g) => t = g,
@@ -853,9 +834,9 @@ fn thresh_triangle(hist: &[f32; 256]) -> usize {
 /// `z₀`) that keeps the first three moments `m₁, m₂, m₃` of the histogram
 /// (`m₀ = 1`). `z₀, z₁` are the roots of `z² + c₁z + c₀ = 0`, where
 /// `c₀, c₁` solve `c₀m₀ + c₁m₁ = −m₂` and `c₀m₁ + c₁m₂ = −m₃`, and
-/// `p₀ = (z₁ − m₁) / (z₁ − z₀)`. The threshold is the `p₀`-tile: the lowest
-/// bin whose cumulative fraction reaches `p₀` (with a `1e-9` tolerance so
-/// that an exactly reached `p₀` isn't lost to rounding).
+/// `p₀ = (z₁ − m₁) / (z₁ − z₀)`. The threshold is the `p₀`-tile: the cut
+/// whose background fraction (bins `0..=t`) is nearest to `p₀` (Glasbey
+/// 1993), among the cuts that leave both classes non-empty.
 fn thresh_moments(hist: &[f32; 256]) -> usize {
     if let Err(t) = splittable_range(hist) {
         return t;
@@ -876,14 +857,15 @@ fn thresh_moments(hist: &[f32; 256]) -> usize {
     let z0 = 0.5 * (-c1 - r);
     let z1 = 0.5 * (-c1 + r);
     let p0 = (z1 - m1) / (z1 - z0);
-    let mut cum = 0.0f64;
-    for (i, &h) in hist.iter().enumerate() {
-        cum += h as f64 / n;
-        if cum >= p0 - 1e-9 {
-            return i;
+    let (lo, hi) = occupied_range(hist).unwrap_or((0, 0));
+    let (c, _) = prefix_sums(hist);
+    let mut best = lo;
+    for t in lo..hi {
+        if (c[t + 1] / n - p0).abs() < (c[best + 1] / n - p0).abs() {
+            best = t;
         }
     }
-    255
+    best
 }
 
 /// Shannon's function `S(μ) = −μ ln μ − (1 − μ) ln(1 − μ)`, with `0·ln 0 = 0`.
@@ -895,7 +877,11 @@ fn shannon(mu: f64) -> f64 {
 /// Huang & Wang's (1995) fuzzy threshold. For a cut `t`, every gray level
 /// `g` belongs to its class with membership `μ(g) = 1 / (1 + |g − μ_k|/C)`,
 /// where `μ_k` is the mean of its class (`k = 0` for `g ≤ t`, `k = 1`
-/// above) and `C = g_max − g_min` keeps `μ` within `[0.5, 1]`. The cut is
+/// above, eq. 2/3) and `C = g_max − g_min` keeps `μ` within `[0.5, 1]`.
+/// The paper's algorithm (§2.3, eq. 20/21) rounds the class means to whole
+/// gray levels only so that memberships can be tabulated in advance; the
+/// exact means are used here, as the criterion is shallow and rounding
+/// alone moves its minimum by several bins on many histograms. The cut is
 /// the one whose image is least fuzzy, i.e. that minimizes the entropy
 /// measure `E(t) = Σ_g h(g)·S(μ(g))` with Shannon's function `S` (the
 /// paper's `1/(MN ln 2)` normalization doesn't move the minimum). Only cuts
@@ -1121,22 +1107,29 @@ fn thresh_minimum(hist: &[f32; 256]) -> usize {
     }
 }
 
-/// Doyle's (1962) p-tile threshold with `p = 50 %`: the lowest bin at which
-/// the cumulative histogram reaches half of all pixels, i.e. the median gray
-/// level.
+/// Doyle's (1962) p-tile threshold with `p = 50 %`: the cut whose background
+/// share (bins `0..=t`) is as close as possible to `p`, among the cuts that
+/// leave both classes non-empty. For a smooth histogram this is the median
+/// gray level. Taking the closest share rather than the first bin that
+/// reaches `p` matters when one bin holds more than half of the pixels, as
+/// in a saturated image: the first bin reaching 50 % is then that bin, which
+/// for a spike at the top leaves no foreground at all, while the closest
+/// share still separates the spike from the rest.
 fn thresh_percentile(hist: &[f32; 256]) -> usize {
-    if let Err(t) = splittable_range(hist) {
-        return t;
-    }
-    let n: f64 = hist.iter().map(|&h| h as f64).sum();
-    let mut cum = 0.0f64;
-    for (i, &h) in hist.iter().enumerate() {
-        cum += h as f64;
-        if cum >= 0.5 * n {
-            return i;
+    const P: f64 = 0.5;
+    let (lo, hi) = match splittable_range(hist) {
+        Ok(range) => range,
+        Err(t) => return t,
+    };
+    let (c, _) = prefix_sums(hist);
+    let n = c[256];
+    let mut best = lo;
+    for t in lo..hi {
+        if (c[t + 1] / n - P).abs() < (c[best + 1] / n - P).abs() {
+            best = t;
         }
     }
-    255
+    best
 }
 
 /// Sahoo, Wilkins & Yeager's (1997) Rényi entropy threshold. Maximizing the
@@ -1149,8 +1142,10 @@ fn thresh_percentile(hist: &[f32; 256]) -> usize {
 /// with `P` the cumulative fraction, `ω = P(t₃) − P(t₁)` and the weights
 /// `(β₁, β₂, β₃)` = `(0, 1, 3)` if only `t₁, t₂` are within 5 bins of each
 /// other, `(3, 1, 0)` if only `t₂, t₃` are, and `(1, 2, 1)` otherwise.
-/// The weights sum to 4, so `t*` is a weighted average of the three cuts; it
-/// is rounded to the nearest bin.
+/// The weights sum to 4, so `t*` is a weighted average of the three cuts.
+/// Two points the paper leaves open: `P` is summed from bin 0 (as its
+/// class probability `p(Λ₁)`), and the real-valued `t*` is rounded to the
+/// nearest bin.
 fn thresh_renyi_entropy(hist: &[f32; 256]) -> usize {
     if let Err(t) = splittable_range(hist) {
         return t;
@@ -1495,9 +1490,9 @@ fn method_citations(method: &ThresholdMethod) -> &'static [&'static CitationMeta
     match method {
         ThresholdMethod::None | ThresholdMethod::Manual => &[],
         ThresholdMethod::Li => &[&LI, &LI_TAM],
-        ThresholdMethod::MinError => &[&MIN_ERROR],
+        ThresholdMethod::MinError => &[&MIN_ERROR, &GLASBEY],
         ThresholdMethod::Triangle => &[&TRIANGLE],
-        ThresholdMethod::Moments => &[&MOMENTS],
+        ThresholdMethod::Moments => &[&MOMENTS, &GLASBEY],
         ThresholdMethod::Huang => &[&HUANG],
         ThresholdMethod::Intermodes => &[&PREWITT],
         ThresholdMethod::Minimum => &[&PREWITT, &GLASBEY],
@@ -1596,9 +1591,9 @@ mod tests {
         assert_eq!(keys(&robust), ["mcquin2018cellprofiler"]);
         let expected: [&[&str]; 17] = [
             &["li1993minimum", "li1998iterative"],
-            &["kittler1986minimum"],
+            &["kittler1986minimum", "glasbey1993analysis"],
             &["zack1977automatic"],
-            &["tsai1985moment"],
+            &["tsai1985moment", "glasbey1993analysis"],
             &["huang1995image"],
             &["prewitt1966analysis"],
             &["ridler1978picture"],
@@ -2182,9 +2177,14 @@ mod tests {
         assert_eq!(thresh_triangle(&bimodal_reference_histogram()), 41);
     }
 
+    /// ImageJ gives 160, the first bin whose cumulative fraction reaches
+    /// `p₀`. Glasbey (1993) defines the cut whose fraction is *nearest* to
+    /// `p₀`: every cut in the empty valley 40..159 has the same fraction,
+    /// nearer than 160's, and ties go low - the end of the lower cluster,
+    /// which splits the two clusters cleanly.
     #[test]
     fn test_moments_matches_reference() {
-        assert_eq!(thresh_moments(&bimodal_reference_histogram()), 160);
+        assert_eq!(thresh_moments(&bimodal_reference_histogram()), 40);
     }
 
     #[test]
@@ -2223,6 +2223,20 @@ mod tests {
     #[test]
     fn test_percentile_matches_reference() {
         assert_eq!(thresh_percentile(&bimodal_reference_histogram()), 38);
+    }
+
+    /// More than half of the pixels in the top bin (a saturated image): no
+    /// cut reaches exactly 50 %, the closest leaves the saturated spike as
+    /// foreground - not the top bin itself, which would leave nothing above
+    /// it. Every cut from 99 to 254 gives 30 % background; ties go low.
+    #[test]
+    fn test_percentile_keeps_a_saturated_spike_as_foreground() {
+        let mut h = [0.0f32; 256];
+        for bin in h.iter_mut().take(100) {
+            *bin = 3.0;
+        }
+        h[255] = 700.0;
+        assert_eq!(thresh_percentile(&h), 99);
     }
 
     #[test]
