@@ -26,7 +26,7 @@ jobs:
     # merges, and avoids paying for CUDA/Windows/macOS runners on every push.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.2.0
+      image: joda001/evanalyzer-toolchain:0.3.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -159,7 +159,7 @@ jobs:
     # downloads the `test` job pays for.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.2.0
+      image: joda001/evanalyzer-toolchain:0.3.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -194,7 +194,7 @@ jobs:
     # doesn't need the libtorch/JRE downloads the `test` job pays for.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.2.0
+      image: joda001/evanalyzer-toolchain:0.3.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -231,7 +231,7 @@ jobs:
     # release.yml attaches the same report to every release.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.2.0
+      image: joda001/evanalyzer-toolchain:0.3.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
