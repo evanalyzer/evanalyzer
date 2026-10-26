@@ -18,8 +18,7 @@ lcov.info
 # separate versioned file and uploaded as a release asset, never committed.
 *.cdx.json
 
-# CI-only intermediate (ci.yml's coverage job) - the committed artifact is
-# docs/coverage-badge.svg, not this.
+# CI-only intermediates (ci.yml/release.yml coverage jobs) - never committed.
 /coverage-summary.txt
 
 # release.yml's local packaging output, if the release steps are ever run

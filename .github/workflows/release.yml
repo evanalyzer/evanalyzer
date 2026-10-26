@@ -875,3 +875,114 @@ jobs:
         with:
           files: evanalyzer-*-sbom.cdx.json
 
+
+  audit:
+    # cargo-audit report for the release, attached next to the SBOM.
+    # Informational like ci.yml's `audit` job: findings never fail the
+    # release, they're documented in the attached report.
+    needs: [templates]   # uploads into the release created there
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Run cargo audit
+        # Exits non-zero when vulnerabilities are found - kept informational.
+        # Plain text for people, JSON for tooling.
+        run: |
+          cargo audit > evanalyzer-${VERSION}-audit.txt || true
+          cargo audit --json > evanalyzer-${VERSION}-audit.json || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-audit
+          path: evanalyzer-*-audit.*
+
+      - name: Add to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: evanalyzer-*-audit.*
+
+  coverage:
+    # Test coverage of the released commit (cargo-llvm-cov), attached as
+    # lcov plus a zipped HTML report. Runs the same instrumented test suite
+    # as ci.yml's `test` job, in parallel with the platform builds.
+    needs: [templates]   # uploads into the release created there
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-coverage
+
+      - name: Set version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Download native dependencies (libtorch CPU)
+        run: ./libs/download.sh linux-cpu
+
+      - name: Unzip libtorch
+        run: unzip -q "libs/libtorch-"*.zip -d libs
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run tests with coverage instrumentation
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
+        run: >-
+          cargo llvm-cov --workspace --no-report
+          --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
+
+      - name: Generate coverage reports
+        run: |
+          cargo llvm-cov report --lcov --output-path evanalyzer-${VERSION}-coverage.lcov
+          cargo llvm-cov report --html
+          cargo llvm-cov report --summary-only > evanalyzer-${VERSION}-coverage-summary.txt
+          (cd target/llvm-cov && zip -qr "../../evanalyzer-${VERSION}-coverage-html.zip" html)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-coverage
+          path: evanalyzer-*-coverage*
+
+      - name: Add to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: evanalyzer-*-coverage*

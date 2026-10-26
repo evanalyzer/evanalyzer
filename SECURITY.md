@@ -18,4 +18,4 @@ You should receive an acknowledgement within a few days. We'll work with you to 
 
 ## Dependencies
 
-EVAnalyzer's Rust dependencies are checked against the [RustSec advisory database](https://rustsec.org/) with `cargo audit` on every CI run (see the audit badge in [README.md](README.md) and history in [`docs/audit-history.csv`](docs/audit-history.csv)). If you find a vulnerability in a dependency rather than in EVAnalyzer's own code, please report it upstream to the dependency's maintainers as well as to us.
+EVAnalyzer's Rust dependencies are checked against the [RustSec advisory database](https://rustsec.org/) with `cargo audit` on every CI run (results in the run's job summary). Every release attaches the audit report of its exact dependency set as `evanalyzer-<version>-audit.txt` / `.json`, next to the SBOM. If you find a vulnerability in a dependency rather than in EVAnalyzer's own code, please report it upstream to the dependency's maintainers as well as to us.
