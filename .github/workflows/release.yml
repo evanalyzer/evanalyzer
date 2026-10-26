@@ -106,20 +106,6 @@ jobs:
           # Any pre-release version (1.0.0-beta.1, 0.1.0-test.11, ...) is
           # marked as such, so it never shows up as the "Latest" release.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            Downloads are added one by one as each platform's build finishes.
-
-            | Platform | Download | AI models (PyTorch) |
-            |---|---|---|
-            | Windows x86_64 | `evanalyzer-windows-x86_64.zip` | CPU |
-            | Windows x86_64 + NVIDIA GPU | `evanalyzer-windows-x86_64-cuda.7z` | CUDA ¹ |
-            | Windows ARM64 | `evanalyzer-windows-arm64.zip` | CPU |
-            | Linux x86_64 | `evanalyzer-linux-x86_64.tar.gz` | CPU |
-            | Linux x86_64 + NVIDIA GPU | `evanalyzer-linux-x86_64-cuda.7z` | CUDA ¹ |
-            | Linux ARM64 | `evanalyzer-linux-arm64.tar.gz` | **not supported** - PyTorch publishes no libtorch for Linux ARM64 |
-            | macOS Apple Silicon | `evanalyzer-macos-arm64.tar.gz` | CPU |
-
-            ¹ NVIDIA GPUs from Turing on (RTX 20xx, GTX 16xx and newer) with driver 580 or newer. For older GPUs use the CPU download.
 
   build-linux:
     needs: [templates]
