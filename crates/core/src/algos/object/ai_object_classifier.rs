@@ -86,15 +86,19 @@ pub struct AiObjectClassifier {
     ///
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
-    /// If no seg class is selected the criteria are applied to all objects.
+    /// Leave empty to select the objects by their input classes only.
+    /// With input classes too, an object must match both. Alone it also
+    /// selects objects without a class left - the way to bring objects an
+    /// earlier step removed back.
     #[cmdsmeta(visibility = Hidden)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
     /// Restrict classification to objects that already carry one of these classes
     ///
     /// Only ROIs that have been assigned at least one of the listed classes by a prior
-    /// pipeline step will be evaluated by the model. Leave empty to apply the model to
-    /// every object regardless of its current class.
+    /// pipeline step will be evaluated by the model.
+    /// Leave empty to select the objects by their segmentation class only.
+    /// With neither input classes nor a segmentation class the step does nothing.
     #[cmdsmeta(display_name = "Input Classes")]
     pub input_classes: Vec<ObjectClass>,
 
@@ -124,6 +128,14 @@ impl ImageAlgorithm for AiObjectClassifier {
                 self.model_path.display()
             )));
         };
+
+        // Nothing selects objects: classifying "every object" would also
+        // give objects removed by an earlier step a class again. The editor
+        // warns about it (`module_checks`). After the model checks, so a
+        // wrong model is still reported.
+        if self.input_classes.is_empty() && self.origin_segmentation.is_empty() {
+            return Ok(());
+        }
 
         // `output_class == Unset` means "not mapped yet" (the UI defaults every
         // model class to Unset until the user picks a target) - drop those
@@ -487,7 +499,7 @@ mod tests {
                 output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![],
-            input_classes: vec![],
+            input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
 
@@ -538,7 +550,7 @@ mod tests {
                 output_class: ObjectClass::Unset,
             }],
             origin_segmentation: vec![],
-            input_classes: vec![],
+            input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
 
@@ -573,7 +585,7 @@ mod tests {
                 output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![],
-            input_classes: vec![],
+            input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
             match_handling: AiClassifyMatchHandling::AddOutputClassIfMatch,
         };
 
@@ -593,6 +605,58 @@ mod tests {
             ),
             "AddOutputClassIfMatch must keep the object's original class"
         );
+    }
+
+    /// Neither input classes nor a segmentation class: the step does
+    /// nothing - no object is classified, and one an earlier step removed
+    /// (without a class left) stays removed.
+    #[test]
+    fn execute_without_input_classes_and_origin_segmentation_classifies_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.evamodel");
+        save_to_file(&saved_object_classifier(labels()), &path).unwrap();
+
+        for match_handling in [
+            AiClassifyMatchHandling::ReclassifyIfMatch,
+            AiClassifyMatchHandling::AddOutputClassIfMatch,
+        ] {
+            let cmd = AiObjectClassifier {
+                model_path: path.clone(),
+                segmentation_mapping: vec![ClassificationMapping {
+                    object_class: ObjectClass::Global(6),
+                    output_class: ObjectClass::Global(42),
+                }],
+                origin_segmentation: vec![],
+                input_classes: vec![],
+                match_handling,
+            };
+
+            let mut ctx = make_ctx();
+            let mut cache = GlobalPipelineCache::default();
+            let large = make_object(LARGE_ID, 100, SegmentationClass(1));
+            let mut removed = make_object(3, 100, SegmentationClass(1));
+            removed.clear_object_classes();
+            cache.object_cache.insert(large.id.clone(), large);
+            cache.object_cache.insert(removed.id.clone(), removed);
+
+            cmd.execute(&mut ctx, &mut cache).unwrap();
+
+            let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
+            assert!(!large.is_of(&ObjectClass::Global(42), Scope::Global));
+            assert!(large.is_of(
+                &ObjectClass::from_segmentation_class(SegmentationClass(1)),
+                Scope::Global
+            ));
+            assert!(
+                cache
+                    .object_cache
+                    .get(&ObjectId(3))
+                    .unwrap()
+                    .object_classes()
+                    .is_empty(),
+                "a removed object stays removed"
+            );
+        }
     }
 
     #[test]

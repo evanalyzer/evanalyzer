@@ -680,6 +680,51 @@ fn check_steps(project: &ProjectSettings) -> Vec<ModuleProblem> {
                     );
                 }
 
+                // Neither input classes nor a segmentation class: the run
+                // skips the step (`ClassifyObjects::execute`,
+                // `AiObjectClassifier::execute`). The AI classifier's
+                // segmentation class is hidden - only the input classes are
+                // offered there.
+                let selects_nothing = match &command.command {
+                    PipelineCommand::ClassifyObjects(classify)
+                        if classify.input_classes.is_empty()
+                            && classify.origin_segmentation.is_empty() =>
+                    {
+                        Some((
+                            "has no input classes and no segmentation class",
+                            "choose the input classes (or a segmentation class) it works on",
+                        ))
+                    }
+                    PipelineCommand::AiObjectClassifier(classify)
+                        if classify.input_classes.is_empty()
+                            && classify.origin_segmentation.is_empty() =>
+                    {
+                        Some((
+                            "has no input classes",
+                            "choose the input classes it works on",
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some((has_none, choose)) = selects_nothing {
+                    let mut keys = setting(command, "input_classes");
+                    keys.extend(setting(command, "origin_segmentation"));
+                    keys.dedup();
+                    let who = subject(command, &keys);
+                    problems.push(
+                        ModuleProblem::warning(
+                            None,
+                            at,
+                            format!(
+                                "{} - the step classifies nothing; {choose}",
+                                who.says("empty", has_none)
+                            ),
+                        )
+                        .about(keys)
+                        .inside(detail(command)),
+                    );
+                }
+
                 // Classes worked on that no step gives any object - one
                 // warning per class and pipeline, at the first step.
                 if let Some(assigned) = &assigned {
@@ -1621,6 +1666,58 @@ mod tests {
             "{}",
             errors[0].message
         );
+    }
+
+    /// A Classify Objects or AI Object Classifier step with neither input
+    /// classes nor a segmentation class classifies nothing (the run skips
+    /// it): a warning at the step, gone once either is chosen.
+    #[test]
+    fn a_classifier_selecting_no_objects_warns() {
+        use evanalyzer_cfg::core_types::SegmentationClass;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            AiObjectClassifierSettings, ClassifyObjectsSettings,
+        };
+        let warnings = |command: PipelineCommand| -> Vec<ModuleProblem> {
+            let mut project = ProjectSettings::default();
+            project.pipelines.push(nuclei(vec![step(5, command)]));
+            check_project(&project)
+                .into_iter()
+                .filter(|p| p.message.contains("classifies nothing"))
+                .collect()
+        };
+        let classify = |input_classes: Vec<ObjectClass>,
+                        origin_segmentation: Vec<SegmentationClass>| {
+            PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                input_classes,
+                origin_segmentation,
+                ..Default::default()
+            })
+        };
+        let ai = |input_classes: Vec<ObjectClass>, origin_segmentation: Vec<SegmentationClass>| {
+            PipelineCommand::AiObjectClassifier(AiObjectClassifierSettings {
+                input_classes,
+                origin_segmentation,
+                ..Default::default()
+            })
+        };
+
+        let makers: [fn(Vec<ObjectClass>, Vec<SegmentationClass>) -> PipelineCommand; 2] =
+            [classify, ai];
+        for make in makers {
+            let found = warnings(make(vec![], vec![]));
+            assert_eq!(found.len(), 1, "{:?}", messages(&found));
+            assert_eq!(found[0].severity, Severity::Warning);
+            assert_eq!(found[0].step, Some((PipelineId(1), StepId(5))));
+
+            let with_classes = make(vec![ObjectClass::Global(1)], vec![]);
+            assert_eq!(warnings(with_classes), [], "input classes chosen");
+            let with_segmentation = make(vec![], vec![SegmentationClass(1)]);
+            assert_eq!(
+                warnings(with_segmentation),
+                [],
+                "a segmentation class chosen"
+            );
+        }
     }
 
     /// A Load Image Channel step with its own projection while the project

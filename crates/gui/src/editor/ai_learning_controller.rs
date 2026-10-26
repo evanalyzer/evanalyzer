@@ -886,6 +886,7 @@ impl AiLearningController {
             let mut project = self.app_state.get_project_write();
             let id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
             let pipeline = evanalyzer_app::ai_learning::pipeline_for_model(
+                &project,
                 &model,
                 &classifier,
                 evanalyzer_cfg::core_types::PipelineId(id),

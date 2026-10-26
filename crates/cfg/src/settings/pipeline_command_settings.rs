@@ -2267,13 +2267,17 @@ pub struct AiObjectClassifierSettings {
     ///
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
-    /// If no seg class is selected the criteria are applied to all objects.
+    /// Leave empty to select the objects by their input classes only.
+    /// With input classes too, an object must match both. Alone it also
+    /// selects objects without a class left - the way to bring objects an
+    /// earlier step removed back.
     pub origin_segmentation: Vec<SegmentationClass>,
     /// Restrict classification to objects that already carry one of these classes
     ///
     /// Only ROIs that have been assigned at least one of the listed classes by a prior
-    /// pipeline step will be evaluated by the model. Leave empty to apply the model to
-    /// every object regardless of its current class.
+    /// pipeline step will be evaluated by the model.
+    /// Leave empty to select the objects by their segmentation class only.
+    /// With neither input classes nor a segmentation class the step does nothing.
     pub input_classes: Vec<ObjectClass>,
     /// What to do with object class labels after prediction
     ///
@@ -2326,13 +2330,17 @@ pub struct ClassifyObjectsSettings {
     ///
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
-    /// If no seg class is selected the criteria are applied to all objects.
+    /// Leave empty to select the objects by their input classes only.
+    /// With input classes too, an object must match both. Alone it also
+    /// selects objects without a class left - the way to bring objects an
+    /// earlier step removed back.
     pub origin_segmentation: Vec<SegmentationClass>,
     /// Restrict classification to objects that already carry one of these classes
     ///
     /// Only ROIs that have been assigned at least one of the listed classes by a prior
     /// pipeline step will be evaluated against the morphological and intensity criteria below.
-    /// Leave empty to apply the criteria to every object regardless of its current class.
+    /// Leave empty to select the objects by their segmentation class only.
+    /// With neither input classes nor a segmentation class the step does nothing.
     pub input_classes: Vec<ObjectClass>,
     /// What to do with object class labels after criteria evaluation
     ///

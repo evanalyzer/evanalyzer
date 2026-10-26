@@ -50,7 +50,7 @@
       "type": "object",
       "properties": {
         "inputClasses": {
-          "description": "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated by the model. Leave empty to apply the model to\nevery object regardless of its current class.",
+          "description": "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated by the model.\nLeave empty to select the objects by their segmentation class only.\nWith neither input classes nor a segmentation class the step does nothing.",
           "type": "array",
           "default": [],
           "items": {
@@ -68,7 +68,7 @@
           "default": ""
         },
         "originSegmentation": {
-          "description": "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nIf no seg class is selected the criteria are applied to all objects.",
+          "description": "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nLeave empty to select the objects by their input classes only.\nWith input classes too, an object must match both. Alone it also\nselects objects without a class left - the way to bring objects an\nearlier step removed back.",
           "type": "array",
           "default": [],
           "items": {
@@ -272,7 +272,7 @@
           "default": true
         },
         "inputClasses": {
-          "description": "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.",
+          "description": "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to select the objects by their segmentation class only.\nWith neither input classes nor a segmentation class the step does nothing.",
           "type": "array",
           "default": [],
           "items": {
@@ -397,7 +397,7 @@
           "minimum": 0
         },
         "originSegmentation": {
-          "description": "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nIf no seg class is selected the criteria are applied to all objects.",
+          "description": "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nLeave empty to select the objects by their input classes only.\nWith input classes too, an object must match both. Alone it also\nselects objects without a class left - the way to bring objects an\nearlier step removed back.",
           "type": "array",
           "default": [],
           "items": {

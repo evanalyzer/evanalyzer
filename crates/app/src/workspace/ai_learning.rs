@@ -137,9 +137,12 @@ pub fn model_is_used(project: &ProjectSettings, model: &Path) -> bool {
 /// trained class mapped to the project class it was trained from - the
 /// object then has that class's color). Object classifier: the model alone,
 /// on the objects the pipelines before it found (no image of its own; it
-/// goes last), adding the predicted class. Background is not mapped (stays
+/// goes last) - its input classes the classes `project`'s pipelines give
+/// objects ([`classes_the_pipelines_give`]), so objects an earlier step
+/// removed stay removed - adding the predicted class. Background is not mapped (stays
 /// background / leaves the object as it is). `id`: a free pipeline id.
 pub fn pipeline_for_model(
+    project: &ProjectSettings,
     model: &Path,
     classifier: &evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings,
     id: evanalyzer_cfg::core_types::PipelineId,
@@ -205,6 +208,7 @@ pub fn pipeline_for_model(
                             output_class: l.class,
                         })
                         .collect(),
+                    input_classes: classes_the_pipelines_give(project),
                     ..Default::default()
                 },
             ))],
@@ -218,6 +222,34 @@ pub fn pipeline_for_model(
         enabled: true,
         steps,
     }
+}
+
+/// The project classes `project`'s enabled pipelines give objects, in id
+/// order and without Background - what an object classifier added after
+/// them works on. A step that may give any class (annotations keeping their
+/// classes, Extract Objects without a mapping) adds every class of the
+/// project.
+pub fn classes_the_pipelines_give(project: &ProjectSettings) -> Vec<ObjectClass> {
+    use crate::workspace::module_insights::{assigned_classes, resolved_commands};
+    let mut ids = std::collections::BTreeSet::new();
+    for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
+        for step in &pipeline.steps {
+            for command in resolved_commands(step, &project.modules) {
+                let (classes, any) = assigned_classes(&command.command);
+                if any {
+                    ids.extend(project.classification.classes().iter().map(|c| c.id));
+                }
+                ids.extend(classes.into_iter().filter_map(|c| match c {
+                    ObjectClass::Global(n) => Some(n),
+                    _ => None,
+                }));
+            }
+        }
+    }
+    ids.into_iter()
+        .map(ObjectClass::Global)
+        .filter(|c| *c != ObjectClass::BACKGROUND)
+        .collect()
 }
 
 pub fn model_output_path(project_dir: &Path, model_name: &str) -> PathBuf {
@@ -302,7 +334,7 @@ mod tests {
                 },
             ],
         };
-        let p = pipeline_for_model(model, &pixel, PipelineId(7));
+        let p = pipeline_for_model(&ProjectSettings::default(), model, &pixel, PipelineId(7));
         assert_eq!(p.id, PipelineId(7));
         assert_eq!(p.name, "AI · nuclei");
         assert!(matches!(p.image_source, ImageAddress::Channel(2)));
@@ -341,7 +373,7 @@ mod tests {
                 },
             ],
         };
-        let p = pipeline_for_model(model, &object, PipelineId(8));
+        let p = pipeline_for_model(&ProjectSettings::default(), model, &object, PipelineId(8));
         assert!(matches!(p.image_source, ImageAddress::None));
         let [step] = p.steps.as_slice() else {
             panic!("one step")
@@ -353,6 +385,109 @@ mod tests {
         assert_eq!(
             c.segmentation_mapping[0].output_class,
             ObjectClass::Global(5)
+        );
+    }
+
+    /// The object classifier "Add to pipeline" adds works on the classes the
+    /// enabled pipelines give objects: a mapped Extract Objects' class and a
+    /// classify step's output class - not a disabled pipeline's. A step that
+    /// may give any class (Extract Objects without a mapping) brings in
+    /// every class of the project.
+    #[test]
+    fn the_added_object_classifier_works_on_the_classes_the_pipelines_give() {
+        use evanalyzer_cfg::core_types::PipelineId;
+        use evanalyzer_cfg::settings::ai_learning_settings::{
+            AiLearningClassifierSettings, ObjectClassLabel,
+        };
+        use evanalyzer_cfg::settings::classification_settings::Class;
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
+        };
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let step = |command| PipelineStepSettings {
+            id: Default::default(),
+            enabled: true,
+            content: StepContent::Command(command),
+        };
+        let pipeline = |id, enabled, steps| PipelineSettings {
+            id: PipelineId(id),
+            name: format!("p{id}"),
+            description: None,
+            image_source: Default::default(),
+            enabled,
+            steps,
+        };
+        let extract = |class_mapping| {
+            PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                class_mapping,
+                ..Default::default()
+            })
+        };
+        let mapped = |n| {
+            vec![ExtractClassMappingSettings {
+                segmentation_class: SegmentationClass(1),
+                object_class: ObjectClass::Global(n),
+            }]
+        };
+
+        let mut project = ProjectSettings::default();
+        for id in [3, 7, 8, 9] {
+            project.classification.classes_mut().push(Class {
+                id,
+                ..Default::default()
+            });
+        }
+        project.pipelines.push(pipeline(
+            1,
+            true,
+            vec![
+                step(extract(mapped(7))),
+                step(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    input_classes: vec![ObjectClass::Global(7)],
+                    output_class: ObjectClass::Global(3),
+                    ..Default::default()
+                })),
+            ],
+        ));
+        project
+            .pipelines
+            .push(pipeline(2, false, vec![step(extract(mapped(8)))]));
+        assert_eq!(
+            classes_the_pipelines_give(&project),
+            [ObjectClass::Global(3), ObjectClass::Global(7)]
+        );
+
+        let object = AiLearningClassifierSettings::Object {
+            feature_spec: Default::default(),
+            class_labels: vec![ObjectClassLabel {
+                class: ObjectClass::Global(5),
+                name: "Apoptotic".into(),
+            }],
+        };
+        let p = pipeline_for_model(
+            &project,
+            Path::new("/m/apoptotic.evamodel"),
+            &object,
+            PipelineId(9),
+        );
+        let Some(PipelineCommand::AiObjectClassifier(c)) = p.steps[0].command() else {
+            panic!("object classifier")
+        };
+        assert_eq!(
+            c.input_classes,
+            [ObjectClass::Global(3), ObjectClass::Global(7)]
+        );
+
+        project
+            .pipelines
+            .push(pipeline(3, true, vec![step(extract(vec![]))]));
+        assert_eq!(
+            classes_the_pipelines_give(&project),
+            [3, 7, 8, 9].map(ObjectClass::Global),
+            "without a mapping: any class of the project"
         );
     }
 

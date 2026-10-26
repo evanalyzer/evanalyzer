@@ -867,12 +867,16 @@ impl ResultExport {
                 // accounting for column count (cost is roughly per-cell),
                 // which a single large image's object list can blow past
                 // well under Excel's 1,048,576-row sheet cap.
-                let sheet = workbook.add_worksheet_with_constant_memory();
+                let sheet = workbook
+                    .add_worksheet_with_constant_memory()
+                    .map_err(xlsx_err)?;
                 sheet.set_name("List").map_err(xlsx_err)?;
                 write_list_sheet(sheet, database, cancel, self, images, object_classes, false)?;
 
                 if self.with_list_coloc_details {
-                    let coloc_sheet = workbook.add_worksheet_with_constant_memory();
+                    let coloc_sheet = workbook
+                        .add_worksheet_with_constant_memory()
+                        .map_err(xlsx_err)?;
                     coloc_sheet
                         .set_name("List (Coloc Details)")
                         .map_err(xlsx_err)?;
@@ -1146,7 +1150,9 @@ impl ResultExport {
         match self.format {
             ExportFormat::XLSX => {
                 let mut workbook = Workbook::new();
-                let worksheet = workbook.add_worksheet_with_constant_memory();
+                let worksheet = workbook
+                    .add_worksheet_with_constant_memory()
+                    .map_err(xlsx_err)?;
                 worksheet.set_name("Measurements").map_err(xlsx_err)?;
                 each_row(&mut FieldsSheet::new(worksheet))?;
                 workbook
@@ -1199,7 +1205,9 @@ impl ResultExport {
         match self.format {
             ExportFormat::XLSX => {
                 let mut workbook = Workbook::new();
-                let worksheet = workbook.add_worksheet_with_constant_memory();
+                let worksheet = workbook
+                    .add_worksheet_with_constant_memory()
+                    .map_err(xlsx_err)?;
                 worksheet.set_name("Tracks").map_err(xlsx_err)?;
                 each_track(&mut FieldsSheet::new(worksheet))?;
                 workbook
@@ -1291,7 +1299,9 @@ impl ResultExport {
                 let mut names = SheetNamer::new();
                 if write_long {
                     // Constant memory: rows go to a temporary file.
-                    let worksheet = workbook.add_worksheet_with_constant_memory();
+                    let worksheet = workbook
+                        .add_worksheet_with_constant_memory()
+                        .map_err(xlsx_err)?;
                     worksheet.set_name(names.unique("Long")).map_err(xlsx_err)?;
                     each_point(&mut FieldsSheet::new(worksheet))?;
                 } else {
@@ -3967,7 +3977,11 @@ mod tests {
     #[test]
     fn an_xlsx_sheet_refuses_rows_beyond_its_limit() {
         let mut workbook = Workbook::new();
-        let mut sheet = FieldsSheet::new(workbook.add_worksheet_with_constant_memory());
+        let mut sheet = FieldsSheet::new(
+            workbook
+                .add_worksheet_with_constant_memory()
+                .expect("a constant-memory sheet"),
+        );
         sheet.next_row = XLSX_MAX_ROWS - 1;
         sheet.row(&[Field::Number(1.0)]).expect("the last row");
         let error = sheet.row(&[Field::Number(2.0)]).expect_err("beyond");

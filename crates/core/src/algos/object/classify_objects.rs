@@ -160,7 +160,10 @@ pub struct ClassifyObjects {
     ///
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
-    /// If no seg class is selected the criteria are applied to all objects.
+    /// Leave empty to select the objects by their input classes only.
+    /// With input classes too, an object must match both. Alone it also
+    /// selects objects without a class left - the way to bring objects an
+    /// earlier step removed back.
     #[cmdsmeta(visibility = Advanced)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
@@ -168,7 +171,8 @@ pub struct ClassifyObjects {
     ///
     /// Only ROIs that have been assigned at least one of the listed classes by a prior
     /// pipeline step will be evaluated against the morphological and intensity criteria below.
-    /// Leave empty to apply the criteria to every object regardless of its current class.
+    /// Leave empty to select the objects by their segmentation class only.
+    /// With neither input classes nor a segmentation class the step does nothing.
     #[cmdsmeta(display_name = "Input Classes")]
     pub input_classes: Vec<ObjectClass>,
 
@@ -382,6 +386,12 @@ impl ImageAlgorithm for ClassifyObjects {
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
         cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
+        // Nothing selects objects: classifying "every object" would also
+        // give objects removed by an earlier step a class again. The editor
+        // warns about it (`module_checks`).
+        if self.input_classes.is_empty() && self.origin_segmentation.is_empty() {
+            return Ok(());
+        }
         let px_size = ctx.pixel_sizes();
         let pixel_area_size_nm = px_size.px_size_x * px_size.px_size_y;
         let min_intersection_px = self
@@ -426,6 +436,7 @@ impl ImageAlgorithm for ClassifyObjects {
         let evaluations: Vec<(ObjectId, bool)> = cache
             .object_cache
             .values()
+            // Both given: an object must match both.
             .filter(|object| {
                 (self.origin_segmentation.is_empty()
                     || self
@@ -720,6 +731,7 @@ mod tests {
         // Two non-overlapping ROIs, no overlap criterion configured: the criteria (which are
         // otherwise wide open) must match both, exactly as before this feature existed.
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
@@ -752,6 +764,7 @@ mod tests {
         // A doesn't overlap B, so with `overlapping_with: CLASS_B` set, A fails the criteria
         // and RemoveAllClassesIfNotMatch strips its class.
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             overlapping_with: CLASS_B,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
@@ -779,6 +792,7 @@ mod tests {
         // A overlaps B, so with `overlapping_with: CLASS_B` set, A passes the criteria and
         // keeps its class.
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             overlapping_with: CLASS_B,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
@@ -807,6 +821,7 @@ mod tests {
         // A and B overlap by a single pixel ([4,4]x[4,4] = 1 px), but min_intersection_size
         // demands at least 4 - too small an overlap must not count as a match.
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             overlapping_with: CLASS_B,
             min_intersection_size: 4.0,
             size_unit: SizeUnits::Pixels,
@@ -842,6 +857,7 @@ mod tests {
     #[test]
     fn add_output_class_if_match_adds_alongside_the_existing_class() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_B,
             match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
             ..Default::default()
@@ -864,6 +880,7 @@ mod tests {
     #[test]
     fn add_output_class_if_not_match_only_fires_when_criteria_fail() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_B,
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::AddOutputClassIfNotMatch,
@@ -947,6 +964,86 @@ mod tests {
         assert!(classified(ID_B), "segmentation class 2 is");
     }
 
+    /// Input classes and a segmentation class both given: an object must
+    /// match both.
+    #[test]
+    fn input_classes_and_origin_segmentation_must_both_match() {
+        const CLASS_OUT: ObjectClass = ObjectClass::Global(9);
+        let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A],
+            origin_segmentation: vec![SegmentationClass(2)],
+            output_class: CLASS_OUT,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = GlobalPipelineCache::default();
+        for (id, class, seg) in [
+            (ID_A, CLASS_A, 2),
+            (ID_B, CLASS_A, 1),
+            (300_000, CLASS_B, 2),
+        ] {
+            let mut object = make_filled_object(id, [0, 0, 4, 4], class);
+            object.segmentation_class = SegmentationClass(seg);
+            cache.object_cache.insert(ObjectId(id), object);
+        }
+        run(&cmd, &mut cache);
+
+        let classified = |id| {
+            cache
+                .object_cache
+                .get(&ObjectId(id))
+                .unwrap()
+                .is_of(&CLASS_OUT, Scope::Global)
+        };
+        assert!(classified(ID_A), "input class and segmentation class match");
+        assert!(!classified(ID_B), "only the input class matches");
+        assert!(!classified(300_000), "only the segmentation class matches");
+    }
+
+    /// Neither input classes nor a segmentation class: the step does
+    /// nothing - it neither strips classes nor gives a class to an object
+    /// an earlier step removed (one without a class left).
+    #[test]
+    fn without_input_classes_and_origin_segmentation_nothing_changes() {
+        let mut cache = GlobalPipelineCache::default();
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
+        let mut removed = make_filled_object(ID_B, [10, 10, 14, 14], CLASS_A);
+        removed.clear_object_classes();
+        cache.object_cache.insert(ObjectId(ID_B), removed);
+
+        for (name, match_handling) in [
+            ("remove all", ClassifyMatchHandling::RemoveAllClassesIfMatch),
+            ("reclassify", ClassifyMatchHandling::ReclassifyIfMatch),
+            (
+                "add output class",
+                ClassifyMatchHandling::AddOutputClassIfMatch,
+            ),
+        ] {
+            let cmd = ClassifyObjects {
+                output_class: CLASS_B,
+                match_handling,
+                ..Default::default()
+            };
+            run(&cmd, &mut cache);
+
+            let object_a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+            assert!(object_a.is_of(&CLASS_A, Scope::Global), "{name}");
+            assert!(!object_a.is_of(&CLASS_B, Scope::Global), "{name}");
+            assert!(
+                cache
+                    .object_cache
+                    .get(&ObjectId(ID_B))
+                    .unwrap()
+                    .object_classes()
+                    .is_empty(),
+                "{name}: a removed object stays removed"
+            );
+        }
+    }
+
     #[test]
     fn remove_input_class_if_match_strips_listed_input_classes_only() {
         let cmd = ClassifyObjects {
@@ -998,6 +1095,7 @@ mod tests {
     #[test]
     fn remove_output_class_if_match_strips_only_the_output_class() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_A,
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfMatch,
             ..Default::default()
@@ -1019,6 +1117,7 @@ mod tests {
     #[test]
     fn remove_output_class_if_not_match_only_fires_when_criteria_fail() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_A,
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
@@ -1043,6 +1142,7 @@ mod tests {
     #[test]
     fn remove_all_classes_if_match_clears_every_class() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ..Default::default()
         };
@@ -1065,6 +1165,7 @@ mod tests {
     #[test]
     fn reclassify_if_match_replaces_every_class_with_the_output_class() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_B,
             match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
             ..Default::default()
@@ -1089,6 +1190,7 @@ mod tests {
     #[test]
     fn reclassify_if_not_match_only_fires_when_criteria_fail() {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_B,
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::ReclassifyIfNotMatch,
@@ -1143,6 +1245,7 @@ mod tests {
 
     fn keeps_class_with(filters: Vec<IntensityFilter>, avg: f64) -> bool {
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             intensity_filters: filters,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
@@ -1255,6 +1358,7 @@ mod tests {
         // itself (e.g. `overlapping_with` set to one of the object's own classes). It must not
         // be allowed to "intersect itself" to pass the criteria.
         let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
             overlapping_with: CLASS_A,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
@@ -1346,6 +1450,7 @@ mod tests {
                 .collect();
 
             let cmd = ClassifyObjects {
+                input_classes: vec![CLASS_A, CLASS_B],
                 overlapping_with: CLASS_B,
                 match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
                 ..Default::default()
@@ -1427,8 +1532,10 @@ mod tests {
         for object in [global, local_object(ID_B, 10, scope(1))] {
             cache.object_cache.insert(object.id.clone(), object);
         }
-        // No input classes: every object the command sees loses its classes.
+        // No input classes, a segmentation class only: every object of it
+        // the command sees loses its classes.
         let clear_all = ClassifyObjects {
+            origin_segmentation: vec![SegmentationClass(0)],
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ..Default::default()
         };

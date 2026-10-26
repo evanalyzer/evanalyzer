@@ -3221,6 +3221,8 @@ mod full_run_integration_tests {
                 evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 scope,
                 Box::new(ClassifyObjects {
+                    // The extracted objects have no class, only this.
+                    origin_segmentation: vec![SegmentationClass(1)],
                     match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
                     output_class: ObjectClass::Local(1),
                     ..Default::default()
