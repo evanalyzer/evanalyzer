@@ -396,6 +396,38 @@ after editing it, only step 2 is needed.
 `about.toml` lists the accepted licenses. Copyleft licenses are rejected unless
 reviewed and listed per crate there.
 
+### Licensing rules for contributors
+
+EVAnalyzer is a clean-room implementation: no GPL/LGPL/AGPL code, and new
+dependencies must be permissive (the only MPL-2.0 crates, `smartstring` via
+`rhai` and `option-ext` via `dirs`, are reviewed per-crate exceptions).
+
+- **Algorithms come from papers.** Implement a method from its publication and
+  cite it (`CitationMetadata`); other tools may only serve as black boxes for
+  reference values or as documentation of a file/model format. Never read or
+  translate the code of GPL/AGPL projects (ImageJ's `AutoThresholder` is
+  Landini's GPL plugin, not public-domain ImageJ 1 code; Ultralytics YOLO is
+  AGPL; ilastik, QuPath, TrackMate and Fiji plugins are GPL).
+- **Ports from permissive code** (BSD, MIT, Apache, public domain) are allowed:
+  name the source in the file header and add its full license text to
+  `crates/gui/src/third_party_notices.json` (then regenerate
+  `THIRD-PARTY-NOTICES.txt`, see above).
+- **Test data** needs a license that allows redistribution and commercial use,
+  with its attribution in `crates/core/tests/README.md`. Not usable: BBBC035
+  and other Cell Tracking Challenge data (copying forbidden, commercial use
+  needs permission).
+- **On a libtorch/CUDA update**, check the native libraries again:
+  - libgomp is GPL-3.0 with the GCC Runtime Library Exception; its notice holds
+    a written source offer. Look up the GCC version it was built with
+    (`strings libgomp.so.1 | grep annobin` - 2.13.0: GCC 8.5.0, Red Hat
+    8.5.0-28), update the notice and keep a copy of that source package.
+  - Every NVIDIA library shipped must be redistributable: listed in
+    Attachment A of the [CUDA EULA](https://docs.nvidia.com/cuda/eula/index.html)
+    (e.g. `libcufile` as "NVIDIA CUDA File IO Libraries"), or allowed by its own
+    license (NVSHMEM's SLA: "any portion of the SDK"). Update their license
+    texts in `third_party_notices.json` from the wheels'
+    `*.dist-info/licenses/License.txt`.
+
 ---
 
 ## Contributing
