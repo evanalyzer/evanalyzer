@@ -8,6 +8,18 @@ on:
     tags: ["v[0-9]+.*", "[0-9]+.*"]
     branches: ["pipeline_start"]
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign the Windows binaries (Certum SimplySign)
+        type: boolean
+        default: false
+
+env:
+  # Windows code signing (see "Sign the Windows binaries" in build-windows).
+  # Default on: change the 'true' at the end to 'false' to turn it off for
+  # every build. A manual run can also turn it off for just that run with
+  # its "sign" input.
+  SIGN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.sign) || 'true' }}
 
 # Every build job uploads its own files to the release (see "Create the
 # GitHub release" in the templates job).
@@ -255,6 +267,35 @@ jobs:
           cargo build-win
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
+      - name: Sign the Windows binaries
+        # Authenticode-signs our own exe and AI plugin with the Certum
+        # SimplySign cloud certificate; the third-party DLLs (DuckDB,
+        # libtorch) stay as their vendors ship them. ssign derives the login
+        # code from the TOTP seed, so this runs unattended. On/off: the
+        # SIGN_WINDOWS flag at the top of this file.
+        if: env.SIGN_WINDOWS == 'true'
+        env:
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+        run: |
+          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
+            echo "::error::Signing is on, but the CERTUM_EMAIL / CERTUM_OTP secrets are not set. Add them, or turn SIGN_WINDOWS off in release.yml."
+            exit 1
+          fi
+          cargo install ssign --version 0.1.8 --locked
+          # The three Windows builds log in at about the same time with the
+          # same one-time code, which SimplySign may refuse to accept twice:
+          # retry once the next code is out (a new one every 30 s). One file
+          # per call, so a retry never signs an already signed file again.
+          for file in target/x86_64-pc-windows-msvc/release/evanalyzer.exe \
+            target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll; do
+            for attempt in 1 2 3; do
+              ssign --name EVAnalyzer "$file" && break
+              [ "$attempt" = 3 ] && exit 1
+              sleep 35
+            done
+          done
+
       - name: Download templates
         uses: actions/download-artifact@v4
         with:
@@ -471,6 +512,31 @@ jobs:
         run: |
           cargo build-win
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
+
+      - name: Sign the Windows binaries
+        # Same as in build-windows - see there.
+        if: env.SIGN_WINDOWS == 'true'
+        env:
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+        run: |
+          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
+            echo "::error::Signing is on, but the CERTUM_EMAIL / CERTUM_OTP secrets are not set. Add them, or turn SIGN_WINDOWS off in release.yml."
+            exit 1
+          fi
+          cargo install ssign --version 0.1.8 --locked
+          # The three Windows builds log in at about the same time with the
+          # same one-time code, which SimplySign may refuse to accept twice:
+          # retry once the next code is out (a new one every 30 s). One file
+          # per call, so a retry never signs an already signed file again.
+          for file in target/x86_64-pc-windows-msvc/release/evanalyzer.exe \
+            target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll; do
+            for attempt in 1 2 3; do
+              ssign --name EVAnalyzer "$file" && break
+              [ "$attempt" = 3 ] && exit 1
+              sleep 35
+            done
+          done
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -811,6 +877,31 @@ jobs:
         run: |
           cargo build-win-arm --cross-compiler clang
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target aarch64-pc-windows-msvc
+
+      - name: Sign the Windows binaries
+        # Same as in build-windows - see there.
+        if: env.SIGN_WINDOWS == 'true'
+        env:
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+        run: |
+          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
+            echo "::error::Signing is on, but the CERTUM_EMAIL / CERTUM_OTP secrets are not set. Add them, or turn SIGN_WINDOWS off in release.yml."
+            exit 1
+          fi
+          cargo install ssign --version 0.1.8 --locked
+          # The three Windows builds log in at about the same time with the
+          # same one-time code, which SimplySign may refuse to accept twice:
+          # retry once the next code is out (a new one every 30 s). One file
+          # per call, so a retry never signs an already signed file again.
+          for file in target/aarch64-pc-windows-msvc/release/evanalyzer.exe \
+            target/aarch64-pc-windows-msvc/release/evanalyzer_ai.dll; do
+            for attempt in 1 2 3; do
+              ssign --name EVAnalyzer "$file" && break
+              [ "$attempt" = 3 ] && exit 1
+              sleep 35
+            done
+          done
 
       - name: Download templates
         uses: actions/download-artifact@v4
