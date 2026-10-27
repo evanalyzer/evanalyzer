@@ -103,6 +103,24 @@ See [docs/server.md](docs/server.md) for all settings.
 - **Bugs and feature requests:** open an
   [issue](https://github.com/evanalyzer/evanalyzer/issues).
 
+## How to cite
+
+If you use EVAnalyzer in your research, please cite the software and the
+methods of the steps you used:
+
+1. **Write the methods text:** *Cite project* in the top bar (or
+   `evanalyzer cli cite --project my.evaproj`) writes a Markdown file with a
+   ready-to-paste methods paragraph - EVAnalyzer with its version, then each
+   pipeline's steps with their citations - and the full reference list.
+2. **Cite EVAnalyzer itself:**
+
+   > Danmayr, J. (2026). *EVAnalyzer: Enhanced Visual Analyzer.*
+   > https://github.com/evanalyzer/evanalyzer
+
+   GitHub's "Cite this repository" button gives it as BibTeX or APA (from
+   [`CITATION.cff`](CITATION.cff)). A paper is in preparation; this section
+   will name it once it is published.
+
 ---
 
 ## Development Setup

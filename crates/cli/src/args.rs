@@ -18,6 +18,8 @@ pub enum CliCommand {
     ProjectInfo(ProjectInfoArgs),
     /// Check that every image referenced by a project can be found on disk
     Validate(ValidateArgs),
+    /// Write a project's methods paragraph and the citations of its steps (Markdown)
+    Cite(CiteArgs),
     /// Export a results database to CSV or XLSX
     Export(ExportArgs),
     /// Print a quick summary and a page of rows from a results database
@@ -118,6 +120,17 @@ pub struct ValidateArgs {
     /// Project file (.evaproj) to validate
     #[arg(long)]
     pub project: PathBuf,
+}
+
+#[derive(Args)]
+pub struct CiteArgs {
+    /// Project file (.evaproj) to cite
+    #[arg(long)]
+    pub project: PathBuf,
+
+    /// Markdown file to write. Default: `citation.md` next to the project file.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
 }
 
 #[derive(Args)]

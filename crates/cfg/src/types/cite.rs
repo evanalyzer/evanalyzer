@@ -25,7 +25,9 @@ pub struct CitationMetadata {
 
 impl CitationMetadata {
     /// EVAnalyzer itself - for commands implemented here without a
-    /// published method behind them.
+    /// published method behind them, and for the software in every methods
+    /// text. Cites the GitHub repository until the paper is out (then its
+    /// DOI goes here; keep `CITATION.cff` in step).
     ///
     /// An associated `const` (not a function) so `cite()` can return
     /// `Some(&CitationMetadata::DANMAYR)`: a reference to a constant is
@@ -37,7 +39,7 @@ impl CitationMetadata {
         year: 2026,
         container: None,
         doi: None,
-        url: Some("https://evanalyzer.org"),
+        url: Some("https://github.com/evanalyzer/evanalyzer"),
         pages: None,
     };
 

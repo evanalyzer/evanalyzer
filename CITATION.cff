@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: >-
+  If you use EVAnalyzer in your research, please cite it as below. Also cite
+  the methods of the steps you used: "Cite project" in EVAnalyzer writes a
+  methods paragraph with every step's references.
+type: software
+title: "EVAnalyzer: Enhanced Visual Analyzer"
+authors:
+  - family-names: Danmayr
+    given-names: Joachim
+repository-code: "https://github.com/evanalyzer/evanalyzer"
+url: "https://evanalyzer.org"
+license: PolyForm-Noncommercial-1.0.0
+keywords:
+  - bioimage analysis
+  - microscopy
+  - image segmentation
+  - whole-slide imaging

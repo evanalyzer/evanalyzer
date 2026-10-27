@@ -7,8 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::args::{ProjectInfoArgs, ValidateArgs};
+use crate::args::{CiteArgs, ProjectInfoArgs, ValidateArgs};
 use evanalyzer_app::backends::Backend;
+use evanalyzer_app::exporter::cite_project;
 use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
@@ -128,6 +129,21 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
     )))
 }
 
+/// Writes the same file as the GUI's "Cite project": a methods paragraph,
+/// the pipelines' steps and the full references.
+pub fn run_cite(args: CiteArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    let project = load_project(backend.files(), &args.project)?;
+    let out = args.out.unwrap_or_else(|| {
+        args.project
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("citation.md")
+    });
+    cite_project(backend.files(), &project.settings, &out)?;
+    println!("Citation written to {}", out.display());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +192,25 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cite_writes_the_methods_text_next_to_the_project_by_default() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+
+        super::run_cite(
+            CiteArgs {
+                project: file.path.clone(),
+                out: None,
+            },
+            &LocalBackend::default(),
+        )
+        .unwrap();
+
+        let written = file.path.parent().unwrap().join("citation.md");
+        let content = std::fs::read_to_string(written).unwrap();
+        assert!(content.contains("Images were analysed with EVAnalyzer"));
+        assert!(content.contains("[@danmayr2026]"));
     }
 
     #[test]

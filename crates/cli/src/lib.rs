@@ -27,6 +27,7 @@ pub fn run(command: CliCommand, backend: &dyn Backend) -> Result<(), InternalErr
         CliCommand::Analyze(args) => commands::analyze::run(args, backend),
         CliCommand::ProjectInfo(args) => commands::project::run(args, backend),
         CliCommand::Validate(args) => commands::project::run_validate(args, backend),
+        CliCommand::Cite(args) => commands::project::run_cite(args, backend),
         CliCommand::Export(args) => commands::export::run(args, backend),
         CliCommand::View(args) => commands::view::run(args, backend),
         CliCommand::Columns(args) => commands::view::run_columns(args, backend),
