@@ -99,6 +99,7 @@ export struct AiTrainingSettingsSlint {
     rf_criterion: int, // 0 = Gini, 1 = Entropy
     rf_max_features: int, // 0 = auto (sqrt of feature count)
     rf_seed: int,
+    // Not used: out-of-bag samples are never kept (see `Forest`).
     rf_out_of_bag_eval: bool,
 
     // -- K-Nearest Neighbors --
@@ -164,7 +165,7 @@ export global AiLearningState {
         rf_criterion: 0,
         rf_max_features: 0,
         rf_seed: 0,
-        rf_out_of_bag_eval: true,
+        rf_out_of_bag_eval: false,
         // k=5 (odd, avoids ties) with distance weighting: microscopy features
         // are noisy enough that a slightly larger, distance-weighted
         // neighborhood gives steadier decision boundaries than k=3 uniform.

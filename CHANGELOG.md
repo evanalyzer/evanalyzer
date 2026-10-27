@@ -51,6 +51,18 @@ The pixel classifier also got faster: the class and its certainty now come
 from one pass through the trees, about 3 × faster on one core with "Minimum
 certainty" and 2 × without, and the work is spread over all cores.
 
+### Trained classifiers need far less memory
+
+Pipelines with a random forest or MLP from the AI training panel could need
+several GB of extra RAM. Now a model is loaded once per run (not once per
+worker thread), random forests no longer store their out-of-bag samples (a
+model trained on 200,000 pixels: 57 MB → 6 MB; existing models shrink in
+memory right away and on disk when trained again; the unused "Accuracy from
+out-of-bag samples" checkbox is gone), and MLPs predict in small blocks
+without training overhead. Example with 8 threads: random forest +5.9 GB →
++50 MB, MLP +3.9 GB → +50 MB; both faster (forest 1.9 s → 1.3 s, MLP
+0.73 s → 0.24 s). Results are unchanged.
+
 ### Faster YOLOv5 segmentation
 
 Masks are now assembled only around each detected object instead of over the

@@ -10,7 +10,7 @@
 #![allow(unused_imports)]
 
 // Register algos
-mod ai_segmentation;
+pub(crate) mod ai_segmentation;
 mod filters;
 mod flow_control;
 pub(crate) mod libs;

@@ -42,7 +42,8 @@ pub struct RandomForestSettings {
     pub n_trees: u16,
     /// Number of random sample of predictors to use as split candidates.
     pub m: Option<usize>,
-    /// Whether to keep samples used for tree generation. This is required for OOB prediction.
+    /// Not used: the samples used for each tree (for out-of-bag estimates)
+    /// are never kept - see `evanalyzer_core`'s `Forest`.
     pub keep_samples: bool,
     /// Seed used for bootstrap sampling and feature selection for each tree.
     pub seed: u64,

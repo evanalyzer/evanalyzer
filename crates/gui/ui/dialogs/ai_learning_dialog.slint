@@ -826,18 +826,6 @@ export component AiLearningDialog inherits InkDialog {
                                 }
                             }
 
-                            HorizontalLayout {
-                                spacing: 12px;
-                                alignment: start;
-                                FormLabel {
-                                    text: "";
-                                }
-
-                                CheckBox {
-                                    text: "Accuracy from out-of-bag samples";
-                                    checked <=> AiLearningState.settings.rf_out_of_bag_eval;
-                                }
-                            }
                         }
 
                         // K-Nearest Neighbors

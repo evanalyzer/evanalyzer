@@ -20,46 +20,40 @@ use smartcore::linalg::basic::matrix::DenseMatrix;
 use smartcore::tree::decision_tree_classifier::{
     DecisionTreeClassifier, SplitCriterion as SmartcoreSplitCriterion,
 };
-use std::sync::OnceLock;
 
 type ForestModel = RandomForestClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>>;
 type TreeModel = DecisionTreeClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>>;
 
-/// A fitted random forest. Saved exactly as smartcore's own model
-/// (`transparent`); `trees` is only a lazily filled copy of its trees for
-/// [`Forest::vote_share`], since smartcore keeps them private.
+/// A fitted random forest: smartcore's trees, which it keeps private -
+/// read out once after fitting. Saved in smartcore's own form (`trees`,
+/// `classes`). The samples smartcore can keep per tree for out-of-bag
+/// estimates are never kept: nothing reads them, and with them a model
+/// trained on 200 000 pixels was 57 MB on disk and hundreds of MB in RAM. A
+/// model saved with them (before 2026-10-27) loads without them - serde
+/// skips the field while parsing.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct Forest {
-    pub model: ForestModel,
-    #[serde(skip)]
-    trees: OnceLock<Vec<TreeModel>>,
+    #[serde(deserialize_with = "trees_or_none")]
+    trees: Vec<TreeModel>,
+    #[serde(default)]
+    classes: Option<Vec<usize>>,
+}
+
+/// smartcore writes `trees` as an option; `null` (never fitted) reads as
+/// no trees.
+fn trees_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<TreeModel>, D::Error> {
+    Ok(Option::<Vec<TreeModel>>::deserialize(d)?.unwrap_or_default())
 }
 
 impl Forest {
-    pub fn new(model: ForestModel) -> Self {
-        Self {
-            model,
-            trees: OnceLock::new(),
-        }
-    }
-
-    /// The trees, read once through serde (the only public way to them).
-    fn trees(&self) -> Result<&[TreeModel], InternalErrors> {
-        #[derive(Deserialize)]
-        struct Trees {
-            trees: Option<Vec<TreeModel>>,
-        }
-        if let Some(trees) = self.trees.get() {
-            return Ok(trees);
-        }
-        let read = serde_json::to_value(&self.model)
-            .and_then(serde_json::from_value::<Trees>)
+    /// The trees of smartcore's `model` (through serde, the only public way
+    /// to them).
+    fn from_smartcore(model: &ForestModel) -> Result<Self, InternalErrors> {
+        serde_json::to_vec(model)
+            .and_then(|bytes| serde_json::from_slice(&bytes))
             .map_err(|e| {
                 InternalErrors::Internal(format!("failed to read the forest's trees: {e}"))
-            })?;
-        let _ = self.trees.set(read.trees.unwrap_or_default());
-        Ok(self.trees.get().map(Vec::as_slice).unwrap_or_default())
+            })
     }
 
     /// For every row of `features`, the class most trees vote for and the
@@ -75,15 +69,15 @@ impl Forest {
         &self,
         features: &[Vec<f32>],
     ) -> Result<(Vec<usize>, Vec<f32>), InternalErrors> {
-        let trees = self.trees()?;
+        let trees = &self.trees;
         if trees.is_empty() {
-            // No trees, no votes.
-            let x = to_dense_matrix(features)?;
-            let classes = self
-                .model
-                .predict(&x)
-                .map_err(|e| InternalErrors::Internal(e.to_string()))?;
-            return Ok((classes, vec![0.0; features.len()]));
+            // No trees, no votes: every row the first class, as smartcore.
+            let first = self
+                .classes
+                .as_ref()
+                .and_then(|classes| classes.first())
+                .ok_or_else(|| InternalErrors::Internal("the forest has no classes".into()))?;
+            return Ok((vec![*first; features.len()], vec![0.0; features.len()]));
         }
         let chunks = features
             .par_chunks(VOTE_CHUNK_ROWS)
@@ -134,7 +128,8 @@ fn to_smartcore_params(settings: &RandomForestSettings) -> RandomForestClassifie
         min_samples_split: settings.min_samples_split,
         n_trees: settings.n_trees,
         m: settings.m,
-        keep_samples: settings.keep_samples,
+        // Out-of-bag samples: never kept, see `Forest`.
+        keep_samples: false,
         seed: settings.seed,
     }
 }
@@ -151,7 +146,7 @@ pub fn fit_random_forest(
     let y = labels.to_vec();
     let model = RandomForestClassifier::fit(&x, &y, to_smartcore_params(settings))
         .map_err(|e| InternalErrors::Internal(e.to_string()))?;
-    Ok(Classifier::RandomForest(Forest::new(model)))
+    Ok(Classifier::RandomForest(Forest::from_smartcore(&model)?))
 }
 
 #[cfg(test)]
@@ -240,6 +235,86 @@ mod tests {
         );
     }
 
+    /// A forest of no trees (`n_trees: 0`) gives every row its first class,
+    /// as smartcore's own `predict`, with no certainty.
+    #[test]
+    fn a_forest_without_trees_predicts_its_first_class() {
+        let (rows, labels) = two_cluster_dataset();
+        let settings = RandomForestSettings::default();
+        assert_eq!(settings.n_trees, 0);
+        let smartcore = RandomForestClassifier::fit(
+            &to_dense_matrix(&rows).unwrap(),
+            &labels,
+            to_smartcore_params(&settings),
+        )
+        .unwrap();
+        let Classifier::RandomForest(forest) =
+            fit_random_forest(&rows, &labels, &settings).unwrap()
+        else {
+            unreachable!()
+        };
+        let pixels = [vec![0.05, 0.05], vec![10.05, 10.05]];
+        let (classes, share) = forest.predict_with_share(&pixels).unwrap();
+        assert_eq!(
+            classes,
+            smartcore
+                .predict(&to_dense_matrix(&pixels).unwrap())
+                .unwrap()
+        );
+        assert_eq!(share, [0.0, 0.0]);
+    }
+
+    /// A model saved with out-of-bag samples (smartcore's
+    /// `keep_samples`, kept before 2026-10-27) loads without them and
+    /// predicts the same; saved again it has none.
+    #[test]
+    fn a_forest_saved_with_out_of_bag_samples_loads_without_them() {
+        let (rows, labels) = two_cluster_dataset();
+        let settings = RandomForestSettings {
+            n_trees: 5,
+            seed: 9,
+            ..Default::default()
+        };
+        let old = RandomForestClassifier::fit(
+            &to_dense_matrix(&rows).unwrap(),
+            &labels,
+            RandomForestClassifierParameters {
+                keep_samples: true,
+                ..to_smartcore_params(&settings)
+            },
+        )
+        .unwrap();
+        let old_json = serde_json::to_string(&old).unwrap();
+        assert!(old_json.contains("\"samples\":[["), "the old form has them");
+
+        let loaded: Forest = serde_json::from_str(&old_json).unwrap();
+        let pixels = [vec![0.05, 0.05], vec![10.05, 10.05], vec![5.0, 5.0]];
+        let x = to_dense_matrix(&pixels).unwrap();
+        assert_eq!(
+            loaded.predict_with_share(&pixels).unwrap().0,
+            old.predict(&x).unwrap()
+        );
+        let saved = serde_json::to_string(&loaded).unwrap();
+        assert!(!saved.contains("\"samples\""));
+        assert!(saved.len() < old_json.len());
+
+        // Fitting never keeps them, whatever the setting says.
+        let fitted = fit_random_forest(
+            &rows,
+            &labels,
+            &RandomForestSettings {
+                keep_samples: true,
+                ..settings
+            },
+        )
+        .unwrap();
+        assert!(
+            !serde_json::to_string(&fitted)
+                .unwrap()
+                .contains("\"samples\"")
+        );
+    }
+
     /// The class of every row is `predict`'s, also across several chunks and
     /// with ties: an even number of trees on noisy, overlapping classes
     /// (labels 0, 2 and 5 - not 0..n, as when a class has no examples).
@@ -270,6 +345,13 @@ mod tests {
         let Classifier::RandomForest(forest) = &classifier else {
             unreachable!()
         };
+        // The same forest (same seed) as smartcore's own model.
+        let smartcore = RandomForestClassifier::fit(
+            &to_dense_matrix(&rows).unwrap(),
+            &labels,
+            to_smartcore_params(&settings),
+        )
+        .unwrap();
         let pixels: Vec<Vec<f32>> = (0..VOTE_CHUNK_ROWS * 2 + 77)
             .map(|_| vec![next() * 1.4, next()])
             .collect();
@@ -277,7 +359,7 @@ mod tests {
         let (classes, share) = forest.predict_with_share(&pixels).unwrap();
 
         let x = to_dense_matrix(&pixels).unwrap();
-        assert_eq!(classes, forest.model.predict(&x).unwrap());
+        assert_eq!(classes, smartcore.predict(&x).unwrap());
         assert!(
             share.iter().any(|&s| s == 0.5),
             "the data has ties (3 of 6 trees)"
@@ -337,12 +419,14 @@ mod tests {
             assert_eq!(classes.len(), certainty.len());
         }
         times.sort_by(f64::total_cmp);
+        let smartcore = RandomForestClassifier::fit(
+            &to_dense_matrix(&rows).unwrap(),
+            &labels,
+            to_smartcore_params(&settings),
+        )
+        .unwrap();
         let plain = std::time::Instant::now();
-        let Classifier::RandomForest(forest) = &classifier else {
-            unreachable!()
-        };
-        forest
-            .model
+        smartcore
             .predict(&to_dense_matrix(&pixels).unwrap())
             .unwrap();
         println!(

@@ -338,6 +338,9 @@ impl<'a> JobExecutor {
     ) -> Result<(), InternalErrors> {
         info!("Starting pipeline with {} parallel threads", parallelism);
         let start = Instant::now();
+        // Trained models are loaded once for this run and dropped after it.
+        let _models =
+            crate::algos::ai_segmentation::classifier_cache::ClassifierCacheScope::enter();
 
         let ram_budget = self.estimate_ram_budget();
         let image_cache_bytes = crate::utils::resources::recommended_image_cache_bytes(

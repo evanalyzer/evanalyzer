@@ -999,6 +999,45 @@ Drawn with the objects (after a change, not per frame - a pan moves the
 layer). Memory: 2 bytes per pixel of every preview tile (class +
 probability), 512 KB per 512² tile, kept until the next preview.
 
+## Trained models in a pipeline run (2026-10-27)
+
+A random forest or MLP from the AI training panel made a run's RAM jump by
+GBs. Four causes, fixed one by one:
+
+1. The forest kept smartcore's out-of-bag samples (per tree, which samples
+   it used - on by default, read by nothing): 57 MB of JSON for 200,000
+   samples. Now never kept; old models load without them, the panel's
+   checkbox is gone.
+2. The certainty read the trees by turning the whole forest into a
+   `serde_json::Value` (every stored bool a ~32-byte value): a ~600 MB peak
+   per model copy. Now the forest keeps the trees themselves.
+3. Every worker thread loaded and kept its own copy of the model. Now one
+   copy per run, shared; dropped when the last running job ends.
+4. The MLP predicted with the training backend (`Autodiff`, which keeps
+   every layer's output) on the whole tile at once: ~230 MB per 512² tile
+   and thread. Now the plain backend in blocks of 4096 rows, in parallel
+   (identical results - tested).
+
+`bench_trained_model_in_a_run` (core, release): the model saved to disk,
+then 8 worker threads load it through the cache and predict 16 tiles of
+512² with certainty (20 features, 3 classes). Forest: 50 trees, depth 20,
+200,000 samples, out-of-bag on (the old default); MLP: 64, 32. Three runs
+each, alternating; peak RSS of the test process above its start.
+
+| | Model file | 16 tiles, 8 threads | Peak RAM |
+|---|---|---|---|
+| Forest, before | 57.2 MB | 1.87-1.89 s | +5,881 MB |
+| Forest, after 1 + 2 | 6.0 MB | 1.33-1.35 s | +78-79 MB |
+| Forest, after 3 | 6.0 MB | 1.28-1.31 s | +42-56 MB |
+| MLP, before | 14 KB | 0.72-0.74 s | +3,838-3,930 MB |
+| MLP, after 3 | 14 KB | 0.73-0.76 s | +3,805-4,009 MB |
+| MLP, after 4 | 14 KB | 0.22-0.25 s | +41-52 MB |
+
+With 22 threads (a typical analysis) the "before" numbers grow with the
+threads; the "after" ones hardly. Still open: freed memory isn't handed
+back to the system after a run (`malloc_trim`), and the AI plugin keeps
+every deep-learning model loaded until the app ends (TODO).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1041,6 +1080,7 @@ graphics driver).
 | Whole slide (5 channels, 21 tiles, 99,441 objects), performance-check project | 7.41-7.91 GB (was 8.25-8.29 GB) | 2026-10-25 | scopeio 0.0.0-alpha.2 |
 | Pixel classifier with certainty, one 512² tile (20 features, 50 trees) | +62 MB (1 thread) / +104 MB (22 threads) above the test process (was +141 MB) | 2026-10-27 | Pixel classifier: class and certainty in one pass |
 | Prediction overlay tiles in the editor | 512 KB per 512² preview tile | 2026-10-27 | Prediction overlay: drawing it |
+| Trained forest / MLP in a run, 16 tiles 512² on 8 threads | +42-56 MB / +41-52 MB above the test process (was +5.9 GB / +3.9 GB) | 2026-10-27 | Trained models in a pipeline run |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

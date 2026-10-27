@@ -22,16 +22,22 @@ use burn::tensor::{Int, Tensor, TensorData};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{TrainingProgressEvent, TrainingStats};
 use evanalyzer_cfg::settings::ai_learning_settings::{MlpActivation, MlpSettings};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
-/// The MLP backend used for both training and inference. Autodiff-wrapped even
-/// at inference time (simpler, at the cost of unnecessary gradient-tracking
-/// overhead on predict) — splitting out a pure-inference backend without the
-/// Autodiff wrapper is a reasonable follow-up optimization, not done here.
+/// The MLP backend for training (tracks gradients).
 type MlpBackend = Autodiff<NdArray<f32>>;
+
+/// The MLP backend for predictions: no gradient tracking, which kept every
+/// layer's output of a whole tile (~230 MB per 512² tile and thread).
+type MlpInference = NdArray<f32>;
+
+/// Rows per block in a prediction - a block's layer outputs are what is held
+/// at once (rows × widest layer floats), as in the random forest.
+const PREDICT_CHUNK_ROWS: usize = 4096;
 
 fn mlp_device() -> NdArrayDevice {
     NdArrayDevice::Cpu
@@ -113,8 +119,12 @@ pub(crate) fn predict_mlp(
     weights: &[u8],
     features: &[Vec<f32>],
 ) -> Result<Vec<usize>, InternalErrors> {
-    let out = mlp_outputs(architecture, weights, features)?;
-    read_classes(out.argmax(1))
+    let model = inference_model(architecture, weights)?;
+    let blocks = features
+        .par_chunks(PREDICT_CHUNK_ROWS)
+        .map(|block| read_classes(mlp_outputs(&model, architecture, block).argmax(1)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(blocks.concat())
 }
 
 /// Like [`predict_mlp`], plus each row's certainty: the softmax probability
@@ -124,46 +134,70 @@ pub(crate) fn predict_mlp_with_certainty(
     weights: &[u8],
     features: &[Vec<f32>],
 ) -> Result<(Vec<usize>, Vec<f32>), InternalErrors> {
-    let out = mlp_outputs(architecture, weights, features)?;
-    let classes = read_classes(out.clone().argmax(1))?;
-    let certainty = softmax(out, 1)
-        .max_dim(1)
-        .into_data()
-        .convert::<f32>()
-        .to_vec::<f32>()
-        .map_err(|e| InternalErrors::Internal(format!("failed to read MLP certainty: {e:?}")))?;
-    Ok((classes, certainty))
+    let model = inference_model(architecture, weights)?;
+    let blocks = features
+        .par_chunks(PREDICT_CHUNK_ROWS)
+        .map(|block| {
+            let out = mlp_outputs(&model, architecture, block);
+            let classes = read_classes(out.clone().argmax(1))?;
+            let certainty = softmax(out, 1)
+                .max_dim(1)
+                .into_data()
+                .convert::<f32>()
+                .to_vec::<f32>()
+                .map_err(|e| {
+                    InternalErrors::Internal(format!("failed to read MLP certainty: {e:?}"))
+                })?;
+            Ok((classes, certainty))
+        })
+        .collect::<Result<Vec<_>, InternalErrors>>()?;
+    Ok(blocks.into_iter().fold(
+        (
+            Vec::with_capacity(features.len()),
+            Vec::with_capacity(features.len()),
+        ),
+        |(mut classes, mut certainty), (c, p)| {
+            classes.extend(c);
+            certainty.extend(p);
+            (classes, certainty)
+        },
+    ))
 }
 
-/// The model's raw class scores, one row per feature row.
-fn mlp_outputs(
+/// The trained model, for predictions.
+fn inference_model(
     architecture: &MlpArchitecture,
     weights: &[u8],
-    features: &[Vec<f32>],
-) -> Result<Tensor<MlpBackend, 2>, InternalErrors> {
+) -> Result<Mlp<MlpInference>, InternalErrors> {
     let device = mlp_device();
-    let model = Mlp::<MlpBackend>::new(
+    let model = Mlp::<MlpInference>::new(
         &device,
         architecture.n_in,
         &architecture.hidden,
         architecture.n_out,
     );
-
     let recorder = BinBytesRecorder::<FullPrecisionSettings>::default();
     let record = recorder
         .load(weights.to_vec(), &device)
         .map_err(|e| InternalErrors::Internal(format!("failed to load MLP weights: {e:?}")))?;
-    let model = model.load_record(record);
-
-    let n_rows = features.len();
-    let n_in = architecture.n_in;
-    let flat: Vec<f32> = features.iter().flatten().copied().collect();
-    let x = Tensor::<MlpBackend, 2>::from_data(TensorData::new(flat, [n_rows, n_in]), &device);
-
-    Ok(model.forward(x, architecture.activation))
+    Ok(model.load_record(record))
 }
 
-fn read_classes(preds: Tensor<MlpBackend, 2, Int>) -> Result<Vec<usize>, InternalErrors> {
+/// The model's raw class scores, one row per feature row.
+fn mlp_outputs(
+    model: &Mlp<MlpInference>,
+    architecture: &MlpArchitecture,
+    features: &[Vec<f32>],
+) -> Tensor<MlpInference, 2> {
+    let flat: Vec<f32> = features.iter().flatten().copied().collect();
+    let x = Tensor::<MlpInference, 2>::from_data(
+        TensorData::new(flat, [features.len(), architecture.n_in]),
+        &mlp_device(),
+    );
+    model.forward(x, architecture.activation)
+}
+
+fn read_classes(preds: Tensor<MlpInference, 2, Int>) -> Result<Vec<usize>, InternalErrors> {
     let preds_data = preds
         .into_data()
         .convert::<i64>()
@@ -660,6 +694,55 @@ mod tests {
             "large epsilon ({large_epsilon_loss}) should have moved less from the \
              initial loss ({initial_loss}) than a tiny epsilon ({tiny_epsilon_loss}) did"
         );
+    }
+
+    /// Predicting in blocks gives every row exactly what one pass over all
+    /// rows gives - across block borders too.
+    #[test]
+    fn a_prediction_in_blocks_is_the_same_as_in_one_pass() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
+        let (rows, labels) = two_cluster_dataset();
+        let settings = MlpSettings {
+            hidden_layers: vec![4],
+            epochs: 50,
+            learning_rate: 0.05,
+            seed: 3,
+            ..Default::default()
+        };
+        let (progress, cancel) = no_op_progress();
+        let (classifier, _) = fit_mlp(&rows, &labels, 2, &settings, &progress, &cancel).unwrap();
+        let Classifier::Mlp {
+            architecture,
+            weights,
+        } = &classifier
+        else {
+            unreachable!()
+        };
+        let pixels: Vec<Vec<f32>> = (0..PREDICT_CHUNK_ROWS * 2 + 7)
+            .map(|i| {
+                let v = (i % 211) as f32 / 21.0;
+                vec![v, 10.0 - v]
+            })
+            .collect();
+
+        let (classes, certainty) =
+            predict_mlp_with_certainty(architecture, weights, &pixels).unwrap();
+
+        let model = inference_model(architecture, weights).unwrap();
+        let out = mlp_outputs(&model, architecture, &pixels);
+        let one_pass_classes = read_classes(out.clone().argmax(1)).unwrap();
+        let one_pass_certainty = softmax(out, 1)
+            .max_dim(1)
+            .into_data()
+            .to_vec::<f32>()
+            .unwrap();
+        assert_eq!(classes, one_pass_classes);
+        assert_eq!(certainty, one_pass_certainty);
+        assert_eq!(
+            predict_mlp(architecture, weights, &pixels).unwrap(),
+            classes
+        );
+        assert!(classes.contains(&0) && classes.contains(&1));
     }
 
     #[test]

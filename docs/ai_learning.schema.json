@@ -920,7 +920,7 @@
           "default": "GINI"
         },
         "keepSamples": {
-          "description": "Whether to keep samples used for tree generation. This is required for OOB prediction.",
+          "description": "Not used: the samples used for each tree (for out-of-bag estimates)\nare never kept - see `evanalyzer_core`'s `Forest`.",
           "type": "boolean",
           "default": false
         },
