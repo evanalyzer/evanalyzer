@@ -14,9 +14,9 @@
 //! so values stay comparable with other tools and published thresholds.
 //! The noise is Immerkær's estimate.
 //!
-//! Parts of the calculations are ported from CellProfiler and centrosome,
-//! Copyright © 2003 - 2026 Broad Institute, Inc., BSD-3-Clause - see the
-//! third-party notices (About > Licenses).
+//! Parts of the calculations are ported from BSD-3-Clause code, Copyright ©
+//! 2003 - 2026 Broad Institute, Inc. - see the third-party notices
+//! (About > Licenses).
 
 use crate::ImageDimensionality;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
