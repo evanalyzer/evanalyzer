@@ -10,6 +10,7 @@
 use crate::args::{CiteArgs, ProjectInfoArgs, ValidateArgs};
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::exporter::cite_project;
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;

@@ -1107,6 +1107,7 @@ fn color_scheme_from_ui(scheme: InkScheme) -> ColorScheme {
 mod ui_state_tests {
     use super::*;
     use crate::editor::test_support::test_ui_state;
+    use evanalyzer_app::project::ImageListExt;
 
     // -- dirty tracking -----------------------------------------------------
 
@@ -1241,6 +1242,117 @@ mod ui_state_tests {
 
     fn name(ui_state: &UiState) -> String {
         ui_state.get_project().meta.name.clone()
+    }
+
+    /// RAM and time of the undo history on a large project: 100,000
+    /// images (one series, 4 named channels) and 2,000 hand-drawn objects
+    /// (40×40 masks) - one snapshot, then 100 edits that each take one.
+    /// `IMAGES=n` changes the image count. Run with `cargo test --release
+    /// -p evanalyzer_gui --lib bench_undo_snapshots -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_undo_snapshots() {
+        use evanalyzer_cfg::settings::images_settings::{
+            ChannelSettings, ImageEntry, SeriesSettings,
+        };
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+        let mb = |key: &str| {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with(key))
+                        .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                })
+                .unwrap_or(0)
+                / 1024
+        };
+        let images: usize = std::env::var("IMAGES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000);
+        let ui_state = test_ui_state();
+        {
+            let mut project = ui_state.get_project_runtime_write();
+            for i in 0..images {
+                let rel_path = PathBuf::from(format!("plate_{:03}/well_{i:06}_s1.tif", i / 1000));
+                let mut series = SeriesSettings {
+                    image_width: 2048,
+                    image_height: 2048,
+                    ..Default::default()
+                };
+                for c in 0..4 {
+                    series.channels.insert(
+                        c,
+                        ChannelSettings {
+                            name: format!("Channel {c}"),
+                            ..Default::default()
+                        },
+                    );
+                }
+                if i < 20 {
+                    series.objects = (0..100)
+                        .map(|o| ObjectMetricSettings {
+                            id: evanalyzer_cfg::core_types::ObjectId((i * 1000 + o) as u128),
+                            bbox: [0, 0, 39, 39],
+                            area: 1600,
+                            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 1600],
+                            ..Default::default()
+                        })
+                        .collect();
+                }
+                project.images.list.insert(
+                    rel_path.clone(),
+                    ImageEntry {
+                        rel_path,
+                        file_size: 1 << 23,
+                        series: [(0, series)].into(),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let start_rss = mb("VmRSS:");
+        let mut clones: Vec<f64> = (0..5)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let copy = ui_state.get_project().settings.clone();
+                let took = start.elapsed().as_secs_f64() * 1000.0;
+                drop(copy);
+                took
+            })
+            .collect();
+        clones.sort_by(f64::total_cmp);
+        let start = std::time::Instant::now();
+        for i in 0..100 {
+            ui_state.begin_undo_step();
+            ui_state.get_project_write().meta.name = format!("edit {i}");
+        }
+        let edits = start.elapsed().as_secs_f64();
+        println!(
+            "{images} images: one snapshot {:.1} ms (median of 5); 100 edits {edits:.2} s; RSS {start_rss} -> {} MB (+{} MB), peak {} MB",
+            clones[2],
+            mb("VmRSS:"),
+            mb("VmRSS:").saturating_sub(start_rss),
+            mb("VmHWM:")
+        );
+        // Edits of an image's objects (as drawing): each changes one entry.
+        let rss = mb("VmRSS:");
+        let path = ui_state.get_project().images.list.keys().next().unwrap().clone();
+        let start = std::time::Instant::now();
+        for i in 0..100 {
+            ui_state.begin_undo_step();
+            let mut project = ui_state.get_project_write();
+            let entry = project.images.list.get_mut(&path).unwrap();
+            entry.series.get_mut(&0).unwrap().objects[0].area = i;
+        }
+        println!(
+            "100 edits of one image's objects {:.2} s; RSS {rss} -> {} MB (+{} MB), peak {} MB",
+            start.elapsed().as_secs_f64(),
+            mb("VmRSS:"),
+            mb("VmRSS:").saturating_sub(rss),
+            mb("VmHWM:")
+        );
     }
 
     #[test]

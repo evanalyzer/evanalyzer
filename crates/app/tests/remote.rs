@@ -29,6 +29,7 @@ use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::images::TileRequest;
 use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{
@@ -1142,7 +1143,15 @@ fn annotations_go_to_geojson_and_back_through_the_server() {
         tmp_settings: Default::default(),
     };
     let rel = project.images.list.keys().next().unwrap().clone();
-    let series = *project.images.list[&rel].series.keys().next().unwrap();
+    let series = *project
+        .images
+        .list
+        .get(&rel)
+        .unwrap()
+        .series
+        .keys()
+        .next()
+        .unwrap();
     project
         .images
         .list
@@ -1186,7 +1195,7 @@ fn annotations_go_to_geojson_and_back_through_the_server() {
     let report = apply_import(&mut project, pending, true, &Default::default());
     assert_eq!(report.objects, 1);
     assert!(report.unmeasured_images.is_empty(), "{report:?}");
-    let object = &project.images.list[&rel].series[&series].objects[0];
+    let object = &project.images.list.get(&rel).unwrap().series[&series].objects[0];
     assert_eq!(object.bbox, [2, 3, 4, 4]);
     assert_eq!(object.area, 4);
     assert!(

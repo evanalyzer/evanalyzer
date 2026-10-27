@@ -1014,6 +1014,7 @@ mod tests {
     use super::*;
     use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
     use crate::editor::viewport_cache::ViewportCache;
+    use evanalyzer_app::project::ImageListExt;
     use evanalyzer_cfg::core_types::ImageDimensionality;
 
     fn make_controller() -> (Arc<UiState>, Arc<ViewportImageController>) {

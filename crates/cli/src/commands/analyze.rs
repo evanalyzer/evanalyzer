@@ -12,6 +12,7 @@ use evanalyzer_app::analysis::AnalysisRequest;
 use evanalyzer_app::analysis::ProgressEvent;
 use evanalyzer_app::analysis::RunningJob;
 use evanalyzer_app::backends::Backend;
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io::Write;

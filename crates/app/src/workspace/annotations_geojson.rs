@@ -31,6 +31,7 @@
 use crate::api::FileSystem;
 use crate::workspace::extensions::annotations_ext::same_shape;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
+use crate::workspace::extensions::images_ext::ImageListExt;
 use crate::workspace::extensions::project_ext::ProjectExt;
 use crate::workspace::project_owner::ProjectWithRuntime;
 use bitvec::prelude::{BitVec, Lsb0};
@@ -1207,8 +1208,22 @@ mod tests {
         let report = import_file(&mut target, &file, "sub/b.tif", false, &mapping);
         assert_eq!(report.objects, 2);
         assert_eq!(report.created_classes, vec!["Nuclei".to_string()]);
-        let objects = &target.settings.images.list[Path::new("sub/b.tif")].series[&0].objects;
-        let source_objects = &source.settings.images.list[Path::new("a.tif")].series[&0].objects;
+        let objects = &target
+            .settings
+            .images
+            .list
+            .get(Path::new("sub/b.tif"))
+            .unwrap()
+            .series[&0]
+            .objects;
+        let source_objects = &source
+            .settings
+            .images
+            .list
+            .get(Path::new("a.tif"))
+            .unwrap()
+            .series[&0]
+            .objects;
         for (back, original) in objects.iter().zip(source_objects) {
             assert!(same_shape(back, original), "same pixels and plane");
             assert_eq!(back.z_projection, original.z_projection);
@@ -1225,7 +1240,13 @@ mod tests {
         let replaced = import_file(&mut target, &file, "sub/b.tif", true, &mapping);
         assert_eq!(replaced.objects, 2);
         assert_eq!(
-            target.settings.images.list[Path::new("sub/b.tif")].series[&0]
+            target
+                .settings
+                .images
+                .list
+                .get(Path::new("sub/b.tif"))
+                .unwrap()
+                .series[&0]
                 .objects
                 .len(),
             2
@@ -1271,8 +1292,14 @@ mod tests {
         assert_eq!(report.objects, 1);
         assert!(report.unmeasured_images.is_empty(), "{report:?}");
 
-        let object =
-            &project.settings.images.list[Path::new("slice_Z0_C0_T0.tif")].series[&0].objects[0];
+        let object = &project
+            .settings
+            .images
+            .list
+            .get(Path::new("slice_Z0_C0_T0.tif"))
+            .unwrap()
+            .series[&0]
+            .objects[0];
         assert_eq!(object.area, 12);
         let channel = object.intensities.get(&0).expect("measured on channel 0");
         assert!(channel.sum_intensity > 0.0);
@@ -1363,7 +1390,14 @@ mod tests {
         assert_eq!(report.skipped_features, 1, "the point");
         assert_eq!(report.skipped_by_class, 1, "Stroma");
         assert_eq!(report.created_classes, vec!["Tumor".to_string()]);
-        let objects = &project.settings.images.list[Path::new("a.tif")].series[&0].objects;
+        let objects = &project
+            .settings
+            .images
+            .list
+            .get(Path::new("a.tif"))
+            .unwrap()
+            .series[&0]
+            .objects;
         assert_eq!(
             objects[0].object_class,
             HashSet::from([ObjectClass::Global(nuclei)])
@@ -1379,7 +1413,13 @@ mod tests {
             .unwrap();
         assert_eq!(tumor.color, 0xc80000);
         assert!(
-            project.settings.images.list[Path::new("sub/b.tif")].series[&0]
+            project
+                .settings
+                .images
+                .list
+                .get(Path::new("sub/b.tif"))
+                .unwrap()
+                .series[&0]
                 .objects
                 .is_empty(),
             "only the chosen image"

@@ -19,6 +19,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::workspace::extensions::classification_ext::ClassificationExt;
+use crate::workspace::extensions::images_ext::ImageListExt;
 use crate::workspace::module_editing::{remove_binding, same_kind, setting_at};
 use crate::workspace::module_insights::{
     ResolvedCommand, assigned_classes, channels_read, classes_in, created_classes, creates_objects,

@@ -17,6 +17,7 @@
 use crate::editor::project_controller::ProjectController;
 use crate::{AppWindow, LayoutState, RecentProjectRow, StartState, UiState, WorkspaceMode};
 use evanalyzer_app::global::RecentProject;
+use evanalyzer_app::project::ImageListExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::path::PathBuf;
 use std::rc::Rc;

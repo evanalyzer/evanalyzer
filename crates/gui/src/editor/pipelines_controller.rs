@@ -32,6 +32,7 @@ use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::fs::FileSystem;
 use evanalyzer_app::modules::ClassRole;
 use evanalyzer_app::project::ImageEntryExt;
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_module_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
@@ -2806,7 +2807,7 @@ impl PipelinesController {
             plate: project.plate.clone(),
             images: ImageSettings {
                 root: project.images.root.clone(),
-                list,
+                list: evanalyzer_cfg::settings::images_settings::ImageList::from_entries(list),
                 settings,
             },
             pipelines: project.pipelines.clone(),
@@ -3460,7 +3461,8 @@ impl PipelinesController {
         };
         let id = evanalyzer_cfg::core_types::ObjectId(id);
         let bbox = {
-            let mut project = self.app_state.get_project_write();
+            // A selection is no edit: no undo step.
+            let mut project = self.app_state.get_project_runtime_write();
             let Some(bbox) = project
                 .get_preview_objects()
                 .iter()
@@ -7221,7 +7223,7 @@ mod tests {
             },
             images: ImageSettings {
                 root: Some(PathBuf::from("/root")),
-                list,
+                list: evanalyzer_cfg::settings::images_settings::ImageList::from_entries(list),
                 settings: Default::default(),
             },
             ..Default::default()

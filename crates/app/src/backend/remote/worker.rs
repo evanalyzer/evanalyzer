@@ -36,7 +36,9 @@ use crate::api::ImageSource;
 use crate::api::ResultsSource;
 use crate::api::StartPreviewError;
 use crate::api::StartTrainingError;
+use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::images_settings::ImageList;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -185,10 +187,12 @@ fn native_path(path: PathBuf) -> PathBuf {
 fn native_project_paths(project: &mut ProjectSettings) {
     let images = &mut project.images;
     images.root = images.root.take().map(native_path);
-    images.list = std::mem::take(&mut images.list)
-        .into_iter()
-        .map(|(path, entry)| (native_path(path), entry))
-        .collect();
+    images.list = ImageList::from_entries(
+        std::mem::take(&mut images.list)
+            .into_index_map()
+            .into_iter()
+            .map(|(path, entry)| (native_path(path), entry)),
+    );
 }
 
 /// `request` with every path from the client in this machine's spelling -

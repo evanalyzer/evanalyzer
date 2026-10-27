@@ -999,6 +999,41 @@ Drawn with the objects (after a change, not per frame - a pan moves the
 layer). Memory: 2 bytes per pixel of every preview tile (class +
 probability), 512 KB per 512² tile, kept until the next preview.
 
+## Undo history on a large project (2026-10-27)
+
+Every undo step stored a full copy of the project's settings, including
+every image entry and every hand-drawn object. Now the image list
+(`ImageList`) shares the map and its entries between copies until an edit
+changes them. `bench_undo_snapshots` (gui, release): 100,000 images (one
+series, 4 named channels), 2,000 hand-drawn objects (40×40 masks); 3 runs
+each.
+
+| | before | after |
+|---|---|---|
+| One snapshot | 32-34 ms, ~240 MB | 0.0 ms, ~0 |
+| 100 edits (each an undo step) | 10.9-11.4 s, +23,897 MB | <0.01 s, +0-1 MB |
+| 100 edits of one image's objects (as drawing) | as above | 0.62-0.81 s, +960 MB |
+
+An edit of an image still copies the map's pointers (~9.6 MB at 100,000
+images) per undo step - see TODO.
+
+## Prediction overlay: its cost in the step (2026-10-27)
+
+`bench_prediction_overlay_in_the_step` (core, release): the AI Pixel
+Classifier step on one 512² tile, the panel's "Recommended" features (10),
+a forest of 50 trees (depth 20, 3 classes); 5 runs per case, the cases
+alternating, peak RSS above the start.
+
+| Threads | Overlay off | Overlay on | Extra RAM |
+|---|---|---|---|
+| 1 | 0.243-0.279 s | 0.243-0.245 s | ~0-2 MB |
+| 4 | 0.181-0.184 s | 0.180-0.217 s | ~1-3 MB |
+
+No measurable time: a forest's plain prediction already counts the votes
+the certainty comes from. The overlay adds a copy of 2 bytes per pixel
+(512 KB per 512² tile), kept by the editor until the next preview, and
+drawing it (~20 ms full HD, "Prediction overlay: drawing it").
+
 ## Trained models in a pipeline run (2026-10-27)
 
 A random forest or MLP from the AI training panel made a run's RAM jump by
@@ -1081,6 +1116,7 @@ graphics driver).
 | Pixel classifier with certainty, one 512² tile (20 features, 50 trees) | +62 MB (1 thread) / +104 MB (22 threads) above the test process (was +141 MB) | 2026-10-27 | Pixel classifier: class and certainty in one pass |
 | Prediction overlay tiles in the editor | 512 KB per 512² preview tile | 2026-10-27 | Prediction overlay: drawing it |
 | Trained forest / MLP in a run, 16 tiles 512² on 8 threads | +42-56 MB / +41-52 MB above the test process (was +5.9 GB / +3.9 GB) | 2026-10-27 | Trained models in a pipeline run |
+| Undo history, 100,000 images, 100 steps | +1 MB (other edits) / +960 MB (edits of an image) (was +23.9 GB) | 2026-10-27 | Undo history on a large project |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

@@ -18,6 +18,7 @@
 //! ## License
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
 mod analysis;
 mod preview;
 mod running_job;
@@ -32,6 +33,7 @@ mod tests {
     use crate::api::{PreviewRequest, PreviewViewport, RunningJob};
     use crate::backend::LocalBackend;
     use crate::workspace::ProjectWithRuntime;
+    use crate::workspace::extensions::images_ext::ImageListExt;
     use crate::workspace::extensions::project_ext::ProjectExt;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;

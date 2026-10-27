@@ -6080,6 +6080,7 @@ pub(crate) mod tests {
     use crate::editor::object_list_controller::ObjectListController;
     use crate::editor::test_support::{test_ui_state, test_ui_window};
     use crate::editor::viewport_controller::ViewportController;
+    use evanalyzer_app::project::ImageListExt;
 
     fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> Arc<ResultsStateController> {
         make_controller_with_state(ui, test_ui_state())

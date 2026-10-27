@@ -1284,6 +1284,7 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use evanalyzer_app::project::ImageListExt;
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
     use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
     use evanalyzer_cfg::settings::meta_data::{AuthorInformation, MetaData};

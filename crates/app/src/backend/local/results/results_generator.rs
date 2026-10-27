@@ -285,28 +285,16 @@ impl ResultsGenerator {
         };
 
         // `ListFilter.images` carries the rel-paths the GUI's image picker
-        // keys on, but the `objects` table only has `image_name` to filter
-        // on — translate one to the other via the images table. `Some([])`
-        // (an active filter matching nothing, whether the user selected
-        // zero images or none of their selections resolved to a real image)
-        // means zero rows, same convention as the class filter below.
-        let image_names = match &filter.images {
-            Some(rel_paths) => {
-                let images = self.get_images()?;
-                let names: Vec<String> = rel_paths
-                    .iter()
-                    .filter_map(|rel_path| {
-                        images
-                            .iter()
-                            .find(|image| image.rel_path.to_str() == Some(rel_path.as_str()))
-                            .map(|image| image.name.clone())
-                    })
-                    .collect();
-                if names.is_empty() {
-                    return Ok(empty_result(column_names.clone()));
-                }
-                Some(names)
+        // keys on - the objects' `image_rel_path` (not `image_name`, the file
+        // name only: images of the same name in two folders). `Some([])`
+        // (an active filter matching nothing) means zero rows, same
+        // convention as the class filter below; a path that names no image
+        // simply matches no object.
+        let image_rel_paths = match &filter.images {
+            Some(rel_paths) if rel_paths.is_empty() => {
+                return Ok(empty_result(column_names.clone()));
             }
+            Some(rel_paths) => Some(rel_paths),
             None => None,
         };
 
@@ -334,8 +322,11 @@ impl ResultsGenerator {
             self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
-        if let Some(names) = &image_names {
-            conditions.push(format!("image_rel_path IN ({})", sql_string_in_list(names)));
+        if let Some(rel_paths) = image_rel_paths {
+            conditions.push(format!(
+                "image_rel_path IN ({})",
+                sql_string_in_list(rel_paths)
+            ));
         }
         if filter.transpond_table {
             let blocks = class_blocks(class_ids.as_deref(), &classes);
@@ -5289,6 +5280,48 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
+    }
+
+    /// Images in subfolders: the selection carries their relative paths
+    /// (the objects' `image_rel_path`), not only the file name.
+    #[test]
+    fn get_object_list_image_filter_finds_images_in_subfolders() {
+        let generator = open(&[
+            ObjectSpec::new("plate1/img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("plate1/img1.tif", "ClassA", 1, 110),
+            ObjectSpec::new("plate2/img1.tif", "ClassB", 2, 200),
+        ]);
+        // As a run writes them: the name is the file name only.
+        generator
+            .database
+            .execute_batch(
+                "UPDATE images SET image_name = regexp_extract(image_rel_path, '[^/]+$'); \
+                 UPDATE objects SET image_name = regexp_extract(image_rel_path, '[^/]+$');",
+            )
+            .unwrap();
+        let list = |images: Vec<&str>| {
+            generator
+                .get_object_list(&ListFilter {
+                    plane: plane(),
+                    images: Some(images.into_iter().map(String::from).collect()),
+                    object_classes: None,
+                    columns: vec![Column::ImageName],
+                    with_coloc_details: false,
+                    related_to: None,
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap()
+                .source_object_count
+        };
+        assert_eq!(list(vec!["plate1/img1.tif"]), 2);
+        assert_eq!(
+            list(vec!["plate2/img1.tif"]),
+            1,
+            "same file name, other folder"
+        );
+        assert_eq!(list(vec!["plate1/img1.tif", "plate2/img1.tif"]), 3);
+        assert_eq!(list(vec!["plate3/missing.tif"]), 0);
     }
 
     #[test]

@@ -10,7 +10,7 @@
 use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, ops::RangeInclusive, path::PathBuf};
+use std::{collections::BTreeMap, ops::RangeInclusive, path::PathBuf, sync::Arc};
 
 use crate::settings::object_settings::ObjectMetricSettings;
 use crate::types::image::ZProjection;
@@ -22,11 +22,21 @@ pub struct ImageSettings {
     pub root: Option<PathBuf>,
 
     /// Map of images where the key is the path relative to `root`.
-    pub list: IndexMap<PathBuf, ImageEntry>,
+    pub list: ImageList,
 
     /// Project-wide render and display settings.
     pub settings: GlobalImageSettings,
 }
+
+// In memory the map and every entry are shared between copies until one
+// copy changes them (`Arc`, copy-on-write): an undo snapshot of a project
+// with 100,000 images copies nothing. The methods are in `evanalyzer_app`'s
+// `ImageListExt`.
+/// The project's images, keyed by the path relative to the image root.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
+#[serde(transparent)]
+#[schemars(inline)]
+pub struct ImageList(pub Arc<IndexMap<PathBuf, Arc<ImageEntry>>>);
 
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]

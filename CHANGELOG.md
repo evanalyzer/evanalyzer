@@ -63,6 +63,19 @@ without training overhead. Example with 8 threads: random forest +5.9 GB →
 +50 MB, MLP +3.9 GB → +50 MB; both faster (forest 1.9 s → 1.3 s, MLP
 0.73 s → 0.24 s). Results are unchanged.
 
+### Large projects: undo no longer fills the memory
+
+Each undo step kept a full copy of the project - with 100,000 images about
+240 MB per step, up to 100 steps. Now unchanged images are shared between
+steps: 100 edits need about 1 MB instead of 24 GB (edits of an image's
+annotations: under 1 GB), and an edit no longer pauses for ~0.1 s.
+
+### Fixes
+
+- Results list and export: choosing images in subfolders showed no objects.
+- Selecting an object no longer clears what can be redone.
+- The image list could highlight the wrong image (e.g. "1.tif" for "11.tif").
+
 ### Faster YOLOv5 segmentation
 
 Masks are now assembled only around each detected object instead of over the

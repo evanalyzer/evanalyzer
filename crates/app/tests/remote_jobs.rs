@@ -18,6 +18,7 @@ use evanalyzer_app::analysis::{AnalysisRequest, JobState, ProgressEvent, Running
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io;

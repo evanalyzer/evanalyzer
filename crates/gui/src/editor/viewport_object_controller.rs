@@ -321,7 +321,8 @@ impl ViewPortObjectController {
             .map(|i| objects[i].id.clone())
         };
 
-        let mut project = self.app_state.get_project_write();
+        // A selection is no edit: no undo step (it would clear the redo).
+        let mut project = self.app_state.get_project_runtime_write();
         project.set_selected_object(clicked_object_id);
     }
 
@@ -945,6 +946,30 @@ mod tests {
             ui_state.get_project().get_selected_object_id(),
             Some(ObjectId(1))
         );
+    }
+
+    /// Selecting is no edit: it takes no undo step, so what was just
+    /// undone can still be redone.
+    #[test]
+    fn selecting_an_object_keeps_the_redo() {
+        let (ui_state, controller, _) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.toggle_hide_unclassified_objects();
+            project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
+        }
+        ui_state.begin_undo_step();
+        ui_state.get_project_write().meta.name = "renamed".into();
+        assert!(ui_state.undo());
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1))
+        );
+
+        assert!(ui_state.redo(), "the selection must not clear the redo");
+        assert_eq!(ui_state.get_project().meta.name, "renamed");
     }
 
     #[test]

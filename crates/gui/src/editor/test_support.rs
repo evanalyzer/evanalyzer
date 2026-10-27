@@ -21,6 +21,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use crate::{AppWindow, UiState};
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_app::project::ProjectWithRuntime;

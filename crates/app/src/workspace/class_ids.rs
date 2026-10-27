@@ -10,6 +10,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::workspace::extensions::images_ext::ImageListExt;
 use crate::workspace::module_editing::{setting_at, uses_segmentation_class};
 use evanalyzer_cfg::{
     core_types::{InternalErrors, MAX_CLASS_ID, ModuleParamKey, ObjectClass, SegmentationClass},
@@ -531,7 +532,7 @@ mod tests {
             project.tile_merge.classes_to_not_merge,
             [ObjectClass::Global(5)]
         );
-        let object = &project.images.list[0].series[&0].objects[0];
+        let object = &project.images.list.get_index(0).unwrap().1.series[&0].objects[0];
         assert!(object.object_class.contains(&ObjectClass::Global(5)));
         assert!(!object.object_class.contains(&ObjectClass::Global(3)));
         let keys: Vec<ObjectClass> = object.colocalized_with.keys().copied().collect();

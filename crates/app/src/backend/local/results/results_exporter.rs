@@ -1135,7 +1135,11 @@ impl ResultExport {
                 }
                 for i in 0..COLUMNS.len() {
                     match i {
-                        2 | 3 => out.number(row.get::<_, i32>(i).map_err(err)? as f64)?,
+                        // z: NULL for a value of a whole volume (an empty cell).
+                        2 => {
+                            out.optional(row.get::<_, Option<i32>>(i).map_err(err)?.map(f64::from))?
+                        }
+                        3 => out.number(row.get::<_, i32>(i).map_err(err)? as f64)?,
                         12 => out.optional(row.get::<_, Option<f64>>(i).map_err(err)?)?,
                         _ => match row.get::<_, Option<String>>(i).map_err(err)? {
                             Some(text) => out.text(&text)?,
@@ -5007,6 +5011,34 @@ mod tests {
                 "img1.tif,img1.tif,0,1,image,,,,p_01,Pearson,None,p_01/p,",
                 "img2.tif,img2.tif,0,0,image,,,,p_01,Pearson,None,p_01/p,0.75",
             ]
+        );
+    }
+
+    /// A value of a whole volume has no plane (`z_stack` NULL): an empty
+    /// cell, not a failed export.
+    #[test]
+    fn a_whole_volume_value_exports_with_an_empty_z() {
+        let (generator, out_dir, _) = with_measurements();
+        generator
+            .connection()
+            .execute_batch(
+                "INSERT INTO measurements VALUES ('img2.tif', 'img2.tif', NULL, 0, 'image', \
+                 NULL, NULL, NULL, NULL, 'p_01', 'Pearson', 'None', 'p_01/p', 0.5);",
+            )
+            .unwrap();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_measurements: true,
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let csv = std::fs::read_to_string(out_dir.join("measurements.csv")).unwrap();
+        assert!(
+            csv.lines()
+                .any(|l| l == "img2.tif,img2.tif,,0,image,,,,p_01,Pearson,None,p_01/p,0.5"),
+            "{csv}"
         );
     }
 

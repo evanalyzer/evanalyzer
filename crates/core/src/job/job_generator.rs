@@ -293,6 +293,7 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
             let missing: Vec<String> = config
                 .images
                 .list
+                .0
                 .values()
                 .filter_map(|image| {
                     let active = active_series(image, config.images.settings.selected_series);
@@ -439,6 +440,7 @@ pub fn check_series(config: &ProjectSettings) -> Result<(), InternalErrors> {
     let missing: Vec<String> = config
         .images
         .list
+        .0
         .values()
         .filter(|image| !image.series.is_empty() && !image.series.contains_key(&series))
         .map(|image| {
@@ -549,7 +551,10 @@ fn generate_job_from_project_settings_intenal(
     let mut job = JobExecutor::new(
         project_path,
         output_path,
-        config.images.list,
+        std::sync::Arc::unwrap_or_clone(config.images.list.0)
+            .into_iter()
+            .map(|(path, entry)| (path, std::sync::Arc::unwrap_or_clone(entry)))
+            .collect(),
         image_base_path,
         config.images.settings,
         result_storage,
@@ -855,10 +860,8 @@ mod tests {
             ("b.vsi", &[0][..]),
             ("c.vsi", &[][..]),
         ] {
-            project
-                .images
-                .list
-                .insert(PathBuf::from(name), image_with_series(name, keys));
+            Arc::make_mut(&mut project.images.list.0)
+                .insert(PathBuf::from(name), Arc::new(image_with_series(name, keys)));
         }
         assert!(check_series(&project).is_ok(), "no project-wide series");
 
@@ -921,7 +924,8 @@ mod tests {
     ) -> ProjectSettings {
         let mut project = project_with(None, pipelines);
         for img in images {
-            project.images.list.insert(img.rel_path.clone(), img);
+            std::sync::Arc::make_mut(&mut project.images.list.0)
+                .insert(img.rel_path.clone(), std::sync::Arc::new(img));
         }
         project
     }
@@ -1891,7 +1895,8 @@ mod tests {
             series: std::collections::BTreeMap::from([(0, Default::default())]),
             ..Default::default()
         };
-        project.images.list.insert(image.rel_path.clone(), image);
+        std::sync::Arc::make_mut(&mut project.images.list.0)
+            .insert(image.rel_path.clone(), std::sync::Arc::new(image));
         let mut raw = serde_json::to_value(&project).unwrap();
         raw["schemaVersion"] = json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION);
         // Written by hand: no step ids in the pipeline, the module's steps
@@ -1985,7 +1990,8 @@ mod tests {
             series: std::collections::BTreeMap::from([(0, Default::default())]),
             ..Default::default()
         };
-        project.images.list.insert(image.rel_path.clone(), image);
+        std::sync::Arc::make_mut(&mut project.images.list.0)
+            .insert(image.rel_path.clone(), std::sync::Arc::new(image));
         let mut raw = serde_json::to_value(&project).unwrap();
         raw["schemaVersion"] = json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION);
         let meta =

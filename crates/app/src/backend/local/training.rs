@@ -17,6 +17,7 @@ use crate::api::{
 };
 use crate::backend::local::job::join_job;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
+use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, SegmentationClass, TrainingProgressEvent,
 };
@@ -155,7 +156,7 @@ fn gather_pixel_training_images(
     class_labels: &[PixelClassLabel],
 ) -> Result<Vec<TrainingImage>, InternalErrors> {
     let mut images = Vec::new();
-    for (rel_path, entry) in &project.images.list {
+    for (rel_path, entry) in project.images.list.iter() {
         let active = entry.active_series(&project.images.settings);
         let Some(series) = entry.series.get(&active) else {
             continue;

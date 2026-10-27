@@ -182,6 +182,7 @@ mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
     use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::project::ImageListExt;
     use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
 
     fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {

@@ -13,6 +13,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::workspace::extensions::images_ext::ImageListExt;
 use crate::workspace::module_editing::step_setting;
 use evanalyzer_cfg::{
     core_types::{ImageAddress, ModuleParamKey, ObjectClass, StepId},

@@ -416,6 +416,7 @@ impl ProjectWithRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::extensions::images_ext::ImageListExt;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use std::collections::BTreeMap;
     use std::path::Path;

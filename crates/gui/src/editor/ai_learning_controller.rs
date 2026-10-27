@@ -21,6 +21,7 @@ use evanalyzer_app::ai_learning::CancelHandle;
 use evanalyzer_app::ai_learning::PixelTrainingParams;
 use evanalyzer_app::ai_learning::TrainingRequest;
 use evanalyzer_app::project::ImageEntryExt;
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
@@ -1004,7 +1005,7 @@ impl AiLearningController {
             let mut examples = 0;
             let mut current_annotated = false;
             let current = project.get_current_rel_image_path_cloned();
-            for (path, image) in &project.images.list {
+            for (path, image) in project.images.list.iter() {
                 let mut any = false;
                 for series in image.series.values() {
                     for object in &series.objects {
@@ -1618,6 +1619,7 @@ fn format_training_stats(stats: &evanalyzer_cfg::core_types::TrainingStats) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_app::project::ImageListExt;
 
     // -- parse_hidden_layers -----------------------------------------------
 
@@ -1895,7 +1897,13 @@ mod tests {
         state.invoke_assign_object_class(0, 1);
 
         let project = ui_state.get_project();
-        let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
+        let obj = &project
+            .images
+            .list
+            .get(std::path::Path::new("img.tif"))
+            .unwrap()
+            .series[&0]
+            .objects[0];
         assert!(
             obj.object_class
                 .contains(&evanalyzer_cfg::core_types::ObjectClass::Global(1))
@@ -1930,7 +1938,13 @@ mod tests {
         state.invoke_toggle_object_excluded(0);
 
         let project = ui_state.get_project();
-        let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
+        let obj = &project
+            .images
+            .list
+            .get(std::path::Path::new("img.tif"))
+            .unwrap()
+            .series[&0]
+            .objects[0];
         assert!(obj.exclude_from_training);
         drop(project);
 
@@ -1941,7 +1955,13 @@ mod tests {
         state.invoke_toggle_object_excluded(0);
         let project = ui_state.get_project();
         assert!(
-            !project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0]
+            !project
+                .images
+                .list
+                .get(std::path::Path::new("img.tif"))
+                .unwrap()
+                .series[&0]
+                .objects[0]
                 .exclude_from_training
         );
     }
@@ -2110,7 +2130,12 @@ mod tests {
                 ..Default::default()
             });
         }
-        let mut other = project.images.list[std::path::Path::new("img.tif")].clone();
+        let mut other = project
+            .images
+            .list
+            .get(std::path::Path::new("img.tif"))
+            .unwrap()
+            .clone();
         other.rel_path = PathBuf::from("other.tif");
         for series in other.series.values_mut() {
             series.objects.truncate(1);

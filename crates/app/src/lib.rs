@@ -174,6 +174,7 @@ pub mod project {
     };
     pub use crate::workspace::extensions::annotations_ext::{AnnotationScope, AnnotationsExt};
     pub use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
+    pub use crate::workspace::extensions::images_ext::ImageListExt;
     pub use crate::workspace::extensions::object_ext::{ObjectExt, ShownPlane};
     pub use crate::workspace::extensions::project_ext::ConfigValueSource;
     pub use crate::workspace::extensions::project_ext::ProjectExt;

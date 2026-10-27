@@ -16,10 +16,11 @@ on:
 
 env:
   # Windows code signing (see "Sign the Windows binaries" in build-windows).
-  # Default on: change the 'true' at the end to 'false' to turn it off for
-  # every build. A manual run can also turn it off for just that run with
-  # its "sign" input.
-  SIGN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.sign) || 'true' }}
+  # Default off: the "sign" input only exists on a manual run, so pushes
+  # (tags, pipeline_start) fall back to the 'false' at the end - change it
+  # to 'true' to sign every pushed build (needs the CERTUM_* secrets). A
+  # manual run follows its "sign" input.
+  SIGN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.sign) || 'false' }}
 
 # Every build job uploads its own files to the release (see "Create the
 # GitHub release" in the templates job).

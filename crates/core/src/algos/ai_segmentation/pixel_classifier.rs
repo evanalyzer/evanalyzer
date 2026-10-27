@@ -377,6 +377,117 @@ mod tests {
         }
     }
 
+    /// Cost of the prediction overlay in the step: one 512² tile, the
+    /// panel's "Recommended" features (10), a forest of 50 trees (depth 20,
+    /// 3 classes), without and with the overlay's request; median of 5 per
+    /// case, on 1 and 4 threads, peak RSS above the start. Run with
+    /// `cargo test --release -p evanalyzer_core --lib
+    /// bench_prediction_overlay_in_the_step -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_prediction_overlay_in_the_step() {
+        use crate::pipeline::pipeline::PredictionRequest;
+        let peak_mb = || {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("VmHWM:"))
+                        .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                })
+                .unwrap_or(0)
+                / 1024
+        };
+        let recipe: Vec<Vec<evanalyzer_cfg::settings::ai_learning_pixel_settings::PreprocessingSteps>> =
+            serde_json::from_str(r#"[[],[{"GAUSSIAN_BLUR":{"kernelSize":5,"sigma":0.5}}],[{"GAUSSIAN_BLUR":{"kernelSize":13,"sigma":2.0}}],[{"GAUSSIAN_BLUR":{"kernelSize":49,"sigma":8.0}}],[{"GAUSSIAN_BLUR":{"kernelSize":5,"sigma":0.5}},{"EDGE_DETECTION_SOBEL":{"kernelSize":3}}],[{"GAUSSIAN_BLUR":{"kernelSize":13,"sigma":2.0}},{"EDGE_DETECTION_SOBEL":{"kernelSize":3}}],[{"GAUSSIAN_BLUR":{"kernelSize":7,"sigma":1.0}},{"LAPLACIAN":{"kernelSize":3}}],[{"GAUSSIAN_BLUR":{"kernelSize":13,"sigma":2.0}},{"LAPLACIAN":{"kernelSize":3}}],[{"GAUSSIAN_BLUR":{"kernelSize":7,"sigma":1.0}},{"HESSIAN":{"mode":"DETERMINANT"}}],[{"RANK_FILTER":{"radius":4.0,"filterType":"MEDIAN"}}]]"#).unwrap();
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let labels: Vec<usize> = (0..20_000).map(|i| i % 3).collect();
+        let rows: Vec<Vec<f32>> = labels
+            .iter()
+            .map(|&c| {
+                (0..recipe.len())
+                    .map(|f| next() * 0.3 + (c * (f % 3)) as f32 * 0.2)
+                    .collect()
+            })
+            .collect();
+        let forest = RandomForestSettings {
+            n_trees: 50,
+            max_depth: Some(20),
+            min_samples_leaf: 1,
+            min_samples_split: 2,
+            seed: 1,
+            ..Default::default()
+        };
+        let mut saved = saved_pixel_classifier(
+            (0..3)
+                .map(|i| PixelClassLabel {
+                    class: SegmentationClass(i),
+                    name: format!("c{i}"),
+                })
+                .collect(),
+        );
+        saved.classifier = fit_random_forest(&rows, &labels, &forest).unwrap();
+        if let AiLearningClassifierSettings::Pixel { feature_spec, .. } =
+            &mut saved.settings.classifier
+        {
+            feature_spec.channels = recipe;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bench.evamodel");
+        save_to_file(&saved, &path).unwrap();
+        let cmd = PixelClassifier {
+            model_path: path,
+            segmentation_mapping: vec![],
+            min_certainty: 0.0,
+        };
+        let pixels: Vec<f32> = (0..512 * 512)
+            .map(|i| ((i % 512) as f32 / 40.0).sin() * 0.5 + next() * 0.2)
+            .collect();
+        let _models = super::super::classifier_cache::ClassifierCacheScope::enter();
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            for asked in [false, true, false, true] {
+                let before = peak_mb();
+                let mut times: Vec<f64> = (0..5)
+                    .map(|_| {
+                        let mut ctx = gray_ctx(512, 512, pixels.clone());
+                        if asked {
+                            ctx.prediction = PredictionRequest::Asked;
+                        }
+                        let mut cache = GlobalPipelineCache::default();
+                        let start = std::time::Instant::now();
+                        pool.install(|| cmd.execute(&mut ctx, &mut cache)).unwrap();
+                        let took = start.elapsed().as_secs_f64();
+                        assert_eq!(
+                            matches!(ctx.prediction, PredictionRequest::Captured(_)),
+                            asked
+                        );
+                        took
+                    })
+                    .collect();
+                times.sort_by(f64::total_cmp);
+                println!(
+                    "{threads} thread(s), overlay {}: median {:.3} s (min {:.3}, max {:.3}); peak {} MB (+{} MB)",
+                    if asked { "on " } else { "off" },
+                    times[2],
+                    times[0],
+                    times[4],
+                    peak_mb(),
+                    peak_mb().saturating_sub(before)
+                );
+            }
+        }
+    }
+
     #[test]
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();

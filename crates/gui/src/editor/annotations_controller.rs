@@ -20,6 +20,7 @@ use crate::{
     AnnotationClassRow, AnnotationState, AppWindow, DialogType, FileRequest, GlobalAppState,
     ImportClassRow, WarningState,
 };
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{
     AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, PipelineObjects,
     ProjectExt, ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
@@ -863,6 +864,7 @@ fn scope(all_images: bool) -> AnnotationScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_app::project::ImageListExt;
 
     #[test]
     fn the_import_message_lists_what_happened() {
@@ -1033,7 +1035,14 @@ mod tests {
             0,
             vec![measured_1, measured_2],
         );
-        let objects = &project.settings.images.list[Path::new("a.tif")].series[&0].objects;
+        let objects = &project
+            .settings
+            .images
+            .list
+            .get(Path::new("a.tif"))
+            .unwrap()
+            .series[&0]
+            .objects;
         assert_eq!(objects[0].intensities[&0].sum_intensity, 7.0);
         assert!(
             objects[1].intensities.is_empty(),

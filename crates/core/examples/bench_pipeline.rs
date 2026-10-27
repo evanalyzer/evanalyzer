@@ -98,12 +98,12 @@ fn main() {
         if !path.exists() {
             make_image(&path, size, spots, i as u64 + 1);
         }
-        project.images.list.insert(
+        std::sync::Arc::make_mut(&mut project.images.list.0).insert(
             name.clone(),
-            ImageEntry {
+            std::sync::Arc::new(ImageEntry {
                 rel_path: name,
                 ..Default::default()
-            },
+            }),
         );
     }
     project.classification.classes_mut().push(

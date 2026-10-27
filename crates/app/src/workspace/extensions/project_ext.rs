@@ -14,6 +14,7 @@ use crate::workspace::ProjectTmpSettings;
 use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
+use crate::workspace::extensions::images_ext::ImageListExt;
 use crate::workspace::extensions::object_ext::{ObjectExt, ShownPlane};
 use crate::workspace::extensions::utils::{
     ASSIGNED_WAVELENGTHS, channel_colors, class_name_of_channel, get_relative_key, is_in_root,

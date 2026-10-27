@@ -13,6 +13,7 @@
 
 use crate::api::TrainedClassifier;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
+use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_settings::{

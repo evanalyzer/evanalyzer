@@ -17,6 +17,7 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
 use crate::{ImageItemData, ImagesListState, PlateWell, WellState};
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::collect_images_at_root;
 use evanalyzer_app::project::{ProjectExt, SelectNewProjectRootAction};
 use log::{debug, info, warn};
@@ -749,6 +750,7 @@ impl ImagesListController {
         scroll_to: bool,
     ) {
         let ui_weak = self.ui.clone();
+        let root = self.app_state.get_project().images.root.clone();
 
         // The final assignment goes into the event loop
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -756,11 +758,11 @@ impl ImagesListController {
                     let images_state = ui_ready.global::<ImagesListState>();
                    let images_list_model =  images_state.get_images_list();
 
-                   let search_path = selected_absolute_path.to_string_lossy();
-                    let selected_index: Option<usize> = images_list_model.iter().position(|item| {
-                        let item_path: &str = item.path.as_str();
-                        search_path.contains(item_path)
-                    });
+                    let selected_index = row_of_image(
+                        images_list_model.iter().map(|item| item.path.to_string()),
+                        root.as_deref(),
+                        &selected_absolute_path,
+                    );
 
                     if let Some(index) = selected_index {
                         images_state.set_selected_image_index(index as i32);
@@ -778,6 +780,19 @@ impl ImagesListController {
     }
 }
 
+/// The row (its relative path, as the list shows it) of the image at
+/// `selected` - whole paths compared, so "1.tif" is not ".../11.tif".
+fn row_of_image(
+    rel_paths: impl Iterator<Item = String>,
+    root: Option<&std::path::Path>,
+    selected: &std::path::Path,
+) -> Option<usize> {
+    let root = root.unwrap_or(std::path::Path::new(""));
+    rel_paths
+        .into_iter()
+        .position(|rel_path| root.join(rel_path) == selected)
+}
+
 /// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
 /// the (already-lowercased) filter text against `rel_path`, then maps each
 /// surviving entry to an `ImageItemData`. Pulled out as a pure function so
@@ -786,7 +801,7 @@ impl ImagesListController {
 /// `init_no_event_loop()` testing platform (see `test_ui_window`) never
 /// actually drains.
 fn build_image_list_items(
-    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    images: &evanalyzer_cfg::settings::images_settings::ImageList,
     filter_text_lowercase: &str,
     states: &ImageStates,
     image_root: &std::path::Path,
@@ -838,7 +853,7 @@ const QUICK_PICK_LIMIT: usize = 50;
 /// `query` (any case, any order), at most [`QUICK_PICK_LIMIT`]. Also how
 /// many match in all and where the open image `current` (relative) is.
 fn quick_pick_items(
-    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    images: &evanalyzer_cfg::settings::images_settings::ImageList,
     query: &str,
     current: Option<&std::path::Path>,
     states: &ImageStates,
@@ -928,7 +943,7 @@ struct PlateItems {
 /// A well is `analysed` when one of its images is in the analysis open in
 /// Results, else `preview` when one was previewed, else `new`.
 fn build_plate(
-    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    images: &evanalyzer_cfg::settings::images_settings::ImageList,
     plate: &evanalyzer_cfg::settings::plate_settings::PlateSettings,
     states: &ImageStates,
     image_root: &std::path::Path,
@@ -981,6 +996,24 @@ fn build_plate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The selected image's row: whole paths, not a substring - "1.tif"
+    /// must not find ".../11.tif", nor "a/1.tif" find "b/a/1.tif".
+    #[test]
+    fn the_selected_row_is_the_image_with_exactly_that_path() {
+        let rows = || {
+            ["11.tif", "1.tif", "b/a/1.tif", "a/1.tif"]
+                .map(String::from)
+                .into_iter()
+        };
+        let root = std::path::Path::new("/data/plate");
+        let row = |selected: &str| row_of_image(rows(), Some(root), std::path::Path::new(selected));
+        assert_eq!(row("/data/plate/1.tif"), Some(1));
+        assert_eq!(row("/data/plate/11.tif"), Some(0));
+        assert_eq!(row("/data/plate/a/1.tif"), Some(3));
+        assert_eq!(row("/data/plate/b/a/1.tif"), Some(2));
+        assert_eq!(row("/data/other/1.tif"), None);
+    }
     use crate::editor::test_support::test_ui_state;
 
     fn make_controller() -> ImagesListController {
@@ -1252,7 +1285,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let mut images = indexmap::IndexMap::new();
+        let mut images = evanalyzer_cfg::settings::images_settings::ImageList::default();
         for name in ["a.tif", "b.tif"] {
             images.insert(
                 PathBuf::from(name),
@@ -1280,7 +1313,7 @@ mod tests {
 
     #[test]
     fn a_wells_state_is_analysed_before_preview_before_new() {
-        let mut images = indexmap::IndexMap::new();
+        let mut images = evanalyzer_cfg::settings::images_settings::ImageList::default();
         for name in ["A01_01.tif", "A01_02.tif", "A02_01.tif", "A03_01.tif"] {
             images.insert(
                 PathBuf::from(name),
@@ -1314,7 +1347,7 @@ mod tests {
 
     #[test]
     fn build_plate_puts_each_image_in_its_well_in_number_order() {
-        let mut images = indexmap::IndexMap::new();
+        let mut images = evanalyzer_cfg::settings::images_settings::ImageList::default();
         for name in ["B03_02.tif", "A01_01.tif", "B03_01.tif", "notes.tif"] {
             images.insert(
                 PathBuf::from(name),
@@ -1404,10 +1437,9 @@ mod tests {
         assert_eq!(has_annotations_by_path.get("empty.tif"), Some(&false));
     }
 
-    fn image_entries(paths: &[&str]) -> indexmap::IndexMap<PathBuf, ImageEntry> {
-        paths
-            .iter()
-            .map(|path| {
+    fn image_entries(paths: &[&str]) -> evanalyzer_cfg::settings::images_settings::ImageList {
+        evanalyzer_cfg::settings::images_settings::ImageList::from_entries(paths.iter().map(
+            |path| {
                 (
                     PathBuf::from(path),
                     ImageEntry {
@@ -1417,8 +1449,8 @@ mod tests {
                         series: BTreeMap::new(),
                     },
                 )
-            })
-            .collect()
+            },
+        ))
     }
 
     #[test]

@@ -93,7 +93,8 @@ impl ObjectListController {
             let manager = self.clone();
             ui.global::<ObjectListState>()
                 .on_object_selected(move |object_id| {
-                    let mut project = manager.app_state.get_project_write();
+                    // A selection is no edit: no undo step.
+                    let mut project = manager.app_state.get_project_runtime_write();
                     let selected = resolve_object_id(&project, object_id);
                     project.set_selected_object(selected);
                     drop(project);
