@@ -1,0 +1,38 @@
+name: conventional-commits
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  conventional-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the PR title and its commits
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pattern='^(feat|fix|perf|refactor|test|docs|build|ci|style|chore|revert)(\([a-z0-9-]+\))?!?: [^ ].{0,70}[^.]$'
+          ok=true
+          if ! printf '%s' "$TITLE" | grep -Eq "$pattern"; then
+            echo "::error::PR title is not a conventional commit: $TITLE"
+            ok=false
+          fi
+          while IFS= read -r subject; do
+            if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+              echo "::error::Commit message is not a conventional commit: $subject"
+              ok=false
+            fi
+          done < <(git log --format=%s "$BASE..$HEAD")
+          $ok && echo "All conventional: type(scope): description"
+          $ok
+        shell: bash
