@@ -27,6 +27,7 @@ serde_json = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+evanalyzer_core = { workspace = true }
 image = { workspace = true }
 tungstenite = { workspace = true }
 rustls = { workspace = true }

@@ -57,6 +57,7 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
     }
 
     job.breakpoint = request.breakpoint;
+    job.prediction = request.prediction;
     job.breakpoint_tiles = request.breakpoint_tiles.max(1) as usize;
 
     let parallelism = evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes());

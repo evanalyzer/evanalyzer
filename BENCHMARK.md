@@ -983,6 +983,22 @@ certainty and 2x faster than smartcore's class-only `predict` (the chunks
 fit the CPU cache). In an analysis the tiles already run in parallel, so
 the per-tile thread gain there is smaller.
 
+## Prediction overlay: drawing it (2026-10-27)
+
+`bench_draw_prediction` (gui, release, one thread): the object layer of a
+full-HD viewport with its 64 px margin (2048 × 1208) covered by 512²
+prediction tiles of 3 classes, blended in the class colours; median of 5.
+
+| Zoom | Time |
+|---|---|
+| 1 | 21.7 ms (20.1-24.3) |
+| 4 | 19.7 ms |
+| 0.25 (the tiles cover a quarter of the screen) | 4.0 ms |
+
+Drawn with the objects (after a change, not per frame - a pan moves the
+layer). Memory: 2 bytes per pixel of every preview tile (class +
+probability), 512 KB per 512² tile, kept until the next preview.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1024,6 +1040,7 @@ graphics driver).
 | Reading a 3-channel ND2 2424² with a max projection of 23 z | ~390 MB (test process) | 2026-10-25 | One shared image reader |
 | Whole slide (5 channels, 21 tiles, 99,441 objects), performance-check project | 7.41-7.91 GB (was 8.25-8.29 GB) | 2026-10-25 | scopeio 0.0.0-alpha.2 |
 | Pixel classifier with certainty, one 512² tile (20 features, 50 trees) | +62 MB (1 thread) / +104 MB (22 threads) above the test process (was +141 MB) | 2026-10-27 | Pixel classifier: class and certainty in one pass |
+| Prediction overlay tiles in the editor | 512 KB per 512² preview tile | 2026-10-27 | Prediction overlay: drawing it |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

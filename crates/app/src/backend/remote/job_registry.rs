@@ -116,7 +116,8 @@ impl Snapshot {
                 self.tiles = None;
             }
             ProgressEvent::Finished => self.finished = true,
-            ProgressEvent::BreakpointReached { .. } => {}
+            // Previews only: nothing a later client needs to catch up on.
+            ProgressEvent::BreakpointReached { .. } | ProgressEvent::PredictionReached { .. } => {}
         }
     }
 

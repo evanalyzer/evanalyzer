@@ -11,6 +11,9 @@ use crate::ViewportState as ViewportSlintState;
 use crate::editor::object_render::{
     CHILD_RGB, DIMMED_RGB, ObjectDrawInstance, PARENT_RGB, SELECTED_RGB, ZOrder, draw_objects,
 };
+use crate::editor::prediction_overlay::{
+    PredictionOverlay, PredictionTile, ScreenTransform, class_rgb,
+};
 use crate::editor::results_overlay::{ResultsOverlay, draw_results_overlay};
 use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
@@ -299,6 +302,9 @@ pub struct ViewportController {
     /// freed when the breakpoint is cleared, an analysis starts or another
     /// image opens (see [`Self::clear_breakpoint`]).
     pub(crate) breakpoint_tiles: Arc<RwLock<Vec<BreakpointChannelData>>>,
+    /// The prediction overlay of the AI training panel: its settings and
+    /// the last preview's tiles, drawn under the objects.
+    pub(crate) prediction: Arc<PredictionOverlay>,
     /// Bumped whenever the compared picture changes (its tiles, histogram
     /// window, view mode, log scale, compare switched on): the worker
     /// renders it again only then - a pan or zoom just moves it.
@@ -415,6 +421,7 @@ impl ViewportController {
             })),
             drawing_tasks,
             breakpoint_tiles: Arc::new(RwLock::new(Vec::new())),
+            prediction: Arc::new(PredictionOverlay::default()),
             compare_epoch: AtomicU64::new(0),
             compare_renders: AtomicU64::new(0),
             breakpoint_view_mode: Arc::new(AtomicU8::new(BreakpointViewMode::default() as u8)),
@@ -687,6 +694,8 @@ impl ViewportController {
     }
 
     pub fn trigger_new_image_redraw(&self) {
+        // Another image: the last one's prediction doesn't belong to it.
+        self.prediction.clear();
         self.bump_content_generation();
         self.reset_high_res_barrier();
         let mut task: DrawingTask = DrawingTask::default();
@@ -700,6 +709,7 @@ impl ViewportController {
     }
 
     pub fn trigger_new_series_redraw(&self) {
+        self.prediction.clear();
         self.bump_content_generation();
         self.reset_high_res_barrier();
         let mut task: DrawingTask = DrawingTask::default();
@@ -957,6 +967,47 @@ impl ViewportController {
     /// A tile's breakpoint image from a preview: `first` (the run's first)
     /// drops the last run's tiles, else it replaces the tile at the same
     /// place or joins them.
+    /// A preview tile's prediction (the `first` of a preview replaces the
+    /// last preview's), drawn at once.
+    pub fn add_prediction_tile(&self, tile: PredictionTile, first: bool) {
+        self.prediction.add_tile(tile, first);
+        if first {
+            self.post_prediction_legend();
+        }
+        self.trigger_image_redraw_objects();
+    }
+
+    /// The prediction overlay's legend in the viewport: the classes of the
+    /// prediction shown, in their colours.
+    fn post_prediction_legend(&self) {
+        let legend = self.prediction.legend(&*self.app_state.get_project());
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let classes: Vec<crate::PredictionClassSlint> = legend
+                    .into_iter()
+                    .map(|(name, [r, g, b])| crate::PredictionClassSlint {
+                        name: name.into(),
+                        color: slint::Color::from_rgb_u8(r, g, b),
+                    })
+                    .collect();
+                ui.global::<crate::AiLearningState>()
+                    .set_prediction_classes(Rc::new(VecModel::from(classes)).into());
+            }
+        })
+        .ok();
+    }
+
+    /// No prediction to show any more (a preview ran without one): the
+    /// last one's tiles go.
+    pub fn clear_prediction(&self) {
+        if self.prediction.has_tiles() {
+            self.prediction.clear();
+            self.post_prediction_legend();
+            self.trigger_image_redraw_objects();
+        }
+    }
+
     pub fn add_breakpoint_tile(&self, tile: BreakpointChannelData, first: bool) {
         {
             let mut tiles = self.breakpoint_tiles.write().unwrap();
@@ -1042,6 +1093,7 @@ impl ViewportController {
     pub fn clear_shown_image(&self) {
         self.bump_content_generation();
         *self.breakpoint_tiles.write().unwrap() = Vec::new();
+        self.prediction.clear();
         self.bump_compare();
         *self.breakpoint_histogram.write().unwrap() = None;
         self.compare.store(false, Ordering::Relaxed);
@@ -1475,8 +1527,20 @@ impl ViewportController {
         }
 
         // Composited straight into the buffer handed to Slint (starts out
-        // transparent) - no second overlay-sized copy.
+        // transparent) - no second overlay-sized copy. The prediction
+        // overlay first, so the objects lie on it.
         let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
+        self.prediction.draw(
+            buffer.make_mut_slice(),
+            ScreenTransform {
+                width: buf_w,
+                height: buf_h,
+                zoom,
+                off_x: off_x + margin,
+                off_y: off_y + margin,
+            },
+            |class| class_rgb(&*project, class),
+        );
         let links = family.as_ref().map_or(&[][..], |(_, _, links)| &links[..]);
         draw_objects(
             buffer.make_mut_slice(),

@@ -131,6 +131,12 @@ export struct AiTrainingSettingsSlint {
     ring_width: int,
 }
 
+// A class of the prediction overlay's legend: its name and colour.
+export struct PredictionClassSlint {
+    name: string,
+    color: color,
+}
+
 export global AiLearningState {
     in-out property <AiTrainingSettingsSlint> settings: {
         mode: 0,
@@ -237,6 +243,20 @@ export global AiLearningState {
     // The model just trained isn't applied by any step yet: the result
     // offers "Add to pipeline".
     in property <bool> can_add_to_pipeline: false;
+
+    // -- The prediction overlay (design canvas "AI Training Dialog", U6):
+    // each pixel in its predicted class's colour, the stronger the more
+    // probable. Changes go to Rust through `prediction_changed`. --
+    in-out property <bool> prediction_on: false;
+    in-out property <float> prediction_opacity: 0.7;
+    in-out property <bool> prediction_background: true;
+    // The class and its probability under the cursor (the pixel info).
+    in-out property <bool> prediction_values: true;
+    // The legend: the classes of the last prediction (Rust).
+    in property <[PredictionClassSlint]> prediction_classes: [];
+    // Why nothing is shown (no pipeline applies the model yet), else "".
+    in property <string> prediction_hint: "";
+    callback prediction_changed();
 
     // Fired by the toolbar button, before the dialog is shown, so Rust can
     // refresh class_names/object_metrics/training_images/training_objects

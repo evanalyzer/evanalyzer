@@ -2054,6 +2054,63 @@ mod tests {
         assert!(r.view().get_high_res_ready());
     }
 
+    /// The prediction overlay lands in the object layer at its place,
+    /// in its class colour as strong as it is probable, under the objects.
+    #[test]
+    fn the_prediction_overlay_is_drawn_into_the_object_layer() {
+        use crate::editor::prediction_overlay::{
+            BACKGROUND_RGB, PredictionOverlaySettings, PredictionTile,
+        };
+        use evanalyzer_app::analysis::{PredictedClass, PredictionCapture};
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        set_view(&r, 1.0, 0.0, 0.0);
+        let controller = &r.worker.viewport_controller;
+        controller.set_memory_settings(ViewportMemorySettings {
+            object_overlay_margin_px: 0,
+            ..Default::default()
+        });
+        let pixel_at = |r: &Render, x: usize, y: usize| {
+            let image = r.ui.get_object_image().to_rgba8().expect("rgba");
+            let width = image.width() as usize;
+            image.as_slice()[y * width + x]
+        };
+        controller
+            .prediction
+            .set_settings(PredictionOverlaySettings {
+                on: true,
+                opacity: 1.0,
+                ..Default::default()
+            });
+        controller.add_prediction_tile(
+            PredictionTile {
+                tile_offset_x: 4,
+                tile_offset_y: 2,
+                capture: PredictionCapture {
+                    width: 2,
+                    height: 1,
+                    classes: vec![PredictedClass {
+                        name: "Background".into(),
+                        segmentation_class:
+                            evanalyzer_cfg::core_types::SegmentationClass::BACKGROUND,
+                    }],
+                    class_of_pixel: vec![0, 0],
+                    probability: vec![255, 0],
+                },
+            },
+            true,
+        );
+        r.draw(TaskDispatch::Objects, DrawingTask::default());
+
+        let sure = pixel_at(&r, 4, 2);
+        assert_eq!(
+            [sure.r, sure.g, sure.b, sure.a],
+            [BACKGROUND_RGB[0], BACKGROUND_RGB[1], BACKGROUND_RGB[2], 255]
+        );
+        assert_eq!(pixel_at(&r, 5, 2).a, 0, "0 %: clear");
+        assert_eq!(pixel_at(&r, 3, 2).a, 0, "outside the tile");
+    }
+
     #[test]
     fn the_object_overlay_reaches_the_margin_past_every_viewport_edge() {
         let mut r = render_fixture(project_with_fixture_image());

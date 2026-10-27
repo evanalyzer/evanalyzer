@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::editor::prediction_overlay::PredictionTile;
 use crate::editor::viewport_controller::BreakpointChannelData;
 use crate::{
     PipelineRunningState, PipelinesPanelState, PreviewRunState, UiState,
@@ -180,6 +181,36 @@ impl PipelineWorker {
                             step_id,
                             mode,
                         });
+                // The prediction overlay: the pixel classifier step it shows
+                // sends each tile's prediction.
+                let overlay = self.viewport_controller.prediction.settings();
+                let prediction = overlay
+                    .on
+                    .then(|| {
+                        evanalyzer_app::ai_learning::prediction_target(
+                            &task.project_settings,
+                            overlay.model.as_deref(),
+                        )
+                    })
+                    .flatten();
+                // Nothing to show: the panel says why.
+                let hint = match (&prediction, overlay.on, &overlay.model) {
+                    (None, true, Some(model)) => format!(
+                        "No pipeline applies the model '{}' yet - \"Add to pipeline\" adds one.",
+                        model
+                            .file_stem()
+                            .map(|name| name.to_string_lossy())
+                            .unwrap_or_default()
+                    ),
+                    _ => String::new(),
+                };
+                let ui_handle = self.app_state.ui_handle.clone();
+                let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_handle.upgrade() {
+                        ui.global::<crate::AiLearningState>()
+                            .set_prediction_hint(hint.into());
+                    }
+                });
                 // Tiles: the preview's limit (auto: the running computer's),
                 // the breakpoint's this computer's - its images are kept here.
                 let memory = self.viewport_controller.memory_settings();
@@ -188,6 +219,7 @@ impl PipelineWorker {
                     project_path: task.project_path,
                     viewport,
                     breakpoint,
+                    prediction,
                     max_visible_tiles: memory.requested_preview_tiles(),
                     breakpoint_tiles: memory.effective_breakpoint_tiles(
                         crate::editor::viewport_cache::this_computer_ram_bytes(),
@@ -256,6 +288,8 @@ impl PipelineWorker {
             let mut pipeline_start: Option<std::time::Instant> = None;
             // A run's first breakpoint tile replaces the last run's ones.
             let mut first_breakpoint_tile = true;
+            // The same for the prediction overlay's tiles.
+            let mut first_prediction_tile = true;
             // The images in work, in the order they started; the status bar
             // names the oldest.
             let mut in_work: Vec<PathBuf> = Vec::new();
@@ -483,6 +517,21 @@ impl PipelineWorker {
                     ProgressEvent::ImageFailed { path } => {
                         error!("Pipeline image failed: {}", path.display());
                     }
+                    ProgressEvent::PredictionReached {
+                        capture,
+                        tile_offset_x,
+                        tile_offset_y,
+                    } => {
+                        self_handle.viewport_controller.add_prediction_tile(
+                            PredictionTile {
+                                tile_offset_x,
+                                tile_offset_y,
+                                capture,
+                            },
+                            first_prediction_tile,
+                        );
+                        first_prediction_tile = false;
+                    }
                     ProgressEvent::Finished => {
                         info!("Pipeline job finished - waiting for result");
                         *cancel_slot.lock().unwrap() = None;
@@ -493,6 +542,11 @@ impl PipelineWorker {
             // (see `RunningJob::wait`), so the user sees it and this worker
             // survives to run the next job.
             let job_result = job.wait();
+            // A preview without a prediction (overlay off, no pixel
+            // classifier step any more): the last one's would be stale.
+            if is_preview && first_prediction_tile && job_result.is_ok() {
+                self.viewport_controller.clear_prediction();
+            }
             if !is_preview {
                 self.pipeline_controller
                     .analysis_running
@@ -1065,6 +1119,149 @@ mod tests {
             !message.contains("Error") && !message.contains("fixture.ome.tif"),
             "{message}"
         );
+    }
+
+    /// A pixel classifier pipeline (step 5) applying a saved model that
+    /// tells dark from bright pixels.
+    fn pixel_classifier_pipeline(
+        f: &Fixture,
+    ) -> evanalyzer_cfg::settings::pipeline_settings::PipelineSettings {
+        use evanalyzer_cfg::core_types::SegmentationClass;
+        use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
+        use evanalyzer_cfg::settings::ai_learning_settings::{
+            AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
+            PixelClassLabel, PixelInputColor, RandomForestSettings,
+        };
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            PixelClassifierSettings, SegmentationMappingSettings,
+        };
+        use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+        use evanalyzer_core::ai_learning::model::{
+            CURRENT_SAVED_CLASSIFIER_VERSION, random_forest::fit_random_forest,
+        };
+        let rows: Vec<Vec<f32>> = (0..40).map(|i| vec![i as f32 / 40.0]).collect();
+        let labels: Vec<usize> = (0..40).map(|i| usize::from(i >= 4)).collect();
+        let forest = RandomForestSettings {
+            n_trees: 10,
+            seed: 1,
+            ..Default::default()
+        };
+        let saved = evanalyzer_core::SavedClassifier {
+            version: CURRENT_SAVED_CLASSIFIER_VERSION,
+            classifier: fit_random_forest(&rows, &labels, &forest).unwrap(),
+            settings: AiLearningSettings {
+                schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+                meta: Default::default(),
+                backend: AiLearningBackendSettings::RandomForest(forest),
+                classifier: AiLearningClassifierSettings::Pixel {
+                    feature_spec: AiLearningPixelFeatureSettings {
+                        channels: vec![vec![]],
+                        image_channels: Vec::new(),
+                        image_channel_names: Vec::new(),
+                    },
+                    input_color: PixelInputColor::Gray,
+                    class_labels: vec![
+                        PixelClassLabel {
+                            class: SegmentationClass(5),
+                            name: "Background".into(),
+                        },
+                        PixelClassLabel {
+                            class: SegmentationClass(6),
+                            name: "Cell".into(),
+                        },
+                    ],
+                },
+            },
+        };
+        let model = f.dir.path().join("cells.evamodel");
+        evanalyzer_core::save_classifier_to_file(&saved, &model).unwrap();
+        PipelineSettings {
+            id: PipelineId(4),
+            name: "cells".into(),
+            description: None,
+            image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: StepId(5),
+                enabled: true,
+                content: StepContent::Command(PipelineCommand::PixelClassifier(
+                    PixelClassifierSettings {
+                        model_path: model,
+                        segmentation_mapping: vec![SegmentationMappingSettings {
+                            model_class: SegmentationClass(6),
+                            segmentation_class: SegmentationClass(1),
+                        }],
+                        min_certainty: 0.0,
+                    },
+                )),
+            }],
+        }
+    }
+
+    /// With the prediction overlay on, a preview brings each tile's
+    /// prediction of the model's step; a preview without one (the step
+    /// gone) clears it, and so does switching the overlay off.
+    #[test]
+    fn a_preview_brings_the_prediction_while_the_overlay_is_on() {
+        use crate::editor::prediction_overlay::PredictionOverlaySettings;
+        let f = fixture();
+        let pipeline = pixel_classifier_pipeline(&f);
+        let overlay = &f.worker.viewport_controller.prediction;
+        let task = || {
+            let mut task = f.task(true);
+            task.project_settings.pipelines.push(pipeline.clone());
+            task
+        };
+
+        f.worker.run_task(task());
+        drain_ui_queue();
+        assert!(!overlay.has_tiles(), "the overlay is off");
+
+        overlay.set_settings(PredictionOverlaySettings {
+            on: true,
+            model: Some(PathBuf::from("models/cells.evamodel")),
+            ..Default::default()
+        });
+        f.worker.run_task(task());
+        drain_ui_queue();
+        assert!(overlay.has_tiles());
+        let (class, percent) = overlay.value_at(5.0, 5.0).expect("a prediction at (5, 5)");
+        assert!(class == "Background" || class == "Cell", "{class}");
+        assert!((50..=100).contains(&percent), "{percent}");
+        // The legend: the model's classes, Cell in its project class's colour.
+        use slint::Model;
+        let ai = f.ui.global::<crate::AiLearningState>();
+        let legend: Vec<String> = ai
+            .get_prediction_classes()
+            .iter()
+            .map(|class| class.name.to_string())
+            .collect();
+        assert_eq!(legend, ["Background", "Cell"]);
+        assert_eq!(ai.get_prediction_hint(), "");
+
+        let mut without = f.task(true);
+        without.project_settings.pipelines.clear();
+        f.worker.run_task(without);
+        drain_ui_queue();
+        assert!(!overlay.has_tiles(), "no pixel classifier any more");
+        assert_eq!(
+            ai.get_prediction_classes().row_count(),
+            0,
+            "the legend goes with it"
+        );
+        assert!(
+            ai.get_prediction_hint()
+                .contains("No pipeline applies the model 'cells'"),
+            "{}",
+            ai.get_prediction_hint()
+        );
+
+        f.worker.run_task(task());
+        drain_ui_queue();
+        assert!(overlay.has_tiles());
+        overlay.set_settings(PredictionOverlaySettings::default());
+        assert!(!overlay.has_tiles(), "switched off");
     }
 
     #[test]

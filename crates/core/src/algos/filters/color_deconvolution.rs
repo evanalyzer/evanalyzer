@@ -228,7 +228,10 @@ impl ImageAlgorithm for ColorDeconvolution {
         let scale = 1.0 / MAX_OPTICAL_DENSITY;
 
         ctx.prepare_f32_gray_scratch()?;
-        let (input, output) = match (ctx.image.as_ref(), std::sync::Arc::make_mut(&mut ctx.scratch_pad)) {
+        let (input, output) = match (
+            ctx.image.as_ref(),
+            std::sync::Arc::make_mut(&mut ctx.scratch_pad),
+        ) {
             (ImageContainer::F32Rgb(input), ImageContainer::F32Gray(output)) => (input, output),
             _ => unreachable!("checked above; the scratch pad was just made gray"),
         };
@@ -315,7 +318,11 @@ mod tests {
 
     #[test]
     fn white_glass_has_no_stain() {
-        for output in [StainOutput::Stain1, StainOutput::Stain2, StainOutput::Stain3] {
+        for output in [
+            StainOutput::Stain1,
+            StainOutput::Stain2,
+            StainOutput::Stain3,
+        ] {
             let out = run(&cmd(StainVectors::HDab, output), &[[1.0, 1.0, 1.0]]);
             assert!(out[0].abs() < 1e-6, "{output:?}: {}", out[0]);
         }
@@ -341,7 +348,11 @@ mod tests {
     fn three_stains_separate_with_h_e_dab() {
         let vectors = [unit(HEMATOXYLIN), unit(EOSIN), unit(DAB)];
         let pixel = stained([0.3, 0.2, 0.6], vectors);
-        let outputs = [StainOutput::Stain1, StainOutput::Stain2, StainOutput::Stain3];
+        let outputs = [
+            StainOutput::Stain1,
+            StainOutput::Stain2,
+            StainOutput::Stain3,
+        ];
         for (output, expected) in outputs.into_iter().zip([0.3, 0.2, 0.6]) {
             let got = run(&cmd(StainVectors::HEDab, output), &[pixel])[0];
             assert!(
@@ -369,8 +380,14 @@ mod tests {
 
     #[test]
     fn black_pixels_stay_finite_and_in_range() {
-        let out = run(&cmd(StainVectors::HE, StainOutput::Stain1), &[[0.0, 0.0, 0.0]]);
-        assert!(out[0].is_finite() && (0.0..=1.0).contains(&out[0]), "{out:?}");
+        let out = run(
+            &cmd(StainVectors::HE, StainOutput::Stain1),
+            &[[0.0, 0.0, 0.0]],
+        );
+        assert!(
+            out[0].is_finite() && (0.0..=1.0).contains(&out[0]),
+            "{out:?}"
+        );
     }
 
     #[test]

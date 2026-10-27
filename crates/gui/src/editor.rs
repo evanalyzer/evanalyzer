@@ -41,6 +41,7 @@ pub(crate) mod object_render;
 pub mod pipeline_task;
 pub mod pipeline_worker;
 pub mod pipelines_controller;
+pub(crate) mod prediction_overlay;
 pub mod project_controller;
 pub mod project_settings_controller;
 pub mod results_list_controller;

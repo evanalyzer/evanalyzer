@@ -33,3 +33,12 @@ pub struct BreakpointSettings {
     pub step_id: StepId,
     pub mode: BreakpointMode,
 }
+
+/// The pixel classifier step a preview run captures the prediction of, for
+/// the prediction overlay (each pixel's class and how probable it is).
+/// Independent of a breakpoint - both can be set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct PredictionTarget {
+    pub pipeline_id: PipelineId,
+    pub step_id: StepId,
+}

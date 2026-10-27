@@ -69,7 +69,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 32;
+pub const PROTOCOL_VERSION: u32 = 33;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -405,6 +405,15 @@ pub(crate) enum WireProgressEvent {
         nr_bits: u16,
         channel_idx: Option<i32>,
     },
+    /// Blobs: the class of each pixel, then its probability (a byte each).
+    PredictionReached {
+        width: usize,
+        height: usize,
+        /// The model's classes: name and project segmentation class.
+        classes: Vec<(String, u32)>,
+        tile_offset_x: usize,
+        tile_offset_y: usize,
+    },
 }
 
 pub(crate) fn event_to_wire(event: ProgressEvent) -> (WireProgressEvent, Vec<Vec<u8>>) {
@@ -470,6 +479,26 @@ pub(crate) fn event_to_wire(event: ProgressEvent) -> (WireProgressEvent, Vec<Vec
                 blobs,
             );
         }
+        ProgressEvent::PredictionReached {
+            capture,
+            tile_offset_x,
+            tile_offset_y,
+        } => {
+            return (
+                WireProgressEvent::PredictionReached {
+                    width: capture.width,
+                    height: capture.height,
+                    classes: capture
+                        .classes
+                        .into_iter()
+                        .map(|class| (class.name, class.segmentation_class.as_u32()))
+                        .collect(),
+                    tile_offset_x,
+                    tile_offset_y,
+                },
+                vec![capture.class_of_pixel, capture.probability],
+            );
+        }
     };
     (wire, Vec::new())
 }
@@ -533,6 +562,43 @@ pub(crate) fn event_from_wire(
                 tile_height,
                 nr_bits,
                 channel_idx,
+            }
+        }
+        WireProgressEvent::PredictionReached {
+            width,
+            height,
+            classes,
+            tile_offset_x,
+            tile_offset_y,
+        } => {
+            let [class_of_pixel, probability]: [Vec<u8>; 2] = blobs.try_into().map_err(|_| {
+                InternalErrors::Internal("a prediction needs its two pixel blobs".into())
+            })?;
+            if class_of_pixel.len() != width * height || probability.len() != width * height {
+                return Err(InternalErrors::Internal(format!(
+                    "a {width}x{height} prediction with {} and {} bytes",
+                    class_of_pixel.len(),
+                    probability.len()
+                )));
+            }
+            ProgressEvent::PredictionReached {
+                capture: evanalyzer_core::PredictionCapture {
+                    width,
+                    height,
+                    classes: classes
+                        .into_iter()
+                        .map(|(name, class)| evanalyzer_core::PredictedClass {
+                            name,
+                            segmentation_class: evanalyzer_cfg::core_types::SegmentationClass(
+                                class,
+                            ),
+                        })
+                        .collect(),
+                    class_of_pixel,
+                    probability,
+                },
+                tile_offset_x,
+                tile_offset_y,
             }
         }
     })
@@ -797,6 +863,57 @@ mod tests {
         };
         assert_eq!(instances.as_slice(), &[0, 1, 1, 2]);
         assert_eq!((tile_offset_x, nr_bits, channel_idx), (256, 12, Some(1)));
+    }
+
+    fn prediction() -> ProgressEvent {
+        ProgressEvent::PredictionReached {
+            capture: evanalyzer_core::PredictionCapture {
+                width: 2,
+                height: 2,
+                classes: vec![
+                    evanalyzer_core::PredictedClass {
+                        name: "Background".into(),
+                        segmentation_class: evanalyzer_cfg::core_types::SegmentationClass(0),
+                    },
+                    evanalyzer_core::PredictedClass {
+                        name: "Nucleus".into(),
+                        segmentation_class: evanalyzer_cfg::core_types::SegmentationClass(7),
+                    },
+                ],
+                class_of_pixel: vec![0, 1, 1, 0],
+                probability: vec![255, 133, 200, 90],
+            },
+            tile_offset_x: 512,
+            tile_offset_y: 1024,
+        }
+    }
+
+    #[test]
+    fn a_prediction_survives_the_wire() {
+        let (wire, blobs) = event_to_wire(prediction());
+        assert_eq!(blobs.len(), 2, "class and probability as blobs");
+        let back = event_from_wire(wire, blobs).unwrap();
+        let (
+            ProgressEvent::PredictionReached {
+                capture,
+                tile_offset_x,
+                tile_offset_y,
+            },
+            ProgressEvent::PredictionReached { capture: sent, .. },
+        ) = (back, prediction())
+        else {
+            panic!("expected a prediction event");
+        };
+        assert_eq!(capture, sent);
+        assert_eq!((tile_offset_x, tile_offset_y), (512, 1024));
+    }
+
+    #[test]
+    fn a_prediction_with_missing_or_short_pixels_is_an_error() {
+        let (wire, mut blobs) = event_to_wire(prediction());
+        assert!(event_from_wire(wire.clone(), Vec::new()).is_err());
+        blobs[1].pop();
+        assert!(event_from_wire(wire, blobs).is_err());
     }
 
     #[test]

@@ -90,7 +90,11 @@ fn robust_range(source: &Source) -> (f32, f32) {
     values.sort_unstable_by(f32::total_cmp);
     let at = |q: f32| values[((values.len() - 1) as f32 * q).round() as usize];
     let (lo, hi) = (at(0.01), at(0.99));
-    if hi - lo > 1e-6 { (lo, hi) } else { (lo, lo + 1.0) }
+    if hi - lo > 1e-6 {
+        (lo, hi)
+    } else {
+        (lo, lo + 1.0)
+    }
 }
 
 /// The pixels of a window of the view, as the wand compares them: per
@@ -222,7 +226,11 @@ fn otsu(values: &[f32], max: f32) -> (f32, f32, f32) {
 
 /// The wand's pixels for a stroke through `points` (window pixels) with
 /// circles of `radius` window pixels: a mask of the window, row by row.
-pub(crate) fn wand_mask(features: &Features, points: &[(f32, f32)], radius: f32) -> BitVec<u64, Lsb0> {
+pub(crate) fn wand_mask(
+    features: &Features,
+    points: &[(f32, f32)],
+    radius: f32,
+) -> BitVec<u64, Lsb0> {
     let (w, h) = (features.width, features.height);
     let mut mask = BitVec::<u64, Lsb0>::repeat(false, w * h);
     if points.is_empty() || w == 0 || h == 0 {
@@ -278,7 +286,11 @@ pub(crate) fn wand_mask(features: &Features, points: &[(f32, f32)], radius: f32)
             f32::INFINITY
         } else {
             let (t, near, far) = otsu(&distances, max);
-            if far - near < MIN_CONTRAST { f32::INFINITY } else { t }
+            if far - near < MIN_CONTRAST {
+                f32::INFINITY
+            } else {
+                t
+            }
         };
 
         if threshold.is_infinite() {
@@ -399,7 +411,10 @@ pub(crate) fn to_full_image(
         return None;
     }
     let (fx0, fy0) = grid.to_full((features.x0 + lo_x) as f32, (features.y0 + lo_y) as f32);
-    let (fx1, fy1) = grid.to_full((features.x0 + hi_x + 1) as f32, (features.y0 + hi_y + 1) as f32);
+    let (fx1, fy1) = grid.to_full(
+        (features.x0 + hi_x + 1) as f32,
+        (features.y0 + hi_y + 1) as f32,
+    );
     let x_min = fx0.floor().max(0.0) as u32;
     let y_min = fy0.floor().max(0.0) as u32;
     let x_max = (fx1.ceil() as i64 - 1).min(image_w as i64 - 1);
@@ -416,7 +431,10 @@ pub(crate) fn to_full_image(
         for x in x_min..=x_max {
             // The view pixel the full pixel's centre falls in.
             let (vx, vy) = grid.to_view(x as f32 + 0.5, y as f32 + 0.5);
-            let (vx, vy) = (vx.floor() - features.x0 as f32, vy.floor() - features.y0 as f32);
+            let (vx, vy) = (
+                vx.floor() - features.x0 as f32,
+                vy.floor() - features.y0 as f32,
+            );
             if vx < 0.0 || vy < 0.0 || vx >= w as f32 || vy >= features.height as f32 {
                 continue;
             }
@@ -467,7 +485,9 @@ mod tests {
     #[test]
     fn without_an_edge_it_takes_the_whole_circle_like_the_brush() {
         // Faint noise only, far below MIN_CONTRAST.
-        let plane = (0..30 * 30).map(|i| 0.5 + 0.01 * ((i * 7) % 3) as f32).collect();
+        let plane = (0..30 * 30)
+            .map(|i| 0.5 + 0.01 * ((i * 7) % 3) as f32)
+            .collect();
         let features = Features::from_planes(30, 30, vec![plane]);
         let mask = wand_mask(&features, &[(15.0, 15.0)], 5.0);
         let expected = (0..30 * 30)
@@ -487,7 +507,11 @@ mod tests {
         let plane = (0..size * size)
             .map(|i| {
                 let x = i % size;
-                if (12..18).contains(&x) || (4..7).contains(&x) { 1.0 } else { 0.0 }
+                if (12..18).contains(&x) || (4..7).contains(&x) {
+                    1.0
+                } else {
+                    0.0
+                }
             })
             .collect();
         let features = Features::from_planes(size, size, vec![plane]);
@@ -511,8 +535,12 @@ mod tests {
     fn colors_count_not_only_brightness() {
         // Red left, green right: the same brightness, different colors.
         let size = 30;
-        let red = (0..size * size).map(|i| if i % size < 15 { 1.0 } else { 0.0 }).collect();
-        let green = (0..size * size).map(|i| if i % size < 15 { 0.0 } else { 1.0 }).collect();
+        let red = (0..size * size)
+            .map(|i| if i % size < 15 { 1.0 } else { 0.0 })
+            .collect();
+        let green = (0..size * size)
+            .map(|i| if i % size < 15 { 0.0 } else { 1.0 })
+            .collect();
         let features = Features::from_planes(size, size, vec![red, green]);
         let mask = wand_mask(&features, &[(10.5, 15.5)], 8.0);
         assert!(mask.iter_ones().all(|i| i % size < 15));

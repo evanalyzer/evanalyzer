@@ -80,6 +80,7 @@ pub mod global {
     pub use crate::workspace::settings::ColorScheme;
     pub use crate::workspace::settings::NavigatorMode;
     pub use crate::workspace::settings::PanelSettings;
+    pub use crate::workspace::settings::PredictionOverlayPrefs;
     pub use crate::workspace::settings::RecentProject;
     pub use crate::workspace::settings::RecentServer;
     pub use crate::workspace::settings::USER_FOLDER_NAME;
@@ -209,9 +210,11 @@ pub mod ai_learning {
     pub use crate::api::TrainingRequest;
     pub use crate::workspace::ai_learning::load_classifier_settings;
     pub use crate::workspace::ai_learning::model_is_used;
+    pub use crate::workspace::ai_learning::model_output_path;
     pub use crate::workspace::ai_learning::object_class_labels_from_project;
     pub use crate::workspace::ai_learning::pipeline_for_model;
     pub use crate::workspace::ai_learning::pixel_class_labels_from_project;
+    pub use crate::workspace::ai_learning::prediction_target;
     pub use crate::workspace::ai_learning::save_trained_model;
     pub use crate::workspace::ai_learning::used_object_classes;
 }
@@ -242,6 +245,7 @@ pub mod analysis {
     pub use crate::api::ProgressEvent;
     pub use crate::api::RunningJob;
     pub use evanalyzer_core::random_job_name;
+    pub use evanalyzer_core::{PredictedClass, PredictionCapture};
 }
 
 pub mod preview {

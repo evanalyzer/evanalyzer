@@ -16,6 +16,10 @@ use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
+    AiLearningState, PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState,
+    PreviewRunState,
+};
+use crate::{
     CardTable, CardTableRow, ClassItemData, CommandDef, CommandParameter, CommandPickerState,
     CreateModuleState, DefaultParamPreview, ExposeChoiceState, GlobalAppState, GroupItem,
     InPlaceCopyState, LeafParam, ModuleBindingRow, ModuleClassRow, ModuleClassesState,
@@ -23,7 +27,6 @@ use crate::{
     PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, ProblemItem,
     RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
 };
-use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState, PreviewRunState};
 use crate::{ResultItemData, ResultsListState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::fs::FileSystem;
@@ -242,7 +245,10 @@ impl PipelinesController {
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(manager) = weak.upgrade() {
                     manager.whole_image_preview_outdated(true);
-                    manager.schedule_auto_preview();
+                    // A model under another name: the overlay shows it.
+                    if !manager.sync_prediction_overlay() {
+                        manager.schedule_auto_preview();
+                    }
                 }
             })
             .ok();
@@ -250,6 +256,17 @@ impl PipelinesController {
 
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // The prediction overlay's remembered look (it starts off).
+            let prefs = self.app_state.load_app_settings().prediction_overlay;
+            let state = ui.global::<AiLearningState>();
+            state.set_prediction_opacity(prefs.opacity);
+            state.set_prediction_background(prefs.show_background);
+            state.set_prediction_values(prefs.show_values);
+            let manager = self.clone();
+            state.on_prediction_changed(move || {
+                manager.sync_prediction_overlay();
+            });
+
             // The remembered "Always show advanced settings"
             ui.global::<PipelinesPanelState>().set_always_show_advanced(
                 self.app_state
@@ -3376,6 +3393,60 @@ impl PipelinesController {
 
     /// With auto preview on: the preview, once nothing has changed for
     /// `PREVIEW_DEBOUNCE_MS` (each call restarts the wait). On the UI thread.
+    /// Applies the AI training panel's prediction overlay settings (and
+    /// remembers its look). Switched on, or another model: a preview at once
+    /// - also with auto preview off, it was asked for - and `true`; else
+    /// only the objects are drawn again. Off: the legend and hint go.
+    fn sync_prediction_overlay(self: &Arc<Self>) -> bool {
+        use crate::editor::prediction_overlay::PredictionOverlaySettings;
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        let state = ui.global::<AiLearningState>();
+        let ai = state.get_settings();
+        let pixel = ai.mode == 0;
+        // The model the panel works on: the loaded one, else the one its
+        // name is saved as (steps are matched by the file name).
+        let model = if !ai.loaded_model_path.is_empty() {
+            std::path::PathBuf::from(ai.loaded_model_path.as_str())
+        } else {
+            evanalyzer_app::ai_learning::model_output_path(
+                std::path::Path::new(""),
+                ai.model_name.as_str(),
+            )
+        };
+        let settings = PredictionOverlaySettings {
+            on: state.get_prediction_on() && pixel,
+            model: Some(model),
+            opacity: state.get_prediction_opacity(),
+            show_background: state.get_prediction_background(),
+            show_values: state.get_prediction_values(),
+        };
+        self.app_state.update_app_settings(|app| {
+            app.prediction_overlay = evanalyzer_app::global::PredictionOverlayPrefs {
+                opacity: settings.opacity,
+                show_background: settings.show_background,
+                show_values: settings.show_values,
+            }
+        });
+        let previous = self.viewport_controller.prediction.settings();
+        self.viewport_controller
+            .prediction
+            .set_settings(settings.clone());
+        if !settings.on {
+            state.set_prediction_classes(slint::ModelRc::default());
+            state.set_prediction_hint("".into());
+            self.viewport_controller.trigger_image_redraw_objects();
+            return false;
+        }
+        if !previous.on || previous.model != settings.model {
+            self.trigger_pipeline_preview_execution();
+            return true;
+        }
+        self.viewport_controller.trigger_image_redraw_objects();
+        false
+    }
+
     fn schedule_auto_preview(self: &Arc<Self>) {
         let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
         if auto_preview {
@@ -7953,6 +8024,50 @@ mod tests {
         ui.global::<PipelinesPanelState>()
             .invoke_auto_preview(false);
         assert!(!*controller.auto_preview_enabled.lock().unwrap());
+    }
+
+    /// The training panel's prediction switch drives the overlay (the model
+    /// is the one the panel's name is saved as), its look is remembered; an
+    /// object classifier has none.
+    #[test]
+    fn the_prediction_switch_drives_the_overlay_and_its_look_is_remembered() {
+        let ui = test_ui_window();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        controller.attach_callbacks();
+        let ai = ui.global::<AiLearningState>();
+        let overlay = || controller.viewport_controller.prediction.settings();
+        let mut settings = ai.get_settings();
+        settings.mode = 0;
+        settings.model_name = "cells".into();
+        ai.set_settings(settings.clone());
+
+        ai.set_prediction_on(true);
+        ai.set_prediction_opacity(0.4);
+        ai.set_prediction_background(false);
+        ai.invoke_prediction_changed();
+        drain_ui_queue();
+        assert!(overlay().on);
+        assert_eq!(overlay().opacity, 0.4);
+        assert!(!overlay().show_background);
+        assert_eq!(
+            overlay()
+                .model
+                .as_deref()
+                .and_then(std::path::Path::file_name),
+            Some(std::ffi::OsStr::new("cells.evamodel"))
+        );
+        let remembered = ui_state.load_app_settings().prediction_overlay;
+        assert_eq!(
+            (remembered.opacity, remembered.show_background),
+            (0.4, false)
+        );
+
+        settings.mode = 1;
+        ai.set_settings(settings);
+        ai.invoke_prediction_changed();
+        drain_ui_queue();
+        assert!(!overlay().on, "an object classifier predicts no pixels");
+        assert_eq!(ai.get_prediction_classes().row_count(), 0);
     }
 
     #[test]

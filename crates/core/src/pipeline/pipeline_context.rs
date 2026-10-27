@@ -13,7 +13,7 @@ use crate::pipeline::scope::Scope;
 use crate::{
     ImagePlane,
     image::{ImageContainer, ImageTypeMarker, ManagedImage, PixelSizes},
-    pipeline::pipeline::PipelineImageMeta,
+    pipeline::pipeline::{PipelineImageMeta, PredictionRequest},
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::{Image, ImageSize};
@@ -39,6 +39,9 @@ pub struct PipelineContext {
     /// The scope the running command is in - set by the pipeline before
     /// each command. A local class names objects of this scope only.
     pub scope: Scope,
+    /// Set to `Asked` by the pipeline before the step a run wants the
+    /// prediction of; a pixel classifier answers with `Captured`.
+    pub prediction: PredictionRequest,
 }
 
 impl PipelineContext {
@@ -61,6 +64,7 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             scope: Scope::Global,
+            prediction: PredictionRequest::None,
             image_meta,
             image: Arc::new(T::create_container(size, tile_offset, plane)?),
             scratch_pad: Arc::new(T::create_container(size, tile_offset, plane)?),
@@ -91,6 +95,7 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             scope: Scope::Global,
+            prediction: PredictionRequest::None,
             image_meta,
             image,
             scratch_pad: Arc::new(empty_image),
@@ -141,6 +146,7 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             scope: Scope::Global,
+            prediction: PredictionRequest::None,
             image: placeholder()?,
             scratch_pad: placeholder()?,
             segmentation_map: Some(
@@ -179,6 +185,7 @@ impl PipelineContext {
         let empty = PipelineContext {
             output_path: None,
             scope: Scope::Global,
+            prediction: PredictionRequest::None,
             image_meta: self.image_meta.clone(),
             image: placeholder(),
             scratch_pad: placeholder(),
@@ -699,6 +706,7 @@ mod tests {
             Ok(Self {
                 output_path: None,
                 scope: Scope::Global,
+                prediction: PredictionRequest::None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -745,6 +753,7 @@ mod tests {
             Ok(Self {
                 output_path: None,
                 scope: Scope::Global,
+                prediction: PredictionRequest::None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -791,6 +800,7 @@ mod tests {
             Ok(Self {
                 output_path: None,
                 scope: Scope::Global,
+                prediction: PredictionRequest::None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -830,6 +840,7 @@ mod tests {
             Ok(Self {
                 output_path: Some(PathBuf::default()),
                 scope: Scope::Global,
+                prediction: PredictionRequest::None,
                 image: Arc::new(T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
@@ -879,6 +890,7 @@ mod tests {
             Ok(Self {
                 output_path: Some(PathBuf::default()),
                 scope: Scope::Global,
+                prediction: PredictionRequest::None,
                 image: Arc::new(T::create_container(
                     size,
                     offset,

@@ -13,6 +13,8 @@ import { ResultsState } from "../api/results.slint";
 
 import { Navigator } from "viewport_navigator.slint";
 import { StackBar, StackSteps } from "viewport_stack_bar.slint";
+import { PredictionLegend } from "viewport_prediction_legend.slint";
+import { AiLearningState } from "../api/ai_learning.slint";
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
@@ -785,6 +787,12 @@ export component Viewport inherits Rectangle {
             ? root.width - root.edge-left - root.edge-right - (navigator.visible ? navigator.width + 12px : 0px)
             // The scale bar is in the image's area then, not on this line.
             : root.width - root.edge-left - root.edge-right-bottom - (scale-row.visible && !root.ortho-on ? scale-row.width + 12px : 0px);
+    }
+
+    // The prediction overlay's legend: top left, beside the panels.
+    if AiLearningState.prediction_on && ImageMetaData.image_name != "" && !root.volume-on && !root.split-mode: PredictionLegend {
+        x: root.edge-left;
+        y: root.margin;
     }
 
     // Above the image's touch area: clicks in it move the view. Top right,

@@ -8,6 +8,7 @@ import { ListView, ScrollView } from "std-widgets.slint";
 import { LineEdit, ComboBox, SpinBox, CheckBox } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
+import { StackTrack } from "../editor/viewport_stack_bar.slint";
 
 // A form row's label - plain (InkLabel's elide costs ~2 KB a use).
 component FormLabel inherits Text {
@@ -1080,6 +1081,88 @@ export component AiLearningDialog inherits InkDialog {
                         }
                     }
                 }
+            }
+        }
+
+        // ----- SHOW ON IMAGE: the prediction overlay (pixel classifier) -----
+        // Each pixel in the colour of its predicted class, the stronger the
+        // more probable - pale where to paint next.
+        if AiLearningState.settings.mode == 0: VerticalLayout {
+            vertical-stretch: 0;
+            alignment: start;
+            padding-left: 14px;
+            padding-right: 14px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 8px;
+            Rectangle {
+                height: 1px;
+                background: Ink.border-soft;
+            }
+            InkCaption {
+                text: "SHOW ON IMAGE";
+            }
+            InkSegmented {
+                label: "Show on image";
+                model: ["Prediction", "Off"];
+                selected: AiLearningState.prediction_on ? 0 : 1;
+                tips: ["Each pixel in the colour of the class it is predicted as - the stronger, the more probable", "Only the image and the objects"];
+                picked(index) => {
+                    AiLearningState.prediction_on = index == 0;
+                    AiLearningState.prediction_changed();
+                }
+            }
+            if AiLearningState.prediction_on: HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: "Opacity";
+                    color: Ink.text-dim;
+                    font-size: Ink.fs-secondary;
+                    vertical-alignment: center;
+                }
+                StackTrack {
+                    height: 20px;
+                    label: "Prediction opacity";
+                    value: round(AiLearningState.prediction_opacity * 100);
+                    count: 101;
+                    unit: " %";
+                    picked(v) => {
+                        AiLearningState.prediction_opacity = clamp(v, 0, 100) / 100;
+                        AiLearningState.prediction_changed();
+                    }
+                }
+                Text {
+                    text: round(AiLearningState.prediction_opacity * 100) + " %";
+                    min-width: 36px;
+                    font-family: Ink.font-mono;
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                }
+            }
+            if AiLearningState.prediction_on: CheckBox {
+                text: "Background in its colour too";
+                checked <=> AiLearningState.prediction_background;
+                toggled => {
+                    AiLearningState.prediction_changed();
+                }
+            }
+            if AiLearningState.prediction_on: CheckBox {
+                text: "Values under the cursor";
+                checked <=> AiLearningState.prediction_values;
+                toggled => {
+                    AiLearningState.prediction_changed();
+                }
+            }
+            if AiLearningState.prediction_on && AiLearningState.prediction_hint != "": InkBanner {
+                tone: InkTone.warn;
+                text: AiLearningState.prediction_hint;
+            }
+            if AiLearningState.prediction_on && AiLearningState.prediction_hint == "": Text {
+                text: "Pale areas are where the model is unsure - paint examples there, then train again.";
+                color: Ink.text-dim;
+                font-size: Ink.fs-secondary;
+                wrap: word-wrap;
             }
         }
 

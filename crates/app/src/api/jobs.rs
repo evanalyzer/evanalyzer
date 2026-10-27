@@ -12,7 +12,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::{
-    core_types::{BreakpointSettings, InternalErrors},
+    core_types::{BreakpointSettings, InternalErrors, PredictionTarget},
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
 pub use evanalyzer_core::ProgressEvent;
@@ -46,6 +46,10 @@ pub struct PreviewRequest {
     /// Stop at (or snapshot) a pipeline step and stream its image back via
     /// `ProgressEvent::BreakpointReached`.
     pub breakpoint: Option<BreakpointSettings>,
+    /// The pixel classifier step whose prediction every tile streams back
+    /// via `ProgressEvent::PredictionReached`, for the prediction overlay.
+    #[serde(default)]
+    pub prediction: Option<PredictionTarget>,
     /// Previews covering more tiles are rejected (at low zoom a whole slide
     /// spans hundreds). `None`: what the computer running it can take
     /// ([`ViewportMemorySettings::auto_preview_tiles`]); a server also caps

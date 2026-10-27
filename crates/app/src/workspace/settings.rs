@@ -87,6 +87,33 @@ pub struct AppSettings {
     /// settings even when connected to a server.
     #[serde(default)]
     pub viewport: ViewportMemorySettings,
+
+    /// How the AI training panel's prediction overlay looks (whether it is
+    /// on isn't kept: it starts off).
+    #[serde(default)]
+    pub prediction_overlay: PredictionOverlayPrefs,
+}
+
+/// The prediction overlay's look, kept between sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PredictionOverlayPrefs {
+    /// 0..=1, of a pixel the model is sure of.
+    pub opacity: f32,
+    /// The background class in its colour too, else left clear.
+    pub show_background: bool,
+    /// The class and its probability under the cursor (the pixel info).
+    pub show_values: bool,
+}
+
+impl Default for PredictionOverlayPrefs {
+    fn default() -> Self {
+        Self {
+            opacity: 0.7,
+            show_background: true,
+            show_values: true,
+        }
+    }
 }
 
 /// The panels over the image as the user left them: shown (EVA › View) and

@@ -527,7 +527,7 @@ impl Canvas<'_> {
 
 /// `rgb` at `alpha` over `dst` (Porter-Duff over, straight alpha).
 #[inline]
-fn blend(dst: &mut slint::Rgba8Pixel, rgb: [u8; 3], alpha: f32) {
+pub(crate) fn blend(dst: &mut slint::Rgba8Pixel, rgb: [u8; 3], alpha: f32) {
     let sa = alpha.clamp(0.0, 1.0);
     // Nothing there yet (most pixels): the colour itself.
     if dst.a == 0 {

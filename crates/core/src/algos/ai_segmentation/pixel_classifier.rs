@@ -25,6 +25,7 @@ use crate::{
     },
     image::ImageContainer,
     pipeline::{
+        pipeline::{PredictedClass, PredictionCapture, PredictionRequest},
         pipeline_cache::{CacheAddress, GlobalPipelineCache},
         pipeline_context::PipelineContext,
     },
@@ -137,8 +138,28 @@ impl ImageAlgorithm for PixelClassifier {
                 rows.push(bank.feature_vector_at(x, y));
             }
         }
-        let predicted = if self.min_certainty > 0.0 {
+        let mapping: HashMap<SegmentationClass, u32> = self
+            .segmentation_mapping
+            .iter()
+            .map(|m| (m.model_class, m.segmentation_class.as_u32()))
+            .collect();
+
+        // The prediction overlay wants every pixel's class as predicted (the
+        // minimum certainty is applied after it) and how probable it is.
+        let wants_prediction = ctx.prediction == PredictionRequest::Asked;
+        let predicted = if self.min_certainty > 0.0 || wants_prediction {
             let (mut predicted, certainty) = saved.classifier.predict_with_certainty(&rows)?;
+            if wants_prediction {
+                ctx.prediction = prediction_capture(
+                    &predicted,
+                    &certainty,
+                    class_labels,
+                    &mapping,
+                    width,
+                    height,
+                );
+            }
+            // Below the minimum certainty: background (`write_predictions`).
             for (class, certainty) in predicted.iter_mut().zip(certainty) {
                 if certainty < self.min_certainty {
                     *class = usize::MAX;
@@ -148,12 +169,6 @@ impl ImageAlgorithm for PixelClassifier {
         } else {
             saved.classifier.predict(&rows)?
         };
-
-        let mapping: HashMap<SegmentationClass, u32> = self
-            .segmentation_mapping
-            .iter()
-            .map(|m| (m.model_class, m.segmentation_class.as_u32()))
-            .collect();
 
         let segmentation_map = ctx.get_segmentation_map_mut()?;
         write_predictions(
@@ -204,6 +219,47 @@ fn check_input_color(
         ))),
         _ => Ok(()),
     }
+}
+
+/// The prediction overlay's capture of a tile: each pixel's class (an index
+/// into the model's `class_labels`, as predicted - before the minimum
+/// certainty) and its probability as a byte. `Captured`, or `None` for a
+/// model with more classes than a byte holds (no overlay then).
+fn prediction_capture(
+    predicted: &[usize],
+    certainty: &[f32],
+    class_labels: &[evanalyzer_cfg::settings::ai_learning_settings::PixelClassLabel],
+    mapping: &HashMap<SegmentationClass, u32>,
+    width: usize,
+    height: usize,
+) -> PredictionRequest {
+    if class_labels.len() > usize::from(u8::MAX) {
+        log::warn!(
+            "prediction overlay: {} classes don't fit a byte - not shown",
+            class_labels.len()
+        );
+        return PredictionRequest::None;
+    }
+    PredictionRequest::Captured(PredictionCapture {
+        width,
+        height,
+        classes: class_labels
+            .iter()
+            .map(|label| PredictedClass {
+                name: label.name.clone(),
+                segmentation_class: mapping
+                    .get(&label.class)
+                    .map_or(SegmentationClass::BACKGROUND, |&class| {
+                        SegmentationClass(class)
+                    }),
+            })
+            .collect(),
+        class_of_pixel: predicted.iter().map(|&class| class as u8).collect(),
+        probability: certainty
+            .iter()
+            .map(|&p| (p.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect(),
+    })
 }
 
 /// Remaps each pixel's predicted class index (into `class_labels`) through
@@ -611,6 +667,98 @@ mod tests {
             ],
             min_certainty: 0.0,
         }
+    }
+
+    /// Asked for its prediction (the prediction overlay), the step captures
+    /// every pixel's class as predicted - also where the minimum certainty
+    /// turns it into background - with its probability, and the model's
+    /// classes with the project class each goes to (background when the
+    /// step maps a class nowhere). Not asked, it captures nothing.
+    #[test]
+    fn the_prediction_is_captured_only_when_asked() {
+        let saved = saved_pixel_classifier(labels());
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = GlobalPipelineCache::default();
+
+        let mut ctx = gray_ctx(2, 1, vec![0.05, 10.05]);
+        command_for(&saved, &dir)
+            .execute(&mut ctx, &mut cache)
+            .unwrap();
+        assert_eq!(ctx.prediction, PredictionRequest::None);
+
+        let mut cmd = PixelClassifier {
+            min_certainty: 1.0,
+            ..command_for(&saved, &dir)
+        };
+        cmd.segmentation_mapping.truncate(1);
+        let mut ctx = gray_ctx(2, 1, vec![0.05, 10.05]);
+        ctx.prediction = PredictionRequest::Asked;
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        assert_eq!(
+            ctx.prediction,
+            PredictionRequest::Captured(PredictionCapture {
+                width: 2,
+                height: 1,
+                classes: vec![
+                    PredictedClass {
+                        name: "Background".into(),
+                        segmentation_class: SegmentationClass(41),
+                    },
+                    PredictedClass {
+                        name: "Cell".into(),
+                        segmentation_class: SegmentationClass::BACKGROUND,
+                    },
+                ],
+                class_of_pixel: vec![0, 1],
+                probability: vec![255, 255],
+            })
+        );
+    }
+
+    /// The captured probability is the certainty as a byte, for every pixel
+    /// - here pixels the trees disagree on.
+    #[test]
+    fn the_captured_probability_is_the_certainty_as_a_byte() {
+        let mut rows = Vec::new();
+        let mut row_classes = Vec::new();
+        for i in 0..15 {
+            rows.push(vec![0.0 + (i % 3) as f32 * 0.1]);
+            row_classes.push(0);
+            rows.push(vec![10.0 + (i % 3) as f32 * 0.1]);
+            row_classes.push(1);
+            rows.push(vec![5.0]);
+            row_classes.push(i % 2);
+        }
+        let mut saved = saved_pixel_classifier(labels());
+        saved.classifier = fit_random_forest(&rows, &row_classes, &reliable_rf_settings()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let pixels = vec![0.05, 5.0, 10.05];
+        let mut ctx = gray_ctx(3, 1, pixels.clone());
+        ctx.prediction = PredictionRequest::Asked;
+        command_for(&saved, &dir)
+            .execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+
+        let (classes, certainty) = saved
+            .classifier
+            .predict_with_certainty(&pixels.iter().map(|&v| vec![v]).collect::<Vec<_>>())
+            .unwrap();
+        let PredictionRequest::Captured(capture) = ctx.prediction else {
+            panic!("captured")
+        };
+        assert_eq!(
+            capture.class_of_pixel,
+            classes.iter().map(|&c| c as u8).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            capture.probability,
+            certainty
+                .iter()
+                .map(|&p| (p * 255.0).round() as u8)
+                .collect::<Vec<_>>()
+        );
+        assert!(capture.probability.iter().any(|&p| p < 255), "{capture:?}");
     }
 
     #[test]

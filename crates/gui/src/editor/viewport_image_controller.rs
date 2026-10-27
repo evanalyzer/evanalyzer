@@ -639,6 +639,18 @@ impl ViewportImageController {
                 }
             }
 
+            // The prediction overlay: the class predicted here, how probable.
+            let prediction = self.viewport_controller.prediction.settings();
+            if prediction.on && prediction.show_values && viewport_state.zoom > 0.0 {
+                let x =
+                    (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
+                let y =
+                    (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
+                if let Some((class, percent)) = self.viewport_controller.prediction.value_at(x, y) {
+                    pixel_values.push(format!("Prediction: {class} {percent} %"));
+                }
+            }
+
             // Calculate position
             let z_stack = match &project.get_z_stack() {
                 Some(stack) => match &stack.z_range {

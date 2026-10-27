@@ -97,6 +97,7 @@ pub fn load() -> (Vec<ThirdPartyGroup>, usize) {
 /// at the repo root, which the release archives carry next to the binaries
 /// and native libraries (some licenses, e.g. NVIDIA's, ask for the text with
 /// the files, not only inside the program).
+#[cfg(test)]
 pub fn notices_text() -> String {
     let (groups, _) = load();
     let mut text = String::from(

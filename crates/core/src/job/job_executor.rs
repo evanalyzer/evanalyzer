@@ -27,6 +27,7 @@ use crate::{
 use evanalyzer_cfg::{
     core_types::{
         BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, ObjectClass, PipelineId,
+        PredictionTarget,
     },
     settings::{
         images_settings::{
@@ -120,6 +121,15 @@ pub enum ProgressEvent {
         /// channel address (e.g. scratchpad or a memory slot).
         channel_idx: Option<i32>,
     },
+    /// A preview tile's prediction for the prediction overlay - sent for
+    /// every tile of a run with `JobExecutor::prediction` set, when its
+    /// pixel classifier step ran.
+    PredictionReached {
+        capture: crate::pipeline::pipeline::PredictionCapture,
+        /// Tile origin in image-pixel coordinates.
+        tile_offset_x: usize,
+        tile_offset_y: usize,
+    },
 }
 
 /// Controls tile selection when running a preview on a single image.
@@ -210,6 +220,9 @@ pub struct JobExecutor {
     /// How many tiles send their breakpoint image: the visible ones nearest
     /// the viewport centre (at least 1).
     pub breakpoint_tiles: usize,
+    /// The pixel classifier step whose prediction a preview run sends per
+    /// tile (`ProgressEvent::PredictionReached`), for the prediction overlay.
+    pub prediction: Option<PredictionTarget>,
 
     /// The project's class colors (`0xRRGGBB`), handed to every image's pipeline cache
     pub class_colors: Arc<HashMap<ObjectClass, u32>>,
@@ -241,6 +254,7 @@ impl<'a> JobExecutor {
             preview_tile_settings: None,
             breakpoint: None,
             breakpoint_tiles: 1,
+            prediction: None,
             class_colors,
         }
     }
@@ -877,6 +891,7 @@ impl<'a> JobExecutor {
                     // an unrelated channel's histogram range - image whenever the
                     // pipeline didn't start from channel 0).
                     let mut breakpoint_channel_idx: Option<i32> = None;
+                    let mut prediction_capture = None;
                     for pipe_id in order {
                         if stop_capture.is_some() {
                             break;
@@ -888,13 +903,21 @@ impl<'a> JobExecutor {
                                 .filter(|b| b.pipeline_id == *pipe_id)
                                 .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                                 .unwrap_or((None, false));
+                            let prediction_step = self
+                                .prediction
+                                .filter(|target| target.pipeline_id == *pipe_id)
+                                .map(|target| target.step_id);
                             let result = p.run_commands(
                                 self.output_path.clone(),
                                 Some(tile),
                                 cache,
                                 bp_step,
                                 snapshot_mode,
+                                prediction_step,
                             )?;
+                            if result.prediction_capture.is_some() {
+                                prediction_capture = result.prediction_capture;
+                            }
                             if result.breakpoint_hit {
                                 stop_capture = result.breakpoint_capture;
                                 if let ImageAddress::Channel(idx) = p.settings.start_image {
@@ -919,6 +942,18 @@ impl<'a> JobExecutor {
                         tile.height,
                         tile_start.elapsed().as_secs_f64()
                     );
+
+                    if let Some(capture) = prediction_capture
+                        && let Some(sender) = &sender
+                    {
+                        sender
+                            .send(ProgressEvent::PredictionReached {
+                                capture,
+                                tile_offset_x: tile.offset_x,
+                                tile_offset_y: tile.offset_y,
+                            })
+                            .ok();
+                    }
 
                     // Snapshot: send the captured buffers but continue merging normally.
                     if let Some(capture) = snapshot_capture {
@@ -1073,6 +1108,7 @@ impl<'a> JobExecutor {
                             merged_cache,
                             bp_step,
                             snapshot_mode,
+                            None,
                         )?;
                         merged_cache = result.cache;
                         debug!(
@@ -4241,6 +4277,86 @@ mod full_run_integration_tests {
         assert_eq!(written, 0, "the pipeline stopped before Extract Objects");
     }
 
+    /// Answers a prediction request with the tile's size - a stand-in for
+    /// the pixel classifier.
+    struct Predicts;
+
+    impl crate::algos::ImageAlgorithm for Predicts {
+        fn execute(
+            &self,
+            ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
+            _cache: &mut GlobalPipelineCache,
+        ) -> Result<(), InternalErrors> {
+            use crate::pipeline::pipeline::{PredictionCapture, PredictionRequest};
+            if ctx.prediction == PredictionRequest::Asked {
+                let size = ctx.get_image_size();
+                ctx.prediction = PredictionRequest::Captured(PredictionCapture {
+                    width: size.width,
+                    height: size.height,
+                    classes: Vec::new(),
+                    class_of_pixel: vec![0; size.width * size.height],
+                    probability: vec![255; size.width * size.height],
+                });
+            }
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "Predicts"
+        }
+
+        fn cite(&self) -> Vec<&'static evanalyzer_cfg::core_types::CitationMetadata> {
+            Vec::new()
+        }
+
+        fn execution_scope(&self) -> crate::algos::ExecutionScope {
+            crate::algos::ExecutionScope::Tile
+        }
+    }
+
+    /// With a prediction target, every tile sends its step's capture; the
+    /// objects are written as without one.
+    #[test]
+    fn a_prediction_target_sends_each_tile_s_capture_and_changes_nothing_else() {
+        let run = |with_target: bool| {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            let step = evanalyzer_cfg::core_types::StepId(900);
+            job.pipelines_pre_process
+                .get_mut(&PipelineId(1))
+                .unwrap()
+                .add_step(step, Scope::Global, Box::new(Predicts));
+            if with_target {
+                job.prediction = Some(PredictionTarget {
+                    pipeline_id: PipelineId(1),
+                    step_id: step,
+                });
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            let predictions: Vec<_> = rx
+                .into_iter()
+                .filter_map(|e| match e {
+                    ProgressEvent::PredictionReached {
+                        capture,
+                        tile_offset_x,
+                        tile_offset_y,
+                    } => Some((tile_offset_x, tile_offset_y, capture.width, capture.height)),
+                    _ => None,
+                })
+                .collect();
+            let written = out_objects.lock().unwrap().len();
+            (predictions, written)
+        };
+
+        let (predictions, written) = run(true);
+        assert_eq!(predictions, [(0, 0, 439, 167)], "the image's one tile");
+        let (none, written_without) = run(false);
+        assert!(none.is_empty());
+        assert_eq!(written, written_without);
+        assert!(written > 0);
+    }
+
     #[test]
     fn a_snapshot_breakpoint_reports_the_capture_and_still_writes_the_objects() {
         let (events, written) = breakpoint_events(BreakpointMode::Snapshot);
@@ -4632,7 +4748,7 @@ mod tile_merge_end_to_end_tests {
     /// sub-tile like `tile_a`/`tile_b` below.
     fn run_pipeline(cache: GlobalPipelineCache, tile: ImageTile) -> GlobalPipelineCache {
         threshold_connected_components_extract_pipeline()
-            .run_commands(PathBuf::new(), Some(tile), cache, None, false)
+            .run_commands(PathBuf::new(), Some(tile), cache, None, false, None)
             .expect("pipeline must run successfully")
             .cache
     }
@@ -4789,7 +4905,7 @@ mod tile_merge_end_to_end_tests {
             max_fragments_per_group: 100,
         }));
         whole_image_cache = tile_merge_pipeline
-            .run_commands(PathBuf::new(), None, whole_image_cache, None, false)
+            .run_commands(PathBuf::new(), None, whole_image_cache, None, false, None)
             .unwrap()
             .cache;
 
@@ -4853,7 +4969,7 @@ mod tile_merge_end_to_end_tests {
         }));
         whole_image_pipeline.add_command(Box::new(voronoi));
         whole_image_pipeline
-            .run_commands(PathBuf::new(), None, cache, None, false)
+            .run_commands(PathBuf::new(), None, cache, None, false, None)
             .unwrap()
             .cache
     }

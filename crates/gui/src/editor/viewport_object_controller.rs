@@ -591,8 +591,15 @@ impl ViewPortObjectController {
         points: &[(f32, f32)],
         radius: f32,
     ) -> Option<(BitVec<u64, Lsb0>, [u32; 4])> {
-        let visible = self.app_state.get_project().get_image_channel_visibilities_vec();
-        let data = self.viewport_cache.active_high_res_data.read().expect("Poisoned");
+        let visible = self
+            .app_state
+            .get_project()
+            .get_image_channel_visibilities_vec();
+        let data = self
+            .viewport_cache
+            .active_high_res_data
+            .read()
+            .expect("Poisoned");
         let (channels, ctx) = data.as_ref()?;
         let grid = ViewGrid::new(ctx)?;
         let view_points: Vec<(f32, f32)> =
@@ -603,10 +610,11 @@ impl ViewPortObjectController {
         let hi = |v: f32| (v + reach).ceil().max(0.0) as usize;
         let window = view_points.iter().fold(
             [usize::MAX, usize::MAX, 0, 0],
-            |[x0, y0, x1, y1], &(x, y)| [x0.min(lo(x)), y0.min(lo(y)), x1.max(hi(x)), y1.max(hi(y))],
+            |[x0, y0, x1, y1], &(x, y)| {
+                [x0.min(lo(x)), y0.min(lo(y)), x1.max(hi(x)), y1.max(hi(y))]
+            },
         );
-        let features =
-            Features::of_window(channels, &visible, ctx.image_w, ctx.image_h, window)?;
+        let features = Features::of_window(channels, &visible, ctx.image_w, ctx.image_h, window)?;
         let local: Vec<(f32, f32)> = view_points
             .iter()
             .map(|&(x, y)| (x - features.x0 as f32, y - features.y0 as f32))
@@ -1181,7 +1189,9 @@ mod tests {
     fn a_wand_stroke_paints_up_to_the_edge_only() {
         let (ui_state, controller) = controller_with_a_class();
         // Dark left of x 12, bright from it on.
-        let pixels = (0..20 * 20).map(|i| if i % 20 < 12 { 0.2 } else { 0.8 }).collect();
+        let pixels = (0..20 * 20)
+            .map(|i| if i % 20 < 12 { 0.2 } else { 0.8 })
+            .collect();
         seed_image_cache_with(&controller.viewport_cache, pixels);
 
         // A 16 px wide stroke at x 6-8 would reach x 16 with the brush.

@@ -17,11 +17,47 @@ use crate::{
         pipeline_context::PipelineContext,
     },
 };
-use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, MemoryId, PipelineId, StepId};
+use evanalyzer_cfg::core_types::{
+    ImageAddress, InternalErrors, MemoryId, PipelineId, SegmentationClass, StepId,
+};
 use kornia_image::ImageSize;
 use log::info;
 use std::sync::Arc;
 use std::{path::PathBuf, time::Instant};
+
+/// What a pixel classifier step predicted for one tile, for the prediction
+/// overlay: per pixel the class (an index into `classes`) and how probable
+/// it is (0..=255 for 0..=100 %). One byte each, so a 512² tile is 512 KB.
+/// Made only when the run asks for it (`run_commands`' `prediction_step`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictionCapture {
+    pub width: usize,
+    pub height: usize,
+    /// The model's classes, in its own order.
+    pub classes: Vec<PredictedClass>,
+    pub class_of_pixel: Vec<u8>,
+    pub probability: Vec<u8>,
+}
+
+/// A class a pixel classifier predicts, and the project class its pixels
+/// go to (`SegmentationClass::BACKGROUND` when the step maps it nowhere).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictedClass {
+    pub name: String,
+    pub segmentation_class: SegmentationClass,
+}
+
+/// Whether the running step should capture its prediction - set by the
+/// pipeline (see [`PipelineContext::prediction`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum PredictionRequest {
+    #[default]
+    None,
+    /// The run wants this step's prediction.
+    Asked,
+    /// The step's answer.
+    Captured(PredictionCapture),
+}
 
 /// The buffers captured at a breakpoint, all from the same pipeline step so
 /// the UI can switch between views instantly with no pipeline re-run.
@@ -44,6 +80,8 @@ pub struct PipelineResult {
     /// Populated when a Stop or Snapshot breakpoint was reached: the image
     /// plus segmentation/instance maps captured at that step.
     pub breakpoint_capture: Option<BreakpointCapture>,
+    /// The prediction of `run_commands`' `prediction_step`, when it ran.
+    pub prediction_capture: Option<PredictionCapture>,
 }
 
 pub struct CorePipelineSettings {
@@ -156,6 +194,10 @@ impl Pipeline {
     ///   - `true`  (Snapshot) — capture the buffers at that step, then
     ///     continue to completion; the capture is returned in
     ///     `breakpoint_capture`.
+    ///
+    /// `prediction_step`: the step (a pixel classifier) whose prediction the
+    /// run wants for the prediction overlay - returned in
+    /// `prediction_capture`. Independent of the breakpoint.
     pub fn run_commands(
         &self,
         output_path: PathBuf,
@@ -163,6 +205,7 @@ impl Pipeline {
         mut cache: GlobalPipelineCache,
         breakpoint_step: Option<StepId>,
         snapshot_mode: bool,
+        prediction_step: Option<StepId>,
     ) -> Result<PipelineResult, InternalErrors> {
         let tile = match tile {
             Some(data) => data,
@@ -211,15 +254,27 @@ impl Pipeline {
         };
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
+        let mut prediction_capture: Option<PredictionCapture> = None;
 
         for (step_id, scope, command) in &self.commands {
             let step_id = *step_id;
             ctx.scope = *scope;
+            let wants_prediction =
+                step_id != StepId::UNASSIGNED && prediction_step == Some(step_id);
+            if wants_prediction {
+                ctx.prediction = PredictionRequest::Asked;
+            }
             let step_start = Instant::now();
             // Which step failed: front ends point at it.
             command
                 .run(&mut ctx, &mut cache)
                 .map_err(|e| e.in_step(self.id, step_id))?;
+            if wants_prediction
+                && let PredictionRequest::Captured(capture) = std::mem::take(&mut ctx.prediction)
+            {
+                prediction_capture = Some(capture);
+            }
+            ctx.prediction = PredictionRequest::None;
             let duration = step_start.elapsed();
             log::debug!("Executed {} in {:?}", command.name(), duration);
 
@@ -266,6 +321,7 @@ impl Pipeline {
                         cache,
                         breakpoint_hit: true,
                         breakpoint_capture: Some(capture),
+                        prediction_capture,
                     });
                 }
             }
@@ -282,6 +338,7 @@ impl Pipeline {
             cache,
             breakpoint_hit: false,
             breakpoint_capture,
+            prediction_capture,
         })
     }
 }
@@ -438,6 +495,7 @@ mod tests {
                     cache,
                     None,
                     false,
+                    None,
                 )
                 .expect("tile stage must not fail");
 
@@ -473,7 +531,14 @@ mod tests {
             exclude_areas_with_no_center: false,
         }));
         let result = stage2
-            .run_commands(PathBuf::default(), None, whole_image_cache, None, false)
+            .run_commands(
+                PathBuf::default(),
+                None,
+                whole_image_cache,
+                None,
+                false,
+                None,
+            )
             .expect("whole-image stage must not fail");
 
         result.cache
@@ -574,6 +639,109 @@ mod tests {
         }
     }
 
+    /// Answers a prediction request with a capture marked by `marker` (its
+    /// width) - a stand-in for the pixel classifier.
+    struct FakePredictor {
+        marker: usize,
+    }
+
+    impl ImageAlgorithm for FakePredictor {
+        fn execute(
+            &self,
+            ctx: &mut PipelineContext,
+            _cache: &mut GlobalPipelineCache,
+        ) -> Result<(), InternalErrors> {
+            if ctx.prediction == PredictionRequest::Asked {
+                ctx.prediction = PredictionRequest::Captured(PredictionCapture {
+                    width: self.marker,
+                    height: 1,
+                    classes: Vec::new(),
+                    class_of_pixel: Vec::new(),
+                    probability: Vec::new(),
+                });
+            }
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "FakePredictor"
+        }
+
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
+        }
+
+        fn execution_scope(&self) -> ExecutionScope {
+            ExecutionScope::Tile
+        }
+    }
+
+    /// Only the requested step is asked for its prediction, and the run
+    /// returns that capture - none without a request.
+    #[test]
+    fn the_prediction_of_the_requested_step_is_returned() {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_step(
+            StepId(1),
+            Scope::Global,
+            Box::new(FakePredictor { marker: 1 }),
+        );
+        pipeline.add_step(
+            StepId(2),
+            Scope::Global,
+            Box::new(FakePredictor { marker: 2 }),
+        );
+        pipeline.add_step(
+            StepId(3),
+            Scope::Global,
+            Box::new(FakePredictor { marker: 3 }),
+        );
+        let run = |prediction_step: Option<StepId>| {
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_meta = default_image_meta(size);
+            let tile = crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            };
+            cache.add_to_channel_cache(
+                Arc::new(ImageContainer::F32Gray(ManagedImage {
+                    data: Image::<f32, 1>::new(size, vec![0.0; 4]).unwrap(),
+                    tile_offset: Point2d { x: 0, y: 0 },
+                    plane: None,
+                    dimensionality: ImageDimensionality::Planar,
+                })),
+                0,
+                tile,
+            );
+            pipeline
+                .run_commands(
+                    PathBuf::default(),
+                    Some(tile),
+                    cache,
+                    None,
+                    false,
+                    prediction_step,
+                )
+                .unwrap()
+                .prediction_capture
+        };
+
+        assert_eq!(run(Some(StepId(2))).map(|c| c.width), Some(2));
+        assert_eq!(run(None), None);
+        assert_eq!(run(Some(StepId(9))), None, "no such step");
+    }
+
     #[test]
     fn read_only_pipeline_shares_the_cached_image_without_cloning() {
         let size = ImageSize {
@@ -623,6 +791,7 @@ mod tests {
                 cache,
                 None,
                 false,
+                None,
             )
             .expect("run must not fail");
 
@@ -678,6 +847,7 @@ mod tests {
                 cache,
                 None,
                 false,
+                None,
             )
             .expect("run must not fail");
 
@@ -770,6 +940,7 @@ mod tests {
                 cache,
                 None,
                 false,
+                None,
             )
             .expect("color_filter followed by sobel must not FormatMismatch on the scratch pad");
 

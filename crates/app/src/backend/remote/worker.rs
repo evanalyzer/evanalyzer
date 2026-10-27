@@ -1280,6 +1280,7 @@ mod session_tests {
                 project_path: PathBuf::from("/data/project"),
                 viewport: Default::default(),
                 breakpoint: None,
+                prediction: None,
                 max_visible_tiles: None,
                 breakpoint_tiles: 1,
                 whole_image: false,

@@ -1,0 +1,103 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// editor/viewport_prediction_legend.slint — the prediction overlay's legend
+// at the top left of the image (design canvas "AI Training Dialog", U6):
+// what the colours mean - each class from pale (unsure) to its full colour
+// (sure) - and ✕ to switch the overlay off.
+
+import { Ink, InkIcons, InkIconButton } from "../ink/ink.slint";
+import { AiLearningState } from "../api/ai_learning.slint";
+
+export component PredictionLegend inherits Rectangle {
+    width: 230px;
+    height: content.preferred-height;
+    background: Ink.glass;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: Ink.shadow;
+    accessible-role: groupbox;
+    accessible-label: "Prediction";
+
+    // Clicks on it don't reach the image below.
+    TouchArea { }
+
+    content := VerticalLayout {
+        padding-left: 10px;
+        padding-right: 4px;
+        padding-top: 4px;
+        padding-bottom: 8px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: "Prediction";
+                font-size: Ink.fs-secondary;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            InkIconButton {
+                size: 24px;
+                icon: InkIcons.close;
+                label: "Hide the prediction";
+                clicked => {
+                    AiLearningState.prediction_on = false;
+                    AiLearningState.prediction_changed();
+                }
+            }
+        }
+        for class in AiLearningState.prediction_classes: HorizontalLayout {
+            padding-right: 6px;
+            spacing: 8px;
+            Rectangle {
+                width: 9px;
+                height: 9px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 2px;
+                background: class.color;
+            }
+            Text {
+                width: 74px;
+                text: class.name;
+                font-size: Ink.fs-secondary;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle {
+                height: 8px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: @linear-gradient(90deg, class.color.with-alpha(0.1) 0%, class.color 100%);
+            }
+        }
+        if AiLearningState.prediction_classes.length == 0: Text {
+            text: AiLearningState.prediction_hint != "" ? AiLearningState.prediction_hint : "Waiting for the preview…";
+            font-size: Ink.fs-secondary;
+            color: Ink.text-dim;
+            wrap: word-wrap;
+        }
+        if AiLearningState.prediction_classes.length > 0: HorizontalLayout {
+            padding-right: 6px;
+            Text {
+                text: "pale: unsure";
+                font-size: Ink.fs-secondary;
+                color: Ink.text-mute;
+                horizontal-stretch: 1;
+                horizontal-alignment: right;
+            }
+            Text {
+                width: 60px;
+                text: "sure";
+                font-size: Ink.fs-secondary;
+                color: Ink.text-mute;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}

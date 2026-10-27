@@ -59,6 +59,7 @@ pub use crate::object::ObjectInit;
 pub use crate::object::Track;
 pub use crate::object::intensities::{ChannelTile, IntensityAccumulator, MaskIntensities};
 pub use crate::object::regions::{measure_on_planes, ring_of};
+pub use crate::pipeline::pipeline::{PredictedClass, PredictionCapture};
 pub use crate::pipeline::pipeline_cache::{AnalysedPlane, GlobalPipelineCache};
 pub use crate::pipeline::pipeline_cache::{channel_pixel_slice, sample_channel_pixel};
 

@@ -29,6 +29,21 @@ affected. MinError can move further, as it may now settle in a different
 minimum - check projects that use it. To compare old and new results
 exactly, keep using the previous version for projects already analysed.
 
+### See what the pixel classifier predicts
+
+The AI training panel has a new "Show on image" card for pixel classifiers:
+**Prediction** colours every pixel of the preview in the colour of the class
+it is predicted as - the stronger, the more probable. Pale areas are where the
+model is unsure: paint a few examples there and train again. A legend sits at
+the top left of the image, the class and its probability under the cursor
+appear in the pixel info, and opacity and the background's colour can be
+set. It shows the pipeline step that applies the model ("Add to pipeline"
+adds one).
+
+The pixel classifier also got faster: the class and its certainty now come
+from one pass through the trees, about 3 × faster on one core with "Minimum
+certainty" and 2 × without, and the work is spread over all cores.
+
 ### Faster YOLOv5 segmentation
 
 Masks are now assembled only around each detected object instead of over the

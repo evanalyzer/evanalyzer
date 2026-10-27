@@ -131,6 +131,38 @@ pub fn model_is_used(project: &ProjectSettings, model: &Path) -> bool {
     })
 }
 
+/// The pixel classifier step the prediction overlay shows: the first
+/// enabled step of an enabled pipeline applying `model` (by file name, as
+/// [`model_is_used`]) - or, without a model, the first such step at all.
+/// Steps inside a module aren't found: a preview can only point at the
+/// module as a whole.
+pub fn prediction_target(
+    project: &ProjectSettings,
+    model: Option<&Path>,
+) -> Option<evanalyzer_cfg::core_types::PredictionTarget> {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    use evanalyzer_cfg::settings::pipeline_settings::StepContent;
+    let name = model.and_then(Path::file_name);
+    project
+        .pipelines
+        .iter()
+        .filter(|pipeline| pipeline.enabled)
+        .find_map(|pipeline| {
+            pipeline.steps.iter().find_map(|step| match &step.content {
+                StepContent::Command(PipelineCommand::PixelClassifier(s))
+                    if step.enabled
+                        && name.is_none_or(|name| s.model_path.file_name() == Some(name)) =>
+                {
+                    Some(evanalyzer_cfg::core_types::PredictionTarget {
+                        pipeline_id: pipeline.id,
+                        step_id: step.id,
+                    })
+                }
+                _ => None,
+            })
+        })
+}
+
 /// A new pipeline applying the trained model at `model` - for the training
 /// panel's "Add to pipeline". Pixel classifier: the model, then connected
 /// components and extract objects, so the classes come out as objects (each
@@ -525,6 +557,67 @@ mod tests {
             &project,
             Path::new("/data/study/models/spots.evamodel")
         ));
+    }
+
+    /// The overlay shows the first enabled step applying the model, in an
+    /// enabled pipeline; without a model the first pixel classifier.
+    #[test]
+    fn the_prediction_target_is_the_first_enabled_step_with_the_model() {
+        use evanalyzer_cfg::core_types::{PipelineId, PredictionTarget, StepId};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let classifier = |id, enabled, model: &str| PipelineStepSettings {
+            id: StepId(id),
+            enabled,
+            content: StepContent::Command(PipelineCommand::PixelClassifier(
+                PixelClassifierSettings {
+                    model_path: PathBuf::from(model),
+                    ..Default::default()
+                },
+            )),
+        };
+        let pipeline = |id, enabled, steps| PipelineSettings {
+            id: PipelineId(id),
+            name: format!("p{id}"),
+            description: None,
+            image_source: Default::default(),
+            enabled,
+            steps,
+        };
+        let mut project = ProjectSettings::default();
+        project.pipelines = vec![
+            pipeline(
+                1,
+                false,
+                vec![classifier(1, true, "models/nuclei.evamodel")],
+            ),
+            pipeline(
+                2,
+                true,
+                vec![
+                    classifier(2, false, "models/nuclei.evamodel"),
+                    classifier(3, true, "models/spots.evamodel"),
+                    classifier(4, true, "models/nuclei.evamodel"),
+                ],
+            ),
+        ];
+        let target = |pipeline, step| {
+            Some(PredictionTarget {
+                pipeline_id: PipelineId(pipeline),
+                step_id: StepId(step),
+            })
+        };
+
+        let nuclei = Path::new("/data/study/models/nuclei.evamodel");
+        assert_eq!(prediction_target(&project, Some(nuclei)), target(2, 4));
+        assert_eq!(prediction_target(&project, None), target(2, 3));
+        assert_eq!(
+            prediction_target(&project, Some(Path::new("other.evamodel"))),
+            None
+        );
     }
 
     use crate::backend::LocalFileSystem;
