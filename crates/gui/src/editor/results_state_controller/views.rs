@@ -570,9 +570,9 @@ impl ResultsStateController {
         // The export dialog starts from the view shown (its columns,
         // classes, aggregation) the next time it opens.
         *self.export_populated.lock().expect("Poisoned") = false;
-        self.refresh_list();
-        self.update_matrix_view();
-        self.refresh_charts();
+        self.refresh_list_now();
+        self.update_matrix_view_now();
+        self.refresh_charts_now();
     }
 
     /// Shows the project's first view of `kind` (one is made if there is

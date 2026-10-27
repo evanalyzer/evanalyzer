@@ -47,6 +47,30 @@ pub trait ImageListExt {
     /// The entries as a plain map (copied where another copy shares them).
     fn into_index_map(self) -> IndexMap<PathBuf, ImageEntry>;
     fn from_entries(entries: impl IntoIterator<Item = (PathBuf, ImageEntry)>) -> Self;
+    /// Roughly the RAM `self` holds that `newer` doesn't share: the map's
+    /// pointers unless both share the map, and every entry `newer` doesn't
+    /// share - for the undo history's budget.
+    fn unshared_bytes(&self, newer: &ImageList) -> u64;
+}
+
+/// RAM of one image in the map itself (key path and pointer) - measured:
+/// ~9.6 MB for 100,000 images.
+const MAP_SLOT_BYTES: u64 = 96;
+/// RAM of an image entry without its objects (series, channels) - measured:
+/// ~2.4 KB with one series of 4 channels.
+const ENTRY_BYTES: u64 = 2048;
+/// RAM of a hand-drawn object besides its mask (classes, links, track).
+const OBJECT_BYTES: u64 = 256;
+
+/// Roughly the RAM `entry` holds.
+fn entry_bytes(entry: &ImageEntry) -> u64 {
+    let objects: u64 = entry
+        .series
+        .values()
+        .flat_map(|series| &series.objects)
+        .map(|object| OBJECT_BYTES + object.mask_data.len() as u64 / 8)
+        .sum();
+    ENTRY_BYTES + objects
 }
 
 impl ImageListExt for ImageList {
@@ -134,6 +158,28 @@ impl ImageListExt for ImageList {
             .collect()
     }
 
+    fn unshared_bytes(&self, newer: &ImageList) -> u64 {
+        if Arc::ptr_eq(&self.0, &newer.0) {
+            return 0;
+        }
+        // Usually the same images in the same order: compared position by
+        // position, without hashing; by path where they differ.
+        let entries: u64 = self
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(i, (path, entry))| {
+                let other = match newer.0.get_index(*i) {
+                    Some((other_path, other)) if other_path == *path => Some(other),
+                    _ => newer.0.get(*path),
+                };
+                other.is_none_or(|other| !Arc::ptr_eq(entry, other))
+            })
+            .map(|(_, (_, entry))| entry_bytes(entry))
+            .sum();
+        self.0.len() as u64 * MAP_SLOT_BYTES + entries
+    }
+
     fn from_entries(entries: impl IntoIterator<Item = (PathBuf, ImageEntry)>) -> Self {
         ImageList(Arc::new(
             entries
@@ -176,6 +222,32 @@ mod tests {
             &copy.0[&PathBuf::from("b.tif")]
         ));
         assert!(copy.get_mut(&PathBuf::from("missing.tif")).is_none());
+    }
+
+    /// What a copy holds on its own: nothing while it shares the map; the
+    /// map's pointers and the changed entry after an edit.
+    #[test]
+    fn the_unshared_bytes_are_what_an_edit_copied() {
+        let original = ImageList::from_entries(
+            (0..10).map(|i| (PathBuf::from(format!("{i}.tif")), entry("x"))),
+        );
+        let mut copy = original.clone();
+        assert_eq!(original.unshared_bytes(&copy), 0);
+        copy.get_mut(&PathBuf::from("3.tif")).unwrap().file_size = 1;
+        assert_eq!(
+            original.unshared_bytes(&copy),
+            10 * MAP_SLOT_BYTES + ENTRY_BYTES
+        );
+        // Another order: found by path.
+        let reordered = ImageList(Arc::new(
+            original
+                .0
+                .iter()
+                .rev()
+                .map(|(p, e)| (p.clone(), e.clone()))
+                .collect(),
+        ));
+        assert_eq!(original.unshared_bytes(&reordered), 10 * MAP_SLOT_BYTES);
     }
 
     /// Saved exactly as the plain map it replaced.

@@ -1015,7 +1015,53 @@ each.
 | 100 edits of one image's objects (as drawing) | as above | 0.62-0.81 s, +960 MB |
 
 An edit of an image still copies the map's pointers (~9.6 MB at 100,000
-images) per undo step - see TODO.
+images) per undo step. That is bounded by the undo history's RAM budget
+(Settings › Viewport › Undo history: Auto or MB; at least 10 steps, at most
+100). Auto: 10 % of the RAM left after a full analysis on every core but
+one, the viewport caches and 512 MB - 8 GB / 4 cores: 510 MB, 16 GB / 22
+cores: 375 MB. Same benchmark, 100 edits of one image's objects:
+
+| Budget | Steps kept | Time | RSS |
+|---|---|---|---|
+| 256 MB | 28 (~250 MB estimated) | 0.71-0.79 s | +288 MB |
+| 2 GB | 100 (~917 MB estimated) | 0.79-0.80 s | +960 MB |
+
+## Results views: queries off the UI thread (2026-10-27)
+
+The list, charts, plate, well and image heatmap queried the database on the
+UI thread - the window froze for every filter tick, page or chart change.
+Now they run on the database thread; a refresh replaced by a newer one
+before it starts is skipped (quick clicks query once; page clicks all run,
+in order); "Loading" shows only after 400 ms and then for at least 400 ms.
+The image selection uses sets, and all images ticked is no image filter.
+
+`bench_results_actions` (gui, release): each action through its Slint
+callback as a click, on a copy of the 1.7 GB results file (1,776 images);
+UI blocked = the callback, shown after = the database thread idle and the UI
+queue drained. Median of 3 per run; three runs each, alternating (one per
+build, 10 s apart). RSS after the action.
+
+| Action | UI blocked before | after | Shown after before | after | RSS before | after |
+|---|---|---|---|---|---|---|
+| t changed | 25-31 ms | 0.0 ms | 26-31 ms | 28-30 ms | 215-219 MB | 213-221 MB |
+| class off + on | 50-56 ms | 0.0-0.1 ms | 51-57 ms | 25-31 ms | 228-236 MB | 226-228 MB |
+| group by images + back | 98-101 ms | 0.1 ms | 99-101 ms | 26-30 ms | 350-353 MB | 232-234 MB |
+| next page | 25-29 ms | 0.0-0.1 ms | 25-29 ms | 23-34 ms | | |
+| previous page | 27-32 ms | 0.0-0.1 ms | 27-32 ms | 29-32 ms | | |
+| all images + none | 51-63 ms | 0.0-0.1 ms | 52-64 ms | 24-27 ms | | |
+| chart: scatter + histogram | 32-35 ms | 0.1 ms | 32-35 ms | 21-23 ms | 381-384 MB | 246-248 MB |
+| plate: class off + on | 8 ms | 0.0-0.1 ms | 8 ms | 9-10 ms | | |
+| 10 × next page (quick) | 270-315 ms | 0.0 ms | 273-316 ms | 269-299 ms | 392-394 MB | 266-270 MB |
+| 100k images: select all | 15-17 ms | 14-21 ms | 19-21 ms | 18-23 ms | | |
+| 100k images: a keystroke in the search | 7-8 ms | 7 ms | | | | |
+| 20k images all ticked: clear the search | 8,261-8,597 ms | 2.9-3.5 ms | | 4.0-4.7 ms | | |
+
+The UI thread is free during every query now. Two-step actions (off + on,
+there + back) query once instead of twice, so they show sooner and the
+process stays ~100 MB lower (the skipped "group by images" query is the
+biggest). Quick page clicks still read every page (each starts where the
+one before ended). "Select all" of 100,000 images still builds the
+selector's rows on the UI thread (14-21 ms).
 
 ## Prediction overlay: its cost in the step (2026-10-27)
 
@@ -1117,6 +1163,8 @@ graphics driver).
 | Prediction overlay tiles in the editor | 512 KB per 512² preview tile | 2026-10-27 | Prediction overlay: drawing it |
 | Trained forest / MLP in a run, 16 tiles 512² on 8 threads | +42-56 MB / +41-52 MB above the test process (was +5.9 GB / +3.9 GB) | 2026-10-27 | Trained models in a pipeline run |
 | Undo history, 100,000 images, 100 steps | +1 MB (other edits) / +960 MB (edits of an image) (was +23.9 GB) | 2026-10-27 | Undo history on a large project |
+| Undo history with the budget, 100,000 images, drawing | budget (Auto: 32 MB-1 GB, e.g. 510 MB on 8 GB / 4 cores); 256 MB: +288 MB | 2026-10-27 | Undo history on a large project |
+| Results actions, 1.7 GB results file | 213-270 MB (test process; was 215-394 MB) | 2026-10-27 | Results views: queries off the UI thread |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

@@ -17,22 +17,14 @@ use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::project::{ProjectOwner, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 pub use file_browser::{FileBrowser, FileMode, FileRequest};
 use slint::ComponentHandle;
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 use crate::remote::reconnector::Reconnector;
-
-/// How many steps of undo/redo history to keep - `ProjectSettings` is small
-/// (metadata/geometry only, no pixel buffers - see the doc comment on
-/// `UiState::undo_stack`), so this is a memory non-issue; it just bounds
-/// how far back a very long editing session can rewind.
-const UNDO_STACK_LIMIT: usize = 100;
 
 /// Edits that land within this long of the last checkpoint are coalesced into
 /// the same undo step instead of each getting their own - otherwise dragging
@@ -46,6 +38,7 @@ mod helper;
 mod license_text;
 mod remote;
 mod third_party_licenses;
+mod undo_history;
 
 // ----------------------------------------------------------------
 // UiState - shared across all GUI controllers
@@ -68,18 +61,21 @@ pub struct UiState {
     /// "Back to how it was saved".
     saved_results_views: Mutex<evanalyzer_cfg::settings::project_settings::ResultsViews>,
     /// Snapshots of `ProjectWithRuntime::settings` taken right before a
-    /// mutation, oldest first. `ProjectSettings` holds only metadata/geometry
-    /// (paths, IDs, object polygons, pipeline params - no pixel buffers), so
-    /// cloning the whole struct per checkpoint is cheap even for large
-    /// projects. Populated by `get_project_write` (see `maybe_checkpoint_undo`)
-    /// so every mutation chokepoint gets undo coverage for free, rather than
-    /// having to thread checkpoint calls through every one of the ~60 call
-    /// sites across the editor controllers.
-    undo_stack: Mutex<VecDeque<ProjectSettings>>,
+    /// mutation, oldest first, within `undo_budget_bytes` (see
+    /// `UndoHistory`; the image list is shared between snapshots until an
+    /// edit changes it). Populated by `get_project_write` (see
+    /// `maybe_checkpoint_undo`) so every mutation chokepoint gets undo
+    /// coverage for free, rather than having to thread checkpoint calls
+    /// through every one of the ~60 call sites across the editor
+    /// controllers.
+    undo_stack: Mutex<undo_history::UndoHistory>,
     /// Snapshots popped off `undo_stack` by `undo()`, so `redo()` can restore
     /// them. Cleared whenever a new checkpoint is pushed (a fresh edit after
     /// an undo invalidates the redone-away future).
-    redo_stack: Mutex<VecDeque<ProjectSettings>>,
+    redo_stack: Mutex<undo_history::UndoHistory>,
+    /// RAM the undo history may use (the settings' "Undo history", see
+    /// `set_undo_budget_mb`).
+    undo_budget_bytes: std::sync::atomic::AtomicU64,
     /// When the most recent undo checkpoint was taken - drives the
     /// `UNDO_COALESCE_WINDOW` grouping in `maybe_checkpoint_undo`.
     last_checkpoint_at: Mutex<Instant>,
@@ -112,6 +108,12 @@ pub struct UiState {
     plane_listeners: Mutex<Vec<Box<dyn Fn(Option<u32>, u32) + Send + Sync>>>,
 }
 
+/// The undo history's RAM in effect on this computer.
+fn undo_budget_bytes(settings: &evanalyzer_app::global::ViewportMemorySettings) -> u64 {
+    let (cores, total_ram) = evanalyzer_app::backends::local::cpu_ram_diagnostics();
+    u64::from(settings.effective_undo_history_mb(total_ram, cores)) * 1024 * 1024
+}
+
 impl UiState {
     pub fn new(app: AppHandle, handle: slint::Weak<AppWindow>) -> Self {
         let backend = app.backend();
@@ -130,8 +132,11 @@ impl UiState {
             ui_handle: handle,
             dirty: AtomicBool::new(false),
             saved_results_views: Mutex::new(Default::default()),
-            undo_stack: Mutex::new(VecDeque::new()),
-            redo_stack: Mutex::new(VecDeque::new()),
+            undo_stack: Mutex::new(Default::default()),
+            redo_stack: Mutex::new(Default::default()),
+            undo_budget_bytes: std::sync::atomic::AtomicU64::new(undo_budget_bytes(
+                &app_settings.viewport,
+            )),
             last_checkpoint_at: Mutex::new(Instant::now()),
             force_next_checkpoint: AtomicBool::new(false),
             app_settings: Mutex::new(app_settings),
@@ -443,12 +448,10 @@ impl UiState {
         }
 
         let snapshot = self.app.get_project().settings.clone();
-        let mut undo_stack = self.undo_stack.lock().expect("Poisoned");
-        undo_stack.push_back(snapshot);
-        if undo_stack.len() > UNDO_STACK_LIMIT {
-            undo_stack.pop_front();
-        }
-        drop(undo_stack);
+        self.undo_stack
+            .lock()
+            .expect("Poisoned")
+            .push(snapshot, self.undo_budget());
         self.redo_stack.lock().expect("Poisoned").clear();
         self.push_undo_redo_state_to_ui();
     }
@@ -474,17 +477,15 @@ impl UiState {
     /// every panel from the restored `settings` afterwards (there's no single
     /// "refresh everything" entry point - see `UndoRedoController`).
     pub fn undo(&self) -> bool {
-        let Some(prev) = self.undo_stack.lock().expect("Poisoned").pop_back() else {
+        let Some(prev) = self.undo_stack.lock().expect("Poisoned").pop() else {
             return false;
         };
 
         let current = self.app.get_project().settings.clone();
-        let mut redo_stack = self.redo_stack.lock().expect("Poisoned");
-        redo_stack.push_back(current);
-        if redo_stack.len() > UNDO_STACK_LIMIT {
-            redo_stack.pop_front();
-        }
-        drop(redo_stack);
+        self.redo_stack
+            .lock()
+            .expect("Poisoned")
+            .push(current, self.undo_budget());
 
         let views_changed;
         {
@@ -509,17 +510,15 @@ impl UiState {
     /// Re-applies the most recently undone checkpoint, if any. Same
     /// refresh-after-restore contract as `undo()`.
     pub fn redo(&self) -> bool {
-        let Some(next) = self.redo_stack.lock().expect("Poisoned").pop_back() else {
+        let Some(next) = self.redo_stack.lock().expect("Poisoned").pop() else {
             return false;
         };
 
         let current = self.app.get_project().settings.clone();
-        let mut undo_stack = self.undo_stack.lock().expect("Poisoned");
-        undo_stack.push_back(current);
-        if undo_stack.len() > UNDO_STACK_LIMIT {
-            undo_stack.pop_front();
-        }
-        drop(undo_stack);
+        self.undo_stack
+            .lock()
+            .expect("Poisoned")
+            .push(current, self.undo_budget());
 
         let views_changed;
         {
@@ -535,6 +534,17 @@ impl UiState {
             self.results_views_restored();
         }
         true
+    }
+
+    fn undo_budget(&self) -> u64 {
+        self.undo_budget_bytes.load(Ordering::Relaxed)
+    }
+
+    /// The RAM the undo history may use from now on, as `settings` give it
+    /// on this computer - older steps over it go with the next one.
+    pub fn set_undo_budget(&self, settings: &evanalyzer_app::global::ViewportMemorySettings) {
+        self.undo_budget_bytes
+            .store(undo_budget_bytes(settings), Ordering::Relaxed);
     }
 
     /// Pushes `ToolbarState.can_undo`/`can_redo` to the UI thread so the
@@ -1108,6 +1118,7 @@ mod ui_state_tests {
     use super::*;
     use crate::editor::test_support::test_ui_state;
     use evanalyzer_app::project::ImageListExt;
+    use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
     // -- dirty tracking -----------------------------------------------------
 
@@ -1336,9 +1347,26 @@ mod ui_state_tests {
             mb("VmRSS:").saturating_sub(start_rss),
             mb("VmHWM:")
         );
-        // Edits of an image's objects (as drawing): each changes one entry.
+        // Edits of an image's objects (as drawing): each changes one entry -
+        // within the budget (`BUDGET_MB`, default 256).
+        let budget_mb: u32 = std::env::var("BUDGET_MB")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(256);
+        ui_state.set_undo_budget(&evanalyzer_app::global::ViewportMemorySettings {
+            undo_history_auto: false,
+            undo_history_mb: budget_mb,
+            ..Default::default()
+        });
         let rss = mb("VmRSS:");
-        let path = ui_state.get_project().images.list.keys().next().unwrap().clone();
+        let path = ui_state
+            .get_project()
+            .images
+            .list
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
         let start = std::time::Instant::now();
         for i in 0..100 {
             ui_state.begin_undo_step();
@@ -1346,9 +1374,14 @@ mod ui_state_tests {
             let entry = project.images.list.get_mut(&path).unwrap();
             entry.series.get_mut(&0).unwrap().objects[0].area = i;
         }
+        let took = start.elapsed().as_secs_f64();
+        let (steps, bytes) = {
+            let history = ui_state.undo_stack.lock().unwrap();
+            (history.len(), history.bytes())
+        };
         println!(
-            "100 edits of one image's objects {:.2} s; RSS {rss} -> {} MB (+{} MB), peak {} MB",
-            start.elapsed().as_secs_f64(),
+            "100 edits of one image's objects, budget {budget_mb} MB: {took:.2} s, {steps} steps kept (~{} MB); RSS {rss} -> {} MB (+{} MB), peak {} MB",
+            bytes / (1024 * 1024),
             mb("VmRSS:"),
             mb("VmRSS:").saturating_sub(rss),
             mb("VmHWM:")
@@ -1490,10 +1523,10 @@ mod ui_state_tests {
         let ui_state = test_ui_state();
         {
             let mut undo_stack = ui_state.undo_stack.lock().unwrap();
-            for i in 0..UNDO_STACK_LIMIT {
+            for i in 0..undo_history::MAX_STEPS {
                 let mut settings = ProjectSettings::default();
                 settings.meta.name = format!("step {i}");
-                undo_stack.push_back(settings);
+                undo_stack.push(settings, u64::MAX);
             }
         }
         ui_state
@@ -1503,9 +1536,9 @@ mod ui_state_tests {
         set_name(&ui_state, "newest");
 
         let undo_stack = ui_state.undo_stack.lock().unwrap();
-        assert_eq!(undo_stack.len(), UNDO_STACK_LIMIT);
-        assert_eq!(undo_stack.front().unwrap().meta.name, "step 1");
-        assert_eq!(undo_stack.back().unwrap().meta.name, "");
+        assert_eq!(undo_stack.len(), undo_history::MAX_STEPS);
+        assert_eq!(undo_stack.oldest().unwrap().meta.name, "step 1");
+        assert_eq!(undo_stack.newest().unwrap().meta.name, "");
     }
 
     #[test]
@@ -1514,19 +1547,19 @@ mod ui_state_tests {
         set_name(&ui_state, "edited");
         {
             let mut redo_stack = ui_state.redo_stack.lock().unwrap();
-            for i in 0..UNDO_STACK_LIMIT {
+            for i in 0..undo_history::MAX_STEPS {
                 let mut settings = ProjectSettings::default();
                 settings.meta.name = format!("redo {i}");
-                redo_stack.push_back(settings);
+                redo_stack.push(settings, u64::MAX);
             }
         }
 
         assert!(ui_state.undo());
 
         let redo_stack = ui_state.redo_stack.lock().unwrap();
-        assert_eq!(redo_stack.len(), UNDO_STACK_LIMIT);
-        assert_eq!(redo_stack.front().unwrap().meta.name, "redo 1");
-        assert_eq!(redo_stack.back().unwrap().meta.name, "edited");
+        assert_eq!(redo_stack.len(), undo_history::MAX_STEPS);
+        assert_eq!(redo_stack.oldest().unwrap().meta.name, "redo 1");
+        assert_eq!(redo_stack.newest().unwrap().meta.name, "edited");
     }
 
     #[test]
@@ -1536,10 +1569,10 @@ mod ui_state_tests {
         assert!(ui_state.undo());
         {
             let mut undo_stack = ui_state.undo_stack.lock().unwrap();
-            for i in 0..UNDO_STACK_LIMIT {
+            for i in 0..undo_history::MAX_STEPS {
                 let mut settings = ProjectSettings::default();
                 settings.meta.name = format!("undo {i}");
-                undo_stack.push_back(settings);
+                undo_stack.push(settings, u64::MAX);
             }
         }
 
@@ -1547,9 +1580,9 @@ mod ui_state_tests {
 
         assert_eq!(name(&ui_state), "edited");
         let undo_stack = ui_state.undo_stack.lock().unwrap();
-        assert_eq!(undo_stack.len(), UNDO_STACK_LIMIT);
-        assert_eq!(undo_stack.front().unwrap().meta.name, "undo 1");
-        assert_eq!(undo_stack.back().unwrap().meta.name, "");
+        assert_eq!(undo_stack.len(), undo_history::MAX_STEPS);
+        assert_eq!(undo_stack.oldest().unwrap().meta.name, "undo 1");
+        assert_eq!(undo_stack.newest().unwrap().meta.name, "");
     }
 
     // -- preferences ----------------------------------------------------------

@@ -135,6 +135,11 @@ export global ViewportMemoryState {
     // Rust.
     in property <string> auto_preview_tiles_note;
     in property <string> auto_breakpoint_tiles_note;
+    // RAM of the undo history: automatic (what this computer spares next to
+    // a full analysis) or the MB; the note what automatic gives here.
+    in-out property <bool> undo_history_auto: true;
+    in-out property <int> undo_history_mb: 256;
+    in property <string> auto_undo_history_note;
     // An image opened the first time: auto-scaled (all channels); channels
     // without a wavelength colored. Both kept in the project afterwards.
     in-out property <bool> auto_scale_new_images: true;

@@ -53,7 +53,7 @@ use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const LIST_PAGE_SIZE: i32 = 500;
@@ -115,6 +115,74 @@ impl DbWorker {
             // A failing job must not take the jobs queued after it down.
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
                 error!("A results database job panicked");
+            }
+        }
+    }
+}
+
+/// "Loading" in the status bar only for work that takes a while: shown
+/// after [`LOADING_SHOW_AFTER`] (fast queries never flash it), then kept at
+/// least [`LOADING_SHOW_FOR`] (no flash when the work ends right after).
+const LOADING_SHOW_AFTER: std::time::Duration = std::time::Duration::from_millis(400);
+const LOADING_SHOW_FOR: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// The "Loading" indicator's state, on the UI thread.
+#[derive(Default)]
+struct LoadingIndicator {
+    busy: std::cell::Cell<bool>,
+    shown_since: std::cell::Cell<Option<std::time::Instant>>,
+    timer: slint::Timer,
+}
+
+thread_local! {
+    static LOADING: LoadingIndicator = LoadingIndicator::default();
+}
+
+impl LoadingIndicator {
+    fn set_busy(&self, ui: &slint::Weak<AppWindow>, busy: bool) {
+        self.busy.set(busy);
+        let show = |ui: &slint::Weak<AppWindow>, on: bool| {
+            if let Some(ui) = ui.upgrade() {
+                ui.global::<ResultsState>().set_loading(on);
+            }
+        };
+        match (busy, self.shown_since.get()) {
+            // Shown already: stays (a pending hide is off).
+            (true, Some(_)) => self.timer.stop(),
+            (true, None) => {
+                let ui = ui.clone();
+                self.timer.start(
+                    slint::TimerMode::SingleShot,
+                    LOADING_SHOW_AFTER,
+                    move || {
+                        LOADING.with(|indicator| {
+                            if indicator.busy.get() && indicator.shown_since.get().is_none() {
+                                indicator.shown_since.set(Some(std::time::Instant::now()));
+                                show(&ui, true);
+                            }
+                        })
+                    },
+                );
+            }
+            // Never shown: nothing to hide.
+            (false, None) => self.timer.stop(),
+            (false, Some(since)) => {
+                let hide = move |ui: &slint::Weak<AppWindow>| {
+                    LOADING.with(|indicator| {
+                        if !indicator.busy.get() {
+                            indicator.shown_since.set(None);
+                            show(ui, false);
+                        }
+                    })
+                };
+                match LOADING_SHOW_FOR.checked_sub(since.elapsed()) {
+                    None => hide(ui),
+                    Some(left) => {
+                        let ui = ui.clone();
+                        self.timer
+                            .start(slint::TimerMode::SingleShot, left, move || hide(&ui));
+                    }
+                }
             }
         }
     }
@@ -533,6 +601,12 @@ pub struct ResultsStateController {
     rail_mode: Mutex<ResultsRailMode>,
     list_stale: AtomicBool,
     charts_stale: AtomicBool,
+    // The last refresh asked for, per view: a queued refresh that a newer
+    // one replaced does nothing (quick clicks query once) - see
+    // `queue_refresh`.
+    list_generation: AtomicU64,
+    charts_generation: AtomicU64,
+    matrix_generation: AtomicU64,
     // Called after the results' plate view changed the project's plate settings,
     // so the project settings dialog shows them too (wired in editor.rs).
     plate_settings_written: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -582,6 +656,9 @@ impl ResultsStateController {
             rail_mode: Mutex::new(ResultsRailMode::List),
             list_stale: AtomicBool::new(false),
             charts_stale: AtomicBool::new(false),
+            list_generation: AtomicU64::new(0),
+            charts_generation: AtomicU64::new(0),
+            matrix_generation: AtomicU64::new(0),
             plate_settings_written: Mutex::new(None),
             split: Mutex::new(split::SplitState::default()),
             tracks: Mutex::new(tracks::TracksState::default()),
@@ -713,7 +790,10 @@ impl ResultsStateController {
                     state.set_active_well_disabled(false);
                     *manager.current_image.lock().expect("Poisned") = None;
                     if let Some(well_id) = manager.current_well.lock().expect("Poisned").clone() {
-                        manager.update_well_view(&well_id);
+                        manager.queue_refresh(
+                            |m| &m.matrix_generation,
+                            move |m| m.update_well_view(&well_id),
+                        );
                     }
                 }
             });
@@ -1550,7 +1630,11 @@ impl ResultsStateController {
                     }
                     *manager.current_well.lock().expect("Poisned") = Some(well.to_string());
                     *manager.current_image.lock().expect("Poisned") = None;
-                    manager.update_well_view(&well);
+                    let well = well.to_string();
+                    manager.queue_refresh(
+                        |m| &m.matrix_generation,
+                        move |m| m.update_well_view(&well),
+                    );
                 });
 
             let manager = self.clone();
@@ -1625,7 +1709,10 @@ impl ResultsStateController {
                         warn!("Failed to upgrade UI handle in on_well_field_clicked");
                     }
                     *manager.current_image.lock().expect("Poisned") = Some(rel_path.clone());
-                    manager.update_image_heatmap_view(&rel_path);
+                    manager.queue_refresh(
+                        |m| &m.matrix_generation,
+                        move |m| m.update_image_heatmap_view(&rel_path),
+                    );
                 });
 
             // Toggles the selected field's image disabled/enabled (see
@@ -2256,7 +2343,7 @@ impl ResultsStateController {
     /// Changes the plate settings from the results' plate view: in the Matrix
     /// view, in the project (marked unsaved, and shown in the project
     /// settings) and on screen.
-    fn edit_plate_settings(&self, edit: impl FnOnce(&mut PlateSettings)) {
+    fn edit_plate_settings(self: &Arc<Self>, edit: impl FnOnce(&mut PlateSettings)) {
         let plate = {
             let mut guard = self.matrix_filter.lock().expect("Poisoned");
             let filter = guard.get_or_insert_with(MatrixFilter::default);
@@ -2292,7 +2379,7 @@ impl ResultsStateController {
     /// and `to` (row by row) swap places in the well's image order. A well
     /// fitted automatically becomes a fixed grid of the size `shown`, in
     /// number order - what Auto showed - first.
-    fn move_well_image(&self, from: usize, to: usize, shown: (u32, u32)) {
+    fn move_well_image(self: &Arc<Self>, from: usize, to: usize, shown: (u32, u32)) {
         if from == to {
             return;
         }
@@ -2311,7 +2398,7 @@ impl ResultsStateController {
 
     /// The project's plate settings changed elsewhere (project settings
     /// dialog, undo, another project): show and use them.
-    pub fn apply_project_plate_settings(&self) {
+    pub fn apply_project_plate_settings(self: &Arc<Self>) {
         let plate = self._app_state.get_project().plate.clone();
         let changed = match self.matrix_filter.lock().expect("Poisoned").as_mut() {
             Some(filter) if filter.plate != plate => {
@@ -2559,9 +2646,7 @@ impl ResultsStateController {
     fn set_loading_in_slint(&self, loading: bool) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ResultsState>().set_loading(loading);
-            }
+            LOADING.with(|indicator| indicator.set_busy(&ui_weak, loading));
         })
         .ok();
     }
@@ -2946,9 +3031,9 @@ impl ResultsStateController {
                 self.show_active_view_mode();
                 // Only the tab on screen queries the database; the others
                 // catch up when they're shown.
-                self.refresh_list();
-                self.update_matrix_view();
-                self.refresh_charts();
+                self.refresh_list_now();
+                self.update_matrix_view_now();
+                self.refresh_charts_now();
             }
             Err(err) => {
                 error!("{}", err);
@@ -2976,7 +3061,7 @@ impl ResultsStateController {
     // filter, so jump back to page 1.
     /// Down to the children or partners a click on a children's or
     /// partners' count (`row`, `column` of the list) counts.
-    fn drill_into(&self, row: i32, column: i32) {
+    fn drill_into(self: &Arc<Self>, row: i32, column: i32) {
         let id = self
             .list_row_ids
             .lock()
@@ -3056,10 +3141,37 @@ impl ResultsStateController {
             .collect()
     }
 
-    fn refresh_list(&self) {
+    /// The list again from page 1 (its filters changed) - queried on the
+    /// database thread, so the window doesn't wait for it.
+    fn refresh_list(self: &Arc<Self>) {
+        self.queue_refresh(|m| &m.list_generation, |m| m.refresh_list_now());
+    }
+
+    fn refresh_list_now(&self) {
         *self.list_page.lock().expect("Poisned") = 0;
         *self.list_page_cursors.lock().expect("Poisned") = vec![None];
         self.update_list_view();
+    }
+
+    /// Runs `job` on the database thread unless a newer refresh of the same
+    /// view (`generation`) is asked for before it starts - quick clicks
+    /// query only for the last one.
+    fn queue_refresh(
+        self: &Arc<Self>,
+        generation: fn(&Self) -> &AtomicU64,
+        job: impl FnOnce(&Arc<Self>) + Send + 'static,
+    ) {
+        let asked = generation(self).fetch_add(1, Ordering::SeqCst) + 1;
+        self.run_db_job(move |manager| {
+            if generation(manager).load(Ordering::SeqCst) == asked {
+                job(manager);
+            }
+        });
+    }
+
+    /// The charts again (what they show changed) - on the database thread.
+    fn refresh_charts(self: &Arc<Self>) {
+        self.queue_refresh(|m| &m.charts_generation, |m| m.refresh_charts_now());
     }
 
     /// Runs whichever of `get_histogram`/`get_scatter`/`get_boxplot`
@@ -3067,7 +3179,7 @@ impl ResultsStateController {
     /// `ResultsState.chart-*` — called whenever anything the query depends
     /// on changes (chart kind, column(s), class filter, z/t plane, or a
     /// fresh database).
-    fn refresh_charts(&self) {
+    fn refresh_charts_now(&self) {
         self.remember_view();
         if !self.is_view_shown(ResultsRailMode::Charts, &self.charts_stale) {
             return;
@@ -3401,7 +3513,7 @@ impl ResultsStateController {
 
     /// The List view, filtered to the objects of the boxplot's box `label`
     /// (a class, an image, a well, a plate row or column).
-    pub fn show_box_in_list(&self, label: &str) {
+    pub fn show_box_in_list(self: &Arc<Self>, label: &str) {
         let group = self.chart_filter.lock().expect("Poisened").group_by;
         // Into the project's List view, the box's objects on its settings.
         self.activate_first_view_of(
@@ -3700,7 +3812,18 @@ impl ResultsStateController {
     // to page 1; going past the last page is harmless (the query just comes
     // back empty), but the Next button is disabled once that would happen
     // (see `set_objects_list_in_slint`) so it shouldn't occur in practice.
-    fn change_list_page(&self, delta: i32) {
+    fn change_list_page(self: &Arc<Self>, delta: i32) {
+        // In order, each from the page before (its start is known only once
+        // that one is read) - unless the list is refreshed meanwhile.
+        let asked = self.list_generation.load(Ordering::SeqCst);
+        self.run_db_job(move |manager| {
+            if manager.list_generation.load(Ordering::SeqCst) == asked {
+                manager.change_list_page_now(delta);
+            }
+        });
+    }
+
+    fn change_list_page_now(&self, delta: i32) {
         {
             let mut page = self.list_page.lock().expect("Poisned");
             *page = (*page + delta).max(0);
@@ -3989,7 +4112,12 @@ impl ResultsStateController {
         .ok();
     }
 
-    pub fn update_matrix_view(&self) {
+    /// The plate again - on the database thread.
+    pub fn update_matrix_view(self: &Arc<Self>) {
+        self.queue_refresh(|m| &m.matrix_generation, |m| m.update_matrix_view_now());
+    }
+
+    pub fn update_matrix_view_now(&self) {
         self.remember_view();
         // Hidden: refreshed anyway whenever the Matrix tab is shown.
         if *self.rail_mode.lock().expect("Poisoned") != ResultsRailMode::Matrix {
@@ -4072,14 +4200,19 @@ impl ResultsStateController {
     // — the well level reuses the exact same toolbar as the plate level,
     // not a separate one), so a change there must refresh whichever grid is
     // actually on screen rather than always the plate's.
-    fn refresh_active_matrix_view(&self) {
-        self.remember_view();
+    fn refresh_active_matrix_view(self: &Arc<Self>) {
         let Some(ui_ready) = self.ui.upgrade() else {
             warn!("Failed to upgrade UI handle in refresh_active_matrix_view");
             return;
         };
         let level = ui_ready.global::<ResultsState>().get_matrix_level();
-        self.refresh_matrix_view_at(level);
+        self.queue_refresh(
+            |m| &m.matrix_generation,
+            move |m| {
+                m.remember_view();
+                m.refresh_matrix_view_at(level);
+            },
+        );
     }
 
     /// `refresh_active_matrix_view` for a known `level` - callable off the
@@ -4096,7 +4229,7 @@ impl ResultsStateController {
                 return;
             }
         }
-        self.update_matrix_view();
+        self.update_matrix_view_now();
     }
 
     // Third drill level from the plate: the fields inside one well. Reuses
@@ -4582,7 +4715,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn select_all_aggregations(&self) {
+    fn select_all_aggregations(self: &Arc<Self>) {
         let items = aggregation_items(&AGGREGATIONS);
         self.list_filter.lock().expect("Poisened").aggregations = AGGREGATIONS.to_vec();
         self.push_aggregation_items(
@@ -4592,7 +4725,7 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
-    fn select_none_aggregations(&self) {
+    fn select_none_aggregations(self: &Arc<Self>) {
         let items = aggregation_items(&[]);
         self.list_filter.lock().expect("Poisened").aggregations = Vec::new();
         self.push_aggregation_items(items, list_summary(0, AGGREGATIONS.len(), "Aggregations"));
@@ -4645,7 +4778,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn select_all_images(&self) {
+    fn select_all_images(self: &Arc<Self>) {
         let images = self.images.lock().expect("Poisened");
         let items = image_items(&images, true);
         let total = images.len();
@@ -4656,7 +4789,7 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
-    fn select_none_images(&self) {
+    fn select_none_images(self: &Arc<Self>) {
         let images = self.images.lock().expect("Poisened");
         let items = image_items(&images, false);
         let total = images.len();
@@ -4692,17 +4825,16 @@ impl ResultsStateController {
     // scrolling to find it.
     fn filter_images(&self, query: &str) {
         let images = self.images.lock().expect("Poisened");
-        let selected_paths = self
-            .list_filter
-            .lock()
-            .expect("Poisened")
+        let list_filter = self.list_filter.lock().expect("Poisened");
+        // A set: with every image selected, a list search per image was
+        // O(n²) (20,000 images: ~10 s).
+        let selected: HashSet<&Path> = list_filter
             .image_rel_path
-            .clone();
-        let items = filtered_image_items(
-            &images,
-            |path| selected_paths.iter().any(|p| p == path),
-            query,
-        );
+            .iter()
+            .map(PathBuf::as_path)
+            .collect();
+        let items = filtered_image_items(&images, |path| selected.contains(path), query);
+        drop(list_filter);
         drop(images);
 
         let ui_weak = self.ui.clone();
@@ -4718,7 +4850,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn select_all_classes(&self) {
+    fn select_all_classes(self: &Arc<Self>) {
         let classes = self.classes.lock().expect("Poisened");
         let items = class_filter_items(&classes, true);
         let total = classes.len();
@@ -4729,7 +4861,7 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
-    fn select_none_classes(&self) {
+    fn select_none_classes(self: &Arc<Self>) {
         let classes = self.classes.lock().expect("Poisened");
         let items = class_filter_items(&classes, false);
         let total = classes.len();
@@ -4761,7 +4893,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn select_all_columns(&self) {
+    fn select_all_columns(self: &Arc<Self>) {
         let columns = self.available_columns.lock().expect("Poisened");
         let classes = self.classes.lock().expect("Poisened");
         let items = column_items(&columns, &classes, |_| true);
@@ -4774,7 +4906,7 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
-    fn select_none_columns(&self) {
+    fn select_none_columns(self: &Arc<Self>) {
         let columns = self.available_columns.lock().expect("Poisened");
         let classes = self.classes.lock().expect("Poisened");
         let items = column_items(&columns, &classes, |_| false);
@@ -5509,7 +5641,15 @@ fn list_images(
         ImageState::Disabled => disabled,
     };
     let to_string = |path: &PathBuf| path.to_str().map(str::to_string);
-    match (state, ticked.is_empty()) {
+    let ticked_set: HashSet<&Path> = ticked.iter().map(PathBuf::as_path).collect();
+    // Every image ticked: the same as none - no list of them all in the
+    // query.
+    let all_ticked = !ticked.is_empty()
+        && ticked_set.len() == images.len()
+        && images
+            .iter()
+            .all(|image| ticked_set.contains(image.rel_path.as_path()));
+    match (state, ticked.is_empty() || all_ticked) {
         (ImageState::All, true) => None,
         (ImageState::All, false) => Some(ticked.iter().filter_map(to_string).collect()),
         (_, true) => Some(
@@ -5520,15 +5660,12 @@ fn list_images(
                 .collect(),
         ),
         (_, false) => Some(
-            ticked
+            images
                 .iter()
-                .filter(|path| {
-                    images
-                        .iter()
-                        .find(|image| &&image.rel_path == path)
-                        .is_some_and(|image| wanted(image.disabled))
+                .filter(|image| {
+                    ticked_set.contains(image.rel_path.as_path()) && wanted(image.disabled)
                 })
-                .filter_map(to_string)
+                .filter_map(|image| to_string(&image.rel_path))
                 .collect(),
         ),
     }
@@ -6819,6 +6956,65 @@ pub(crate) mod tests {
         assert!(exported_images(&controller, &ui).is_empty());
     }
 
+    /// Quick clicks query once: of refreshes queued while the database
+    /// thread is busy only the last runs; page changes all run, in order.
+    #[test]
+    fn of_quick_refreshes_only_the_last_runs() {
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.db_worker.inline.store(false, Ordering::SeqCst);
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        controller.run_db_job(move |_| {
+            wait.recv().ok();
+        });
+        let runs = Arc::new(Mutex::new(Vec::new()));
+        for i in 0..3 {
+            let runs = runs.clone();
+            controller.queue_refresh(
+                |m| &m.charts_generation,
+                move |_| runs.lock().unwrap().push(i),
+            );
+        }
+        release.send(()).unwrap();
+        while controller.db_worker.pending.load(Ordering::SeqCst) > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(*runs.lock().unwrap(), [2]);
+    }
+
+    /// "Loading" only for work that takes a while: a quick job never shows
+    /// it; a long one after 400 ms, then for at least 400 ms.
+    #[test]
+    fn loading_shows_only_for_work_that_takes_a_while() {
+        use i_slint_backend_testing::mock_elapsed_time;
+        use std::time::Duration;
+        let ui = test_ui_window();
+        let state = ui.global::<ResultsState>();
+        let busy = |on: bool| LOADING.with(|indicator| indicator.set_busy(&ui.as_weak(), on));
+
+        busy(true);
+        mock_elapsed_time(Duration::from_millis(300));
+        busy(false);
+        mock_elapsed_time(Duration::from_millis(1000));
+        assert!(!state.get_loading(), "a quick job never shows it");
+
+        busy(true);
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(!state.get_loading());
+        mock_elapsed_time(Duration::from_millis(150));
+        assert!(state.get_loading(), "shown after 400 ms");
+        busy(false);
+        assert!(state.get_loading(), "kept for at least 400 ms");
+        // Busy again meanwhile: stays without a gap.
+        busy(true);
+        mock_elapsed_time(Duration::from_millis(1000));
+        assert!(state.get_loading());
+        busy(false);
+        mock_elapsed_time(Duration::from_millis(450));
+        assert!(!state.get_loading(), "then hidden");
+    }
+
     /// All / only enabled / only disabled, with and without ticked images.
     #[test]
     fn the_list_asks_for_the_images_in_or_out_of_the_results() {
@@ -6858,6 +7054,13 @@ pub(crate) mod tests {
         assert_eq!(
             ask(&[PathBuf::from("a.tif")], ImageState::Disabled),
             Some(vec![])
+        );
+        // All ticked: as none - no list of every image in the query.
+        let all: Vec<PathBuf> = ["c.tif", "a.tif", "b.tif"].map(PathBuf::from).to_vec();
+        assert_eq!(ask(&all, ImageState::All), None);
+        assert_eq!(
+            ask(&all, ImageState::Enabled),
+            Some(vec!["a.tif".to_string()])
         );
     }
 
@@ -7630,6 +7833,148 @@ pub(crate) mod tests {
             );
             report(&format!("split: draw the objects, {name}"), start.elapsed());
         }
+    }
+
+    /// Each results action as a click triggers it: how long the UI thread
+    /// is blocked (the callback), until the result is shown (the database
+    /// thread idle and the UI queue drained), and the RSS / peak after it;
+    /// 3 rounds, the median. Then 10 quick "next page" clicks, and the image
+    /// selector with 100,000 images ("all", a keystroke in its search).
+    /// `EVADB=<file.evadb> cargo test --release -p evanalyzer_gui --lib
+    /// bench_results_actions -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_results_actions() {
+        use std::time::{Duration, Instant};
+        let Ok(path) = std::env::var("EVADB") else {
+            return;
+        };
+        let mb = |key: &str| {
+            std::fs::read_to_string("/proc/self/status")
+                .unwrap_or_default()
+                .lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0)
+                / 1024.0
+        };
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        // As in the app: the database work on its own thread.
+        controller.db_worker.inline.store(false, Ordering::SeqCst);
+        let state = ui.global::<ResultsState>();
+        let settle = |controller: &Arc<ResultsStateController>| {
+            loop {
+                drain_ui_queue();
+                if controller.db_worker.pending.load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            }
+            drain_ui_queue();
+        };
+        controller.open_database(PathBuf::from(&path));
+        settle(&controller);
+        let class = controller.classes.lock().unwrap()[0].name.clone();
+        println!(
+            "{:<30} {:>12} {:>12} {:>9} {:>9}",
+            "action", "UI blocked", "shown after", "RSS", "peak"
+        );
+        let measure = |name: &str, action: &dyn Fn()| {
+            let mut runs: Vec<(f64, f64)> = (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    action();
+                    let blocked = start.elapsed().as_secs_f64() * 1000.0;
+                    settle(&controller);
+                    (blocked, start.elapsed().as_secs_f64() * 1000.0)
+                })
+                .collect();
+            runs.sort_by(|a, b| a.1.total_cmp(&b.1));
+            println!(
+                "{name:<30} {:>9.1} ms {:>9.1} ms {:>6.0} MB {:>6.0} MB",
+                runs[1].0,
+                runs[1].1,
+                mb("VmRSS:"),
+                mb("VmHWM:")
+            );
+        };
+        measure("t changed", &|| state.invoke_t_changed(0));
+        measure("class off + on", &|| {
+            state.invoke_list_class_selected(class.clone().into(), false);
+            state.invoke_list_class_selected(class.clone().into(), true);
+        });
+        measure("group by images + back", &|| {
+            state.invoke_list_group_by_selected("images".into());
+            state.invoke_list_group_by_selected("objects".into());
+        });
+        measure("next page", &|| state.invoke_list_next_page());
+        measure("previous page", &|| state.invoke_list_prev_page());
+        measure("all images + none", &|| {
+            state.invoke_list_image_select_all();
+            state.invoke_list_image_select_none();
+        });
+        state.set_rail_mode(ResultsRailMode::Charts);
+        state.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        settle(&controller);
+        measure("chart: scatter + histogram", &|| {
+            state.invoke_chart_kind_selected(crate::ResultsChartKind2::Scatter);
+            state.invoke_chart_kind_selected(crate::ResultsChartKind2::Histogram);
+        });
+        state.set_rail_mode(ResultsRailMode::Matrix);
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        settle(&controller);
+        measure("plate: class off + on", &|| {
+            state.invoke_matrix_class_selected(class.clone().into(), false);
+            state.invoke_matrix_class_selected(class.clone().into(), true);
+        });
+        state.set_rail_mode(ResultsRailMode::List);
+        state.invoke_rail_mode_selected(ResultsRailMode::List);
+        settle(&controller);
+
+        // Quick clicks: 10 pages forward.
+        let start = Instant::now();
+        let mut blocked = Duration::ZERO;
+        for _ in 0..10 {
+            let click = Instant::now();
+            state.invoke_list_next_page();
+            blocked += click.elapsed();
+        }
+        settle(&controller);
+        println!(
+            "{:<30} {:>9.1} ms {:>9.1} ms {:>6.0} MB {:>6.0} MB",
+            "10 x next page",
+            blocked.as_secs_f64() * 1000.0,
+            start.elapsed().as_secs_f64() * 1000.0,
+            mb("VmRSS:"),
+            mb("VmHWM:")
+        );
+
+        // 100,000 images in the selector (no list behind them).
+        *controller.result_generator.lock().unwrap() = None;
+        *controller.images.lock().unwrap() = (0..100_000)
+            .map(|i| ImageEntry {
+                name: format!("well_{i:06}.tif"),
+                rel_path: PathBuf::from(format!("plate_{:03}/well_{i:06}.tif", i / 1000)),
+                disabled: false,
+                disabled_reason: None,
+            })
+            .collect();
+        measure("100k images: select all", &|| {
+            state.invoke_list_image_select_all()
+        });
+        measure("100k images: keystroke", &|| {
+            state.invoke_list_image_filter_changed("well_0001".into())
+        });
+        // Every image shown and selected: each checked against the selection.
+        controller.images.lock().unwrap().truncate(20_000);
+        state.invoke_list_image_select_all();
+        measure("20k images: clear the search", &|| {
+            state.invoke_list_image_filter_changed("".into())
+        });
     }
 
     /// Leak check: the results opened 15 times (`BENCH_ROUNDS`), each time List, Plate,

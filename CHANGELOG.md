@@ -70,6 +70,22 @@ Each undo step kept a full copy of the project - with 100,000 images about
 steps: 100 edits need about 1 MB instead of 24 GB (edits of an image's
 annotations: under 1 GB), and an edit no longer pauses for ~0.1 s.
 
+### Results: no more freezing
+
+Changing a filter, the page, a chart or the plate no longer freezes the
+window while the results are read - it stays responsive, and quick clicks
+read only once (e.g. 1.7 GB results: two filter changes in a row 51-57 ms
+of frozen window before, now none and the result ~2x sooner). "Loading" in
+the status bar appears only for reads that take longer than 0.4 s. Choosing
+images in a long list is instant (20,000 images: clearing the search took
+8 s).
+
+### Undo history within a RAM budget
+
+Settings › Viewport › Undo history: Auto (what the computer can spare next
+to an analysis on all its cores) or a size in MB. The oldest steps go first;
+the last 10 always stay.
+
 ### Fixes
 
 - Results list and export: choosing images in subfolders showed no objects.

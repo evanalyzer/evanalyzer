@@ -328,6 +328,13 @@ pub struct ViewportMemorySettings {
     /// working graphics driver (virtual machines, remote desktop, old
     /// computers) - slower on very large screens. Read at startup.
     pub software_renderer: bool,
+
+    /// RAM the undo history may use - [`Self::undo_history_mb`], or with
+    /// this what this computer can spare next to a full analysis
+    /// ([`Self::auto_undo_history_mb`]). The oldest steps go first, but at
+    /// least [`Self::MIN_UNDO_STEPS`] are always kept.
+    pub undo_history_auto: bool,
+    pub undo_history_mb: u32,
 }
 
 impl ViewportMemorySettings {
@@ -341,6 +348,15 @@ impl ViewportMemorySettings {
     const AUTO_TILE_CACHE_RAM_PERCENT: u64 = 10;
     const AUTO_TILE_CACHE_MIN_MB: u32 = 128;
     const AUTO_OVERVIEW_CACHE_DIVISOR: u32 = 4;
+    pub const DEFAULT_UNDO_HISTORY_MB: u32 = 256;
+    /// Undo steps kept whatever they cost.
+    pub const MIN_UNDO_STEPS: usize = 10;
+    const AUTO_UNDO_MIN_MB: u64 = 32;
+    const AUTO_UNDO_MAX_MB: u64 = 1024;
+    /// Share of the RAM left over that the automatic undo history takes.
+    const AUTO_UNDO_PERCENT_OF_SPARE: u64 = 10;
+    /// RAM kept for the app itself and the operating system.
+    const APP_AND_SYSTEM_RESERVE_MB: u64 = 512;
 
     /// Cache sizes (tile, overview) in MB for a computer with
     /// `total_ram_bytes`: 10 % of the RAM for tiles, between 128 MB and the
@@ -386,6 +402,35 @@ impl ViewportMemorySettings {
         }
     }
 
+    /// The undo history's RAM in MB on a computer with `total_ram_bytes`
+    /// and `cores`, with the caches in effect: 10 % of what is left after a
+    /// full analysis on every core but one (each worker a 4096² tile of 4
+    /// channels, ~0.5 GB - `evanalyzer_core::estimate_ram_budget`), the
+    /// viewport's caches and 512 MB for the app and the system; between 32
+    /// MB and 1 GB. 8 GB / 4 cores: ~510 MB; 16 GB / 22 cores: ~375 MB.
+    pub fn auto_undo_history_mb(&self, total_ram_bytes: u64, cores: usize) -> u32 {
+        const MB: u64 = 1024 * 1024;
+        let tile = evanalyzer_core::MAX_TILE_SIZE;
+        let worker = evanalyzer_core::estimate_ram_budget(tile, tile, 4).total_bytes();
+        let analysis = worker * cores.saturating_sub(1).max(1) as u64;
+        let (tile_cache, overview_cache) = self.effective_cache_mb(total_ram_bytes);
+        let reserved = analysis
+            + (tile_cache as u64 + overview_cache as u64 + Self::APP_AND_SYSTEM_RESERVE_MB) * MB;
+        let spare_mb = total_ram_bytes.saturating_sub(reserved) / MB;
+        (spare_mb * Self::AUTO_UNDO_PERCENT_OF_SPARE / 100)
+            .clamp(Self::AUTO_UNDO_MIN_MB, Self::AUTO_UNDO_MAX_MB) as u32
+    }
+
+    /// The undo history's RAM in MB in effect on a computer with
+    /// `total_ram_bytes` and `cores`.
+    pub fn effective_undo_history_mb(&self, total_ram_bytes: u64, cores: usize) -> u32 {
+        if self.undo_history_auto {
+            self.auto_undo_history_mb(total_ram_bytes, cores)
+        } else {
+            self.undo_history_mb.max(1)
+        }
+    }
+
     /// The cache sizes (tile, overview) in MB in effect on a computer with
     /// `total_ram_bytes`.
     pub fn effective_cache_mb(&self, total_ram_bytes: u64) -> (u32, u32) {
@@ -416,6 +461,8 @@ impl Default for ViewportMemorySettings {
             breakpoint_tiles_auto: true,
             breakpoint_tiles: 1,
             software_renderer: false,
+            undo_history_auto: true,
+            undo_history_mb: Self::DEFAULT_UNDO_HISTORY_MB,
         }
     }
 }
@@ -560,6 +607,36 @@ pub fn save_app_settings_to(path: &Path, settings: &AppSettings) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The automatic undo history leaves a full analysis on every core its
+    /// RAM: 10 % of what is left, between 32 MB and 1 GB.
+    #[test]
+    fn the_automatic_undo_history_leaves_room_for_a_full_analysis() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        let auto = ViewportMemorySettings::default();
+        // 8 GB, 4 cores: 3 workers (1548 MB), caches 1023 MB, 512 MB app.
+        assert_eq!(auto.auto_undo_history_mb(8 * GB, 4), 510);
+        assert_eq!(auto.auto_undo_history_mb(16 * GB, 22), 375);
+        assert_eq!(auto.auto_undo_history_mb(4 * GB, 4), 152);
+        // Nothing left over: the least.
+        assert_eq!(auto.auto_undo_history_mb(8 * GB, 16), 32);
+        assert_eq!(auto.auto_undo_history_mb(512 * GB, 8), 1024);
+        // Bigger caches set by hand leave less.
+        let big_caches = ViewportMemorySettings {
+            cache_sizes_auto: false,
+            tile_cache_mb: 4096,
+            ..Default::default()
+        };
+        assert!(
+            big_caches.auto_undo_history_mb(16 * GB, 4) < auto.auto_undo_history_mb(16 * GB, 4)
+        );
+        let own = ViewportMemorySettings {
+            undo_history_auto: false,
+            undo_history_mb: 64,
+            ..Default::default()
+        };
+        assert_eq!(own.effective_undo_history_mb(8 * GB, 4), 64);
+    }
 
     fn project(path: &str) -> RecentProject {
         RecentProject {

@@ -29,6 +29,7 @@ pub use crate::utils::resources::SystemDiagnostics;
 pub use crate::utils::resources::cpu_ram_diagnostics;
 pub use crate::utils::resources::recommended_parallelism;
 pub use crate::utils::resources::system_diagnostics;
+pub use crate::utils::resources::{MAX_TILE_SIZE, estimate_ram_budget};
 pub use evanalyzer_ai::cuda_is_available;
 
 // Image reader

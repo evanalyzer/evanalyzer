@@ -124,6 +124,16 @@ impl ViewportImageController {
             state.set_breakpoint_tiles_auto(settings.breakpoint_tiles_auto);
             state.set_software_renderer(settings.software_renderer);
             state.set_breakpoint_tiles(settings.effective_breakpoint_tiles(ram) as i32);
+            let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+            state.set_auto_undo_history_note(
+                format!(
+                    "{gb:.0} GB RAM, {cores} cores: {} MB",
+                    settings.auto_undo_history_mb(ram, cores)
+                )
+                .into(),
+            );
+            state.set_undo_history_auto(settings.undo_history_auto);
+            state.set_undo_history_mb(settings.effective_undo_history_mb(ram, cores) as i32);
             state.set_auto_scale_new_images(settings.auto_scale_new_images);
             state.set_color_channels_without_wavelength(settings.color_channels_without_wavelength);
         }
@@ -166,6 +176,12 @@ impl ViewportImageController {
             auto_scale_new_images: state.get_auto_scale_new_images(),
             color_channels_without_wavelength: state.get_color_channels_without_wavelength(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
+            undo_history_auto: state.get_undo_history_auto(),
+            undo_history_mb: if state.get_undo_history_auto() {
+                before.undo_history_mb
+            } else {
+                state.get_undo_history_mb().max(1) as u32
+            },
         };
         if settings.objects_as_table != before.objects_as_table {
             ui.global::<LayoutState>()
@@ -178,6 +194,7 @@ impl ViewportImageController {
 
     /// Applies `settings` to the viewport and saves them on this computer.
     fn apply_memory_settings(&self, settings: ViewportMemorySettings) {
+        self.app_state.set_undo_budget(&settings);
         self.viewport_controller
             .set_memory_settings(settings.clone());
         self.app_state.save_viewport_memory_settings(settings);
@@ -1481,6 +1498,8 @@ mod tests {
         state.set_software_renderer(true);
         state.set_auto_scale_new_images(false);
         state.set_color_channels_without_wavelength(true);
+        state.set_undo_history_auto(false);
+        state.set_undo_history_mb(96);
 
         state.invoke_apply();
         drain_ui_queue();
@@ -1502,6 +1521,8 @@ mod tests {
             breakpoint_tiles_auto: false,
             breakpoint_tiles: 2,
             software_renderer: true,
+            undo_history_auto: false,
+            undo_history_mb: 96,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(
