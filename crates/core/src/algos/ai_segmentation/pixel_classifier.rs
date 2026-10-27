@@ -464,12 +464,12 @@ mod tests {
                 .unwrap();
             ctx.get_segmentation_map().unwrap().as_slice().to_vec()
         };
-        let x = crate::ai_learning::utils::to_dense_matrix(&[vec![0.05], vec![5.0], vec![10.05]])
-            .unwrap();
         let crate::ai_learning::model::Classifier::RandomForest(forest) = &saved.classifier else {
             unreachable!()
         };
-        let share = forest.vote_share(&x).unwrap();
+        let (_, share) = forest
+            .predict_with_share(&[vec![0.05], vec![5.0], vec![10.05]])
+            .unwrap();
         assert_eq!(share[0], 1.0, "a clear pixel: every tree agrees");
         assert!(share[1] < 1.0 || share[2] < 1.0, "{share:?}");
 

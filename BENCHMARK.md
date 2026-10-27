@@ -961,6 +961,28 @@ turning. Nothing runs or is kept while the view is off.
 the volume, 3.7 MB per 8-bit channel for the Fly Brain (11.2 MB), at most
 16.8 MB per 8-bit / 33.6 MB per 16-bit channel; the renders are a few MB.
 
+## Pixel classifier: class and certainty in one pass (2026-10-27)
+
+The random forest's certainty ("Minimum certainty", later the prediction
+overlay) ran smartcore's `predict` and then every tree again on the whole
+tile, holding every tree's votes for every pixel. Now `predict_with_share`
+runs each tree once on chunks of 4096 rows, counts the votes (the class is
+exactly smartcore's - tested, ties included) and the chunks run in parallel;
+plain predictions take the same path. `bench_predict_with_certainty`
+(core, release): one 512² tile, 20 features, 50 trees, 3 classes, forest
+trained on 5000 samples; median of 3, peak RSS of the test process above
+its start (the pixel rows themselves ~27 MB).
+
+| | before | 1 thread | 4 threads | 22 threads |
+|---|---|---|---|---|
+| Class + certainty | 1.58-1.60 s, +141 MB | 0.54 s, +62 MB | 0.16 s, +68 MB | 0.05-0.08 s, +102-104 MB |
+| Class only (smartcore `predict`, before) | 1.05 s | | | |
+
+Same classes everywhere; one thread is 3x faster than before with
+certainty and 2x faster than smartcore's class-only `predict` (the chunks
+fit the CPU cache). In an analysis the tiles already run in parallel, so
+the per-tile thread gain there is smaller.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1001,6 +1023,7 @@ graphics driver).
 | Running a pipeline: 6 images 12288² (54 tiles), 8 threads | 4.5-4.6 GB | 2026-10-25 | One shared image reader |
 | Reading a 3-channel ND2 2424² with a max projection of 23 z | ~390 MB (test process) | 2026-10-25 | One shared image reader |
 | Whole slide (5 channels, 21 tiles, 99,441 objects), performance-check project | 7.41-7.91 GB (was 8.25-8.29 GB) | 2026-10-25 | scopeio 0.0.0-alpha.2 |
+| Pixel classifier with certainty, one 512² tile (20 features, 50 trees) | +62 MB (1 thread) / +104 MB (22 threads) above the test process (was +141 MB) | 2026-10-27 | Pixel classifier: class and certainty in one pass |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.
