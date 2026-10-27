@@ -306,10 +306,11 @@ mod tests {
         let content = std::fs::read_to_string(&output_file).unwrap();
 
         assert!(
-            content.contains("[@li1993minimum] [@zack1977automatic]"),
+            content.contains("[@li1993minimum] [@li1998iterative] [@zack1977automatic]"),
             "{content}"
         );
         assert!(content.contains("Minimum cross entropy thresholding"));
+        assert!(content.contains("An iterative algorithm for minimum cross entropy thresholding"));
         assert!(content.contains("Automatic measurement of sister chromatid exchange frequency"));
     }
 
