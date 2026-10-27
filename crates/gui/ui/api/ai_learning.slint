@@ -137,6 +137,14 @@ export struct PredictionClassSlint {
     color: color,
 }
 
+// An object the object classifier is unsure of (the "Most unsure" list).
+export struct PredictionUnsureSlint {
+    id: string,
+    class: string,
+    color: color,
+    percent: int,
+}
+
 export global AiLearningState {
     in-out property <AiTrainingSettingsSlint> settings: {
         mode: 0,
@@ -256,7 +264,11 @@ export global AiLearningState {
     in property <[PredictionClassSlint]> prediction_classes: [];
     // Why nothing is shown (no pipeline applies the model yet), else "".
     in property <string> prediction_hint: "";
+    // Of an object classifier: the objects it is least sure of (Rust).
+    in property <[PredictionUnsureSlint]> prediction_unsure: [];
     callback prediction_changed();
+    // An object of `prediction_unsure` clicked: select it, fly to it.
+    callback prediction_object_clicked(string);
 
     // Fired by the toolbar button, before the dialog is shown, so Rust can
     // refresh class_names/object_metrics/training_images/training_objects

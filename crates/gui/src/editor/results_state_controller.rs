@@ -10,7 +10,7 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 
-mod split;
+pub(crate) mod split;
 mod tracks;
 mod tracks_all;
 mod views;

@@ -18,7 +18,8 @@ use crate::{
     },
 };
 use evanalyzer_cfg::core_types::{
-    ImageAddress, InternalErrors, MemoryId, PipelineId, SegmentationClass, StepId,
+    ImageAddress, InternalErrors, MemoryId, ObjectClass, ObjectId, PipelineId, SegmentationClass,
+    StepId,
 };
 use kornia_image::ImageSize;
 use log::info;
@@ -47,6 +48,26 @@ pub struct PredictedClass {
     pub segmentation_class: SegmentationClass,
 }
 
+/// What an AI object classifier step predicted for each object it scored,
+/// for the prediction overlay: the class (an index into `classes`) and how
+/// probable it is (0..=255 for 0..=100 %). Made only when the run asks for
+/// it, like [`PredictionCapture`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectPredictionCapture {
+    /// The model's classes, in its own order.
+    pub classes: Vec<PredictedObjectClass>,
+    /// Each scored object: (its id, class index, probability).
+    pub objects: Vec<(ObjectId, u8, u8)>,
+}
+
+/// A class an object classifier predicts, and the project class its
+/// objects get (`ObjectClass::Unset` when the step maps it nowhere).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictedObjectClass {
+    pub name: String,
+    pub object_class: ObjectClass,
+}
+
 /// Whether the running step should capture its prediction - set by the
 /// pipeline (see [`PipelineContext::prediction`]).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -55,8 +76,10 @@ pub enum PredictionRequest {
     None,
     /// The run wants this step's prediction.
     Asked,
-    /// The step's answer.
+    /// The step's answer - a pixel classifier's.
     Captured(PredictionCapture),
+    /// An object classifier's.
+    CapturedObjects(ObjectPredictionCapture),
 }
 
 /// The buffers captured at a breakpoint, all from the same pipeline step so
@@ -80,8 +103,11 @@ pub struct PipelineResult {
     /// Populated when a Stop or Snapshot breakpoint was reached: the image
     /// plus segmentation/instance maps captured at that step.
     pub breakpoint_capture: Option<BreakpointCapture>,
-    /// The prediction of `run_commands`' `prediction_step`, when it ran.
+    /// The prediction of `run_commands`' `prediction_step`, when it ran -
+    /// a pixel classifier's.
     pub prediction_capture: Option<PredictionCapture>,
+    /// An object classifier's.
+    pub object_prediction: Option<ObjectPredictionCapture>,
 }
 
 pub struct CorePipelineSettings {
@@ -255,6 +281,7 @@ impl Pipeline {
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
         let mut prediction_capture: Option<PredictionCapture> = None;
+        let mut object_prediction: Option<ObjectPredictionCapture> = None;
 
         for (step_id, scope, command) in &self.commands {
             let step_id = *step_id;
@@ -269,10 +296,14 @@ impl Pipeline {
             command
                 .run(&mut ctx, &mut cache)
                 .map_err(|e| e.in_step(self.id, step_id))?;
-            if wants_prediction
-                && let PredictionRequest::Captured(capture) = std::mem::take(&mut ctx.prediction)
-            {
-                prediction_capture = Some(capture);
+            if wants_prediction {
+                match std::mem::take(&mut ctx.prediction) {
+                    PredictionRequest::Captured(capture) => prediction_capture = Some(capture),
+                    PredictionRequest::CapturedObjects(capture) => {
+                        object_prediction = Some(capture)
+                    }
+                    _ => {}
+                }
             }
             ctx.prediction = PredictionRequest::None;
             let duration = step_start.elapsed();
@@ -322,6 +353,7 @@ impl Pipeline {
                         breakpoint_hit: true,
                         breakpoint_capture: Some(capture),
                         prediction_capture,
+                        object_prediction,
                     });
                 }
             }
@@ -339,6 +371,7 @@ impl Pipeline {
             breakpoint_hit: false,
             breakpoint_capture,
             prediction_capture,
+            object_prediction,
         })
     }
 }

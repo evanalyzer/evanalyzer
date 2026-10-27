@@ -181,8 +181,8 @@ impl PipelineWorker {
                             step_id,
                             mode,
                         });
-                // The prediction overlay: the pixel classifier step it shows
-                // sends each tile's prediction.
+                // The prediction overlay: the classifier step it shows sends
+                // each tile's prediction (pixels) or its objects'.
                 let overlay = self.viewport_controller.prediction.settings();
                 let prediction = overlay
                     .on
@@ -530,6 +530,12 @@ impl PipelineWorker {
                             },
                             first_prediction_tile,
                         );
+                        first_prediction_tile = false;
+                    }
+                    ProgressEvent::ObjectPredictionReached { capture } => {
+                        self_handle
+                            .viewport_controller
+                            .set_object_prediction(capture);
                         first_prediction_tile = false;
                     }
                     ProgressEvent::Finished => {
@@ -1216,7 +1222,7 @@ mod tests {
 
         f.worker.run_task(task());
         drain_ui_queue();
-        assert!(!overlay.has_tiles(), "the overlay is off");
+        assert!(!overlay.has_prediction(), "the overlay is off");
 
         overlay.set_settings(PredictionOverlaySettings {
             on: true,
@@ -1225,7 +1231,7 @@ mod tests {
         });
         f.worker.run_task(task());
         drain_ui_queue();
-        assert!(overlay.has_tiles());
+        assert!(overlay.has_prediction());
         let (class, percent) = overlay.value_at(5.0, 5.0).expect("a prediction at (5, 5)");
         assert!(class == "Background" || class == "Cell", "{class}");
         assert!((50..=100).contains(&percent), "{percent}");
@@ -1244,7 +1250,7 @@ mod tests {
         without.project_settings.pipelines.clear();
         f.worker.run_task(without);
         drain_ui_queue();
-        assert!(!overlay.has_tiles(), "no pixel classifier any more");
+        assert!(!overlay.has_prediction(), "no pixel classifier any more");
         assert_eq!(
             ai.get_prediction_classes().row_count(),
             0,
@@ -1259,9 +1265,9 @@ mod tests {
 
         f.worker.run_task(task());
         drain_ui_queue();
-        assert!(overlay.has_tiles());
+        assert!(overlay.has_prediction());
         overlay.set_settings(PredictionOverlaySettings::default());
-        assert!(!overlay.has_tiles(), "switched off");
+        assert!(!overlay.has_prediction(), "switched off");
     }
 
     #[test]

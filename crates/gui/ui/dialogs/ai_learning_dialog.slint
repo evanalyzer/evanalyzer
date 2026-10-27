@@ -1084,10 +1084,10 @@ export component AiLearningDialog inherits InkDialog {
             }
         }
 
-        // ----- SHOW ON IMAGE: the prediction overlay (pixel classifier) -----
-        // Each pixel in the colour of its predicted class, the stronger the
-        // more probable - pale where to paint next.
-        if AiLearningState.settings.mode == 0: VerticalLayout {
+        // ----- SHOW ON IMAGE: the prediction overlay -----
+        // Each pixel (object) in the colour of its predicted class, the
+        // stronger the more probable - pale where to paint (label) next.
+        VerticalLayout {
             vertical-stretch: 0;
             alignment: start;
             padding-left: 14px;
@@ -1106,7 +1106,10 @@ export component AiLearningDialog inherits InkDialog {
                 label: "Show on image";
                 model: ["Prediction", "Off"];
                 selected: AiLearningState.prediction_on ? 0 : 1;
-                tips: ["Each pixel in the colour of the class it is predicted as - the stronger, the more probable", "Only the image and the objects"];
+                tips: [
+                    AiLearningState.settings.mode == 0 ? "Each pixel in the colour of the class it is predicted as - the stronger, the more probable" : "Each object as strong as the model is sure of its class",
+                    "Only the image and the objects"
+                ];
                 picked(index) => {
                     AiLearningState.prediction_on = index == 0;
                     AiLearningState.prediction_changed();
@@ -1140,7 +1143,7 @@ export component AiLearningDialog inherits InkDialog {
                     vertical-alignment: center;
                 }
             }
-            if AiLearningState.prediction_on: CheckBox {
+            if AiLearningState.prediction_on && AiLearningState.settings.mode == 0: CheckBox {
                 text: "Background in its colour too";
                 checked <=> AiLearningState.prediction_background;
                 toggled => {
@@ -1154,12 +1157,64 @@ export component AiLearningDialog inherits InkDialog {
                     AiLearningState.prediction_changed();
                 }
             }
+            // The objects to label next: click selects one and flies to it.
+            if AiLearningState.prediction_on && AiLearningState.settings.mode == 1 && AiLearningState.prediction_unsure.length > 0: VerticalLayout {
+                spacing: 2px;
+                InkCaption {
+                    text: "MOST UNSURE OBJECTS";
+                }
+                for object in AiLearningState.prediction_unsure: Rectangle {
+                    height: 22px;
+                    border-radius: Ink.radius-sm;
+                    background: unsure-touch.has-hover ? Ink.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: object.class + " " + object.percent + " %";
+                    accessible-action-default => {
+                        AiLearningState.prediction_object_clicked(object.id);
+                    }
+                    unsure-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            AiLearningState.prediction_object_clicked(object.id);
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 9px;
+                            height: 9px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 2px;
+                            background: object.color;
+                        }
+                        Text {
+                            text: object.class;
+                            font-size: Ink.fs-secondary;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: object.percent + " %";
+                            font-family: Ink.font-mono;
+                            font-size: Ink.fs-secondary;
+                            color: Ink.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
             if AiLearningState.prediction_on && AiLearningState.prediction_hint != "": InkBanner {
                 tone: InkTone.warn;
                 text: AiLearningState.prediction_hint;
             }
             if AiLearningState.prediction_on && AiLearningState.prediction_hint == "": Text {
-                text: "Pale areas are where the model is unsure - paint examples there, then train again.";
+                text: AiLearningState.settings.mode == 0
+                    ? "Pale areas are where the model is unsure - paint examples there, then train again."
+                    : "Pale objects are where the model is unsure - copy a few to manual, give them their class, then train again.";
                 color: Ink.text-dim;
                 font-size: Ink.fs-secondary;
                 wrap: word-wrap;

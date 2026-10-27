@@ -245,7 +245,9 @@ pub mod analysis {
     pub use crate::api::ProgressEvent;
     pub use crate::api::RunningJob;
     pub use evanalyzer_core::random_job_name;
-    pub use evanalyzer_core::{PredictedClass, PredictionCapture};
+    pub use evanalyzer_core::{
+        ObjectPredictionCapture, PredictedClass, PredictedObjectClass, PredictionCapture,
+    };
 }
 
 pub mod preview {

@@ -130,6 +130,12 @@ pub enum ProgressEvent {
         tile_offset_x: usize,
         tile_offset_y: usize,
     },
+    /// A preview's object prediction for the prediction overlay - the
+    /// objects an AI object classifier step (`JobExecutor::prediction`)
+    /// scored, sent once its whole-image phase ran.
+    ObjectPredictionReached {
+        capture: crate::pipeline::pipeline::ObjectPredictionCapture,
+    },
 }
 
 /// Controls tile selection when running a preview on a single image.
@@ -1101,6 +1107,10 @@ impl<'a> JobExecutor {
                             .filter(|b| b.pipeline_id == *pipe_id)
                             .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                             .unwrap_or((None, false));
+                        let prediction_step = self
+                            .prediction
+                            .filter(|target| target.pipeline_id == *pipe_id)
+                            .map(|target| target.step_id);
                         let pipeline_start = Instant::now();
                         let result = p.run_commands(
                             self.output_path.clone(),
@@ -1108,9 +1118,15 @@ impl<'a> JobExecutor {
                             merged_cache,
                             bp_step,
                             snapshot_mode,
-                            None,
+                            prediction_step,
                         )?;
                         merged_cache = result.cache;
+                        if let (Some(capture), Some(sender)) = (result.object_prediction, &progress)
+                        {
+                            sender
+                                .send(ProgressEvent::ObjectPredictionReached { capture })
+                                .ok();
+                        }
                         debug!(
                             "{image_rel_path:?} t={t} z={z}: whole-image pipeline {pipe_id} in {:.2} s",
                             pipeline_start.elapsed().as_secs_f64()

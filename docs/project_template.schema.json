@@ -62,6 +62,14 @@
           "$ref": "#/$defs/ObjectAiObjectClassifierAiClassifyMatchHandlingSettings",
           "default": "RECLASSIFY_IF_MATCH"
         },
+        "minCertainty": {
+          "description": "Objects the model is less sure about than this are left as they are (0 = off).\nThe certainty is the share of trees (random forest) or neighbours (KNN) voting for the class, or the probability of the class (MLP).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
+        },
         "modelPath": {
           "description": "Path to a trained object classifier model, saved from the AI training dialog.",
           "type": "string",

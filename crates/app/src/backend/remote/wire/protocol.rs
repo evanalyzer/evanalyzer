@@ -405,6 +405,13 @@ pub(crate) enum WireProgressEvent {
         nr_bits: u16,
         channel_idx: Option<i32>,
     },
+    /// No blobs: a few bytes per object.
+    ObjectPredictionReached {
+        /// The model's classes: name and project object class.
+        classes: Vec<(String, evanalyzer_cfg::core_types::ObjectClass)>,
+        /// Each scored object: id, class index, probability (0..=255).
+        objects: Vec<(evanalyzer_cfg::core_types::ObjectId, u8, u8)>,
+    },
     /// Blobs: the class of each pixel, then its probability (a byte each).
     PredictionReached {
         width: usize,
@@ -478,6 +485,16 @@ pub(crate) fn event_to_wire(event: ProgressEvent) -> (WireProgressEvent, Vec<Vec
                 },
                 blobs,
             );
+        }
+        ProgressEvent::ObjectPredictionReached { capture } => {
+            WireProgressEvent::ObjectPredictionReached {
+                classes: capture
+                    .classes
+                    .into_iter()
+                    .map(|class| (class.name, class.object_class))
+                    .collect(),
+                objects: capture.objects,
+            }
         }
         ProgressEvent::PredictionReached {
             capture,
@@ -562,6 +579,22 @@ pub(crate) fn event_from_wire(
                 tile_height,
                 nr_bits,
                 channel_idx,
+            }
+        }
+        WireProgressEvent::ObjectPredictionReached { classes, objects } => {
+            ProgressEvent::ObjectPredictionReached {
+                capture: evanalyzer_core::ObjectPredictionCapture {
+                    classes: classes
+                        .into_iter()
+                        .map(
+                            |(name, object_class)| evanalyzer_core::PredictedObjectClass {
+                                name,
+                                object_class,
+                            },
+                        )
+                        .collect(),
+                    objects,
+                },
             }
         }
         WireProgressEvent::PredictionReached {
@@ -906,6 +939,28 @@ mod tests {
         };
         assert_eq!(capture, sent);
         assert_eq!((tile_offset_x, tile_offset_y), (512, 1024));
+    }
+
+    #[test]
+    fn an_object_prediction_survives_the_wire() {
+        use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+        let capture = evanalyzer_core::ObjectPredictionCapture {
+            classes: vec![evanalyzer_core::PredictedObjectClass {
+                name: "Mitotic".into(),
+                object_class: ObjectClass::Global(4),
+            }],
+            objects: vec![(ObjectId(u128::MAX - 3), 0, 131)],
+        };
+        let (wire, blobs) = event_to_wire(ProgressEvent::ObjectPredictionReached {
+            capture: capture.clone(),
+        });
+        assert!(blobs.is_empty());
+        let ProgressEvent::ObjectPredictionReached { capture: back } =
+            event_from_wire(wire, blobs).unwrap()
+        else {
+            panic!("expected an object prediction");
+        };
+        assert_eq!(back, capture);
     }
 
     #[test]

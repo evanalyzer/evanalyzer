@@ -137,7 +137,8 @@ fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut us
         | ProgressEvent::TileCompleted { .. }
         | ProgressEvent::WholeImagePhaseCompleted { .. }
         | ProgressEvent::BreakpointReached { .. }
-        | ProgressEvent::PredictionReached { .. } => {}
+        | ProgressEvent::PredictionReached { .. }
+        | ProgressEvent::ObjectPredictionReached { .. } => {}
     }
 }
 

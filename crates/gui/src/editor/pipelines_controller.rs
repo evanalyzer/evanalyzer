@@ -92,7 +92,7 @@ thread_local! {
 pub struct PipelinesController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
-    pub(crate) _object_list_controller: Arc<ObjectListController>,
+    pub(crate) object_list_controller: Arc<ObjectListController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
@@ -181,7 +181,7 @@ impl PipelinesController {
         Self {
             ui,
             app_state: app_state.clone(),
-            _object_list_controller: object_list_controller,
+            object_list_controller: object_list_controller,
             viewport_controller,
             template_controller,
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
@@ -265,6 +265,10 @@ impl PipelinesController {
             let manager = self.clone();
             state.on_prediction_changed(move || {
                 manager.sync_prediction_overlay();
+            });
+            let manager = self.clone();
+            state.on_prediction_object_clicked(move |id| {
+                manager.show_predicted_object(&id);
             });
 
             // The remembered "Always show advanced settings"
@@ -3404,7 +3408,6 @@ impl PipelinesController {
         };
         let state = ui.global::<AiLearningState>();
         let ai = state.get_settings();
-        let pixel = ai.mode == 0;
         // The model the panel works on: the loaded one, else the one its
         // name is saved as (steps are matched by the file name).
         let model = if !ai.loaded_model_path.is_empty() {
@@ -3416,7 +3419,7 @@ impl PipelinesController {
             )
         };
         let settings = PredictionOverlaySettings {
-            on: state.get_prediction_on() && pixel,
+            on: state.get_prediction_on(),
             model: Some(model),
             opacity: state.get_prediction_opacity(),
             show_background: state.get_prediction_background(),
@@ -3435,6 +3438,7 @@ impl PipelinesController {
             .set_settings(settings.clone());
         if !settings.on {
             state.set_prediction_classes(slint::ModelRc::default());
+            state.set_prediction_unsure(slint::ModelRc::default());
             state.set_prediction_hint("".into());
             self.viewport_controller.trigger_image_redraw_objects();
             return false;
@@ -3445,6 +3449,57 @@ impl PipelinesController {
         }
         self.viewport_controller.trigger_image_redraw_objects();
         false
+    }
+
+    /// An object of the training panel's "Most unsure" list clicked: it is
+    /// selected (the objects panel offers "Copy to manual") and the view
+    /// flies to it.
+    fn show_predicted_object(self: &Arc<Self>, id: &str) {
+        let Ok(id) = id.parse::<u128>() else {
+            return;
+        };
+        let id = evanalyzer_cfg::core_types::ObjectId(id);
+        let bbox = {
+            let mut project = self.app_state.get_project_write();
+            let Some(bbox) = project
+                .get_preview_objects()
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| o.bbox)
+            else {
+                return;
+            };
+            project.set_selected_object(Some(id));
+            bbox
+        };
+        self.object_list_controller
+            .sync_selected_object_to_slint(true);
+        self.viewport_controller.trigger_image_redraw_objects();
+        let (w, h) = *self
+            .viewport_controller
+            .full_image_size
+            .lock()
+            .expect("Poisoned");
+        let (_, _, _, v_w, v_h) = self.viewport_controller.view();
+        if w <= 0 || v_w <= 0.0 {
+            return;
+        }
+        let target = crate::editor::results_overlay::focus_view(
+            v_w,
+            v_h,
+            w as f32,
+            h as f32,
+            bbox.map(|v| v as f32),
+        );
+        let reduce_motion = self.viewport_controller.memory_settings().reduce_motion;
+        if let Some(ui) = self.ui.upgrade() {
+            crate::editor::results_state_controller::split::fly_to_view(
+                &ui,
+                target,
+                (v_w, v_h),
+                reduce_motion,
+            );
+        }
     }
 
     fn schedule_auto_preview(self: &Arc<Self>) {
@@ -8027,8 +8082,8 @@ mod tests {
     }
 
     /// The training panel's prediction switch drives the overlay (the model
-    /// is the one the panel's name is saved as), its look is remembered; an
-    /// object classifier has none.
+    /// is the one the panel's name is saved as), its look is remembered -
+    /// for an object classifier too; off clears the legend and the list.
     #[test]
     fn the_prediction_switch_drives_the_overlay_and_its_look_is_remembered() {
         let ui = test_ui_window();
@@ -8066,8 +8121,14 @@ mod tests {
         ai.set_settings(settings);
         ai.invoke_prediction_changed();
         drain_ui_queue();
-        assert!(!overlay().on, "an object classifier predicts no pixels");
+        assert!(overlay().on, "an object classifier's objects are shown");
+
+        ai.set_prediction_on(false);
+        ai.invoke_prediction_changed();
+        drain_ui_queue();
+        assert!(!overlay().on);
         assert_eq!(ai.get_prediction_classes().row_count(), 0);
+        assert_eq!(ai.get_prediction_unsure().row_count(), 0);
     }
 
     #[test]

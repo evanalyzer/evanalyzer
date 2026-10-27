@@ -581,6 +581,7 @@ impl From<AiObjectClassifierSettings> for AiObjectClassifier {
                 .collect(),
             input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
             match_handling: AiClassifyMatchHandling::from(_s.match_handling),
+            min_certainty: _s.min_certainty.clamp(0.0, 1.0),
         }
     }
 }

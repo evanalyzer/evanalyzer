@@ -2111,6 +2111,98 @@ mod tests {
         assert_eq!(pixel_at(&r, 3, 2).a, 0, "outside the tile");
     }
 
+    /// An object classifier's prediction: each scored object as strong as
+    /// the model is sure of it (a tie: clear), the others as usual; the
+    /// training panel gets the legend and the objects least sure first.
+    #[test]
+    fn an_object_prediction_draws_objects_as_strong_as_they_are_sure() {
+        use crate::editor::prediction_overlay::PredictionOverlaySettings;
+        use evanalyzer_app::analysis::{ObjectPredictionCapture, PredictedObjectClass};
+        use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        set_view(&r, 1.0, 0.0, 0.0);
+        let controller = &r.worker.viewport_controller;
+        controller.set_memory_settings(ViewportMemorySettings {
+            object_overlay_margin_px: 0,
+            ..Default::default()
+        });
+        let square = |id: u128, x: u32| ObjectMetricSettings {
+            id: ObjectId(id),
+            bbox: [x, 10, x + 5, 15],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 36],
+            object_class: [ObjectClass::Global(1)].into(),
+            ..Default::default()
+        };
+        {
+            let mut project = r.app_state.get_project_write();
+            project.classification.classes_mut().push(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    id: 1,
+                    color: 0x2a6bdf,
+                    name: "Interphase".into(),
+                    notes: String::new(),
+                },
+            );
+            let preview = &mut project.tmp_settings.preview_objects;
+            preview.extend([square(1, 10), square(2, 30), square(3, 50)]);
+        }
+        let interior = |r: &Render, x: usize| {
+            let image = r.ui.get_object_image().to_rgba8().expect("rgba");
+            let width = image.width() as usize;
+            image.as_slice()[12 * width + x].a
+        };
+        controller
+            .prediction
+            .set_settings(PredictionOverlaySettings {
+                on: true,
+                opacity: 1.0,
+                ..Default::default()
+            });
+        controller.set_object_prediction(ObjectPredictionCapture {
+            classes: vec![
+                PredictedObjectClass {
+                    name: "Interphase".into(),
+                    object_class: ObjectClass::Unset,
+                },
+                PredictedObjectClass {
+                    name: "Mitotic".into(),
+                    object_class: ObjectClass::Unset,
+                },
+            ],
+            objects: vec![(ObjectId(1), 1, 255), (ObjectId(2), 0, 127)],
+        });
+        r.draw(TaskDispatch::Objects, DrawingTask::default());
+        drain_ui_queue();
+
+        let (sure, tie, unscored) = (interior(&r, 12), interior(&r, 32), interior(&r, 52));
+        assert!(sure > 0, "sure: drawn");
+        assert_eq!(tie, 0, "a tie: clear");
+        assert!(unscored > 0, "not scored: as usual");
+
+        use slint::Model;
+        let ai = r.ui.global::<crate::AiLearningState>();
+        let legend: Vec<String> = ai
+            .get_prediction_classes()
+            .iter()
+            .map(|class| class.name.to_string())
+            .collect();
+        assert_eq!(legend, ["Interphase", "Mitotic"]);
+        let unsure: Vec<(String, String, i32)> = ai
+            .get_prediction_unsure()
+            .iter()
+            .map(|o| (o.id.to_string(), o.class.to_string(), o.percent))
+            .collect();
+        assert_eq!(
+            unsure,
+            [
+                ("2".to_string(), "Interphase".to_string(), 50),
+                ("1".to_string(), "Mitotic".to_string(), 100)
+            ]
+        );
+    }
+
     #[test]
     fn the_object_overlay_reaches_the_margin_past_every_viewport_edge() {
         let mut r = render_fixture(project_with_fixture_image());

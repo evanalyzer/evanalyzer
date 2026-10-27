@@ -5,7 +5,9 @@
 //! the stronger the more probable - pale where the model is unsure, which
 //! is where to paint next. Keeps the preview's tiles of it (each
 //! `ProgressEvent::PredictionReached`) and draws them into the object
-//! layer, under the objects.
+//! layer, under the objects. For an object classifier
+//! (`ProgressEvent::ObjectPredictionReached`) each object is as strong as
+//! the model is sure of its class instead.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-27
@@ -15,7 +17,9 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::editor::object_render::blend;
-use evanalyzer_app::analysis::PredictionCapture;
+use evanalyzer_app::analysis::{ObjectPredictionCapture, PredictionCapture};
+use evanalyzer_cfg::core_types::ObjectId;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
@@ -49,6 +53,22 @@ impl PredictionOverlay {
         &self,
         project: &P,
     ) -> Vec<(String, [u8; 3])> {
+        if let Some(objects) = &*self.objects.read().expect("Poisoned") {
+            return objects
+                .classes
+                .iter()
+                .map(|class| {
+                    let rgb = project.get_class_from_id(&class.object_class).map_or(
+                        BACKGROUND_RGB,
+                        |class| {
+                            let rgb = class.color;
+                            [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
+                        },
+                    );
+                    (class.name.clone(), rgb)
+                })
+                .collect();
+        }
         let tiles = self.tiles.read().expect("Poisoned");
         tiles.first().map_or_else(Vec::new, |tile| {
             tile.capture
@@ -105,12 +125,35 @@ impl PredictionTile {
     }
 }
 
-/// The overlay's settings and the last preview's tiles - kept until the
-/// next preview's first tile, a preview without any or another image.
+/// An object classifier's prediction: each scored object's class (index
+/// into `classes`) and probability (0..=255).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ObjectPrediction {
+    pub(crate) classes: Vec<evanalyzer_app::analysis::PredictedObjectClass>,
+    pub(crate) objects: HashMap<ObjectId, (u8, u8)>,
+}
+
+impl From<ObjectPredictionCapture> for ObjectPrediction {
+    fn from(capture: ObjectPredictionCapture) -> Self {
+        Self {
+            classes: capture.classes,
+            objects: capture
+                .objects
+                .into_iter()
+                .map(|(id, class, p)| (id, (class, p)))
+                .collect(),
+        }
+    }
+}
+
+/// The overlay's settings and the last preview's prediction - its tiles
+/// or its objects - kept until the next preview's, a preview without any
+/// or another image.
 #[derive(Default)]
 pub(crate) struct PredictionOverlay {
     settings: RwLock<PredictionOverlaySettings>,
     tiles: RwLock<Vec<PredictionTile>>,
+    objects: RwLock<Option<ObjectPrediction>>,
 }
 
 impl PredictionOverlay {
@@ -131,6 +174,7 @@ impl PredictionOverlay {
         let mut tiles = self.tiles.write().expect("Poisoned");
         if first {
             tiles.clear();
+            *self.objects.write().expect("Poisoned") = None;
         }
         tiles.retain(|t| {
             (t.tile_offset_x, t.tile_offset_y) != (tile.tile_offset_x, tile.tile_offset_y)
@@ -138,12 +182,69 @@ impl PredictionOverlay {
         tiles.push(tile);
     }
 
-    pub(crate) fn clear(&self) {
+    /// Stores an object classifier's prediction in place of the last one
+    /// (tiles or objects).
+    pub(crate) fn set_objects(&self, capture: ObjectPredictionCapture) {
         self.tiles.write().expect("Poisoned").clear();
+        *self.objects.write().expect("Poisoned") = Some(capture.into());
     }
 
-    pub(crate) fn has_tiles(&self) -> bool {
+    pub(crate) fn clear(&self) {
+        self.tiles.write().expect("Poisoned").clear();
+        *self.objects.write().expect("Poisoned") = None;
+    }
+
+    /// Whether there is a prediction (tiles or objects) to show.
+    pub(crate) fn has_prediction(&self) -> bool {
         !self.tiles.read().expect("Poisoned").is_empty()
+            || self.objects.read().expect("Poisoned").is_some()
+    }
+
+    /// Whether the prediction is an object classifier's.
+    pub(crate) fn has_objects(&self) -> bool {
+        self.objects.read().expect("Poisoned").is_some()
+    }
+
+    /// How opaque each object is drawn (see [`ObjectAlphas::get`]) - read
+    /// once per redraw; `None`: the overlay is off or shows no objects.
+    pub(crate) fn object_alphas(&self) -> Option<ObjectAlphas<'_>> {
+        let settings = self.settings.read().expect("Poisoned");
+        if !settings.on {
+            return None;
+        }
+        let opacity = settings.opacity;
+        drop(settings);
+        let objects = self.objects.read().expect("Poisoned");
+        objects
+            .is_some()
+            .then_some(ObjectAlphas { opacity, objects })
+    }
+
+    /// The class object `id` is predicted as and how probable it is
+    /// (0..=100 %).
+    pub(crate) fn object_value(&self, id: &ObjectId) -> Option<(String, u8)> {
+        let objects = self.objects.read().expect("Poisoned");
+        let objects = objects.as_ref()?;
+        let (class, p) = objects.objects.get(id)?;
+        let class = objects.classes.get(usize::from(*class))?;
+        Some((class.name.clone(), percent(*p)))
+    }
+
+    /// The `n` objects the model is least sure of, least sure first: id,
+    /// predicted class (index into the legend) and %.
+    pub(crate) fn most_unsure_objects(&self, n: usize) -> Vec<(ObjectId, usize, u8)> {
+        let objects = self.objects.read().expect("Poisoned");
+        let Some(objects) = objects.as_ref() else {
+            return Vec::new();
+        };
+        let mut unsure: Vec<(&ObjectId, &(u8, u8))> = objects.objects.iter().collect();
+        // Ties: by id, so the list doesn't shuffle between previews.
+        unsure.sort_unstable_by(|a, b| a.1.1.cmp(&b.1.1).then_with(|| a.0.cmp(b.0)));
+        unsure
+            .into_iter()
+            .take(n)
+            .map(|(id, (class, p))| (id.clone(), usize::from(*class), percent(*p)))
+            .collect()
     }
 
     /// The class predicted at image pixel `(x, y)` and how probable it is
@@ -157,8 +258,7 @@ impl PredictionOverlay {
                 .capture
                 .classes
                 .get(usize::from(tile.capture.class_of_pixel[i]))?;
-            let percent = (u32::from(tile.capture.probability[i]) * 100 + 127) / 255;
-            Some((class.name.clone(), percent as u8))
+            Some((class.name.clone(), percent(tile.capture.probability[i])))
         })
     }
 
@@ -185,6 +285,27 @@ impl PredictionOverlay {
             }
         });
     }
+}
+
+/// The object prediction while a redraw reads it.
+pub(crate) struct ObjectAlphas<'a> {
+    opacity: f32,
+    objects: std::sync::RwLockReadGuard<'a, Option<ObjectPrediction>>,
+}
+
+impl ObjectAlphas<'_> {
+    /// How opaque object `id` is drawn, 0..=1 - the opacity × [`strength`]
+    /// of its prediction; `None`: it wasn't scored (drawn as usual).
+    pub(crate) fn get(&self, id: &ObjectId) -> Option<f32> {
+        let objects = self.objects.as_ref()?;
+        let (_, p) = objects.objects.get(id)?;
+        Some(self.opacity * strength(*p, objects.classes.len()))
+    }
+}
+
+/// A probability byte (0..=255) as 0..=100 %, rounded.
+fn percent(probability: u8) -> u8 {
+    ((u32::from(probability) * 100 + 127) / 255) as u8
 }
 
 /// Where image pixels land in a screen-space buffer: image pixel `p` at
@@ -447,6 +568,152 @@ mod tests {
         });
         assert_eq!(drawn(&overlay), [0, 255]);
         overlay.set_settings(PredictionOverlaySettings::default());
-        assert!(!overlay.has_tiles(), "off frees the tiles");
+        assert!(!overlay.has_prediction(), "off frees the tiles");
+    }
+
+    /// Three objects of a two-class object classifier: sure Mitotic, a tie,
+    /// fairly sure Interphase.
+    fn object_capture() -> ObjectPredictionCapture {
+        use evanalyzer_app::analysis::PredictedObjectClass;
+        use evanalyzer_cfg::core_types::ObjectClass;
+        ObjectPredictionCapture {
+            classes: vec![
+                PredictedObjectClass {
+                    name: "Interphase".into(),
+                    object_class: ObjectClass::Global(1),
+                },
+                PredictedObjectClass {
+                    name: "Mitotic".into(),
+                    object_class: ObjectClass::Global(2),
+                },
+            ],
+            objects: vec![
+                (ObjectId(1), 1, 255),
+                (ObjectId(2), 0, 128),
+                (ObjectId(3), 0, 204),
+            ],
+        }
+    }
+
+    /// Each object is as opaque as the model is sure of it (a tie:
+    /// clear), with the overlay on only; unscored objects keep their look.
+    #[test]
+    fn an_object_is_as_strong_as_the_model_is_sure_of_it() {
+        let overlay = PredictionOverlay::default();
+        overlay.set_objects(object_capture());
+        assert!(overlay.object_alphas().is_none(), "off");
+        overlay.set_settings(PredictionOverlaySettings {
+            on: true,
+            opacity: 0.5,
+            ..Default::default()
+        });
+        let alphas = overlay.object_alphas().unwrap();
+        assert_eq!(alphas.get(&ObjectId(1)), Some(0.5));
+        let tie = alphas.get(&ObjectId(2)).unwrap();
+        assert!(tie < 0.01, "{tie}");
+        let fair = alphas.get(&ObjectId(3)).unwrap();
+        assert!((fair - 0.5 * 0.6).abs() < 0.01, "{fair}");
+        assert_eq!(alphas.get(&ObjectId(99)), None, "not scored");
+        drop(alphas);
+        assert_eq!(
+            overlay.object_value(&ObjectId(3)),
+            Some(("Interphase".to_string(), 80))
+        );
+    }
+
+    /// Time for the per-object work of one redraw (an `object_alpha` per
+    /// object) and for the "Most unsure" list, with 100 000 scored objects.
+    /// Run with `cargo test --release -p evanalyzer_gui --lib
+    /// bench_object_prediction -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_object_prediction() {
+        use evanalyzer_app::analysis::PredictedObjectClass;
+        use evanalyzer_cfg::core_types::ObjectClass;
+        let n = 100_000u128;
+        let capture = ObjectPredictionCapture {
+            classes: (0..3)
+                .map(|i| PredictedObjectClass {
+                    name: format!("c{i}"),
+                    object_class: ObjectClass::Global(i),
+                })
+                .collect(),
+            objects: (0..n)
+                .map(|i| (ObjectId(i * 7919), (i % 3) as u8, (i % 256) as u8))
+                .collect(),
+        };
+        let overlay = PredictionOverlay::default();
+        overlay.set_settings(PredictionOverlaySettings {
+            on: true,
+            ..Default::default()
+        });
+        let start = std::time::Instant::now();
+        overlay.set_objects(capture);
+        let stored = start.elapsed();
+        let start = std::time::Instant::now();
+        let mut sum = 0.0;
+        let alphas = overlay.object_alphas().unwrap();
+        for i in 0..n {
+            sum += alphas.get(&ObjectId(i * 7919)).unwrap_or(0.0);
+        }
+        drop(alphas);
+        let redraw = start.elapsed();
+        let start = std::time::Instant::now();
+        let unsure = overlay.most_unsure_objects(5);
+        let list = start.elapsed();
+        println!(
+            "100k objects: store {stored:?}, alphas of a redraw {redraw:?}, unsure list {list:?} ({sum:.0}, {})",
+            unsure.len()
+        );
+    }
+
+    /// The least sure objects come first, as many as asked for.
+    #[test]
+    fn the_most_unsure_objects_come_first() {
+        let overlay = PredictionOverlay::default();
+        assert!(overlay.most_unsure_objects(8).is_empty());
+        overlay.set_objects(object_capture());
+        assert_eq!(
+            overlay.most_unsure_objects(2),
+            [(ObjectId(2), 0, 50), (ObjectId(3), 0, 80)]
+        );
+    }
+
+    /// Objects and tiles replace each other: one prediction at a time.
+    #[test]
+    fn objects_and_tiles_replace_each_other() {
+        let overlay = PredictionOverlay::default();
+        overlay.add_tile(tile(0, 0, 255), true);
+        overlay.set_objects(object_capture());
+        assert!(overlay.has_objects());
+        assert_eq!(overlay.value_at(1.0, 0.0), None, "the tiles are gone");
+        overlay.add_tile(tile(0, 0, 255), true);
+        assert!(!overlay.has_objects());
+        assert_eq!(overlay.object_value(&ObjectId(1)), None);
+        overlay.clear();
+        assert!(!overlay.has_prediction());
+    }
+
+    /// The legend of an object prediction: the model's classes in their
+    /// project classes' colours.
+    #[test]
+    fn the_legend_of_an_object_prediction_has_its_classes() {
+        use evanalyzer_cfg::settings::classification_settings::{Class, ClassificationSettings};
+        let mut project = evanalyzer_app::project::ProjectWithRuntime::default();
+        project.classification = ClassificationSettings::new_from_existing(vec![Class {
+            id: 2,
+            name: "Mitotic".into(),
+            color: 0x2a6bdf,
+            notes: String::new(),
+        }]);
+        let overlay = PredictionOverlay::default();
+        overlay.set_objects(object_capture());
+        assert_eq!(
+            overlay.legend(&project),
+            [
+                ("Interphase".to_string(), BACKGROUND_RGB),
+                ("Mitotic".to_string(), BLUE)
+            ]
+        );
     }
 }

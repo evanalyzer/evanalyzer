@@ -2339,6 +2339,9 @@ pub struct FillObjectHolesSettings {}
 
 // ============ OBJECT ============
 
+fn _serde_default_aiobjectclassifier_min_certainty() -> f32 {
+    0.0f32
+}
 /// Classifies objects with a model trained in the AI training dialog (an
 /// `.evamodel` file).
 ///
@@ -2381,6 +2384,11 @@ pub struct AiObjectClassifierSettings {
     /// - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.
     /// - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.
     pub match_handling: ObjectAiObjectClassifierAiClassifyMatchHandlingSettings,
+    /// Objects the model is less sure about than this are left as they are (0 = off).
+    /// The certainty is the share of trees (random forest) or neighbours (KNN) voting for the class, or the probability of the class (MLP).
+    #[schemars(range(min = 0, max = 1))]
+    #[serde(default = "_serde_default_aiobjectclassifier_min_certainty")]
+    pub min_certainty: f32,
 }
 
 impl Default for AiObjectClassifierSettings {
@@ -2392,6 +2400,7 @@ impl Default for AiObjectClassifierSettings {
             input_classes: vec![],
             match_handling:
                 ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch,
+            min_certainty: 0.0f32,
         }
     }
 }

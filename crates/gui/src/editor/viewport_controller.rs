@@ -366,6 +366,10 @@ pub struct ViewportController {
 /// landing right after opening a new image would erase that task's
 /// `is_new_image`/`auto_adjust_if_not_set` flags, skipping histogram
 /// computation and rendering the image black.
+/// How many of the objects an object classifier is least sure of the
+/// training panel lists.
+const UNSURE_OBJECTS_LISTED: usize = 5;
+
 fn merge_into_slot(pair: &(Mutex<Option<DrawingTask>>, Condvar), t: DrawingTask) {
     let (lock, cvar) = pair;
     let mut slot = lock.lock().unwrap();
@@ -977,22 +981,49 @@ impl ViewportController {
         self.trigger_image_redraw_objects();
     }
 
+    /// An object classifier's prediction (replaces the last prediction),
+    /// drawn at once.
+    pub fn set_object_prediction(
+        &self,
+        capture: evanalyzer_app::analysis::ObjectPredictionCapture,
+    ) {
+        self.prediction.set_objects(capture);
+        self.post_prediction_legend();
+        self.trigger_image_redraw_objects();
+    }
+
     /// The prediction overlay's legend in the viewport: the classes of the
-    /// prediction shown, in their colours.
+    /// prediction shown, in their colours - and, of an object classifier,
+    /// the objects it is least sure of for the training panel.
     fn post_prediction_legend(&self) {
         let legend = self.prediction.legend(&*self.app_state.get_project());
+        let unsure = self.prediction.most_unsure_objects(UNSURE_OBJECTS_LISTED);
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let classes: Vec<crate::PredictionClassSlint> = legend
+                let colour = |[r, g, b]: [u8; 3]| slint::Color::from_rgb_u8(r, g, b);
+                let unsure: Vec<crate::PredictionUnsureSlint> = unsure
                     .into_iter()
-                    .map(|(name, [r, g, b])| crate::PredictionClassSlint {
-                        name: name.into(),
-                        color: slint::Color::from_rgb_u8(r, g, b),
+                    .filter_map(|(id, class, percent)| {
+                        let (name, rgb) = legend.get(class)?;
+                        Some(crate::PredictionUnsureSlint {
+                            id: id.0.to_string().into(),
+                            class: name.into(),
+                            color: colour(*rgb),
+                            percent: i32::from(percent),
+                        })
                     })
                     .collect();
-                ui.global::<crate::AiLearningState>()
-                    .set_prediction_classes(Rc::new(VecModel::from(classes)).into());
+                let classes: Vec<crate::PredictionClassSlint> = legend
+                    .into_iter()
+                    .map(|(name, rgb)| crate::PredictionClassSlint {
+                        name: name.into(),
+                        color: colour(rgb),
+                    })
+                    .collect();
+                let state = ui.global::<crate::AiLearningState>();
+                state.set_prediction_classes(Rc::new(VecModel::from(classes)).into());
+                state.set_prediction_unsure(Rc::new(VecModel::from(unsure)).into());
             }
         })
         .ok();
@@ -1001,7 +1032,7 @@ impl ViewportController {
     /// No prediction to show any more (a preview ran without one): the
     /// last one's tiles go.
     pub fn clear_prediction(&self) {
-        if self.prediction.has_tiles() {
+        if self.prediction.has_prediction() {
             self.prediction.clear();
             self.post_prediction_legend();
             self.trigger_image_redraw_objects();
@@ -1483,6 +1514,7 @@ impl ViewportController {
         let mut keyed: Vec<(u32, ObjectDrawInstance)> =
             Vec::with_capacity(objects.len() + auto_objects.len());
 
+        let prediction_alphas = self.prediction.object_alphas();
         for object in objects.iter().chain(auto_objects.iter()) {
             if !is_object_drawn(&*project, hide_unclassified, &object.object_class) {
                 continue;
@@ -1503,12 +1535,18 @@ impl ViewportController {
                     argb(object_transparency / 3, DIMMED_RGB)
                 }
             });
+            // The prediction overlay of an object classifier: as opaque as
+            // the model is sure of the object's class.
+            let alpha = prediction_alphas
+                .as_ref()
+                .and_then(|alphas| alphas.get(&object.id))
+                .map_or(object_transparency, |a| (a * 255.0).round() as u8);
             let color = if is_selected {
                 argb(object_transparency, SELECTED_RGB)
             } else if let Some(color) = relative {
                 color
             } else {
-                get_colors_from_class(&project, object_transparency, &object.object_class)
+                get_colors_from_class(&project, alpha, &object.object_class)
             };
 
             keyed.push((
@@ -1525,6 +1563,8 @@ impl ViewportController {
                 },
             ));
         }
+
+        drop(prediction_alphas);
 
         // Composited straight into the buffer handed to Slint (starts out
         // transparent) - no second overlay-sized copy. The prediction

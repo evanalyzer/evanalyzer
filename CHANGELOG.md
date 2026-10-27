@@ -29,7 +29,7 @@ affected. MinError can move further, as it may now settle in a different
 minimum - check projects that use it. To compare old and new results
 exactly, keep using the previous version for projects already analysed.
 
-### See what the pixel classifier predicts
+### See what the AI classifiers predict
 
 The AI training panel has a new "Show on image" card for pixel classifiers:
 **Prediction** colours every pixel of the preview in the colour of the class
@@ -39,6 +39,13 @@ the top left of the image, the class and its probability under the cursor
 appear in the pixel info, and opacity and the background's colour can be
 set. It shows the pipeline step that applies the model ("Add to pipeline"
 adds one).
+
+For an object classifier the card shows each object as strong as the model
+is sure of its class, the class and its probability of the object under the
+cursor, and the **most unsure objects**: click one to jump to it, copy it to
+manual and give it its class, then train again. The AI Object Classifier step
+also got a **Minimum certainty**: objects the model is less sure about keep
+their class(es) as they are.
 
 The pixel classifier also got faster: the class and its certainty now come
 from one pass through the trees, about 3 × faster on one core with "Minimum

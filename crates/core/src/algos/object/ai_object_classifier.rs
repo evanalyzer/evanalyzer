@@ -30,7 +30,11 @@ use crate::{
         ExecutionScope, ImageAlgorithm, ai_segmentation::classifier_cache::load_cached_classifier,
     },
     object::{Intensity, Object, ObjectInit, regions::ring_mask},
-    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
+    pipeline::{
+        pipeline::{ObjectPredictionCapture, PredictedObjectClass, PredictionRequest},
+        pipeline_cache::GlobalPipelineCache,
+        pipeline_context::PipelineContext,
+    },
 };
 
 /// Maps one class the model was trained to predict to a class ID meaningful
@@ -108,6 +112,18 @@ pub struct AiObjectClassifier {
     /// - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.
     #[cmdsmeta(default = AiClassifyMatchHandling::ReclassifyIfMatch)]
     pub match_handling: AiClassifyMatchHandling,
+
+    /// Objects the model is less sure about than this are left as they are (0 = off).
+    /// The certainty is the share of trees (random forest) or neighbours (KNN) voting for the class, or the probability of the class (MLP).
+    #[cmdsmeta(
+        default = 0.0,
+        min = 0.0,
+        max = 1.0,
+        step = 0.05,
+        optional = true,
+        summary = true
+    )]
+    pub min_certainty: f32,
 }
 
 impl ImageAlgorithm for AiObjectClassifier {
@@ -168,7 +184,27 @@ impl ImageAlgorithm for AiObjectClassifier {
             return Ok(());
         }
 
-        let predicted = saved.classifier.predict(&rows)?;
+        // The prediction overlay wants every scored object's class as
+        // predicted (the minimum certainty is applied after it) and how
+        // probable it is.
+        let wants_prediction = ctx.prediction == PredictionRequest::Asked;
+        let predicted = if self.min_certainty > 0.0 || wants_prediction {
+            let (mut predicted, certainty) = saved.classifier.predict_with_certainty(&rows)?;
+            check_prediction_count_matches(ids.len(), predicted.len())?;
+            if wants_prediction {
+                ctx.prediction =
+                    object_prediction(&ids, &predicted, &certainty, class_labels, &mapping);
+            }
+            // Below the minimum certainty: left as it is (skipped below).
+            for (class, certainty) in predicted.iter_mut().zip(certainty) {
+                if certainty < self.min_certainty {
+                    *class = usize::MAX;
+                }
+            }
+            predicted
+        } else {
+            saved.classifier.predict(&rows)?
+        };
         check_prediction_count_matches(ids.len(), predicted.len())?;
 
         for (id, class_idx) in ids.into_iter().zip(predicted) {
@@ -208,6 +244,50 @@ impl ImageAlgorithm for AiObjectClassifier {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::WholeImage
     }
+}
+
+/// The prediction overlay's capture: each scored object's class as
+/// predicted (an index into the model's `class_labels`) and its
+/// probability as a byte, the classes with the project class each maps to.
+/// `None` for a model with more classes than a byte holds.
+fn object_prediction(
+    ids: &[ObjectId],
+    predicted: &[usize],
+    certainty: &[f32],
+    class_labels: &[evanalyzer_cfg::settings::ai_learning_settings::ObjectClassLabel],
+    mapping: &HashMap<ObjectClass, ObjectClass>,
+) -> PredictionRequest {
+    if class_labels.len() > usize::from(u8::MAX) {
+        log::warn!(
+            "prediction overlay: {} classes don't fit a byte - not shown",
+            class_labels.len()
+        );
+        return PredictionRequest::None;
+    }
+    PredictionRequest::CapturedObjects(ObjectPredictionCapture {
+        classes: class_labels
+            .iter()
+            .map(|label| PredictedObjectClass {
+                name: label.name.clone(),
+                object_class: mapping
+                    .get(&label.class)
+                    .copied()
+                    .unwrap_or(ObjectClass::Unset),
+            })
+            .collect(),
+        objects: ids
+            .iter()
+            .zip(predicted)
+            .zip(certainty)
+            .map(|((id, &class), &p)| {
+                (
+                    id.clone(),
+                    class as u8,
+                    (p.clamp(0.0, 1.0) * 255.0).round() as u8,
+                )
+            })
+            .collect(),
+    })
 }
 
 /// The feature rows of `objects` (of an image of `size`), as in training:
@@ -456,6 +536,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
         let mut ctx = make_ctx();
         let mut cache = GlobalPipelineCache::default();
@@ -475,6 +556,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
         let mut ctx = make_ctx();
         let mut cache = GlobalPipelineCache::default();
@@ -501,6 +583,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
 
         let mut ctx = make_ctx();
@@ -533,6 +616,138 @@ mod tests {
         );
     }
 
+    /// A model the trees disagree on for mid-sized objects (area 50 was
+    /// trained as both classes), sure about large ones.
+    fn unsure_in_the_middle() -> SavedClassifier {
+        let mut rows = Vec::new();
+        let mut targets = Vec::new();
+        for i in 0..15 {
+            let jitter = (i % 3) as f32 * 0.1;
+            rows.push(vec![1.0 + jitter]);
+            targets.push(0);
+            rows.push(vec![100.0 + jitter]);
+            targets.push(1);
+            rows.push(vec![50.0]);
+            targets.push(i % 2);
+        }
+        let mut saved = saved_object_classifier(labels());
+        saved.classifier = fit_random_forest(&rows, &targets, &reliable_rf_settings()).unwrap();
+        saved
+    }
+
+    /// Both classes mapped (Small → 41, Large → 42); every object of
+    /// segmentation class 1 scored.
+    fn classify_all(path: &std::path::Path, min_certainty: f32) -> AiObjectClassifier {
+        AiObjectClassifier {
+            model_path: path.to_path_buf(),
+            segmentation_mapping: vec![
+                ClassificationMapping {
+                    object_class: ObjectClass::Global(5),
+                    output_class: ObjectClass::Global(41),
+                },
+                ClassificationMapping {
+                    object_class: ObjectClass::Global(6),
+                    output_class: ObjectClass::Unset,
+                },
+            ],
+            origin_segmentation: vec![],
+            input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
+            match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty,
+        }
+    }
+
+    /// An object the model is less sure about than the minimum certainty
+    /// keeps its classes; a sure one is classified.
+    #[test]
+    fn objects_below_the_minimum_certainty_are_left_as_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.evamodel");
+        save_to_file(&unsure_in_the_middle(), &path).unwrap();
+        let run = |min_certainty: f32| {
+            let mut cache = GlobalPipelineCache::default();
+            for (id, area) in [(SMALL_ID, 1), (3, 50)] {
+                let object = make_object(id, area, SegmentationClass(1));
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            classify_all(&path, min_certainty)
+                .execute(&mut make_ctx(), &mut cache)
+                .unwrap();
+            [SMALL_ID, 3].map(|id| {
+                cache
+                    .object_cache
+                    .get(&ObjectId(id))
+                    .unwrap()
+                    .is_of(&ObjectClass::Global(41), Scope::Global)
+            })
+        };
+        let (_, share) = {
+            let crate::ai_learning::model::Classifier::RandomForest(forest) =
+                &unsure_in_the_middle().classifier
+            else {
+                unreachable!()
+            };
+            forest.predict_with_share(&[vec![50.0]]).unwrap()
+        };
+        assert!(share[0] < 1.0, "the trees disagree at 50: {share:?}");
+
+        assert_eq!(run(0.0)[0], true);
+        let [small, middle] = run(1.0);
+        assert!(small, "a sure object is classified");
+        assert!(!middle, "an unsure one keeps its classes");
+    }
+
+    /// Asked for its prediction, the step captures every scored object's
+    /// class as predicted (also below the minimum certainty) with its
+    /// probability, and the model's classes with the project class each
+    /// gets (Unset where not mapped). Not asked, nothing.
+    #[test]
+    fn the_object_prediction_is_captured_only_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.evamodel");
+        save_to_file(&saved_object_classifier(labels()), &path).unwrap();
+        let cache = || {
+            let mut cache = GlobalPipelineCache::default();
+            for (id, area) in [(SMALL_ID, 1), (LARGE_ID, 100)] {
+                let object = make_object(id, area, SegmentationClass(1));
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            cache
+        };
+
+        let mut ctx = make_ctx();
+        classify_all(&path, 0.0)
+            .execute(&mut ctx, &mut cache())
+            .unwrap();
+        assert_eq!(ctx.prediction, PredictionRequest::None);
+
+        let mut ctx = make_ctx();
+        ctx.prediction = PredictionRequest::Asked;
+        classify_all(&path, 1.0)
+            .execute(&mut ctx, &mut cache())
+            .unwrap();
+        let PredictionRequest::CapturedObjects(mut capture) = ctx.prediction else {
+            panic!("captured")
+        };
+        capture.objects.sort_by_key(|(id, _, _)| id.0);
+        assert_eq!(
+            capture,
+            ObjectPredictionCapture {
+                classes: vec![
+                    PredictedObjectClass {
+                        name: "Small".into(),
+                        object_class: ObjectClass::Global(41),
+                    },
+                    PredictedObjectClass {
+                        name: "Large".into(),
+                        object_class: ObjectClass::Unset,
+                    },
+                ],
+                objects: vec![(ObjectId(SMALL_ID), 0, 255), (ObjectId(LARGE_ID), 1, 255)],
+            }
+        );
+    }
+
     #[test]
     fn execute_treats_an_unset_output_class_as_not_mapped() {
         // The UI defaults every model class row to `ObjectClass::Unset` until the
@@ -552,6 +767,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
 
         let mut ctx = make_ctx();
@@ -587,6 +803,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![ObjectClass::from_segmentation_class(SegmentationClass(1))],
             match_handling: AiClassifyMatchHandling::AddOutputClassIfMatch,
+            min_certainty: 0.0,
         };
 
         let mut ctx = make_ctx();
@@ -629,6 +846,7 @@ mod tests {
                 origin_segmentation: vec![],
                 input_classes: vec![],
                 match_handling,
+                min_certainty: 0.0,
             };
 
             let mut ctx = make_ctx();
@@ -674,6 +892,7 @@ mod tests {
             origin_segmentation: vec![SegmentationClass(9)],
             input_classes: vec![],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
 
         let mut ctx = make_ctx();
@@ -710,6 +929,7 @@ mod tests {
                 ObjectClass::from_segmentation_class(SegmentationClass(1)),
             ],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
 
         let mut ctx = make_ctx();
@@ -741,6 +961,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![ObjectClass::Global(99)],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
 
         let mut ctx = make_ctx();
@@ -765,6 +986,7 @@ mod tests {
             origin_segmentation: vec![],
             input_classes: vec![],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+            min_certainty: 0.0,
         };
         assert_eq!(cmd.name(), "Ai Object Classifier");
     }

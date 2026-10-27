@@ -1224,7 +1224,7 @@ thread_local! {
 /// Moves the view to `(zoom, offset_x, offset_y)` in [`FLY_MS`] (eased),
 /// or at once with reduced motion; the image is rendered for the end.
 /// `(v_w, v_h)`: the viewport's size.
-fn fly_to_view(
+pub(crate) fn fly_to_view(
     ui: &AppWindow,
     (zoom, off_x, off_y): (f32, f32, f32),
     (v_w, v_h): (f32, f32),

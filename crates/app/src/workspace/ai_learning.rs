@@ -131,9 +131,10 @@ pub fn model_is_used(project: &ProjectSettings, model: &Path) -> bool {
     })
 }
 
-/// The pixel classifier step the prediction overlay shows: the first
-/// enabled step of an enabled pipeline applying `model` (by file name, as
-/// [`model_is_used`]) - or, without a model, the first such step at all.
+/// The classifier step the prediction overlay shows: the first enabled
+/// step of an enabled pipeline applying `model` (by file name, as
+/// [`model_is_used`] - an AI pixel or object classifier) - or, without a
+/// model, the first pixel classifier.
 /// Steps inside a module aren't found: a preview can only point at the
 /// module as a whole.
 pub fn prediction_target(
@@ -148,17 +149,21 @@ pub fn prediction_target(
         .iter()
         .filter(|pipeline| pipeline.enabled)
         .find_map(|pipeline| {
-            pipeline.steps.iter().find_map(|step| match &step.content {
-                StepContent::Command(PipelineCommand::PixelClassifier(s))
-                    if step.enabled
-                        && name.is_none_or(|name| s.model_path.file_name() == Some(name)) =>
-                {
-                    Some(evanalyzer_cfg::core_types::PredictionTarget {
+            pipeline.steps.iter().find_map(|step| {
+                let model_path = match &step.content {
+                    StepContent::Command(PipelineCommand::PixelClassifier(s)) => &s.model_path,
+                    StepContent::Command(PipelineCommand::AiObjectClassifier(s))
+                        if name.is_some() =>
+                    {
+                        &s.model_path
+                    }
+                    _ => return None,
+                };
+                (step.enabled && name.is_none_or(|name| model_path.file_name() == Some(name)))
+                    .then_some(evanalyzer_cfg::core_types::PredictionTarget {
                         pipeline_id: pipeline.id,
                         step_id: step.id,
                     })
-                }
-                _ => None,
             })
         })
 }
@@ -618,6 +623,44 @@ mod tests {
             prediction_target(&project, Some(Path::new("other.evamodel"))),
             None
         );
+    }
+
+    /// An object classifier's step is found by its model too - but never
+    /// as "the first classifier" without a model (that is a pixel one).
+    #[test]
+    fn the_prediction_target_can_be_an_object_classifier_step() {
+        use evanalyzer_cfg::core_types::{PipelineId, PredictionTarget, StepId};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::AiObjectClassifierSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let mut project = ProjectSettings::default();
+        project.pipelines = vec![PipelineSettings {
+            id: PipelineId(1),
+            name: "p1".into(),
+            description: None,
+            image_source: Default::default(),
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: StepId(7),
+                enabled: true,
+                content: StepContent::Command(PipelineCommand::AiObjectClassifier(
+                    AiObjectClassifierSettings {
+                        model_path: PathBuf::from("models/mitosis.evamodel"),
+                        ..Default::default()
+                    },
+                )),
+            }],
+        }];
+        assert_eq!(
+            prediction_target(&project, Some(Path::new("/x/models/mitosis.evamodel"))),
+            Some(PredictionTarget {
+                pipeline_id: PipelineId(1),
+                step_id: StepId(7),
+            })
+        );
+        assert_eq!(prediction_target(&project, None), None);
     }
 
     use crate::backend::LocalFileSystem;

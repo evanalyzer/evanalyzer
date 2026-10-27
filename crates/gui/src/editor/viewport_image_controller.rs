@@ -646,7 +646,19 @@ impl ViewportImageController {
                     (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
                 let y =
                     (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
-                if let Some((class, percent)) = self.viewport_controller.prediction.value_at(x, y) {
+                let value = self
+                    .viewport_controller
+                    .prediction
+                    .value_at(x, y)
+                    .or_else(|| {
+                        let objects = self.viewport_controller.prediction.has_objects();
+                        objects
+                            .then(|| {
+                                object_prediction_at(&project, &self.viewport_controller, x, y)
+                            })
+                            .flatten()
+                    });
+                if let Some((class, percent)) = value {
                     pixel_values.push(format!("Prediction: {class} {percent} %"));
                 }
             }
@@ -958,6 +970,43 @@ impl ViewportImageController {
             );
         }
     }
+}
+
+/// The object classifier's prediction for the object under image point
+/// `(x, y)` - the one drawn on top, picked as a click picks it.
+fn object_prediction_at(
+    project: &evanalyzer_app::project::ProjectWithRuntime,
+    viewport: &ViewportController,
+    x: f32,
+    y: f32,
+) -> Option<(String, u8)> {
+    use crate::editor::object_render::{ZOrder, pick};
+    use evanalyzer_app::project::ObjectExt;
+    if x < 0.0 || y < 0.0 {
+        return None;
+    }
+    let (x, y) = (x as u32, y as u32);
+    let shown = project.get_shown_plane();
+    let hide_unclassified = project.hide_unclassified_objects();
+    let z = ZOrder::new(project);
+    let objects: Vec<_> = project
+        .get_preview_objects()
+        .iter()
+        .filter(|o| {
+            crate::editor::viewport_controller::is_object_drawn(
+                project,
+                hide_unclassified,
+                &o.object_class,
+            )
+        })
+        .collect();
+    let i = pick(objects.iter().map(|o| {
+        (
+            z.key(&o.object_class, false),
+            o.is_part_of_on_plane(x, y, shown),
+        )
+    }))?;
+    viewport.prediction.object_value(&objects[i].id)
 }
 
 #[cfg(test)]
