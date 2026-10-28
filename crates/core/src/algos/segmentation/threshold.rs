@@ -694,10 +694,16 @@ fn thresh_otsu_multi(hist: &[f32; 256]) -> (usize, usize) {
 /// initial guess, which reaches the minimum in a few steps instead of an
 /// exhaustive search.
 ///
-/// Conventions: starts at the global mean, gray levels are the bin indices,
-/// stops once `t` moves by less than half a bin (or after 1000 steps), and
-/// returns `floor(t)`. A lower class whose mean is 0 (all of it in bin 0)
-/// sends `t` to 0, the limit of the update as `μ_a → 0`.
+/// Li & Lee's class split (eq. 2): `g(x, y) = μ₁` for `f < t` and `μ₂` for
+/// `f ≥ t`, so their integer `t` is the first foreground level and
+/// `t − 1` the cut returned here. Their gray levels run `1..=L` (§3), so
+/// bin `i` is gray level `i + 1`: the criterion uses `ln f` and is not
+/// invariant to that shift, and a level of 0 would have no logarithm.
+///
+/// Conventions: starts at the global mean, stops once `t` moves by less
+/// than half a bin (or after 1000 steps), and returns `floor(t)`. `t` is
+/// kept in bin units; the update is evaluated in gray levels (both class
+/// means `+ 1`) and shifted back.
 fn thresh_li(hist: &[f32; 256]) -> usize {
     if let Err(t) = splittable_range(hist) {
         return t;
@@ -712,13 +718,10 @@ fn thresh_li(hist: &[f32; 256]) -> usize {
         if w_a <= 0.0 || w_b <= 0.0 {
             break;
         }
-        let mean_a = s[b + 1] / w_a;
-        let mean_b = (s[256] - s[b + 1]) / w_b;
-        let next = if mean_a > 0.0 {
-            (mean_b - mean_a) / (mean_b.ln() - mean_a.ln())
-        } else {
-            0.0
-        };
+        // Class means as gray levels `1..=256` (Li & Lee, §3).
+        let mean_a = s[b + 1] / w_a + 1.0;
+        let mean_b = (s[256] - s[b + 1]) / w_b + 1.0;
+        let next = (mean_b - mean_a) / (mean_b.ln() - mean_a.ln()) - 1.0;
         let converged = (next - t).abs() < 0.5;
         t = next;
         if converged {
@@ -801,7 +804,17 @@ fn thresh_min_error(hist: &[f32; 256]) -> usize {
 /// threshold is the bin where the histogram lies furthest below that line,
 /// i.e. where the tail "bends away" from the peak's straight-line decay.
 /// Because the line is fixed, the perpendicular distance is the vertical gap
-/// times a constant, so the vertical gap is maximized directly.
+/// times a constant, so the vertical gap is maximized directly. (The paper
+/// normalizes height and dynamic range to 1 first, Fig. 2; that scales every
+/// gap by the same factor and doesn't move the maximum.)
+///
+/// The paper's objects are the regions "darker than" the threshold (p. 743),
+/// with the histogram running from the background peak towards the tail, so
+/// the threshold level itself is background: the returned bin is the last
+/// background bin, as for every other method. Zack et al. then add "a fixed
+/// offset" (0.2 of the normalized range in Fig. 2) to the maximum-distance
+/// level to get their search threshold; that offset is specific to their
+/// chromosome images and is not applied here.
 ///
 /// Conventions: the peak is the lowest bin with the maximum count; the tail
 /// ends at the outermost occupied bin (with its own count); the longer side
@@ -2166,13 +2179,12 @@ mod tests {
         Ok(())
     }
 
-    /// Class means 30 and 180 give the fixed point
-    /// `t = 150 / ln(180 / 30) ≈ 83.72`. Bins `0..=83` lie below that
-    /// boundary, so the paper's result is bin 83; ImageJ reports 84 (one bin
-    /// higher, i.e. rounded instead of floored).
+    /// As gray levels `1..=256` (Li & Lee §3) the class means are 31 and
+    /// 181, giving the fixed point `150 / ln(181 / 31) ≈ 85.01`, i.e. bin
+    /// 84.01: bins `0..=84` lie below that boundary.
     #[test]
     fn test_li_matches_reference() {
-        assert_eq!(thresh_li(&bimodal_reference_histogram()), 83);
+        assert_eq!(thresh_li(&bimodal_reference_histogram()), 84);
     }
 
     /// For every cut in the gap the classes are the two uniform blocks
@@ -2859,22 +2871,29 @@ mod tests {
         assert_paper_split(ThresholdMethod::Minimum, &v_histogram(), 100)
     }
 
-    /// Li & Lee's paper was not available for this check, so this pins only
-    /// the code's own convention (`floor` of the fixed point, bins `≤ k`
-    /// background). From the mean 127.5 the iteration
-    /// `t = (μ_b − μ_a)/(ln μ_b − ln μ_a)` visits 115.96, 109.28, 105.91,
-    /// 103.65, 102.52, 101.95 and 101.38, which repeats → 101.
+    /// Li & Lee (1993, eq. 2, 8): level `f < t` is reconstructed as `μ₁`,
+    /// `f ≥ t` as `μ₂`, and `t` minimizes `η(t)`, so `t − 1` is the last
+    /// background level. With gray levels `1..=256` the iteration
+    /// `t = (μ_b − μ_a)/(ln μ_b − ln μ_a)` (in bin units) goes from the mean
+    /// 127.5 through 116.06, 109.96, 106.04, 104.35, 103.22, 102.65 to 102.08,
+    /// which repeats → 102. Note: the exhaustive minimum of eq. 8 on this
+    /// histogram is `t = 102`, i.e. `k = 101`; the fixed-point iteration
+    /// lands one bin higher.
     #[test]
-    fn li_split_follows_the_code_convention() -> Result<(), Box<dyn std::error::Error>> {
-        assert_paper_split(ThresholdMethod::Li, &uniform_histogram(), 101)
+    fn li_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Li, &uniform_histogram(), 102)
     }
 
-    /// Zack et al.'s paper was not available for this check, so this pins
-    /// only the code's own convention. Peak 256 at level 0, every other level
-    /// 1: the line from (0, 256) to (255, 1) is `256 − i`, the gap below it
-    /// `255 − i`, largest at `i = 1`.
+    /// Zack et al. (1977, p. 743 and Fig. 2): objects are the regions
+    /// "darker than" the threshold, on a histogram running from the
+    /// background peak to the far end of the tail, so the threshold level
+    /// itself is background; mirrored for a tail on the bright side, that is
+    /// `k` = the maximum-distance level. Peak 256 at level 0, every other
+    /// level 1: the line from (0, 256) to (255, 1) is `256 − i`, the gap
+    /// below it `255 − i`, largest at `i = 1`. (The paper's fixed offset
+    /// added to that level is not applied, see `thresh_triangle`.)
     #[test]
-    fn triangle_split_follows_the_code_convention() -> Result<(), Box<dyn std::error::Error>> {
+    fn triangle_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
         let mut hist = [1.0f32; 256];
         hist[0] = 256.0;
         assert_paper_split(ThresholdMethod::Triangle, &hist, 1)
