@@ -49,7 +49,7 @@ pub(super) struct GroupingSql {
 }
 
 pub struct ResultsGenerator {
-    database: Connection,
+    database: evanalyzer_core::ResultsConnection,
     classes_cache: RefCell<Option<Vec<Class>>>,
     coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
     /// The pattern `Grouping::Auto` picked for this database's images.
@@ -209,9 +209,8 @@ impl ResultsGenerator {
     /// process - the app ended up locking itself out of its own database
     /// on every export.
     pub fn try_clone(&self) -> Result<Self, InternalErrors> {
-        let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         Ok(Self {
-            database: self.database.try_clone().map_err(to_io_err)?,
+            database: self.database.try_clone()?,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
@@ -4812,7 +4811,7 @@ mod tests {
     /// evanalyzer_core's duckdb.rs), so this takes one `c_stacks` value per
     /// "image" row directly rather than inferring it from object data.
     fn generator_with_c_stacks(c_stacks_per_image: &[u32]) -> ResultsGenerator {
-        let database = Connection::open_in_memory().unwrap();
+        let database = evanalyzer_core::ResultsConnection::open_in_memory().unwrap();
         database
             .execute_batch(
                 "CREATE TABLE classes (class_id INTEGER, name VARCHAR, color UINTEGER);

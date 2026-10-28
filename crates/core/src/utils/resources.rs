@@ -132,13 +132,43 @@ pub fn recommended_image_cache_bytes(
 /// Cap for the one cache a tiled image's tiles are merged into: the RAM
 /// left once every one of `parallelism` workers has its own tile's full
 /// estimate ([`RamBudget::total_bytes`]: working set, its channel tiles,
-/// object margin). Whatever doesn't fit goes to disk while the tiles still
+/// object margin), less the results storage's own memory (`reserved_bytes`,
+/// DuckDB's limit). Whatever doesn't fit goes to disk while the tiles still
 /// run - not only at the end - so the merged channel tiles of a whole slide
-/// can't grow past the RAM. Never below `min_image_cache_bytes`, as
-/// [`recommended_image_cache_bytes`].
-pub fn recommended_merged_cache_bytes(parallelism: usize, budget: &RamBudget) -> u64 {
-    available_memory_bytes()
-        .saturating_sub(parallelism.max(1) as u64 * budget.total_bytes())
+/// can't grow past the RAM. See [`merged_cache_bytes`].
+pub fn recommended_merged_cache_bytes(
+    parallelism: usize,
+    budget: &RamBudget,
+    reserved_bytes: u64,
+) -> u64 {
+    merged_cache_bytes(
+        available_memory_bytes(),
+        parallelism,
+        budget,
+        reserved_bytes,
+    )
+}
+
+/// [`recommended_merged_cache_bytes`] with `available` RAM.
+///
+/// The storage's share is at most a quarter of `available` (DuckDB's limit
+/// comes from the total RAM, not what is free), and it never takes the
+/// channel tiles of the tiles in work (`parallelism` × one tile's
+/// channels): a cache smaller than that reloads tiles from disk again and
+/// again - `tests/haut` with 4 GB available and the whole 8 GB limit
+/// reserved: 73 → 326 s, 32 → 839 s system CPU. Never below
+/// `min_image_cache_bytes`, as [`recommended_image_cache_bytes`].
+pub fn merged_cache_bytes(
+    available: u64,
+    parallelism: usize,
+    budget: &RamBudget,
+    reserved_bytes: u64,
+) -> u64 {
+    let workers = parallelism.max(1) as u64;
+    let free = available.saturating_sub(workers * budget.total_bytes());
+    let tiles_in_work = (workers * budget.min_image_cache_bytes).min(free);
+    free.saturating_sub(reserved_bytes.min(available / 4))
+        .max(tiles_in_work)
         .max(budget.min_image_cache_bytes)
 }
 
@@ -357,7 +387,7 @@ mod tests {
         // More workers than any machine has RAM for: the minimum still.
         let budget = estimate_ram_budget(4096, 4096, 5);
         assert_eq!(
-            recommended_merged_cache_bytes(1_000_000, &budget),
+            recommended_merged_cache_bytes(1_000_000, &budget, 0),
             budget.min_image_cache_bytes
         );
     }
@@ -365,11 +395,45 @@ mod tests {
     #[test]
     fn recommended_merged_cache_bytes_leaves_every_worker_its_tile() {
         let budget = estimate_ram_budget(4096, 4096, 5);
-        let few_workers = recommended_merged_cache_bytes(2, &budget);
-        let many_workers = recommended_merged_cache_bytes(16, &budget);
+        let few_workers = recommended_merged_cache_bytes(2, &budget, 0);
+        let many_workers = recommended_merged_cache_bytes(16, &budget, 0);
         assert!(
             many_workers <= few_workers,
             "each more worker's tile leaves the merged cache less"
+        );
+    }
+
+    const GB: u64 = 1 << 30;
+
+    #[test]
+    fn the_merged_cache_leaves_the_storage_its_memory() {
+        let budget = estimate_ram_budget(4096, 4096, 5);
+        let free = 16 * GB - 4 * budget.total_bytes();
+        assert_eq!(merged_cache_bytes(16 * GB, 4, &budget, 0), free);
+        assert_eq!(
+            merged_cache_bytes(16 * GB, 4, &budget, 2 * GB),
+            free - 2 * GB
+        );
+    }
+
+    /// DuckDB's limit comes from the total RAM: with little of it free, the
+    /// storage gets a quarter of what is free, not its whole limit.
+    #[test]
+    fn the_storage_takes_at_most_a_quarter_of_the_free_ram() {
+        let budget = estimate_ram_budget(512, 512, 1);
+        let free = 4 * GB - budget.total_bytes();
+        assert_eq!(merged_cache_bytes(4 * GB, 1, &budget, 8 * GB), free - GB);
+    }
+
+    /// The storage's share never takes the channel tiles of the tiles in
+    /// work - smaller, the cache reloads them from disk again and again.
+    #[test]
+    fn the_storage_never_takes_the_tiles_in_work() {
+        let budget = estimate_ram_budget(4096, 4096, 5);
+        let available = 4 * budget.total_bytes() + 4 * budget.min_image_cache_bytes + GB / 2;
+        assert_eq!(
+            merged_cache_bytes(available, 4, &budget, 8 * GB),
+            4 * budget.min_image_cache_bytes
         );
     }
 

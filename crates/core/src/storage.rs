@@ -72,6 +72,12 @@ pub trait PipelineResultExporter: Send + Sync {
     fn finish_run(&self, _outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
         Ok(())
     }
+
+    /// RAM the storage itself may use while the run writes into it - kept
+    /// out of the image cache's budget. Default 0.
+    fn reserved_memory_bytes(&self) -> u64 {
+        0
+    }
 }
 
 /// The analysed objects, as dataset steps read them - typed, so steps don't

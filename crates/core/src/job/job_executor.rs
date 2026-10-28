@@ -355,9 +355,14 @@ impl<'a> JobExecutor {
             parallelism
         );
         // One image: its tiles run on every worker and are merged into one
-        // cache, which gets the whole budget. Many images: one per worker.
+        // cache, which gets the whole budget - but the results storage's own
+        // memory (DuckDB's limit). Many images: one per worker.
         let merged_cache_bytes = if self.images.len() == 1 {
-            crate::utils::resources::recommended_merged_cache_bytes(parallelism, &ram_budget)
+            crate::utils::resources::recommended_merged_cache_bytes(
+                parallelism,
+                &ram_budget,
+                self.result_storage.reserved_memory_bytes(),
+            )
         } else {
             image_cache_bytes
         };

@@ -57,27 +57,109 @@ use std::time::Instant;
 /// `Database` safely, which is exactly what multiple results panels (or a
 /// live-preview writer running alongside a results viewer) need.
 ///
-/// Never evicted: entries stay open for the life of the process. For this
-/// app's actual usage (a handful of results files open per session, not
-/// thousands) that's a better tradeoff than the complexity of an eviction
-/// policy - the cost is a few extra open file handles hanging around, not a
-/// resource leak that grows unboundedly during normal use.
-static CONNECTION_CACHE: LazyLock<Mutex<HashMap<PathBuf, Connection>>> =
+/// Closed with the last [`ResultsConnection`] to the file: an entry stays
+/// only while someone uses it (an analysis writing, the results window
+/// reading). Before, entries were never closed - every results file opened
+/// in a session kept its DuckDB instance, its buffer pool (up to the memory
+/// limit) and its file handle until the app ended.
+static CONNECTION_CACHE: LazyLock<Mutex<HashMap<PathBuf, SharedDatabase>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Returns a `Connection` usable for `path`, sharing the resident anchor
+/// One open results file: the anchor connection and how many
+/// [`ResultsConnection`]s to it are alive.
+struct SharedDatabase {
+    anchor: Connection,
+    users: usize,
+}
+
+/// A connection to a results file from [`shared_connection`] - use it as a
+/// [`Connection`]. When the last one to a file is dropped, the file's DuckDB
+/// instance closes: its memory is freed, and DuckDB folds its write-ahead
+/// log back into the file.
+pub struct ResultsConnection {
+    /// `Some` until dropped - taken first, so the connection is closed
+    /// before the anchor.
+    conn: Option<Connection>,
+    path: PathBuf,
+}
+
+impl ResultsConnection {
+    /// Another connection to the same file, counted like this one (not
+    /// [`Connection::try_clone`], which the file's closing wouldn't wait
+    /// for).
+    pub fn try_clone(&self) -> Result<ResultsConnection, InternalErrors> {
+        match &self.conn {
+            // In memory: not in the cache, a plain clone.
+            Some(conn) if self.path.as_os_str().is_empty() => Ok(ResultsConnection {
+                conn: Some(
+                    conn.try_clone()
+                        .map_err(|e| InternalErrors::Io(e.to_string()))?,
+                ),
+                path: PathBuf::new(),
+            }),
+            _ => shared_connection(&self.path),
+        }
+    }
+
+    /// An in-memory database (tests): no file, not shared.
+    pub fn open_in_memory() -> Result<ResultsConnection, InternalErrors> {
+        Ok(ResultsConnection {
+            conn: Some(
+                Connection::open_in_memory().map_err(|e| InternalErrors::Io(e.to_string()))?,
+            ),
+            path: PathBuf::new(),
+        })
+    }
+}
+
+impl std::ops::Deref for ResultsConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.conn.as_ref().expect("a live connection")
+    }
+}
+
+impl std::ops::DerefMut for ResultsConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.conn.as_mut().expect("a live connection")
+    }
+}
+
+impl Drop for ResultsConnection {
+    fn drop(&mut self) {
+        drop(self.conn.take());
+        let mut cache = CONNECTION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(shared) = cache.get_mut(&self.path) {
+            shared.users = shared.users.saturating_sub(1);
+            if shared.users == 0 {
+                // Dropped under the lock: an open of the same file waits
+                // until it is closed.
+                cache.remove(&self.path);
+            }
+        }
+    }
+}
+
+/// Returns a connection usable for `path`, sharing the resident anchor
 /// connection for that path if one is already open (see `CONNECTION_CACHE`'s
 /// doc comment), opening and caching a fresh one otherwise.
 ///
 /// Every connection to a results file in this process must come from here -
 /// a plain `Connection::open` next to a cached one fails on Windows.
-pub fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
+pub fn shared_connection(path: &Path) -> Result<ResultsConnection, InternalErrors> {
     let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
     let mut cache = CONNECTION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let handle = |conn: Connection| ResultsConnection {
+        conn: Some(conn),
+        path: path.to_path_buf(),
+    };
 
-    if let Some(anchor) = cache.get(path) {
-        match anchor.try_clone() {
-            Ok(handle) => return Ok(handle),
+    if let Some(shared) = cache.get_mut(path) {
+        match shared.anchor.try_clone() {
+            Ok(conn) => {
+                shared.users += 1;
+                return Ok(handle(conn));
+            }
             // The anchor connection has gone bad (e.g. the file was deleted
             // or replaced out from under it) - drop it and fall through to
             // open a fresh one below, rather than keep handing out clones
@@ -96,9 +178,16 @@ pub fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
     if let Err(e) = anchor.execute_batch(&format!("SET memory_limit = '{limit_mb}MB';")) {
         log::warn!("Could not limit DuckDB's memory to {limit_mb} MB: {e}");
     }
-    let handle = anchor.try_clone().map_err(to_io_err)?;
-    cache.insert(path.to_path_buf(), anchor);
-    Ok(handle)
+    let conn = anchor.try_clone().map_err(to_io_err)?;
+    cache.insert(path.to_path_buf(), SharedDatabase { anchor, users: 1 });
+    Ok(handle(conn))
+}
+
+/// The memory DuckDB may use for a results file on this computer (see
+/// [`duckdb_memory_limit_mb`]) - for the analysis' RAM budget: a run writes
+/// into one, and DuckDB uses most of it (`tests/haut`: 1.3-1.6 GB).
+pub fn results_memory_limit_bytes() -> u64 {
+    duckdb_memory_limit_mb(crate::utils::resources::cpu_ram_diagnostics().1) << 20
 }
 
 /// The format of the results files this build writes (`run.schema_version`).
@@ -176,7 +265,7 @@ fn existing_object_indices(conn: &Connection) -> Result<HashMap<String, i32>, In
 pub struct DuckDbExporter {
     // Connection is Send but !Sync; the Mutex makes the struct Sync so it can
     // satisfy the `PipelineResultExporter: Send + Sync` bound.
-    conn: Mutex<Connection>,
+    conn: Mutex<ResultsConnection>,
     /// Maps ObjectClass → human-readable name from project classification settings.
     pub class_names: HashMap<ObjectClass, (String, u32)>,
     /// Each object's mask is stored (`objects.mask`, see `mask_codec`) - the
@@ -1294,7 +1383,7 @@ impl DuckDbExporter {
     /// holding it: every image runs on its own thread, and one panic must
     /// not fail all others. The panicking export's transaction was rolled
     /// back when it was dropped, so the connection is consistent.
-    fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    fn lock_conn(&self) -> std::sync::MutexGuard<'_, ResultsConnection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -1486,20 +1575,32 @@ impl PipelineResultExporter for DuckDbExporter {
         Some(self)
     }
 
+    /// DuckDB's memory limit: a run uses most of it (`tests/haut`: 1.3-1.6
+    /// GB of 8 GB).
+    fn reserved_memory_bytes(&self) -> u64 {
+        results_memory_limit_bytes()
+    }
+
     fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
         let (status, message) = match outcome {
             Ok(()) => ("finished", None),
             Err(InternalErrors::Cancelled) => ("cancelled", None),
             Err(e) => ("failed", Some(e.to_string())),
         };
-        self.conn
+        let conn = self
+            .conn
             .lock()
-            .map_err(|_| InternalErrors::Internal("results database lock poisoned".into()))?
-            .execute(
-                "UPDATE run SET status = ?, message = ?, finished_at = current_timestamp",
-                params![status, message],
-            )
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            .map_err(|_| InternalErrors::Internal("results database lock poisoned".into()))?;
+        conn.execute(
+            "UPDATE run SET status = ?, message = ?, finished_at = current_timestamp",
+            params![status, message],
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        // The file complete on disk now, not only when it is closed: the
+        // results window may keep it open, and the user may copy it.
+        if let Err(e) = conn.execute_batch("CHECKPOINT;") {
+            log::warn!("Could not checkpoint the results file: {e}");
+        }
         Ok(())
     }
 
@@ -1845,6 +1946,51 @@ mod tests {
             );
             assert!(finished);
         }
+    }
+
+    fn is_open(path: &Path) -> bool {
+        CONNECTION_CACHE.lock().unwrap().contains_key(path)
+    }
+
+    /// A results file stays open while a connection to it is alive, and is
+    /// closed - its memory freed - with the last one.
+    #[test]
+    fn a_results_file_is_closed_with_its_last_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let first = shared_connection(&path).unwrap();
+        let second = first.try_clone().unwrap();
+        first.execute_batch("CREATE TABLE t (v INTEGER);").unwrap();
+
+        drop(first);
+        assert!(is_open(&path), "the second connection still uses it");
+        second.execute_batch("INSERT INTO t VALUES (1);").unwrap();
+
+        drop(second);
+        assert!(!is_open(&path));
+        // Opened again later, with what was written.
+        let again = shared_connection(&path).unwrap();
+        let n: i64 = again
+            .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// The end of a run folds the write-ahead log into the file - complete
+    /// on disk while the results stay open (the results window).
+    #[test]
+    fn a_finished_run_leaves_no_write_ahead_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new(), &MetaData::default()).unwrap();
+        let wal = dir.path().join("results.evadb.wal");
+        let wal_len = || std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        assert!(wal_len() > 0, "the run's rows are in the log first");
+
+        exporter.finish_run(&Ok(())).unwrap();
+
+        assert_eq!(wal_len(), 0);
+        assert!(is_open(&path), "still open");
     }
 
     #[test]

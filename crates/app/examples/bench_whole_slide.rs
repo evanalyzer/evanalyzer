@@ -195,9 +195,14 @@ fn main() {
     // The spill files' peak, sampled while the run goes on.
     let tmp = std::env::temp_dir();
     let spill_peak = Arc::new(AtomicU64::new(0));
+    // DuckDB's own memory (`duckdb_memory()`) of the results file, sampled
+    // too - once the run created it.
+    let duckdb_peak = Arc::new(AtomicU64::new(0));
+    let results_dir: Arc<std::sync::Mutex<Option<PathBuf>>> = Default::default();
     let stop = Arc::new(AtomicBool::new(false));
     let sampler = {
         let (spill_peak, stop) = (spill_peak.clone(), stop.clone());
+        let (duckdb_peak, results_dir) = (duckdb_peak.clone(), results_dir.clone());
         std::thread::spawn(move || {
             // `BENCH_TRACE=1`: RSS and spill size over time, on stderr.
             let trace = std::env::var("BENCH_TRACE").is_ok();
@@ -205,6 +210,23 @@ fn main() {
             while !stop.load(Ordering::Relaxed) {
                 let spill = dir_bytes(&tmp) + open_deleted_bytes(&tmp);
                 spill_peak.fetch_max(spill, Ordering::Relaxed);
+                let db = results_dir.lock().unwrap().as_ref().and_then(|dir| {
+                    std::fs::read_dir(dir)
+                        .ok()?
+                        .flatten()
+                        .map(|e| e.path())
+                        .find(|p| p.extension().is_some_and(|e| e == "evadb"))
+                });
+                if let Some(db) = db
+                    && let Ok(conn) = evanalyzer_core::open_results_database(&db)
+                    && let Ok(bytes) = conn.query_row(
+                        "SELECT sum(memory_usage_bytes)::BIGINT FROM duckdb_memory()",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )
+                {
+                    duckdb_peak.fetch_max(bytes as u64, Ordering::Relaxed);
+                }
                 if trace {
                     eprintln!(
                         "trace t={:.1}s rss={} MB spill={} MB",
@@ -230,6 +252,7 @@ fn main() {
         .unwrap();
     println!("threads: {}", job.parallelism());
     let output = job.output_path().clone();
+    *results_dir.lock().unwrap() = Some(output.clone());
     for _ in job.events() {}
     let result = job.wait();
     let elapsed = start.elapsed().as_secs_f64();
@@ -242,6 +265,17 @@ fn main() {
         .map(|e| e.path())
         .find(|p| p.extension().is_some_and(|e| e == "evadb"))
         .expect("a results database");
+    // The results file as the run left it (the process still running, as
+    // the app after a run).
+    let file_mb = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) / 1_000_000;
+    let mut wal = db.clone().into_os_string();
+    wal.push(".wal");
+    println!(
+        "results: file={} MB wal={} MB duckdb_peak={} MB",
+        file_mb(&db),
+        file_mb(Path::new(&wal)),
+        duckdb_peak.load(Ordering::Relaxed) / 1_000_000
+    );
     let conn = duckdb::Connection::open(&db).unwrap();
     let (objects, area): (i64, i64) = conn
         .query_row(
