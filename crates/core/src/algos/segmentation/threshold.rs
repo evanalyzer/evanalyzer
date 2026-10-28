@@ -277,35 +277,29 @@ impl ImageAlgorithm for Threshold {
                         hist_memo.insert(s.value_source, hist);
                     }
                     let (hist, dmin, dmax) = hist_memo.get(&s.value_source).unwrap();
-                    // As in ImageJ (`scaleAndSetThreshold(0,
-                    // calcThresholdValue(...) + 1 + cValue, ...)`), the raw
-                    // split bin is always mapped one
-                    // bin *above* itself before rescaling: the split bin
-                    // is background, the next bin up is where foreground
-                    // starts. Omitting this "+1" makes the threshold one
-                    // bin too permissive, letting background-adjacent
-                    // noise through as foreground.
+                    // Every histogram method returns `k`, the last
+                    // background gray level: the papers split the levels
+                    // into `≤ k` and `> k` (Glasbey 1993, p. 532: "All pixel
+                    // values less than or equal to t are allocated to one
+                    // category, and those greater than t to the other";
+                    // likewise Kapur via Sahoo et al. 1997, p. 72, Shanbhag
+                    // 1994, p. 414, Huang & Wang 1995, eq. 4). Gray level
+                    // `i` is histogram bin `i`, which holds every pixel that
+                    // `build_histogram` rounds to `i`, so a pixel is
+                    // foreground exactly when its bin is above `k`: the
+                    // cut-off is the largest value still counted into bin
+                    // `k`, applied with the strict `>` below - i.e. `≥` the
+                    // lower edge of bin `k + 1`, not its centre.
                     //
-                    // Clamped to 254: bin 255 always rescales to exactly
-                    // `dmax` (`255.0 / 255.0 == 1.0`), and the classification
-                    // below is a strict `>` against that value - but `dmax`
-                    // is by construction the brightest pixel actually
-                    // present, so nothing can ever be strictly greater than
-                    // it. A cleanly bimodal image (e.g. background at 0,
-                    // objects at one fixed high value) commonly makes an
-                    // auto method return bin 254 - every bin between the two
-                    // populations ties for the same between-class variance,
-                    // and the winning tie lands on the last one checked -
-                    // which, once bumped by the "+1" above, would otherwise
-                    // silently produce zero foreground pixels for every
-                    // entry using this threshold, no matter how many
-                    // genuinely bright pixels the image has. Any method
-                    // returning 254 (or, before this clamp, even 255 itself
-                    // for a method whose own range includes it) hits the
-                    // same unreachable-threshold failure, not just Otsu.
-                    let bin = (compute_auto_threshold(method, hist) + 1).min(254);
+                    // `k` is clamped to 254: `dmax` itself always lands in
+                    // bin 255, so this keeps at least the brightest pixels as
+                    // foreground. Only `k = 255` ("everything is
+                    // background") is affected, which a method can return
+                    // when its real-valued boundary lies beyond the
+                    // brightest level (e.g. a minimum error root above 255).
+                    let k = compute_auto_threshold(method, hist).min(254);
                     let relative = if *dmax > *dmin {
-                        dmin + (bin as f32 / 255.0) * (dmax - dmin)
+                        last_value_in_bin(k, *dmin, *dmax)
                     } else {
                         *dmin
                     };
@@ -462,18 +456,39 @@ fn histogram_from_slice(data: &[f32]) -> ([f32; 256], f32, f32) {
 /// bit-depth range the image actually uses.
 fn build_histogram(data: &[f32], min: f32, max: f32) -> [f32; 256] {
     let mut hist = [0.0f32; 256];
-    let range = max - min;
     for &v in data {
-        let normalized = if range > 0.0 {
-            ((v - min) / range).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        // Round to the nearest bin rather than truncate.
-        let bin = ((normalized * 255.0).round() as usize).min(255);
-        hist[bin] += 1.0;
+        hist[histogram_bin(v, min, max)] += 1.0;
     }
     hist
+}
+
+/// The bin `build_histogram` counts `v` into: `v` rescaled from
+/// `min..=max` to `0..=255` and rounded to the nearest bin rather than
+/// truncated, so bin `i` holds the rescaled values in `[i − 0.5, i + 0.5)`.
+fn histogram_bin(v: f32, min: f32, max: f32) -> usize {
+    let range = max - min;
+    let normalized = if range > 0.0 {
+        ((v - min) / range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    ((normalized * 255.0).round() as usize).min(255)
+}
+
+/// The largest value `histogram_bin` still counts into a bin `≤ k`
+/// (`k < 255`, `min < max`), so `v > last_value_in_bin(k, ..)` holds exactly
+/// for the values in bins `k + 1..=255`. Starts from the bin edge
+/// `k + 0.5` and steps over the few `f32` values that rounding in either
+/// computation can put on the wrong side of it.
+fn last_value_in_bin(k: usize, min: f32, max: f32) -> f32 {
+    let mut v = min + (k as f32 + 0.5) / 255.0 * (max - min);
+    while histogram_bin(v, min, max) > k {
+        v = v.next_down();
+    }
+    while histogram_bin(v.next_up(), min, max) <= k {
+        v = v.next_up();
+    }
+    v
 }
 
 /// Dispatches to the correct auto-threshold algorithm, returning a bin index 0–255.
@@ -523,8 +538,9 @@ fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize 
 // Each method is implemented from the definitions in its original paper (cited
 // in its doc comment and in `method_citation`). Every function takes a 256-bin
 // histogram whose bin index doubles as the gray level, and returns the
-// threshold *bin*: bins `0..=t` are background, bins above `t` foreground
-// (`Threshold::execute` adds the "+1" when mapping back to an intensity).
+// threshold *bin*: bins `0..=t` are background, bins above `t` foreground,
+// the papers' `≤ t` / `> t` split (`Threshold::execute` maps it back to the
+// pixels with `last_value_in_bin`).
 //
 // Shared conventions, stated once here instead of on every method:
 // - A histogram with fewer than two occupied bins has no split to optimize;
@@ -584,8 +600,8 @@ fn boundary_bin(t: f64) -> usize {
 /// Ties go to the lowest bin. This matters for a cleanly bimodal histogram:
 /// `ω` and `μ` don't change across an empty gap, so every cut in the gap
 /// ties, and the cut lands at the end of the lower population - never at
-/// the top of the range, where the "+1" in `Threshold::execute` could reach
-/// the image maximum (the `.min(254)` clamp there stays as a backstop).
+/// the top of the range, next to the image maximum (the `.min(254)` clamp
+/// in `Threshold::execute` stays as a backstop).
 fn thresh_otsu(hist: &[f32; 256]) -> usize {
     if let Err(t) = splittable_range(hist) {
         return t;
@@ -622,8 +638,8 @@ fn thresh_otsu(hist: &[f32; 256]) -> usize {
 /// over both cuts.
 ///
 /// Each returned cut is the *last* bin of its (lower) class, exactly like
-/// `thresh_otsu`'s return value, so the same "+1" scaling in
-/// `Threshold::execute` applies unchanged to whichever cut ends up selected.
+/// `thresh_otsu`'s return value, so `Threshold::execute` maps whichever cut
+/// ends up selected to the pixels exactly as it maps a two-class cut.
 fn thresh_otsu_multi(hist: &[f32; 256]) -> (usize, usize) {
     let n: f64 = hist.iter().map(|&v| v as f64).sum();
     if n == 0.0 {
@@ -2388,7 +2404,7 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test for the "+1 lands on `dmax`" bug, originally reported
+    /// Regression test for the "cut-off lands on `dmax`" bug, originally reported
     /// as a real Otsu segmentation step finding 0 spots in every frame of
     /// two ground-truth images, despite the same pipeline correctly finding
     /// spots on noisier images whose histograms spread across enough bins
@@ -2403,9 +2419,7 @@ mod tests {
     /// this particular histogram's tie at bin 0 rather than drifting toward
     /// the top of the range, and `Threshold::execute`'s `.min(254)` clamp
     /// remains a backstop for every *other* auto method that can still
-    /// return a bin whose "+1" rescale would otherwise land exactly on
-    /// `dmax` (`255.0 / 255.0 == 1.0`) - unreachable by any real pixel
-    /// under the strict `>` classification below.
+    /// return bin 255, whose cut-off would leave no pixel above it.
     #[test]
     fn test_threshold_execute_otsu_clean_bimodal_image_still_finds_the_bright_population()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2455,25 +2469,9 @@ mod tests {
     }
 
     /// Golden-data regression for the `Threshold::execute` pipeline
-    /// (histogram binning, the auto-threshold "+1" bin offset, and the
-    /// lower-bound-exclusive/upper-bound-inclusive comparison), not just
-    /// the individual `thresh_XXX` bin-selection algorithms above.
-    ///
-    /// Before this fix, `Threshold::execute` was missing ImageJ's
-    /// `scaleAndSetThreshold(0, calcThresholdValue(...) + 1 + cValue, ...)`
-    /// "+1" bin offset and used an inclusive lower bound (`>=`) instead of
-    /// an exclusive one (strict `>`),
-    /// making the threshold systematically one bin too permissive -
-    /// letting background-adjacent noise through as foreground.
-    ///
-    /// `RAW` and the C++ numbers quoted below are from a standalone harness
-    /// built directly against `autoThreshold` / `scaleAndSetThreshold` /
-    /// `ThresholdTriangle::calcThresholdValue` in that file, run on this
-    /// exact data. Its triangle step (taken from ImageJ) picks bin 11; the
-    /// paper's maximum-distance bin used by `thresh_triangle` is bin 10 (see
-    /// `test_triangle_matches_reference` for the same one-bin offset), so
-    /// the binning/"+1"/comparison layers are checked against the C++
-    /// pipeline with that one bin accounted for.
+    /// (histogram binning, mapping the returned bin back to a cut-off, and
+    /// the comparison) on a realistic 16-bit spot image, not just the
+    /// individual `thresh_XXX` bin-selection algorithms above.
     #[test]
     fn test_threshold_execute_matches_reference() -> Result<(), Box<dyn std::error::Error>> {
         const N: usize = 2000;
@@ -2614,18 +2612,272 @@ mod tests {
             .filter(|&&v| v != 0)
             .count();
 
-        // C++ reference: min=0.0 max=1449.0 triangleBin=11 finalThreshold=68,
-        // foreground_px(strict>)=658 of 2000. With the paper's triangle bin
-        // 10, the same pipeline gives the cut (10 + 1) / 255 · 1449 ≈ 62.5,
-        // and 660 pixels lie strictly above it.
+        // The values span 0..=1449, so bin 10 (the triangle bin) ends at
+        // 10.5 / 255 · 1449 ≈ 59.7: foreground is every pixel in bins 11 and
+        // up, i.e. every value ≥ 60, and 660 of the 2000 values are.
         let (hist, _, _) =
             histogram_from_slice(&RAW.iter().map(|&v| v as f32 / 65535.0).collect::<Vec<_>>());
         assert_eq!(thresh_triangle(&hist), 10);
+        assert_eq!(fg, RAW.iter().filter(|&&v| v >= 60).count());
         assert_eq!(
             fg, 660,
-            "Threshold::execute foreground pixel count does not match the reference pipeline"
+            "Threshold::execute foreground pixel count does not match the bin split"
         );
         Ok(())
+    }
+
+    // ── The papers' class split, end to end ──────────────────────────────
+
+    /// Runs `method` through `Threshold::execute`: the cut-off is computed
+    /// from an image whose histogram is exactly `hist` (one pixel of value
+    /// `i` per count in bin `i`; bins 0 and 255 are occupied, so the pixel
+    /// values are the gray levels themselves) and applied to four probe
+    /// pixels around the boundary between levels `k` and `k + 1`. Asserts
+    /// that the method returns `k` and that, as in the papers, level `k` is
+    /// background and all of bin `k + 1` foreground: the probe exactly on
+    /// the bin edge `k + 0.5` pins `≥` against `>`, the probe at `k + 1`
+    /// pins the edge against the bin centre.
+    fn assert_paper_split(
+        method: ThresholdMethod,
+        hist: &[f32; 256],
+        k: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(compute_auto_threshold(&method, hist), k, "{method:?}");
+        assert!(hist[0] > 0.0 && hist[255] > 0.0);
+        let mut source = Vec::new();
+        for (level, &count) in hist.iter().enumerate() {
+            source.extend(std::iter::repeat_n(level as f32, count as usize));
+        }
+        let edge = k as f32 + 0.5;
+        let probes = [k as f32, edge.next_down(), edge, k as f32 + 1.0];
+        // The binning itself: the probes fall into bins k, k, k + 1, k + 1.
+        let bins: Vec<usize> = probes
+            .iter()
+            .map(|&v| histogram_bin(v, 0.0, 255.0))
+            .collect();
+        assert_eq!(bins, [k, k, k + 1, k + 1]);
+
+        let memory_id = MemoryId::PipelineContext(1);
+        let mut cache = GlobalPipelineCache::default();
+        let size = ImageSize {
+            width: source.len(),
+            height: 1,
+        };
+        cache.image_cache.insert(
+            CacheAddress::Memory(memory_id),
+            Arc::new(ImageContainer::new_f32_gray_from_image_test(
+                Image::<f32, 1>::new(size, source)?,
+            )),
+        );
+        let size = ImageSize {
+            width: probes.len(),
+            height: 1,
+        };
+        let mut ctx =
+            PipelineContext::new_from_image_test(Image::<f32, 1>::new(size, probes.to_vec())?)?;
+        let cmd = Threshold {
+            thresholds: vec![ThresholdEntry {
+                method,
+                min_threshold: 0.0,
+                max_threshold: 255.0,
+                unit: PixelUnits::Relative,
+                segmentation_class: SegmentationClass(1),
+                value_source: ThresholdValueSource::Memory(memory_id),
+            }],
+        };
+        cmd.execute(&mut ctx, &mut cache)?;
+        let labels = ctx
+            .segmentation_map
+            .as_ref()
+            .expect("no segmentation map")
+            .as_slice();
+        assert_eq!(labels, &[0, 0, 1, 1], "{method:?}: probes {probes:?}");
+        Ok(())
+    }
+
+    /// One pixel per gray level 0..=255. It is symmetric about 127.5, so
+    /// every symmetric criterion splits it into two halves of 128 levels:
+    /// `0..=127` | `128..=255`, i.e. `k = 127` under the `≤ k` convention.
+    fn uniform_histogram() -> [f32; 256] {
+        [1.0; 256]
+    }
+
+    /// `h(i) = |i − 100| + 1`: exactly two strict maxima, at 0 (101) and 255
+    /// (156), so no smoothing is needed, and a unique minimum at 100.
+    fn v_histogram() -> [f32; 256] {
+        std::array::from_fn(|i| (i as f32 - 100.0).abs() + 1.0)
+    }
+
+    /// Two tents of half-width 64 at 64 and 191 on a floor of 1, symmetric
+    /// about 127.5 with every level occupied.
+    fn two_tent_histogram() -> [f32; 256] {
+        std::array::from_fn(|i| {
+            let i = i as f32;
+            1.0 + (64.0 - (i - 64.0).abs()).max(0.0) + (64.0 - (i - 191.0).abs()).max(0.0)
+        })
+    }
+
+    /// Otsu (1979) as given by Glasbey (1993, p. 533, INTERMEANS): `t` is the
+    /// `j` maximizing `A_j(A_n − A_j)(μ_j − ν_j)²`, `μ_j` the mean of levels
+    /// `≤ j`. On the uniform histogram the class means are `μ = j/2`,
+    /// `ν = (j + 256)/2`, `ν − μ = 128` for every `j`, so the criterion is
+    /// `∝ (j + 1)(255 − j)`, maximal only at `j = 127`.
+    #[test]
+    fn otsu_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        let otsu = ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two,
+        };
+        assert_paper_split(otsu, &uniform_histogram(), 127)
+    }
+
+    /// Three tents of half-width 42 at 42, 127.5 and 213 on a floor of 1,
+    /// doubled to whole counts, symmetric about 127.5. The joint optimum of
+    /// the three-class between-class variance is the symmetric pair
+    /// `(84, 170)` (`170 = 254 − 84`), and it is unique (checked by an
+    /// exhaustive search over all pairs). Each cut is the last level of its
+    /// lower class, so the middle class `85..=170` is foreground with `k = 84`
+    /// and background with `k = 170`.
+    #[test]
+    fn three_class_otsu_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        let hist: [f32; 256] = std::array::from_fn(|i| {
+            let i2 = 2.0 * i as f32;
+            2.0 + [84.0f32, 255.0, 426.0]
+                .iter()
+                .map(|&p2| (84.0 - (i2 - p2).abs()).max(0.0))
+                .sum::<f32>()
+        });
+        assert_eq!(thresh_otsu_multi(&hist), (84, 170));
+        for (middle_class, k) in [
+            (OtsuMiddleClass::Foreground, 84),
+            (OtsuMiddleClass::Background, 170),
+        ] {
+            let otsu = ThresholdMethod::Otsu {
+                classes: OtsuClasses::Three { middle_class },
+            };
+            assert_paper_split(otsu, &hist, k)?;
+        }
+        Ok(())
+    }
+
+    /// Glasbey (1993, p. 532): MEAN is "the integer part of `B_n/A_n`".
+    /// The uniform histogram's mean is 127.5, so `t = 127`, not 128.
+    #[test]
+    fn mean_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Mean, &uniform_histogram(), 127)
+    }
+
+    /// Glasbey (1993, p. 532), MEDIAN / Doyle's p-tile: `t` such that
+    /// `A_t/A_n` is as close as possible to 0.5. On the uniform histogram
+    /// `A_t/A_n = (t + 1)/256` is exactly 0.5 only at `t = 127`.
+    #[test]
+    fn percentile_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Percentile, &uniform_histogram(), 127)
+    }
+
+    /// Ridler & Calvard as given by Glasbey (1993, p. 533, INTERMEANS(I)):
+    /// from MEAN (127), `t` becomes the integer part of `(μ_t + ν_t)/2`
+    /// until it repeats. Class means 63.5 and 191.5 give 127.5 → 127, a fixed
+    /// point.
+    #[test]
+    fn isodata_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::IsoData, &uniform_histogram(), 127)
+    }
+
+    /// Kittler & Illingworth as given by Glasbey (1993, p. 533,
+    /// MINERROR(I)): from MEAN (127) the two classes have equal variances and
+    /// proportions, where the method "is equivalent to INTERMEANS(I)": the
+    /// root is the midpoint of the means, 127.5 → 127, a fixed point.
+    #[test]
+    fn min_error_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::MinError, &uniform_histogram(), 127)
+    }
+
+    /// Tsai's moments as given by Glasbey (1993, p. 532): `A_t/A_n` nearest
+    /// to `x₀`. A symmetric histogram has `x₀ = ½` (the two preserved levels
+    /// lie symmetric about the mean), reached exactly at `t = 127`.
+    #[test]
+    fn moments_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Moments, &uniform_histogram(), 127)
+    }
+
+    /// Kapur et al. as given by Sahoo et al. (1997, p. 72): classes
+    /// `0..=t` and `t+1..=255`. For the uniform histogram the summed entropy
+    /// is `ln(t + 1) + ln(255 − t)`, strictly concave with its maximum at
+    /// `t = 127`.
+    #[test]
+    fn max_entropy_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::MaxEntropy, &uniform_histogram(), 127)
+    }
+
+    /// Yen et al.'s entropic correlation as given by Sahoo et al. (1997,
+    /// p. 73): `C(t) = −ln Σ_{i≤t}(p_i/P)² − ln Σ_{i>t}(p_i/(1−P))²`. For the
+    /// uniform histogram that is again `ln(t + 1) + ln(255 − t)`.
+    #[test]
+    fn yen_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Yen, &uniform_histogram(), 127)
+    }
+
+    /// Sahoo et al. (1997, p. 74): on the uniform histogram all three
+    /// Rényi cuts are 127 (see the two tests above; the order-0.5 sum is
+    /// `2 ln(t + 1) + 2 ln(255 − t)`), so `ω = 0` and `t*_c = 127`.
+    #[test]
+    fn renyi_entropy_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::RenyiEntropy, &uniform_histogram(), 127)
+    }
+
+    /// Shanbhag (1994, p. 414-416): class 1 is `0..=T`, class 2
+    /// `T+1..=N`. On the uniform histogram with `T = 127` both classes hold
+    /// 128 levels whose memberships (eq. 2-4) are the same set
+    /// `½ + j/256`, `j = 1..=128`, so `info₁ = info₂` (eq. 5, 6) there.
+    #[test]
+    fn shanbhag_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Shanbhag, &uniform_histogram(), 127)
+    }
+
+    /// Huang & Wang (1995, eq. 2-4): level `g ≤ t` belongs to the class
+    /// with mean `μ₀`. The two-tent histogram is symmetric about 127.5, so
+    /// `E(t) = E(254 − t)`; its unique minimum (checked exhaustively) is
+    /// therefore `t = 127`. (The uniform histogram does not work here: its
+    /// minimum is the tied pair 126/128.)
+    #[test]
+    fn huang_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Huang, &two_tent_histogram(), 127)
+    }
+
+    /// Glasbey (1993, p. 532), INTERMODES: the V histogram is already
+    /// bimodal with modes 0 and 255, so `t = (0 + 255)/2 = 127.5`: the
+    /// boundary between levels 127 and 128, i.e. `k = 127`.
+    #[test]
+    fn intermodes_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Intermodes, &v_histogram(), 127)
+    }
+
+    /// Glasbey (1993, p. 532), MINIMUM: `t` with `y_{t−1} > y_t ≤ y_{t+1}`
+    /// in the valley, which is level 100 itself (background).
+    #[test]
+    fn minimum_splits_like_the_paper() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Minimum, &v_histogram(), 100)
+    }
+
+    /// Li & Lee's paper was not available for this check, so this pins only
+    /// the code's own convention (`floor` of the fixed point, bins `≤ k`
+    /// background). From the mean 127.5 the iteration
+    /// `t = (μ_b − μ_a)/(ln μ_b − ln μ_a)` visits 115.96, 109.28, 105.91,
+    /// 103.65, 102.52, 101.95 and 101.38, which repeats → 101.
+    #[test]
+    fn li_split_follows_the_code_convention() -> Result<(), Box<dyn std::error::Error>> {
+        assert_paper_split(ThresholdMethod::Li, &uniform_histogram(), 101)
+    }
+
+    /// Zack et al.'s paper was not available for this check, so this pins
+    /// only the code's own convention. Peak 256 at level 0, every other level
+    /// 1: the line from (0, 256) to (255, 1) is `256 − i`, the gap below it
+    /// `255 − i`, largest at `i = 1`.
+    #[test]
+    fn triangle_split_follows_the_code_convention() -> Result<(), Box<dyn std::error::Error>> {
+        let mut hist = [1.0f32; 256];
+        hist[0] = 256.0;
+        assert_paper_split(ThresholdMethod::Triangle, &hist, 1)
     }
 
     // ── value_source ─────────────────────────────────────────────────────
