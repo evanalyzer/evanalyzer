@@ -342,7 +342,7 @@ impl PipelineWorker {
                         // Clear any stale preview ROIs so the incremental tile updates
                         // start from a clean slate.
                         if is_preview {
-                            let mut project = self_handle.app_state.get_project_write();
+                            let mut project = self_handle.app_state.get_project_runtime_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_measurements.clear();
                         }
@@ -375,7 +375,7 @@ impl PipelineWorker {
                             // Append the new ROIs and redraw so the user sees partial results.
                             self_handle
                                 .app_state
-                                .get_project_write()
+                                .get_project_runtime_write()
                                 .tmp_settings
                                 .preview_objects
                                 .extend(objects);
@@ -607,7 +607,7 @@ impl PipelineWorker {
                         // though the backend merged them.
                         if let Some(final_objects) = output.preview_objects {
                             objects_found = Some(final_objects.len());
-                            let mut project = self_handle.app_state.get_project_write();
+                            let mut project = self_handle.app_state.get_project_runtime_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_objects.extend(final_objects);
                         }
@@ -615,7 +615,7 @@ impl PipelineWorker {
                         if let Some(measurements) = output.preview_measurements {
                             self_handle
                                 .app_state
-                                .get_project_write()
+                                .get_project_runtime_write()
                                 .tmp_settings
                                 .preview_measurements = measurements;
                         }
@@ -1286,6 +1286,22 @@ mod tests {
             f.ui.global::<GlobalAppState>().get_active_dialog(),
             DialogType::StepSettings
         );
+    }
+
+    /// The preview's objects are no edit: a preview takes no undo step, so
+    /// an undone edit can still be redone after it.
+    #[test]
+    fn a_preview_after_an_undo_keeps_the_redo() {
+        let f = fixture();
+        let ui_state = &f.worker.app_state;
+        ui_state.get_project_write().meta.name = "edited".into();
+        assert!(ui_state.undo());
+
+        f.worker.run_task(f.task(true));
+        drain_ui_queue();
+
+        assert!(ui_state.redo(), "the redo survives");
+        assert_eq!(ui_state.get_project().meta.name, "edited");
     }
 
     /// A preview while an analysis runs (editing allowed during it): it

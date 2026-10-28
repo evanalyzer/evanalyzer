@@ -120,7 +120,7 @@ impl ImagesListController {
 
         if is_part_of_root {
             {
-                let mut project = self.app_state.get_project_write();
+                let mut project = self.app_state.get_project_runtime_write();
                 project.set_current_image_path(image_path);
             } // write lock dropped before sync calls that re-acquire it
 
@@ -415,7 +415,7 @@ impl ImagesListController {
 
             if let Some(path) = selected_absolute_path {
                 {
-                    let mut project = manager.app_state.get_project_write();
+                    let mut project = manager.app_state.get_project_runtime_write();
                     project.set_current_image_path(&path);
                 }
 
@@ -1106,6 +1106,22 @@ mod tests {
         assert_eq!(project.get_current_image_path_cloned(), Some(image_path));
         // Must not have touched the root - it was already correct.
         assert_eq!(project.images.root, Some(PathBuf::from("/data/images")));
+    }
+
+    /// Opening an image is no edit: it takes no undo step, so an undone
+    /// edit can still be redone after it.
+    #[test]
+    fn opening_an_image_after_an_undo_keeps_the_redo() {
+        let controller = Arc::new(make_controller());
+        controller.app_state.get_project_runtime_write().images.root =
+            Some(PathBuf::from("/data/images"));
+        controller.app_state.get_project_write().meta.name = "edited".into();
+        assert!(controller.app_state.undo());
+
+        controller.open_new_image(&PathBuf::from("/data/images/img.tif"));
+
+        assert!(controller.app_state.redo(), "the redo survives");
+        assert_eq!(controller.app_state.get_project().meta.name, "edited");
     }
 
     #[test]
