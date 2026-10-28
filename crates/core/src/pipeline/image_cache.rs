@@ -159,6 +159,25 @@ impl ImageCache {
         })
     }
 
+    /// Changes `hot_cache`'s cap to `capacity_bytes`. Entries over a smaller
+    /// cap are spilled to disk, not dropped.
+    pub fn set_capacity_bytes(&mut self, capacity_bytes: u64) {
+        let inner = self.inner.get_mut().expect("Poisned thread");
+        let capacity = NonZeroUsize::new((capacity_bytes as usize).max(1)).unwrap();
+        while inner.hot_cache.len() + inner.hot_cache.weight() >= capacity.get() {
+            let Some((address, image)) = inner.hot_cache.pop_back() else {
+                break;
+            };
+            spill_to_disk(
+                self.temp_dir.path(),
+                &mut inner.image_index,
+                address,
+                &image,
+            );
+        }
+        inner.hot_cache.resize(capacity);
+    }
+
     /// Inserts `img` at `address`, returning the previously stored image (if
     /// any) - matches `HashMap::insert`.
     ///
@@ -687,6 +706,72 @@ mod tests {
         // Still transparently retrievable, reloaded from the spilled file.
         let fetched = cache.get(&first).unwrap();
         assert_eq!(fetched.as_f32_slice(), Some([1.0; 16].as_slice()));
+    }
+
+    #[test]
+    fn a_smaller_capacity_spills_what_no_longer_fits() {
+        let mut cache = cache_with_capacity(200);
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
+        cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
+        cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
+        assert_eq!(disk_file_count(&cache), 0);
+
+        cache.set_capacity_bytes(100);
+
+        // The least recently used went to disk, not lost.
+        assert_eq!(disk_file_count(&cache), 1);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(
+            cache.get(&first).unwrap().as_f32_slice(),
+            Some([1.0; 16].as_slice())
+        );
+    }
+
+    #[test]
+    fn a_larger_capacity_keeps_more_in_memory() {
+        let mut cache = cache_with_capacity(100);
+
+        cache.set_capacity_bytes(200);
+        cache.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(1)),
+            gray_container(4, 4, vec![1.0; 16]),
+        );
+        cache.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(2)),
+            gray_container(4, 4, vec![2.0; 16]),
+        );
+
+        assert_eq!(disk_file_count(&cache), 0);
+    }
+
+    /// The whole slide's merge: every tile's cache is under its own cap,
+    /// together they are over the merged cache's one cap - the rest spills.
+    #[test]
+    fn tiles_merged_into_one_cache_spill_over_its_one_capacity() {
+        // As the job executor: the merged cache and every tile's cache are
+        // copies of one empty cache.
+        let global = cache_with_capacity(200);
+        let mut merged = global.clone();
+        merged.set_capacity_bytes(100);
+        for id in 1..=2 {
+            let mut tile = global.clone();
+            tile.set_capacity_bytes(200);
+            tile.insert(
+                CacheAddress::Memory(MemoryId::PipelineContext(id)),
+                gray_container(4, 4, vec![id as f32; 16]),
+            );
+            assert_eq!(disk_file_count(&tile), 0, "a tile alone fits");
+            merged.extend(tile);
+        }
+
+        assert_eq!(disk_file_count(&merged), 1);
+        assert_eq!(merged.len(), 2);
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        assert_eq!(
+            merged.get(&first).unwrap().as_f32_slice(),
+            Some([1.0; 16].as_slice())
+        );
     }
 
     #[test]

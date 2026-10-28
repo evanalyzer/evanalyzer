@@ -354,6 +354,17 @@ impl<'a> JobExecutor {
             crate::utils::resources::format_binary_bytes(image_cache_bytes),
             parallelism
         );
+        // One image: its tiles run on every worker and are merged into one
+        // cache, which gets the whole budget. Many images: one per worker.
+        let merged_cache_bytes = if self.images.len() == 1 {
+            crate::utils::resources::recommended_merged_cache_bytes(parallelism, &ram_budget)
+        } else {
+            image_cache_bytes
+        };
+        info!(
+            "Merged image cache capacity: {}",
+            crate::utils::resources::format_binary_bytes(merged_cache_bytes)
+        );
 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
@@ -392,6 +403,7 @@ impl<'a> JobExecutor {
                     cancel.clone(),
                     Some(progress.clone()),
                     image_cache_bytes,
+                    merged_cache_bytes,
                 ) {
                     Ok(()) => {
                         progress
@@ -450,6 +462,7 @@ impl<'a> JobExecutor {
                         cancel.clone(),
                         None,
                         image_cache_bytes,
+                        merged_cache_bytes,
                     ) {
                         Ok(()) => {
                             let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -605,6 +618,7 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
         progress: Option<Sender<ProgressEvent>>,
         image_cache_bytes: u64,
+        merged_cache_bytes: u64,
     ) -> Result<(), InternalErrors> {
         let start_image = Instant::now();
         const RES_IDX: i32 = 0;
@@ -1034,30 +1048,34 @@ impl<'a> JobExecutor {
                     Ok(cache)
                 };
 
-                // Merge cache clouser
-                let merge_caches = |mut a: GlobalPipelineCache,
-                                    b: GlobalPipelineCache|
-                 -> Result<GlobalPipelineCache, InternalErrors> {
-                    a.object_cache.extend(b.object_cache);
-                    a.image_cache.extend(b.image_cache);
-                    Ok(a)
+                // Every finished tile is merged into this one cache, one at a
+                // time: one cap for all of them (`merged_cache_bytes`), so the
+                // channel tiles spill to disk while the tiles still run. Not a
+                // `try_reduce`: each of its partial results had the full cap.
+                let merged = Mutex::new({
+                    let mut merged = global_cache.clone();
+                    merged.image_cache.set_capacity_bytes(merged_cache_bytes);
+                    merged
+                });
+                let merge_tile = |tile: ImageTile| -> Result<(), InternalErrors> {
+                    let cache = run_tile(tile, progress.clone())?;
+                    let mut merged = merged.lock().expect("Poisoned");
+                    merged.object_cache.extend(cache.object_cache);
+                    merged.image_cache.extend(cache.image_cache);
+                    Ok(())
                 };
 
                 // Execute the tiles in prallel
                 let tiles_start = Instant::now();
                 let stack_result = visible_tiles
                     .par_iter()
-                    .map(|&tile| run_tile(tile, progress.clone()))
-                    .try_reduce(|| global_cache.clone(), merge_caches)
-                    .and_then(|acc| {
-                        if hidden_tiles.is_empty() {
-                            return Ok(acc);
-                        }
+                    .try_for_each(|&tile| merge_tile(tile))
+                    .and_then(|()| {
                         hidden_tiles
                             .par_iter()
-                            .map(|&tile| run_tile(tile, progress.clone()))
-                            .try_reduce(|| acc.clone(), merge_caches)
-                    });
+                            .try_for_each(|&tile| merge_tile(tile))
+                    })
+                    .map(|()| merged.into_inner().expect("Poisoned"));
 
                 debug!(
                     "{image_rel_path:?} t={t} z={z}: {} tiles in {:.2} s",

@@ -1119,6 +1119,70 @@ threads; the "after" ones hardly. Still open: freed memory isn't handed
 back to the system after a run (`malloc_trim`), and the AI plugin keeps
 every deep-learning model loaded until the app ends (TODO).
 
+## Whole slide: the cache budget in the tile merge - baseline (2026-10-28)
+
+`bench_whole_slide` (app example, release): `tests/haut` (9343 × 27143,
+5 channels, 5 z, series 0) through the same path as `cli analyze` - load
+channel 0 with a max projection, Gaussian blur, Otsu, objects, Voronoi cells
+(max radius 50 px). Peak RSS of the process, the spill folder's peak size
+(TMPDIR), 10 s apart. 212,413 objects every run.
+
+| Threads | Wall | Peak RSS | Spill peak |
+|---|---|---|---|
+| 21 | 26.3 / 27.2 / 33.9 s | 7.38-7.56 GB | 6.09 GB |
+| 4 | 50.1 / 54.9 s | 7.42-7.44 GB | 0 |
+| 4, only 6.0 GB available | 54.8 s | 6.07 GB, then the kernel's OOM killer | 6.09 GB |
+
+Over time (`BENCH_TRACE=1`, 21 threads): in the tile phase RSS climbs to
+~7.1 GB with nothing spilled - every merge accumulator stays under its own
+cap (available RAM / workers), so all channel tiles stay in RAM (5 channels
+× 253 MPx × f32 = 5.1 GB). Only the final merge puts them into one
+accumulator: 6.1 GB spilled in ~3 s, RSS down to 3.2 GB. The peak grows
+with the slide, not with the budget.
+
+Low RAM: another process held memory until 6.0 GB were available. The run
+(4 threads) went to 6.07 GB in the tile phase and the kernel killed the
+largest other process (the memory holder) - on an 8 GB PC it would have
+been EVAnalyzer. Spilling started only at the final merge (t ≈ 31 s).
+
+## Whole slide: one cache budget for the merged tiles - (a) vs (b) (2026-10-28)
+
+Both variants give the merged channel tiles of a tiled image one cap:
+available RAM minus every worker's full tile estimate
+(`recommended_merged_cache_bytes`).
+
+- (a) Tiles run in parallel, each finished tile is merged into one cache,
+  one at a time (instead of `try_reduce`, whose partial results each had
+  the full per-worker cap).
+- (b) The channel tiles go to one store shared by all tile caches
+  (`ImageCache::share_channels`, each copy sees only its own keys); the
+  merge stays a `try_reduce`.
+
+`bench_whole_slide` on `tests/haut` as above, today / (a) / (b) alternated,
+10 s apart. Same 212,413 objects and area in every run.
+
+| | today | (a) | (b) |
+|---|---|---|---|
+| 21 threads: wall | 22.9 / 24.0 s | 18.6 / 20.1 s | 18.3 / 19.9 s |
+| 21 threads: CPU (user + sys) | 225-238 s | 218-222 s | 220 s |
+| 21 threads: peak RSS / spill | 7.50-7.66 GB / 6.09 GB | 7.56-7.57 GB / 0 | 7.62-7.87 GB / 0 |
+| 4 threads: wall | 42.1 / 42.4 s | 40.3 / 46.4 s | 43.3 / 44.3 s |
+| 4 threads: peak RSS | 7.35-7.49 GB | 7.26-7.31 GB | 7.36-7.40 GB |
+| 4 threads, ~6 GB available: peak RSS | 5.86 / 6.07 / 6.28 GB | 5.27 / 5.42 / 5.43 GB | 4.24 / 5.51 / 5.55 GB |
+| 4 threads, ~6 GB available: wall / CPU | 49-51 s / 156-160 s | 50-54 s / 156-162 s | 52-56 s / 156-158 s |
+| 4 threads, ~4 GB available: peak RSS | 5.44 / 5.49 GB | 3.47 / 3.57 GB | 3.17 / 3.26 GB |
+| 4 threads, ~4 GB available: wall / CPU | 47.8 / 48.9 s, 156 s | 50.3 / 51.7 s, 157-159 s | 51.9 / 57.5 s, 156 s |
+
+With plenty of RAM today's run spilled 6 GB at 21 threads (one accumulator
+over its per-worker cap at the end); both variants keep it in RAM - 15-20 %
+faster. With little RAM today's peak doesn't follow the RAM at all (5.4 GB
+with 4 GB available - into swap); both variants stay under it, spilling
+while the tiles run. (b) is ~0.3 GB lower (the running tiles' channels count
+toward the one cap) but a little slower under pressure (every channel read
+and every spill write goes through the one shared lock). Same CPU.
+"Available" is MemAvailable after another process held the rest; the
+container has swap, so the numbers above it are noisy.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1165,6 +1229,8 @@ graphics driver).
 | Undo history, 100,000 images, 100 steps | +1 MB (other edits) / +960 MB (edits of an image) (was +23.9 GB) | 2026-10-27 | Undo history on a large project |
 | Undo history with the budget, 100,000 images, drawing | budget (Auto: 32 MB-1 GB, e.g. 510 MB on 8 GB / 4 cores); 256 MB: +288 MB | 2026-10-27 | Undo history on a large project |
 | Results actions, 1.7 GB results file | 213-270 MB (test process; was 215-394 MB) | 2026-10-27 | Results views: queries off the UI thread |
+| Whole slide 9343 × 27143, 5 channels (`tests/haut`, 212,413 objects), 4 or 21 threads | 7.4-7.6 GB; with 6 GB available it overruns them (OOM) | 2026-10-28 | Whole slide: the cache budget in the tile merge |
+| Same slide, one cache budget for the merged tiles (a), 4 threads with ~4 / ~6 GB available | 3.5-3.6 / 5.3-5.4 GB (was 5.4-5.5 / 5.9-6.3 GB) | 2026-10-28 | Whole slide: one cache budget for the merged tiles |
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

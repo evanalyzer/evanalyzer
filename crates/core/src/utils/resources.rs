@@ -129,6 +129,19 @@ pub fn recommended_image_cache_bytes(
         .max(min_image_cache_bytes)
 }
 
+/// Cap for the one cache a tiled image's tiles are merged into: the RAM
+/// left once every one of `parallelism` workers has its own tile's full
+/// estimate ([`RamBudget::total_bytes`]: working set, its channel tiles,
+/// object margin). Whatever doesn't fit goes to disk while the tiles still
+/// run - not only at the end - so the merged channel tiles of a whole slide
+/// can't grow past the RAM. Never below `min_image_cache_bytes`, as
+/// [`recommended_image_cache_bytes`].
+pub fn recommended_merged_cache_bytes(parallelism: usize, budget: &RamBudget) -> u64 {
+    available_memory_bytes()
+        .saturating_sub(parallelism.max(1) as u64 * budget.total_bytes())
+        .max(budget.min_image_cache_bytes)
+}
+
 /// Formats a byte count in binary (1024-based) units - GiB/MiB - not the
 /// decimal (1000-based) GB/MB a raw byte count is easy to misread as. Only
 /// two tiers: everything this module sizes (a per-worker RAM/cache budget)
@@ -336,6 +349,27 @@ mod tests {
         assert!(
             few_workers >= many_workers,
             "fewer concurrent workers must never result in a smaller per-worker cache"
+        );
+    }
+
+    #[test]
+    fn recommended_merged_cache_bytes_is_never_below_the_minimum() {
+        // More workers than any machine has RAM for: the minimum still.
+        let budget = estimate_ram_budget(4096, 4096, 5);
+        assert_eq!(
+            recommended_merged_cache_bytes(1_000_000, &budget),
+            budget.min_image_cache_bytes
+        );
+    }
+
+    #[test]
+    fn recommended_merged_cache_bytes_leaves_every_worker_its_tile() {
+        let budget = estimate_ram_budget(4096, 4096, 5);
+        let few_workers = recommended_merged_cache_bytes(2, &budget);
+        let many_workers = recommended_merged_cache_bytes(16, &budget);
+        assert!(
+            many_workers <= few_workers,
+            "each more worker's tile leaves the merged cache less"
         );
     }
 
