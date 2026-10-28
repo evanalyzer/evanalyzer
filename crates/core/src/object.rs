@@ -1118,7 +1118,13 @@ impl Object {
     /// by any loaded tile for a given channel (e.g. a tile that was never processed, as
     /// happens for an off-screen tile in a partial preview run) is simply skipped for that
     /// channel - not an error, just missing data.
+    ///
+    /// An object without a mask (as an empty geometry result has) has no intensities: the
+    /// result is empty. Not `area`: objects built only to be measured (e.g. rings) leave it 0.
     pub fn measure_intensities(&self, cache: &GlobalPipelineCache) -> IndexMap<i32, Intensity> {
+        if self.mask_data.is_empty() {
+            return IndexMap::new();
+        }
         // Only resolves (and, if needed, disk-loads - see `ImageCache`'s own doc
         // comments) the tiles whose bounds actually overlap this object's bbox,
         // not every channel entry the cache happens to be holding: once the
@@ -1145,7 +1151,8 @@ impl Object {
     /// which on a whole slide read the same tiles from disk again and again -
     /// and the objects in parallel. An object inside one tile is measured
     /// while that tile is loaded; one over several keeps its sums (bounded:
-    /// gray values are counted) until its last tile.
+    /// gray values are counted) until its last tile. An object without a mask
+    /// gets no intensities (an empty map).
     pub fn measure_intensities_of(objects: &mut [Object], cache: &GlobalPipelineCache) {
         use rayon::prelude::*;
         let mut keys: Vec<(i32, ImageTile)> = cache.channel_keys().collect();
@@ -1165,8 +1172,12 @@ impl Object {
         let object_tiles: Vec<Vec<usize>> = objects
             .par_iter()
             .map(|o| {
-                let [x0, y0, x1, y1] = o.bbox.map(|v| v as usize);
                 let mut found = Vec::new();
+                // In no tile: nothing to measure, its map stays empty.
+                if o.mask_data.is_empty() {
+                    return found;
+                }
+                let [x0, y0, x1, y1] = o.bbox.map(|v| v as usize);
                 for (row, start) in rows.iter().zip(&row_starts) {
                     let t = row[0];
                     if t.offset_y > y1 || y0 >= t.offset_y + t.height {
@@ -2017,6 +2028,60 @@ mod tests {
             99.0,
             "object at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
         );
+    }
+
+    /// An object without a mask - as `rasterize_geometry` returns for an empty
+    /// result: a 1-pixel bbox, `area == 0` and an empty mask - has no
+    /// intensities instead of indexing its empty mask.
+    #[test]
+    fn measure_intensities_of_an_empty_object_is_empty() {
+        use crate::image::ManagedImage;
+        use crate::image::Point2d;
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use crate::{ImageContainer, ImagePlane};
+        use kornia_image::{Image, ImageSize};
+        use std::sync::Arc;
+
+        let size = ImageSize {
+            width: 10,
+            height: 10,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(
+            Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::new(size, vec![5.0; 100]).unwrap(),
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+                dimensionality: ImageDimensionality::Planar,
+            })),
+            0,
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+        );
+
+        let empty_mask = Object::new(ObjectInit {
+            id: ObjectId(1),
+            bbox: [3, 3, 3, 3],
+            ..Default::default()
+        });
+        let pixel = Object::new(ObjectInit {
+            id: ObjectId(2),
+            bbox: [3, 3, 3, 3],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, 1),
+            area: 1,
+            ..Default::default()
+        });
+
+        assert!(empty_mask.measure_intensities(&cache).is_empty());
+
+        let mut objects = vec![empty_mask, pixel];
+        Object::measure_intensities_of(&mut objects, &cache);
+        assert!(objects[0].intensities.is_empty());
+        assert_eq!(objects[1].intensities[&0].sum_intensity, 5.0);
     }
 
     /// Tile by tile gives every object what measuring it alone gives -

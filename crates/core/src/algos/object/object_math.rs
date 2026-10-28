@@ -29,10 +29,13 @@ use macros::CommandsMeta;
 
 /// Boolean set operation applied between an `input_class` object ("A") and the union of
 /// its overlapping `other_class` ROIs ("B").
+///
+/// Any operation whose result has no pixels left (e.g. `Subtract` where B covers A,
+/// `Xor` of identical masks) yields no object: nothing is created, measured or stored,
+/// regardless of `keep_unmatched`. In place, the input object is removed.
 #[derive(CommandsMeta)]
 pub enum ObjectSetOperation {
-    /// Intersection: pixels present in both A and B. With no overlapping B, the
-    /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
+    /// Intersection: pixels present in both A and B.
     And,
     /// Union: pixels present in A or B (or both). The result can extend beyond A's
     /// own bounding box into B's territory.
@@ -104,6 +107,12 @@ pub struct ObjectMath {
     /// Note this is a policy override, not the literal mathematical result: e.g. for
     /// `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
     /// still leaves A untouched rather than emitting a zero-area object.
+    ///
+    /// An input object that has partners but whose result is empty is not "unmatched":
+    /// the result is empty, so there is nothing to keep regardless of this setting - no
+    /// output object is created, and in place the input object is removed. Unlike
+    /// CellProfiler, which keeps zero-area objects to keep its label numbers one-to-one,
+    /// none are kept here, as they would leak NaN/zero measurements into statistics.
     #[cmdsmeta(default = true, visibility = Advanced)]
     pub keep_unmatched: bool,
 }
@@ -175,6 +184,13 @@ impl ImageAlgorithm for ObjectMath {
             }
 
             let geometry = input_object.combine_geometry(&overlapping, op, image_size);
+            // No pixels left: not an object, so nothing to create or measure.
+            if geometry.area == 0 {
+                if replace_in_place {
+                    to_remove.push(input_id.clone());
+                }
+                continue;
+            }
             let (segmentation_class, plane) =
                 (input_object.segmentation_class, input_object.plane.clone());
 
@@ -610,6 +626,101 @@ mod tests {
             intensity.sum_intensity,
             cytoplasm.area as f64 * VALUE as f64
         );
+    }
+
+    /// Runs `cmd` on a cell and a nucleus that are identical 10x10 squares, with a
+    /// channel image registered so an attempt to measure an empty result would panic.
+    fn run_on_identical_squares(cmd: &ObjectMath) -> GlobalPipelineCache {
+        let mut cache = GlobalPipelineCache::default();
+        let cell = make_square_object(ID_A, 10, 10, 10, CELL);
+        let nucleus = make_square_object(200_000, 10, 10, 10, NUCLEUS);
+        cache.object_cache.insert(cell.id.clone(), cell);
+        cache.object_cache.insert(nucleus.id.clone(), nucleus);
+
+        let mut ctx = make_ctx_with_channel(
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+            &mut cache,
+            4.0,
+        );
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+        cache
+    }
+
+    #[test]
+    fn subtract_covering_the_input_creates_no_output_object() {
+        let cmd = default_cmd(ObjectSetOperation::Subtract, OUT);
+        let cache = run_on_identical_squares(&cmd);
+
+        assert!(
+            !cache
+                .object_cache
+                .values()
+                .any(|r| r.is_of(&OUT, Scope::Global)),
+            "an empty result must not become an object"
+        );
+        let cell = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert_eq!(cell.area, 100, "the input object stays unchanged");
+        assert_eq!(cell.bbox, [10, 10, 19, 19]);
+        assert_eq!(cache.object_cache.len(), 2);
+    }
+
+    #[test]
+    fn subtract_covering_the_input_in_place_removes_the_input() {
+        let cmd = default_cmd(ObjectSetOperation::Subtract, ObjectClass::Unset);
+        let cache = run_on_identical_squares(&cmd);
+
+        assert!(
+            cache.object_cache.get(&ObjectId(ID_A)).is_none(),
+            "an input object without pixels left must be removed"
+        );
+        assert_eq!(cache.object_cache.len(), 1, "only the nucleus is left");
+    }
+
+    #[test]
+    fn empty_result_is_dropped_regardless_of_keep_unmatched() {
+        for keep_unmatched in [true, false] {
+            let mut cmd = default_cmd(ObjectSetOperation::Subtract, OUT);
+            cmd.keep_unmatched = keep_unmatched;
+            let cache = run_on_identical_squares(&cmd);
+            assert!(
+                !cache
+                    .object_cache
+                    .values()
+                    .any(|r| r.is_of(&OUT, Scope::Global)),
+                "keep_unmatched = {keep_unmatched}: no output object"
+            );
+            assert_eq!(
+                cache.object_cache.get(&ObjectId(ID_A)).map(|c| c.area),
+                Some(100),
+                "keep_unmatched = {keep_unmatched}: input untouched"
+            );
+
+            let mut cmd = default_cmd(ObjectSetOperation::Subtract, ObjectClass::Unset);
+            cmd.keep_unmatched = keep_unmatched;
+            let cache = run_on_identical_squares(&cmd);
+            assert!(
+                cache.object_cache.get(&ObjectId(ID_A)).is_none(),
+                "keep_unmatched = {keep_unmatched}: input removed in place"
+            );
+        }
+    }
+
+    #[test]
+    fn xor_of_identical_masks_creates_no_output_object() {
+        let cmd = default_cmd(ObjectSetOperation::Xor, OUT);
+        let cache = run_on_identical_squares(&cmd);
+
+        assert!(
+            !cache
+                .object_cache
+                .values()
+                .any(|r| r.is_of(&OUT, Scope::Global)),
+            "an empty XOR result must not become an object"
+        );
+        assert_eq!(cache.object_cache.len(), 2);
     }
 
     #[test]

@@ -2805,7 +2805,7 @@
           "default": "UNSET"
         },
         "keepUnmatched": {
-          "description": "When an input object has no qualifying overlapping partner: keep it unchanged in\nthe output (true), or drop it entirely - no output for it at all - (false).\n\nNote this is a policy override, not the literal mathematical result: e.g. for\n`And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\nstill leaves A untouched rather than emitting a zero-area object.",
+          "description": "When an input object has no qualifying overlapping partner: keep it unchanged in\nthe output (true), or drop it entirely - no output for it at all - (false).\n\nNote this is a policy override, not the literal mathematical result: e.g. for\n`And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\nstill leaves A untouched rather than emitting a zero-area object.\n\nAn input object that has partners but whose result is empty is not \"unmatched\":\nthe result is empty, so there is nothing to keep regardless of this setting - no\noutput object is created, and in place the input object is removed. Unlike\nCellProfiler, which keeps zero-area objects to keep its label numbers one-to-one,\nnone are kept here, as they would leak NaN/zero measurements into statistics.",
           "type": "boolean",
           "default": true
         },
@@ -3013,10 +3013,10 @@
       ]
     },
     "ObjectObjectMathObjectSetOperationSettings": {
-      "description": "Boolean set operation applied between an `input_class` object (\"A\") and the union of\nits overlapping `other_class` ROIs (\"B\").",
+      "description": "Boolean set operation applied between an `input_class` object (\"A\") and the union of\nits overlapping `other_class` ROIs (\"B\").\n\nAny operation whose result has no pixels left (e.g. `Subtract` where B covers A,\n`Xor` of identical masks) yields no object: nothing is created, measured or stored,\nregardless of `keep_unmatched`. In place, the input object is removed.",
       "oneOf": [
         {
-          "description": "Intersection: pixels present in both A and B. With no overlapping B, the\nresult is empty - there is nothing to keep regardless of `keep_unmatched`.",
+          "description": "Intersection: pixels present in both A and B.",
           "type": "string",
           "const": "AND"
         },
@@ -5212,7 +5212,7 @@
       ]
     },
     "TransformObjectsSettings": {
-      "description": "Transforms given ROIs and either replaces the old ones or creates new ones.\n\nThis command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
+      "description": "Transforms given ROIs and either replaces the old ones or creates new ones.\n\nThis command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.\n\nA transformed shape with no pixels left (e.g. `Shrink` by more than the object's own\nsize) is not an object: no new object is created, and in place the input object is removed.",
       "type": "object",
       "properties": {
         "function": {

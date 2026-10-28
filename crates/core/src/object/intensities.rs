@@ -575,7 +575,11 @@ pub trait MaskIntensities {
 }
 
 impl MaskIntensities for Object {
+    /// An object without a mask adds nothing (not even its channels).
     fn add_intensities(&self, tiles: &[ChannelTile<'_>], acc: &mut IntensityAccumulator) {
+        if self.mask_data.is_empty() {
+            return;
+        }
         acc.add(&self.mask_data, self.bbox, tiles);
     }
 }

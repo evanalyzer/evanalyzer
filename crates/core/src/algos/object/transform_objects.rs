@@ -123,6 +123,9 @@ pub enum TransformFunction {
 /// carrying `input_class`. The transformed shape keeps the original object's bounding-box center.
 /// If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
 /// otherwise a new object carrying `output_class` is created alongside the untouched input object.
+///
+/// A transformed shape with no pixels left (e.g. `Shrink` by more than the object's own
+/// size) is not an object: no new object is created, and in place the input object is removed.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "object")]
 pub struct TransformObjects {
@@ -166,6 +169,7 @@ impl ImageAlgorithm for TransformObjects {
             .collect();
 
         let mut new_objects: Vec<Object> = Vec::new();
+        let mut to_remove: Vec<ObjectId> = Vec::new();
 
         // Expanding without overlap decides every object's new pixels together.
         let mut grown = match &self.function {
@@ -196,6 +200,13 @@ impl ImageAlgorithm for TransformObjects {
                 Some(geometry) => geometry,
                 None => self.transform_geometry(object, image_size, &px_sizes),
             };
+            // No pixels left: not an object, so nothing to create or measure.
+            if geometry.area == 0 {
+                if replace_in_place {
+                    to_remove.push(id);
+                }
+                continue;
+            }
             let (segmentation_class, plane) = (object.segmentation_class, object.plane.clone());
 
             // Build the transformed shape as its own (not-yet-inserted) object so
@@ -233,6 +244,9 @@ impl ImageAlgorithm for TransformObjects {
             }
         }
 
+        for id in to_remove {
+            cache.object_cache.remove(&id);
+        }
         for object in new_objects {
             cache.object_cache.insert(object.id.clone(), object);
         }
@@ -953,8 +967,41 @@ mod tests {
             },
         );
 
-        let shrunk = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert_eq!(shrunk.area, 0);
+        assert!(
+            cache.object_cache.get(&ObjectId(ID_A)).is_none(),
+            "an object shrunk to nothing must be removed, not kept with area 0"
+        );
+    }
+
+    #[test]
+    fn shrink_past_the_whole_mask_creates_no_output_object() {
+        let cmd = TransformObjects {
+            function: TransformFunction::Shrink {
+                margin: 10.0, // bigger than the 4x4 square itself
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: CLASS_OUT,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
+        cache.object_cache.insert(object.id.clone(), object);
+
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
+
+        assert_eq!(cache.object_cache.len(), 1, "no empty output object");
+        assert_eq!(
+            cache.object_cache.get(&ObjectId(ID_A)).unwrap().area,
+            16,
+            "the input object stays untouched"
+        );
     }
 
     #[test]

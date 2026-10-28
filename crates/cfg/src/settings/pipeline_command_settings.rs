@@ -476,11 +476,14 @@ pub enum MeasureObjectNeighborsNeighborMethodSettings {
 
 /// Boolean set operation applied between an `input_class` object ("A") and the union of
 /// its overlapping `other_class` ROIs ("B").
+///
+/// Any operation whose result has no pixels left (e.g. `Subtract` where B covers A,
+/// `Xor` of identical masks) yields no object: nothing is created, measured or stored,
+/// regardless of `keep_unmatched`. In place, the input object is removed.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ObjectObjectMathObjectSetOperationSettings {
-    /// Intersection: pixels present in both A and B. With no overlapping B, the
-    /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
+    /// Intersection: pixels present in both A and B.
     #[default]
     #[serde(alias = "and")]
     And,
@@ -2847,6 +2850,12 @@ pub struct ObjectMathSettings {
     /// Note this is a policy override, not the literal mathematical result: e.g. for
     /// `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
     /// still leaves A untouched rather than emitting a zero-area object.
+    ///
+    /// An input object that has partners but whose result is empty is not "unmatched":
+    /// the result is empty, so there is nothing to keep regardless of this setting - no
+    /// output object is created, and in place the input object is removed. Unlike
+    /// CellProfiler, which keeps zero-area objects to keep its label numbers one-to-one,
+    /// none are kept here, as they would leak NaN/zero measurements into statistics.
     pub keep_unmatched: bool,
 }
 
@@ -2948,6 +2957,9 @@ impl Default for RelateObjectsSettings {
 /// carrying `input_class`. The transformed shape keeps the original object's bounding-box center.
 /// If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
 /// otherwise a new object carrying `output_class` is created alongside the untouched input object.
+///
+/// A transformed shape with no pixels left (e.g. `Shrink` by more than the object's own
+/// size) is not an object: no new object is created, and in place the input object is removed.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
