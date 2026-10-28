@@ -272,6 +272,41 @@ impl Coloc {
     }
 }
 
+impl Coloc {
+    /// `objects`' indices grouped by the tile of channel A their bounding
+    /// box starts in, in tile order (rows, then columns) - for
+    /// [`object_values`]. Objects outside every tile go last.
+    pub(super) fn tile_groups(
+        &self,
+        objects: &[&Object],
+        cache: &GlobalPipelineCache,
+    ) -> Vec<Vec<usize>> {
+        let a = self.channel_a.0 as i32;
+        let mut tiles: Vec<ImageTile> = cache
+            .channel_keys()
+            .filter(|(c, _)| *c == a)
+            .map(|(_, tile)| tile)
+            .collect();
+        tiles.sort_by_key(|t| (t.offset_y, t.offset_x));
+        let mut groups = vec![Vec::new(); tiles.len() + 1];
+        for (i, object) in objects.iter().enumerate() {
+            let (x, y) = (object.bbox[0] as usize, object.bbox[1] as usize);
+            let tile = tiles
+                .iter()
+                .position(|t| {
+                    x >= t.offset_x
+                        && y >= t.offset_y
+                        && x < t.offset_x + t.width
+                        && y < t.offset_y + t.height
+                })
+                .unwrap_or(tiles.len());
+            groups[tile].push(i);
+        }
+        groups.retain(|group| !group.is_empty());
+        groups
+    }
+}
+
 /// The same tile of channels A and B.
 pub(super) struct TilePair {
     a: Arc<ImageContainer>,
@@ -814,49 +849,44 @@ fn linear_costes(
     (thr_x, thr_y)
 }
 
-/// Each object's values (the pixels inside each object only) from its
-/// (A, B) pixels; `costes` the whole image's Costes thresholds (NaN: off).
-pub(super) fn object_values(
-    objects: &[&[(f32, f32)]],
-    threshold_percent: f64,
-    costes: (f64, f64),
-) -> Vec<Values> {
-    let mut out = vec![[f64::NAN; VALUES.len()]; objects.len()];
-    // Thresholds per object, which pixels count: decided first - several
-    // values are 0 for every object when no pixel of any object counts.
-    let thresholds: Vec<(f64, f64)> = objects
-        .iter()
-        .map(|pixels| {
-            let max = |pick: fn(&(f32, f32)) -> f32| {
-                pixels.iter().map(pick).fold(f32::MIN, f32::max) as f64
-            };
-            (
-                (threshold_percent / 100.0) * max(|p| p.0),
-                (threshold_percent / 100.0) * max(|p| p.1),
-            )
-        })
-        .collect();
-    let counts = |p: &(f32, f32), (tx, ty): (f64, f64)| p.0 as f64 >= tx && p.1 as f64 >= ty;
-    let any_combined = objects
-        .iter()
-        .zip(&thresholds)
-        .any(|(pixels, thr)| pixels.iter().any(|p| counts(p, *thr)));
-    // RWC ranks over the pixels of all the objects.
-    let ranks = (
-        DenseRanks::from_values(objects.iter().flat_map(|p| p.iter().map(|v| v.0)).collect()),
-        DenseRanks::from_values(objects.iter().flat_map(|p| p.iter().map(|v| v.1)).collect()),
-    );
-    let r = ranks.0.count().max(ranks.1.count()) as f64;
-    let (cx, cy) = costes;
-    let costes_any_x = objects.iter().any(|p| p.iter().any(|v| v.0 as f64 > cx));
-    let costes_any_y = objects.iter().any(|p| p.iter().any(|v| v.1 as f64 > cy));
-    let costes_any = objects
-        .iter()
-        .any(|p| p.iter().any(|v| v.0 as f64 > cx && v.1 as f64 > cy));
+/// What one object's pixels give without the other objects - pass 1 of
+/// [`object_values`].
+#[derive(Default)]
+struct ObjectSums {
+    /// No pixels: no values (NaN).
+    empty: bool,
+    thresholds: (f64, f64),
+    pearson: f64,
+    /// Above the object's thresholds: per channel, and both.
+    tot: (f64, f64),
+    comb: Sums,
+    /// Above the whole image's Costes thresholds (at or above for the
+    /// totals, above for both).
+    costes_tot: (f64, f64),
+    costes_comb: Sums,
+    costes_any: (bool, bool, bool),
+}
 
-    for ((pixels, &(tx, ty)), values) in objects.iter().zip(&thresholds).zip(&mut out) {
+impl ObjectSums {
+    fn of(pixels: &[(f32, f32)], threshold_percent: f64, (cx, cy): (f64, f64)) -> Self {
+        let max =
+            |pick: fn(&(f32, f32)) -> f32| pixels.iter().map(pick).fold(f32::MIN, f32::max) as f64;
+        let thresholds = (
+            (threshold_percent / 100.0) * max(|p| p.0),
+            (threshold_percent / 100.0) * max(|p| p.1),
+        );
+        let costes_any = (
+            pixels.iter().any(|v| v.0 as f64 > cx),
+            pixels.iter().any(|v| v.1 as f64 > cy),
+            pixels.iter().any(|v| v.0 as f64 > cx && v.1 as f64 > cy),
+        );
         if pixels.is_empty() {
-            continue;
+            return Self {
+                empty: true,
+                thresholds,
+                costes_any,
+                ..Default::default()
+            };
         }
         // Pearson: sum of the products of the deviations over the
         // product of the square roots of their sums of squares.
@@ -873,15 +903,15 @@ pub(super) fn object_values(
             .map(|p| (p.1 as f64 - mean_y).powi(2))
             .sum::<f64>()
             .sqrt();
-        values[0] = pixels
+        let pearson = pixels
             .iter()
             .map(|p| (p.0 as f64 - mean_x) * (p.1 as f64 - mean_y) / (std_x * std_y))
             .sum();
 
+        let (tx, ty) = thresholds;
         let (mut tot_x, mut tot_y) = (0.0, 0.0);
         let mut comb = Sums::default();
-        let (mut wx, mut wy) = (0.0, 0.0);
-        for p in pixels.iter() {
+        for p in pixels {
             let (x, y) = (p.0 as f64, p.1 as f64);
             if x >= tx {
                 tot_x += x;
@@ -891,57 +921,246 @@ pub(super) fn object_values(
             }
             if x >= tx && y >= ty {
                 comb.add(x, y);
-                let d = (ranks.0.rank(x) as f64 - ranks.1.rank(y) as f64).abs();
-                let weight = (r - d) / r;
-                wx += x * weight;
-                wy += y * weight;
             }
-        }
-        if any_combined {
-            values[2] = comb.x / tot_x;
-            values[3] = comb.y / tot_y;
-            values[4] = comb.xy / (comb.xx * comb.yy).sqrt();
-            values[5] = comb.xy / comb.xx;
-            values[6] = comb.xy / comb.yy;
-            values[7] = wx / tot_x;
-            values[8] = wy / tot_y;
-        } else {
-            values[2..=8].fill(0.0);
         }
 
+        let (mut costes_tot_x, mut costes_tot_y) = (0.0, 0.0);
+        let mut costes_comb = Sums::default();
         if !cx.is_nan() {
-            // Above the whole image's Costes thresholds - the totals count
-            // a pixel at the threshold too (the object rule: at or above).
-            let (mut tot_x, mut tot_y) = (0.0, 0.0);
-            let mut comb = Sums::default();
-            for p in pixels.iter() {
+            for p in pixels {
                 let (x, y) = (p.0 as f64, p.1 as f64);
                 if x >= cx {
-                    tot_x += x;
+                    costes_tot_x += x;
                 }
                 if y >= cy {
-                    tot_y += y;
+                    costes_tot_y += y;
                 }
                 if x > cx && y > cy {
-                    comb.add(x, y);
+                    costes_comb.add(x, y);
                 }
             }
-            if !costes_any_x {
-                tot_x = 0.0;
-            }
-            if !costes_any_y {
-                tot_y = 0.0;
-            }
-            if costes_any {
-                values[9] = comb.x / tot_x;
-                values[10] = comb.y / tot_y;
-            } else {
-                values[9] = 0.0;
-                values[10] = 0.0;
+        }
+        Self {
+            empty: false,
+            thresholds,
+            pearson,
+            tot: (tot_x, tot_y),
+            comb,
+            costes_tot: (costes_tot_x, costes_tot_y),
+            costes_comb,
+            costes_any,
+        }
+    }
+}
+
+/// The different values of a channel over every object's pixels, for the
+/// RWC ranks: whole numbers 0..=65535 (8/16-bit images) in a bit set, the
+/// rest in a list kept sorted and deduplicated as it grows - so it holds
+/// each value once, not once per pixel.
+struct DistinctValues {
+    levels: Vec<u64>,
+    other: Vec<f32>,
+    /// `other`'s length after its last deduplication.
+    deduplicated: usize,
+}
+
+impl Default for DistinctValues {
+    fn default() -> Self {
+        Self {
+            levels: vec![0; 65536 / 64],
+            other: Vec::new(),
+            deduplicated: 0,
+        }
+    }
+}
+
+impl DistinctValues {
+    fn insert(&mut self, v: f32) {
+        // A positive whole number (not -0.0: it ranks below 0.0).
+        if v.is_sign_positive() && v <= 65535.0 && v.fract() == 0.0 {
+            let l = v as usize;
+            self.levels[l / 64] |= 1 << (l % 64);
+        } else {
+            self.other.push(v);
+            if self.other.len() > 2 * self.deduplicated + 4096 {
+                self.deduplicate();
             }
         }
     }
-    out
+
+    fn deduplicate(&mut self) {
+        self.other.sort_unstable_by(f32::total_cmp);
+        self.other.dedup();
+        self.deduplicated = self.other.len();
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        for (a, b) in self.levels.iter_mut().zip(other.levels) {
+            *a |= b;
+        }
+        self.other.extend(other.other);
+        self.deduplicate();
+        self
+    }
+
+    /// As [`DenseRanks::from_values`] of every inserted value.
+    fn ranks(self) -> DenseRanks {
+        let mut values = self.other;
+        for (word, bits) in self.levels.iter().enumerate() {
+            for bit in 0..64 {
+                if bits & (1 << bit) != 0 {
+                    values.push((word * 64 + bit) as f32);
+                }
+            }
+        }
+        DenseRanks::from_values(values)
+    }
+}
+
+/// Each object's values (the pixels inside each object only);
+/// `pixels_of(i)` gives object `i`'s (A, B) pixels, `costes` the whole
+/// image's Costes thresholds (NaN: off). `groups`: the object indices
+/// (every one once) grouped by tile, in tile order - see
+/// [`Coloc::tile_groups`].
+///
+/// One object's pixels at a time (per thread), not every object's at once
+/// - on a whole slide those are gigabytes. RWC ranks the values over the
+/// pixels of all the objects, so it needs a second pass: pass 1 gives each
+/// object's other values and the different values for the ranks, pass 2
+/// reads the pixels of the objects with pixels above both thresholds again
+/// for RWC. Both go group by group, the objects of a group in parallel: the
+/// threads read the same tiles - with the channel tiles spilled to disk,
+/// threads in different places of the slide made the cache load tiles
+/// again and again.
+pub(super) fn object_values(
+    groups: &[Vec<usize>],
+    pixels_of: impl Fn(usize) -> Vec<(f32, f32)> + Sync,
+    threshold_percent: f64,
+    costes: (f64, f64),
+) -> Vec<Values> {
+    let count = groups.iter().map(Vec::len).sum();
+    let mut sums: Vec<ObjectSums> = (0..count).map(|_| ObjectSums::default()).collect();
+    let mut distinct = (DistinctValues::default(), DistinctValues::default());
+    for group in groups {
+        let (group_sums, (xs, ys)) = group
+            .par_iter()
+            .fold(
+                || {
+                    (
+                        Vec::new(),
+                        (DistinctValues::default(), DistinctValues::default()),
+                    )
+                },
+                |(mut sums, (mut xs, mut ys)), &i| {
+                    let pixels = pixels_of(i);
+                    for p in &pixels {
+                        xs.insert(p.0);
+                        ys.insert(p.1);
+                    }
+                    sums.push((i, ObjectSums::of(&pixels, threshold_percent, costes)));
+                    (sums, (xs, ys))
+                },
+            )
+            .reduce(
+                || {
+                    (
+                        Vec::new(),
+                        (DistinctValues::default(), DistinctValues::default()),
+                    )
+                },
+                |(mut a, (ax, ay)), (b, (bx, by))| {
+                    a.extend(b);
+                    (a, (ax.merge(bx), ay.merge(by)))
+                },
+            );
+        for (i, object) in group_sums {
+            sums[i] = object;
+        }
+        distinct = (distinct.0.merge(xs), distinct.1.merge(ys));
+    }
+
+    // Several values are 0 for every object when no pixel of any object
+    // counts.
+    let any_combined = sums.iter().any(|s| s.comb.n > 0.0);
+    let costes_any_x = sums.iter().any(|s| s.costes_any.0);
+    let costes_any_y = sums.iter().any(|s| s.costes_any.1);
+    let costes_any = sums.iter().any(|s| s.costes_any.2);
+
+    // Pass 2, RWC: the objects with pixels above both thresholds.
+    let mut rwc = vec![(0.0, 0.0); count];
+    if any_combined {
+        let ranks = (distinct.0.ranks(), distinct.1.ranks());
+        let r = ranks.0.count().max(ranks.1.count()) as f64;
+        for group in groups {
+            let group_rwc: Vec<(f64, f64)> = group
+                .par_iter()
+                .map(|&i| {
+                    let s = &sums[i];
+                    if s.comb.n == 0.0 {
+                        return (0.0, 0.0);
+                    }
+                    let (tx, ty) = s.thresholds;
+                    let (mut wx, mut wy) = (0.0, 0.0);
+                    for p in pixels_of(i) {
+                        let (x, y) = (p.0 as f64, p.1 as f64);
+                        if x >= tx && y >= ty {
+                            let d = (ranks.0.rank(x) as f64 - ranks.1.rank(y) as f64).abs();
+                            let weight = (r - d) / r;
+                            wx += x * weight;
+                            wy += y * weight;
+                        }
+                    }
+                    (wx, wy)
+                })
+                .collect();
+            for (&i, w) in group.iter().zip(group_rwc) {
+                rwc[i] = w;
+            }
+        }
+    }
+
+    let (cx, _) = costes;
+    sums.iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut values = [f64::NAN; VALUES.len()];
+            if s.empty {
+                return values;
+            }
+            values[0] = s.pearson;
+            let (tot_x, tot_y) = s.tot;
+            let comb = s.comb;
+            if any_combined {
+                let (wx, wy) = rwc[i];
+                values[2] = comb.x / tot_x;
+                values[3] = comb.y / tot_y;
+                values[4] = comb.xy / (comb.xx * comb.yy).sqrt();
+                values[5] = comb.xy / comb.xx;
+                values[6] = comb.xy / comb.yy;
+                values[7] = wx / tot_x;
+                values[8] = wy / tot_y;
+            } else {
+                values[2..=8].fill(0.0);
+            }
+            if !cx.is_nan() {
+                let (mut tot_x, mut tot_y) = s.costes_tot;
+                if !costes_any_x {
+                    tot_x = 0.0;
+                }
+                if !costes_any_y {
+                    tot_y = 0.0;
+                }
+                if costes_any {
+                    values[9] = s.costes_comb.x / tot_x;
+                    values[10] = s.costes_comb.y / tot_y;
+                } else {
+                    values[9] = 0.0;
+                    values[10] = 0.0;
+                }
+            }
+            values
+        })
+        .collect()
 }
 
 /// Manders' coefficients.
@@ -1008,6 +1227,136 @@ mod tests {
     use kornia_image::{Image, ImageSize};
 
     const CELL: ObjectClass = ObjectClass::Global(1);
+
+    /// The values from every object's pixels at once - the earlier
+    /// [`object_values`], kept to check it value for value.
+    fn object_values_all_at_once(
+        objects: &[&[(f32, f32)]],
+        threshold_percent: f64,
+        costes: (f64, f64),
+    ) -> Vec<Values> {
+        let mut out = vec![[f64::NAN; VALUES.len()]; objects.len()];
+        // Thresholds per object, which pixels count: decided first - several
+        // values are 0 for every object when no pixel of any object counts.
+        let thresholds: Vec<(f64, f64)> = objects
+            .iter()
+            .map(|pixels| {
+                let max = |pick: fn(&(f32, f32)) -> f32| {
+                    pixels.iter().map(pick).fold(f32::MIN, f32::max) as f64
+                };
+                (
+                    (threshold_percent / 100.0) * max(|p| p.0),
+                    (threshold_percent / 100.0) * max(|p| p.1),
+                )
+            })
+            .collect();
+        let counts = |p: &(f32, f32), (tx, ty): (f64, f64)| p.0 as f64 >= tx && p.1 as f64 >= ty;
+        let any_combined = objects
+            .iter()
+            .zip(&thresholds)
+            .any(|(pixels, thr)| pixels.iter().any(|p| counts(p, *thr)));
+        // RWC ranks over the pixels of all the objects.
+        let ranks = (
+            DenseRanks::from_values(objects.iter().flat_map(|p| p.iter().map(|v| v.0)).collect()),
+            DenseRanks::from_values(objects.iter().flat_map(|p| p.iter().map(|v| v.1)).collect()),
+        );
+        let r = ranks.0.count().max(ranks.1.count()) as f64;
+        let (cx, cy) = costes;
+        let costes_any_x = objects.iter().any(|p| p.iter().any(|v| v.0 as f64 > cx));
+        let costes_any_y = objects.iter().any(|p| p.iter().any(|v| v.1 as f64 > cy));
+        let costes_any = objects
+            .iter()
+            .any(|p| p.iter().any(|v| v.0 as f64 > cx && v.1 as f64 > cy));
+
+        for ((pixels, &(tx, ty)), values) in objects.iter().zip(&thresholds).zip(&mut out) {
+            if pixels.is_empty() {
+                continue;
+            }
+            // Pearson: sum of the products of the deviations over the
+            // product of the square roots of their sums of squares.
+            let n = pixels.len() as f64;
+            let mean_x = pixels.iter().map(|p| p.0 as f64).sum::<f64>() / n;
+            let mean_y = pixels.iter().map(|p| p.1 as f64).sum::<f64>() / n;
+            let std_x = pixels
+                .iter()
+                .map(|p| (p.0 as f64 - mean_x).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let std_y = pixels
+                .iter()
+                .map(|p| (p.1 as f64 - mean_y).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            values[0] = pixels
+                .iter()
+                .map(|p| (p.0 as f64 - mean_x) * (p.1 as f64 - mean_y) / (std_x * std_y))
+                .sum();
+
+            let (mut tot_x, mut tot_y) = (0.0, 0.0);
+            let mut comb = Sums::default();
+            let (mut wx, mut wy) = (0.0, 0.0);
+            for p in pixels.iter() {
+                let (x, y) = (p.0 as f64, p.1 as f64);
+                if x >= tx {
+                    tot_x += x;
+                }
+                if y >= ty {
+                    tot_y += y;
+                }
+                if x >= tx && y >= ty {
+                    comb.add(x, y);
+                    let d = (ranks.0.rank(x) as f64 - ranks.1.rank(y) as f64).abs();
+                    let weight = (r - d) / r;
+                    wx += x * weight;
+                    wy += y * weight;
+                }
+            }
+            if any_combined {
+                values[2] = comb.x / tot_x;
+                values[3] = comb.y / tot_y;
+                values[4] = comb.xy / (comb.xx * comb.yy).sqrt();
+                values[5] = comb.xy / comb.xx;
+                values[6] = comb.xy / comb.yy;
+                values[7] = wx / tot_x;
+                values[8] = wy / tot_y;
+            } else {
+                values[2..=8].fill(0.0);
+            }
+
+            if !cx.is_nan() {
+                // Above the whole image's Costes thresholds - the totals count
+                // a pixel at the threshold too (the object rule: at or above).
+                let (mut tot_x, mut tot_y) = (0.0, 0.0);
+                let mut comb = Sums::default();
+                for p in pixels.iter() {
+                    let (x, y) = (p.0 as f64, p.1 as f64);
+                    if x >= cx {
+                        tot_x += x;
+                    }
+                    if y >= cy {
+                        tot_y += y;
+                    }
+                    if x > cx && y > cy {
+                        comb.add(x, y);
+                    }
+                }
+                if !costes_any_x {
+                    tot_x = 0.0;
+                }
+                if !costes_any_y {
+                    tot_y = 0.0;
+                }
+                if costes_any {
+                    values[9] = comb.x / tot_x;
+                    values[10] = comb.y / tot_y;
+                } else {
+                    values[9] = 0.0;
+                    values[10] = 0.0;
+                }
+            }
+        }
+        out
+    }
 
     /// One case of `tests/colocalization.json`.
     #[derive(serde::Deserialize)]
@@ -1164,6 +1513,120 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The two passes give exactly the values of every object's pixels at
+    /// once: whole-number and fractional pixel values (bit set and list),
+    /// empty objects, with and without Costes, with and without pixels
+    /// above both thresholds.
+    #[test]
+    fn object_values_match_all_pixels_at_once() {
+        let mut state = 7u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u32
+        };
+        for whole_numbers in [true, false] {
+            let objects: Vec<Vec<(f32, f32)>> = (0..60)
+                .map(|o| {
+                    let n = if o % 13 == 0 { 0 } else { next() % 300 };
+                    (0..n)
+                        .map(|_| {
+                            let (a, b) = (next() % 70_000, next() % 4096);
+                            if whole_numbers {
+                                (a as f32, b as f32)
+                            } else {
+                                (a as f32 * 0.37, b as f32 / 7.0)
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let all: Vec<&[(f32, f32)]> = objects.iter().map(|p| p.as_slice()).collect();
+            for costes in [(f64::NAN, f64::NAN), (20_000.0, 1500.0), (1e9, 1e9)] {
+                // 101 %: no pixel of any object counts.
+                for threshold in [0.0, 15.0, 101.0] {
+                    let expected = object_values_all_at_once(&all, threshold, costes);
+                    // In one group, and in groups of 7 (tiles) out of order.
+                    let all_in_one = vec![(0..objects.len()).collect::<Vec<_>>()];
+                    let mut by_seven: Vec<Vec<usize>> = (0..objects.len())
+                        .collect::<Vec<_>>()
+                        .chunks(7)
+                        .map(<[usize]>::to_vec)
+                        .collect();
+                    by_seven.reverse();
+                    for groups in [all_in_one, by_seven] {
+                        let got = object_values(&groups, |i| objects[i].clone(), threshold, costes);
+                        for (o, (g, e)) in got.iter().zip(&expected).enumerate() {
+                            for (i, (g, e)) in g.iter().zip(e).enumerate() {
+                                assert!(
+                                    g.to_bits() == e.to_bits() || (g.is_nan() && e.is_nan()),
+                                    "object {o} value {i} ({whole_numbers}, {costes:?}, {threshold}): {g} vs {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Objects grouped by the tile they start in, tiles in reading order;
+    /// an object outside every tile last.
+    #[test]
+    fn objects_are_grouped_by_their_tile_in_tile_order() {
+        let mut cache = GlobalPipelineCache::default();
+        for (x, y) in [(10, 0), (0, 0), (0, 10), (10, 10)] {
+            let tile = ImageTile {
+                offset_x: x,
+                offset_y: y,
+                width: 10,
+                height: 10,
+            };
+            let image = ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::from_size_slice(
+                    ImageSize {
+                        width: 10,
+                        height: 10,
+                    },
+                    &[0.0; 100],
+                )
+                .unwrap(),
+                tile_offset: Point2d { x, y },
+                plane: None,
+                dimensionality: ImageDimensionality::Planar,
+            });
+            cache.add_to_channel_cache(Arc::new(image), 0, tile);
+        }
+        let object_at = |x: u32, y: u32| {
+            Object::new(ObjectInit {
+                bbox: [x, y, x + 1, y + 1],
+                area: 4,
+                mask_data: BitVec::repeat(true, 4),
+                ..Default::default()
+            })
+        };
+        // Tiles: (0,0) (10,0) (0,10) (10,10).
+        let objects = [
+            object_at(15, 15),
+            object_at(2, 3),
+            object_at(25, 25),
+            object_at(12, 1),
+            object_at(4, 4),
+        ];
+        let coloc = Coloc {
+            channel_a: ImageChannelIdx(0),
+            channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes: CostesMethod::Off,
+        };
+        let refs: Vec<&Object> = objects.iter().collect();
+        assert_eq!(
+            coloc.tile_groups(&refs, &cache),
+            vec![vec![1, 4], vec![3], vec![0], vec![2]]
+        );
     }
 
     /// Without Costes: no Costes values; per object no slope.

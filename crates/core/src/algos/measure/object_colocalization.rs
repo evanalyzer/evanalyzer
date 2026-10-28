@@ -14,6 +14,7 @@ use super::colocalization::{
     CITATIONS, Coloc, CostesMethod, SLOPE, costes_thresholds, object_values,
 };
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
+use crate::object::Object;
 use crate::pipeline::pipeline_measure::ObjectValue;
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, ObjectClass, ObjectId,
@@ -84,20 +85,27 @@ impl ImageAlgorithm for MeasureObjectColocalization {
             let tiles = coloc.image_tiles(cache)?;
             costes_thresholds(&tiles, coloc.costes, scale)
         };
-        let objects: Vec<(ObjectId, Vec<(f32, f32)>)> = cache
+        // Each object's pixels are read when its values are computed - not
+        // every object's at once (gigabytes on a whole slide).
+        let objects: Vec<(&ObjectId, &Object)> = cache
             .object_cache
             .iter()
             .filter(|(_, object)| object.is_of(&self.objects, ctx.scope))
-            .map(|(id, object)| (id.clone(), coloc.object_pixels(object, cache)))
             .collect();
-        let per_object = object_values(
+        let groups = coloc.tile_groups(
             &objects
                 .iter()
-                .map(|(_, p)| p.as_slice())
+                .map(|(_, object)| *object)
                 .collect::<Vec<_>>(),
+            cache,
+        );
+        let per_object = object_values(
+            &groups,
+            |i| coloc.object_pixels(objects[i].1, cache),
             coloc.threshold_percent as f64,
             costes_thresholds,
         );
+        let objects: Vec<ObjectId> = objects.into_iter().map(|(id, _)| id.clone()).collect();
         for (info, (i, _)) in coloc
             .outputs(&self.id, true)
             .into_iter()
@@ -108,7 +116,7 @@ impl ImageAlgorithm for MeasureObjectColocalization {
                 objects
                     .iter()
                     .zip(&per_object)
-                    .map(|((object, _), values)| ObjectValue {
+                    .map(|(object, values)| ObjectValue {
                         object: object.clone(),
                         value: values[i],
                         related: None,

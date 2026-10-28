@@ -1220,6 +1220,58 @@ RAM is short; worst case per z/t plane width × height × channels × 4 bytes
 reads), independent of the file size - `tests/haut` 9343 × 27143 × 5
 channels: 5.1 GB (6.1 GB measured), an RGB slide 60000 × 40000: ~29 GB.
 
+## Exports of a 4,000-image batch (2026-10-28)
+
+Synthetic results like today's largest batch: core `bench_export
+--images 4000 --objects-per-image 1000 --object-size 12` (4M objects, 1.8 GB
+file). `bench_results_export` (app example): every image, columns Count,
+Area, Intensity avg (channel 0), Circularity, aggregations Avg + Median; one
+export per process.
+
+| Export | Wall | Peak RSS | Output |
+|---|---|---|---|
+| Grouped by image, CSV | 1.0 s | 654 MB | 6 MB |
+| Grouped by image, XLSX | 1.8 s | 726 MB | 5 MB |
+| List of all objects, CSV | 17.5 s | 1,124 MB | 100 MB |
+| List of all objects, XLSX | refused after 7.1 s ("more than an XLSX sheet holds: export it as CSV, or one file per image") | 617 MB | - |
+
+The audit's export items (2026-10-27: all-images list "minutes per page",
+grouped export "4+ GB") were estimated for 100k images - at 4k images
+neither shows.
+
+## Measure Object Colocalization: one object at a time (2026-10-28)
+
+The step collected every object's (A, B) pixel pairs before computing
+anything (8 bytes per object pixel). Now two passes, one object's pixels
+at a time per thread: pass 1 computes each object's values and collects the
+different values for the RWC ranks (which rank over all objects' pixels),
+pass 2 reads the pixels of the objects with pixels above both thresholds
+again for RWC. Objects are processed tile by tile (in parallel within a
+tile): a first version spread the threads over the slide, and with the
+channel tiles spilled the cache reloaded tiles again and again (low RAM:
+72-75 → 89-106 s, system CPU 17 → 73-102 s).
+
+`bench_whole_slide --coloc 1` on `tests/haut` (Measure Object
+Colocalization of the Voronoi cells, channels 0/1, 15 %, Costes "Faster"),
+before / after alternated, 10-15 s apart. The hash over every measurement
+value (`bit_xor(hash(key, value))`) is the same in every run - the values
+are bit-identical.
+
+| | before | after |
+|---|---|---|
+| Cells within 50 px, 21 threads: wall | 28.7 / 30.0 s | 27.7 / 28.6 s |
+| CPU (user + sys) | 290-291 s | 299 s |
+| Peak RSS (tile phase) | 7.76-7.84 GB | 7.74-7.81 GB |
+| Cells covering the slide (no radius limit, 276M object pixels), 21 threads: wall | 62.0 / 64.0 s | 56.3 / 57.9 s |
+| CPU | 612-613 s | 625-626 s |
+| Peak RSS | 11.03-11.04 GB | **8.04-8.22 GB** |
+| Cells within 50 px, 4 threads, ~4 GB available: wall | 73.6 / 70.0 s | 72.2 / 70.0 s |
+| CPU | 211-213 s | 225-226 s |
+| Peak RSS | 3.58-3.77 GB | 3.52-3.60 GB |
+
+CPU +2-6 %: the pixels are read twice (pass 2). Wall is shorter with RAM to
+spare (the pixels are now read in parallel).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1268,6 +1320,8 @@ graphics driver).
 | Results actions, 1.7 GB results file | 213-270 MB (test process; was 215-394 MB) | 2026-10-27 | Results views: queries off the UI thread |
 | Whole slide 9343 × 27143, 5 channels (`tests/haut`, 212,413 objects), 4 or 21 threads | 7.4-7.6 GB; with 6 GB available it overruns them (OOM) | 2026-10-28 | Whole slide: the cache budget in the tile merge |
 | Same slide, one cache budget for the merged tiles (a), 4 threads with ~4 / ~6 GB available | 3.5-3.6 / 5.3-5.4 GB (was 5.4-5.5 / 5.9-6.3 GB) | 2026-10-28 | Whole slide: one cache budget for the merged tiles |
+| Exports of 4,000 images / 4M objects: grouped by image, list CSV | 0.65-0.73 GB / 1.1 GB | 2026-10-28 | Exports of a 4,000-image batch |
+| Whole slide `tests/haut` with Measure Object Colocalization, cells covering the slide, 21 threads | 8.0-8.2 GB (was 11.0 GB) | 2026-10-28 | Measure Object Colocalization: one object at a time |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

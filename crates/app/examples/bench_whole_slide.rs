@@ -18,7 +18,11 @@
 // folder so its size is the image cache's alone.
 //
 // Usage: TMPDIR=<empty dir> cargo run --release -p evanalyzer_app --example bench_whole_slide -- \
-//     <images dir> <work dir> [--threads N] [--channel C]
+//     <images dir> <work dir> [--threads N] [--channel C] [--coloc 1]
+//
+// `--coloc 1` adds Measure Object Colocalization of the Voronoi cells
+// (channels 0 and 1, threshold 15 %, Costes "Faster"). `--voronoi-radius R`
+// (default 50 px; 0: no limit - the cells cover the whole slide).
 
 use evanalyzer_app::analysis::AnalysisRequest;
 use evanalyzer_app::backends::Backend;
@@ -31,7 +35,8 @@ use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
     ExtractObjectsSettings, GaussianBlurSettings, LoadChannelSettings,
-    MathLoadChannelChannelZProjectionSettings, SegmentationThresholdThresholdMethodSettings,
+    MathLoadChannelChannelZProjectionSettings, MeasureColocalizationCostesMethodSettings,
+    MeasureObjectColocalizationSettings, SegmentationThresholdThresholdMethodSettings,
     ThresholdEntrySettings, ThresholdSettings, VoronoiSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{
@@ -98,6 +103,8 @@ fn main() {
     let workdir = PathBuf::from(std::env::args().nth(2).expect("work dir"));
     let threads = arg("--threads", 0);
     let channel = arg("--channel", 0) as u32;
+    let coloc = arg("--coloc", 0) == 1;
+    let voronoi_radius = arg("--voronoi-radius", 50) as f32;
     std::fs::create_dir_all(&workdir).unwrap();
     let backend = LocalBackend::default();
 
@@ -165,10 +172,24 @@ fn main() {
                 mask: ObjectClass::Unset,
                 output_class: ObjectClass::Global(2),
                 unit: SizeUnits::Pixels,
-                max_radius: 50.0,
+                max_radius: voronoi_radius,
                 ..Default::default()
             })),
-        ],
+        ]
+        .into_iter()
+        .chain(coloc.then(|| {
+            step(PipelineCommand::MeasureObjectColocalization(
+                MeasureObjectColocalizationSettings {
+                    id: "object_coloc_01".into(),
+                    objects: ObjectClass::Global(2),
+                    channel_a: ImageChannelIdx(0),
+                    channel_b: ImageChannelIdx(1),
+                    threshold_percent: 15.0,
+                    costes: MeasureColocalizationCostesMethodSettings::Faster,
+                },
+            ))
+        }))
+        .collect(),
     });
 
     // The spill files' peak, sampled while the run goes on.
@@ -229,6 +250,23 @@ fn main() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
+    // To compare runs: identical inputs must give identical values.
+    let (values, value_sum): (i64, f64) = conn
+        .query_row(
+            "SELECT count(*), coalesce(sum(value) FILTER (WHERE isfinite(value)), 0) FROM measurements",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0.0));
+    // Exact and independent of the row order (the sum above isn't).
+    let value_hash: u64 = conn
+        .query_row(
+            "SELECT coalesce(bit_xor(hash(key, value::VARCHAR)), 0) FROM measurements",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    println!("measurements={values} sum={value_sum:.9} hash={value_hash:016x}");
     println!(
         "result={:?} time={elapsed:.1}s peak_rss={} MB spill_peak={} MB objects={objects} sum_area_px={area}",
         result.err(),
