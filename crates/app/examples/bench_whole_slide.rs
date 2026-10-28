@@ -11,7 +11,8 @@
 // as `evanalyzer cli analyze` (folder scan, then `start_analysis`), pipeline
 // max projection -> Gaussian blur -> Otsu -> objects -> Voronoi cells (a
 // whole-image step after the tile merge). Reports wall time, peak RSS and the
-// peak size of the image cache's spill files.
+// peak size of the image cache's spill files (named ones in the temp folder
+// and unnamed ones the process holds open).
 //
 // The spill files go to the system temp folder - set TMPDIR to an empty
 // folder so its size is the image cache's alone.
@@ -72,6 +73,23 @@ fn dir_bytes(dir: &Path) -> u64 {
             Ok(t) if t.is_dir() => dir_bytes(&e.path()),
             _ => e.metadata().map(|m| m.len()).unwrap_or(0),
         })
+        .sum()
+}
+
+/// Unnamed (already deleted) files under `dir` this process holds open -
+/// spill files the OS deletes by itself, invisible to `dir_bytes`. Linux.
+fn open_deleted_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            std::fs::read_link(e.path()).is_ok_and(|target| {
+                target.starts_with(dir) && target.to_string_lossy().ends_with(" (deleted)")
+            })
+        })
+        .map(|e| std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0))
         .sum()
 }
 
@@ -164,7 +182,7 @@ fn main() {
             let trace = std::env::var("BENCH_TRACE").is_ok();
             let start = Instant::now();
             while !stop.load(Ordering::Relaxed) {
-                let spill = dir_bytes(&tmp);
+                let spill = dir_bytes(&tmp) + open_deleted_bytes(&tmp);
                 spill_peak.fetch_max(spill, Ordering::Relaxed);
                 if trace {
                     eprintln!(

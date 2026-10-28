@@ -1183,6 +1183,43 @@ and every spill write goes through the one shared lock). Same CPU.
 "Available" is MemAvailable after another process held the rest; the
 container has swap, so the numbers above it are noisy.
 
+## Whole slide: one unnamed spill file (2026-10-28)
+
+The image cache spilled every evicted image into its own named file in a
+temp folder, deleted only when the cache was dropped normally - a killed
+process (OOM killer, End task, power cut) left them. Now one unnamed file
+per cache (`tempfile::tempfile`; Linux: unlinked, Windows: delete on close),
+images at offsets with positional reads/writes, freed ranges reused - the OS
+deletes it however the process ends, and it is one handle per cache.
+
+`bench_whole_slide` on `tests/haut`, 4 threads, ~4 GB available (another
+process holds the rest), named / unnamed alternated, 10-15 s apart. Spill
+6.09 GB in every run (the benchmark counts unnamed files through
+`/proc/self/fd`), same objects.
+
+| | named files (before) | one unnamed file |
+|---|---|---|
+| Wall | 58.1 / 53.8 / 54.2 / 53.8 / 54.3 / 56.2 s (mean 55.1) | 51.7 / 58.8 / 58.1 / 54.8 / 55.0 / 50.8 s (mean 54.9) |
+| CPU (user + sys) | 168-171 s | 166-172 s |
+| Peak RSS | 3.38-3.77 GB | 3.36-3.62 GB |
+| Left after `kill -9` mid-spill | 1.2 GB in 27 files | nothing |
+
+A first round (load average 11-12 from other work) was left out: 81.9 /
+69.1 s.
+
+Parallel writes into one file: the OS serialises them (one inode lock).
+Micro-benchmark, 64 MB writes into the page cache (overlay fs), 8 threads:
+one file per write 16-20 GB/s, one shared file 4.8-5.1 GB/s, 2 / 4 / 8
+shared files 9.2 / 13.2 / 17.7 GB/s; reads the same (~25 GB/s). It doesn't
+show in the run: a cache's spills already happen one at a time, under its
+lock (TODO: once they leave the lock, a few files per cache).
+
+Temp disk space - for the system requirements: the spill is only used when
+RAM is short; worst case per z/t plane width × height × channels × 4 bytes
+(+ 4 bytes per pixel for each channel variant a Load Image Channel step
+reads), independent of the file size - `tests/haut` 9343 × 27143 × 5
+channels: 5.1 GB (6.1 GB measured), an RGB slide 60000 × 40000: ~29 GB.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1231,6 +1268,9 @@ graphics driver).
 | Results actions, 1.7 GB results file | 213-270 MB (test process; was 215-394 MB) | 2026-10-27 | Results views: queries off the UI thread |
 | Whole slide 9343 × 27143, 5 channels (`tests/haut`, 212,413 objects), 4 or 21 threads | 7.4-7.6 GB; with 6 GB available it overruns them (OOM) | 2026-10-28 | Whole slide: the cache budget in the tile merge |
 | Same slide, one cache budget for the merged tiles (a), 4 threads with ~4 / ~6 GB available | 3.5-3.6 / 5.3-5.4 GB (was 5.4-5.5 / 5.9-6.3 GB) | 2026-10-28 | Whole slide: one cache budget for the merged tiles |
+
+Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
+file" - up to width × height × channels × 4 bytes per plane when RAM is short.
 
 DuckDB may use up to a quarter of the RAM per open results file (1-8 GB,
 then it spills to a temporary file) - the queries above stay far below.

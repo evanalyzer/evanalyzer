@@ -16,19 +16,23 @@ use crate::{ImageContainer, ImagePlane, ManagedImage, pipeline::pipeline_cache::
 use kornia_image::{Image, ImageSize};
 use std::{
     collections::{HashMap, hash_map::RandomState},
-    fs::{self, File},
+    fs::File,
     io::{self, BufReader, BufWriter, Read, Write},
     num::NonZeroUsize,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
-/// On-disk tag for which `ImageContainer` variant a cache file holds -
-/// written first so `load_from_disk` knows how to reconstruct it.
+/// On-disk tag for which `ImageContainer` variant a spilled image is -
+/// written first so `read_image` knows how to reconstruct it.
 const TAG_F32_GRAY: u8 = 0;
 const TAG_F32_RGB: u8 = 1;
 const TAG_U32: u8 = 2;
+
+/// Bytes `write_header` writes before the pixels: tag, width, height, tile
+/// offset x/y, has-plane flag, z/c/t.
+const HEADER_BYTES: u64 = 1 + 4 * 8 + 1 + 3 * 4;
 
 /// Default cap on `hot_cache`'s combined pixel-data size. Bounds memory
 /// use regardless of how many tiles/objects a whole-slide image produces -
@@ -59,6 +63,113 @@ fn new_hot_cache(capacity_bytes: usize) -> HotCache {
     CLruCache::with_config(CLruCacheConfig::new(capacity).with_scale(ImageWeight))
 }
 
+/// The one spill file of a cache and every clone of it: an unnamed temp
+/// file the OS deletes by itself when the last handle closes - also when
+/// the process is killed or crashes, so a whole slide's spill can't be left
+/// behind. One file (one handle) however many images spill, so a big slide
+/// can't run into the open-file limit (256 on macOS by default).
+///
+/// Spilled images are written one after the other, each at its own offset,
+/// with positional reads/writes - several threads use the file at once
+/// without a shared file position. A freed range ([`SpillSlot`] dropped) is
+/// reused by the next image that fits; the file only shrinks when it's
+/// deleted.
+struct SpillFile {
+    file: File,
+    space: Mutex<SpillSpace>,
+}
+
+#[derive(Default)]
+struct SpillSpace {
+    /// The file's end: where the next image goes when no free range fits.
+    end: u64,
+    /// Freed ranges (offset, length).
+    free: Vec<(u64, u64)>,
+}
+
+impl SpillFile {
+    /// In `dir`, or the system temp folder (`None`).
+    fn new(dir: Option<&Path>) -> io::Result<Self> {
+        let file = match dir {
+            Some(dir) => tempfile::tempfile_in(dir)?,
+            None => tempfile::tempfile()?,
+        };
+        Ok(Self {
+            file,
+            space: Mutex::new(SpillSpace::default()),
+        })
+    }
+
+    /// A range of `len` bytes: the first free one it fits in, else at the end.
+    fn allocate(&self, len: u64) -> u64 {
+        let mut space = self.space.lock().expect("Poisned thread");
+        if let Some(i) = space.free.iter().position(|&(_, free)| free >= len) {
+            let (offset, free) = space.free.swap_remove(i);
+            if free > len {
+                space.free.push((offset + len, free - len));
+            }
+            return offset;
+        }
+        let offset = space.end;
+        space.end += len;
+        offset
+    }
+
+    fn release(&self, offset: u64, len: u64) {
+        let mut space = self.space.lock().expect("Poisned thread");
+        space.free.push((offset, len));
+    }
+}
+
+/// Where one spilled image is in its [`SpillFile`]. Shared (`Arc`) by every
+/// cache index that holds the image - clones and merges copy the index - so
+/// its range is only freed when the last of them drops it: no copy can read
+/// a range that another image already reuses.
+struct SpillSlot {
+    file: Arc<SpillFile>,
+    offset: u64,
+    len: u64,
+}
+
+impl Drop for SpillSlot {
+    fn drop(&mut self) {
+        self.file.release(self.offset, self.len);
+    }
+}
+
+/// [`Read`]/[`Write`] at a position of a file, without moving its shared
+/// file position.
+struct FileAt<'a> {
+    file: &'a File,
+    position: u64,
+}
+
+impl Write for FileAt<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        #[cfg(unix)]
+        let written = std::os::unix::fs::FileExt::write_at(self.file, buf, self.position)?;
+        #[cfg(windows)]
+        let written = std::os::windows::fs::FileExt::seek_write(self.file, buf, self.position)?;
+        self.position += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Read for FileAt<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        #[cfg(unix)]
+        let read = std::os::unix::fs::FileExt::read_at(self.file, buf, self.position)?;
+        #[cfg(windows)]
+        let read = std::os::windows::fs::FileExt::seek_read(self.file, buf, self.position)?;
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
 /// `image_index` and `hot_cache` behind one lock, not two: `spill_to_disk`
 /// needs to check-then-insert into `image_index` in lockstep with evicting
 /// from `hot_cache` (see its own doc comment), and `get`/`insert` can race
@@ -67,11 +178,11 @@ fn new_hot_cache(capacity_bytes: usize) -> HotCache {
 /// cache) - a single lock makes that whole sequence atomic instead of
 /// leaving a window where the two could disagree.
 struct ImageCacheInner {
-    // Addresses that have actually been written to a scratch file, and
+    // Addresses that have actually been written to the spill file, and
     // where. An address only appears here once it's been spilled out of
     // `hot_cache` (see `spill_to_disk`) - most images live and die entirely
     // in `hot_cache` and never touch disk at all.
-    image_index: HashMap<CacheAddress, PathBuf>,
+    image_index: HashMap<CacheAddress, Arc<SpillSlot>>,
     // Size-bounded, least-recently-used store of resident images. Every
     // stored address is either only here (never spilled), or here *and* in
     // `image_index` (spilled once, then loaded back by `get`).
@@ -80,23 +191,13 @@ struct ImageCacheInner {
 
 pub struct ImageCache {
     inner: Mutex<ImageCacheInner>,
-    // Shared, refcounted scratch directory: every clone descended from the
-    // same `new()` call writes into (and reads from) this *same* physical
-    // directory, rather than each clone getting its own. That matters
-    // because real usage (`job_executor.rs`) clones a `global_cache` once
-    // per tile, has each tile write its own files into its clone, then
-    // merges every clone back together via `extend` - if each clone owned
-    // a separate directory, merging would only move the path *entries*
-    // (see `extend`), and the moment the per-tile clone that actually wrote
-    // those files went out of scope, its directory (and every file in it)
-    // would be deleted out from under the merged index. Sharing the
-    // directory via `Arc` sidesteps that entirely: the directory is only
-    // removed once the *last* clone anywhere drops, so a file survives
-    // regardless of which specific `ImageCache` instance wrote it or which
-    // one gets dropped first/last - `Arc`'s refcounting is atomic, so this
-    // is safe even when different clones drop concurrently on different
-    // threads.
-    temp_dir: Arc<tempfile::TempDir>,
+    // Shared by every clone descended from the same `new()` call: real
+    // usage (`job_executor.rs`) clones a `global_cache` once per tile, each
+    // tile spills into its clone, and every clone is merged back via
+    // `extend` - which moves the index entries ([`SpillSlot`]s, each holding
+    // the file too). The file closes, and the OS deletes it, once the last
+    // clone and the last slot are gone.
+    spill: Arc<SpillFile>,
 }
 
 /// Can't `#[derive(Clone)]`: `Mutex<T>` doesn't implement `Clone` even when
@@ -105,9 +206,8 @@ pub struct ImageCache {
 /// itself fallible in a way `Clone::clone` can't express).
 ///
 /// Unconditionally safe regardless of how many entries `self` already has:
-/// `temp_dir` is shared (see the field doc above), so the clone can see and
-/// write into the exact same directory as `self` - nothing is left behind
-/// or hidden the way an independent fresh directory would.
+/// the spill file is shared (see the field doc above), and the clone's index
+/// shares each spilled image's slot with `self`'s.
 impl Clone for ImageCache {
     fn clone(&self) -> Self {
         // `CLruCache` isn't `Clone` either, so rebuild one from `self`'s
@@ -123,16 +223,16 @@ impl Clone for ImageCache {
                 image_index: source.image_index.clone(),
                 hot_cache,
             }),
-            temp_dir: Arc::clone(&self.temp_dir),
+            spill: Arc::clone(&self.spill),
         }
     }
 }
 
 impl ImageCache {
-    /// Creates a cache backed by its own fresh scratch directory, with
-    /// `hot_cache` capped at [`DEFAULT_HOT_CACHE_CAPACITY_BYTES`]. For
-    /// production pipeline runs, prefer [`with_capacity_bytes`](Self::with_capacity_bytes)
-    /// with a budget sized against actual parallelism/available RAM (see
+    /// Creates a cache with its own spill file, with `hot_cache` capped at
+    /// [`DEFAULT_HOT_CACHE_CAPACITY_BYTES`]. For production pipeline runs,
+    /// prefer [`with_capacity_bytes`](Self::with_capacity_bytes) with a
+    /// budget sized against actual parallelism/available RAM (see
     /// `resources::recommended_image_cache_bytes`) - this default exists for
     /// callers (tests, ad-hoc/GUI-preview caches) that don't have that
     /// context.
@@ -140,22 +240,18 @@ impl ImageCache {
         Self::with_capacity_bytes(DEFAULT_HOT_CACHE_CAPACITY_BYTES as u64)
     }
 
-    /// Creates a cache backed by its own fresh scratch directory, with
-    /// `hot_cache` capped at `capacity_bytes`. Fails only if the OS can't
-    /// create a temp directory (disk full, no permissions) - callers should
-    /// treat that as fatal for whatever operation needed a disk-backed cache
-    /// in the first place, the same way `job::object_scratch::TileObjectStore::new`
-    /// already does for an analogous scratch directory.
+    /// Creates a cache with its own spill file in the system temp folder,
+    /// with `hot_cache` capped at `capacity_bytes`. Fails only if the OS
+    /// can't create a temp file (no permissions, no temp folder) - callers
+    /// should treat that as fatal for whatever operation needed a
+    /// disk-backed cache in the first place.
     pub fn with_capacity_bytes(capacity_bytes: u64) -> io::Result<Self> {
-        let temp_dir = tempfile::Builder::new()
-            .prefix("evanalyzer-image-cache-")
-            .tempdir()?;
         Ok(Self {
             inner: Mutex::new(ImageCacheInner {
                 image_index: Default::default(),
                 hot_cache: new_hot_cache(capacity_bytes as usize),
             }),
-            temp_dir: Arc::new(temp_dir),
+            spill: Arc::new(SpillFile::new(None)?),
         })
     }
 
@@ -168,12 +264,7 @@ impl ImageCache {
             let Some((address, image)) = inner.hot_cache.pop_back() else {
                 break;
             };
-            spill_to_disk(
-                self.temp_dir.path(),
-                &mut inner.image_index,
-                address,
-                &image,
-            );
+            spill_to_disk(&self.spill, &mut inner.image_index, address, &image);
         }
         inner.hot_cache.resize(capacity);
     }
@@ -192,33 +283,24 @@ impl ImageCache {
         img: Arc<ImageContainer>,
     ) -> Option<Arc<ImageContainer>> {
         let mut inner = self.inner.lock().expect("Poisned thread");
-        // Replacing this address invalidates any file already spilled for
-        // the old value - delete it now rather than leaking scratch space
-        // until the whole cache (and its temp directory) eventually drops.
-        if let Some(stale_path) = inner.image_index.remove(&address) {
-            self.delete_from_disk(&stale_path);
-        }
+        // Replacing this address invalidates what was spilled for the old
+        // value - its slot is freed for reuse once no other copy holds it.
+        inner.image_index.remove(&address);
         let ImageCacheInner {
             image_index,
             hot_cache,
         } = &mut *inner;
-        hot_cache_insert(
-            self.temp_dir.path(),
-            image_index,
-            hot_cache,
-            address,
-            img.clone(),
-        );
+        hot_cache_insert(&self.spill, image_index, hot_cache, address, img.clone());
         Some(img)
     }
 
     /// Moves every entry out of `other` and into `self` - matches
     /// `Extend::extend`. Safe to call even after `other` is dropped
-    /// immediately afterwards: `temp_dir` is shared (see the struct-level
-    /// doc), so the on-disk files these paths point at aren't tied to
-    /// `other`'s lifetime. `other`'s `hot_cache` entries are re-inserted
-    /// through the same size-bounded path `insert` uses, so merging can
-    /// still spill to disk if the combined result needs the room.
+    /// immediately afterwards: each spilled entry's slot holds its spill
+    /// file, so what `other` spilled stays readable. `other`'s `hot_cache`
+    /// entries are re-inserted through the same size-bounded path `insert`
+    /// uses, so merging can still spill to disk if the combined result needs
+    /// the room.
     pub fn extend(&mut self, other: ImageCache) {
         let ImageCacheInner {
             image_index: other_index,
@@ -232,7 +314,7 @@ impl ImageCache {
             hot_cache,
         } = &mut *inner;
         for (address, image) in other_hot {
-            hot_cache_insert(self.temp_dir.path(), image_index, hot_cache, address, image);
+            hot_cache_insert(&self.spill, image_index, hot_cache, address, image);
         }
     }
 
@@ -290,34 +372,27 @@ impl ImageCache {
     /// around that, and lets the lock be held only for the lookup itself,
     /// never across the disk read below.
     pub fn get(&self, address: &CacheAddress) -> Option<Arc<ImageContainer>> {
-        let image_path = {
+        let slot = {
             let mut inner = self.inner.lock().expect("Poisned thread");
             if let Some(image) = inner.hot_cache.get(address) {
                 return Some(image.clone());
             }
-            inner.image_index.get(address)?.clone()
+            Arc::clone(inner.image_index.get(address)?)
         };
 
-        let image = self.load_from_disk(&image_path)?;
+        let image = load_from_disk(&slot)?;
         let mut inner = self.inner.lock().expect("Poisned thread");
         let ImageCacheInner {
             image_index,
             hot_cache,
         } = &mut *inner;
-        hot_cache_insert(
-            self.temp_dir.path(),
-            image_index,
-            hot_cache,
-            *address,
-            image.clone(),
-        );
+        hot_cache_insert(&self.spill, image_index, hot_cache, *address, image.clone());
         Some(image)
     }
 
     /// Keeps only the entries for which `f` returns `true`, evicting the
-    /// rest from both `hot_cache` and `image_index` - deleting the temp
-    /// file too, but only for entries that actually had one (most never
-    /// got spilled at all, so there's nothing on disk to clean up).
+    /// rest from both `hot_cache` and `image_index` - a spilled entry's
+    /// slot is freed for reuse once no other copy holds it.
     ///
     /// Unlike `HashMap::retain`, `f` only receives the key, not `&mut V`:
     /// this cache is disk-backed, so a disk-only entry has no in-memory
@@ -333,9 +408,7 @@ impl ImageCache {
         let mut inner = self.inner.lock().expect("Poisned thread");
         for address in to_remove {
             inner.hot_cache.pop(&address);
-            if let Some(path) = inner.image_index.remove(&address) {
-                self.delete_from_disk(&path);
-            }
+            inner.image_index.remove(&address);
         }
     }
 
@@ -345,31 +418,28 @@ impl ImageCache {
     //     self.image_index.iter()
     // }
 
-    fn try_write_to_disk(path: &PathBuf, image: &ImageContainer) -> io::Result<()> {
-        let mut w = BufWriter::new(File::create(path)?);
+    /// Bytes [`Self::write_image`] writes for `image`.
+    fn encoded_len(image: &ImageContainer) -> u64 {
+        let pixels = match image {
+            ImageContainer::F32Gray(img) => std::mem::size_of_val(img.as_slice()),
+            ImageContainer::F32Rgb(img) => std::mem::size_of_val(img.as_slice()),
+            ImageContainer::U32(img) => std::mem::size_of_val(img.as_slice()),
+        };
+        HEADER_BYTES + pixels as u64
+    }
+
+    fn write_image(w: &mut impl Write, image: &ImageContainer) -> io::Result<()> {
         match image {
             ImageContainer::F32Gray(img) => {
-                Self::write_header(
-                    &mut w,
-                    TAG_F32_GRAY,
-                    img.size(),
-                    &img.tile_offset,
-                    &img.plane,
-                )?;
+                Self::write_header(w, TAG_F32_GRAY, img.size(), &img.tile_offset, &img.plane)?;
                 w.write_all(as_bytes(img.as_slice()))?;
             }
             ImageContainer::F32Rgb(img) => {
-                Self::write_header(
-                    &mut w,
-                    TAG_F32_RGB,
-                    img.size(),
-                    &img.tile_offset,
-                    &img.plane,
-                )?;
+                Self::write_header(w, TAG_F32_RGB, img.size(), &img.tile_offset, &img.plane)?;
                 w.write_all(as_bytes(img.as_slice()))?;
             }
             ImageContainer::U32(img) => {
-                Self::write_header(&mut w, TAG_U32, img.size(), &img.tile_offset, &img.plane)?;
+                Self::write_header(w, TAG_U32, img.size(), &img.tile_offset, &img.plane)?;
                 w.write_all(as_bytes(img.as_slice()))?;
             }
         }
@@ -402,48 +472,22 @@ impl ImageCache {
         Ok(())
     }
 
-    /// Reads back a file written by `try_write_to_disk`. Returns `None`
-    /// (logged) on any I/O or format error - e.g. this cache's own scratch
-    /// directory was wiped externally - since a cache miss is always a safe
-    /// fallback, but a hard error here would take down the whole pipeline
-    /// over what's just a scratch file.
-    fn load_from_disk(&self, path: &PathBuf) -> Option<Arc<ImageContainer>> {
-        let start = Instant::now();
-        match Self::try_load_from_disk(path) {
-            Ok(image) => {
-                debug!(
-                    "Loaded image ({} bytes) from cache file {:?} in {:?}",
-                    image.get_image_memory_usage(),
-                    path,
-                    start.elapsed()
-                );
-                Some(Arc::new(image))
-            }
-            Err(e) => {
-                warn!("Could not load image from cache file {:?}: {}", path, e);
-                None
-            }
-        }
-    }
-
-    fn try_load_from_disk(path: &PathBuf) -> io::Result<ImageContainer> {
-        let mut r = BufReader::new(File::open(path)?);
-
+    fn read_image(r: &mut impl Read) -> io::Result<ImageContainer> {
         let mut tag = [0u8; 1];
         r.read_exact(&mut tag)?;
-        let width = read_u64(&mut r)? as usize;
-        let height = read_u64(&mut r)? as usize;
+        let width = read_u64(r)? as usize;
+        let height = read_u64(r)? as usize;
         let tile_offset = Point2d {
-            x: read_u64(&mut r)? as usize,
-            y: read_u64(&mut r)? as usize,
+            x: read_u64(r)? as usize,
+            y: read_u64(r)? as usize,
         };
         let mut has_plane = [0u8; 1];
         r.read_exact(&mut has_plane)?;
         let plane = if has_plane[0] != 0 {
             Some(ImagePlane {
-                z: read_i32(&mut r)?,
-                c: read_i32(&mut r)?,
-                t: read_i32(&mut r)?,
+                z: read_i32(r)?,
+                c: read_i32(r)?,
+                t: read_i32(r)?,
             })
         } else {
             let mut skip = [0u8; 12];
@@ -456,7 +500,7 @@ impl ImageCache {
 
         match tag[0] {
             TAG_F32_GRAY => {
-                let data = read_pod_vec(&mut r, width * height, 0f32)?;
+                let data = read_pod_vec(r, width * height, 0f32)?;
                 Ok(ImageContainer::F32Gray(ManagedImage {
                     data: Image::<f32, 1>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
@@ -466,7 +510,7 @@ impl ImageCache {
                 }))
             }
             TAG_F32_RGB => {
-                let data = read_pod_vec(&mut r, width * height * 3, 0f32)?;
+                let data = read_pod_vec(r, width * height * 3, 0f32)?;
                 Ok(ImageContainer::F32Rgb(ManagedImage {
                     data: Image::<f32, 3>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
@@ -476,7 +520,7 @@ impl ImageCache {
                 }))
             }
             TAG_U32 => {
-                let data = read_pod_vec(&mut r, width * height, 0u32)?;
+                let data = read_pod_vec(r, width * height, 0u32)?;
                 Ok(ImageContainer::U32(ManagedImage {
                     data: Image::<u32, 1>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
@@ -488,25 +532,44 @@ impl ImageCache {
             other => Err(to_io_err(format!("unknown image cache tag {other}"))),
         }
     }
-    fn delete_from_disk(&self, path: &PathBuf) {
-        if let Err(error) = fs::remove_file(path) {
-            warn!(
-                "Could not delete image: {:?} from cache. Got: {}",
-                path, error
-            );
-        }
+}
+
+/// No manual `Drop` needed here: the spill file is closed - and deleted by
+/// the OS - once the last clone and the last [`SpillSlot`] sharing it drop.
+impl Default for ImageCache {
+    fn default() -> Self {
+        Self::new().expect("failed to create the spill file for ImageCache::default()")
     }
 }
 
-/// No manual `Drop` needed here: `temp_dir` is `Arc<tempfile::TempDir>`, so
-/// the directory - and everything still in it - is only removed once the
-/// *last* clone sharing it drops. That also covers any file `image_index`
-/// might not be tracking for some reason (a bug elsewhere, a process that
-/// panicked mid-write), which a hand-rolled "delete only what `image_index`
-/// knows about" loop wouldn't.
-impl Default for ImageCache {
-    fn default() -> Self {
-        Self::new().expect("failed to create scratch directory for ImageCache::default()")
+/// Reads back an image `spill_to_disk` wrote into `slot`. Returns `None`
+/// (logged) on any I/O or format error, since a cache miss is always a safe
+/// fallback, but a hard error here would take down the whole pipeline over
+/// what's just a scratch file.
+fn load_from_disk(slot: &SpillSlot) -> Option<Arc<ImageContainer>> {
+    let start = Instant::now();
+    let mut r = BufReader::new(FileAt {
+        file: &slot.file.file,
+        position: slot.offset,
+    })
+    .take(slot.len);
+    match ImageCache::read_image(&mut r) {
+        Ok(image) => {
+            debug!(
+                "Loaded image ({} bytes) from the spill file at {} in {:?}",
+                image.get_image_memory_usage(),
+                slot.offset,
+                start.elapsed()
+            );
+            Some(Arc::new(image))
+        }
+        Err(e) => {
+            warn!(
+                "Could not load image from the spill file at {}: {}",
+                slot.offset, e
+            );
+            None
+        }
     }
 }
 
@@ -516,10 +579,10 @@ impl Default for ImageCache {
 /// disk without holding it in memory at all. A free function (not an
 /// `ImageCache` method) so it can take `image_index`/`hot_cache` as
 /// independent `&mut` borrows of one already-locked `ImageCacheInner`,
-/// alongside `&self` calls like `delete_from_disk` at the same call site.
+/// alongside `&self.spill` at the same call site.
 fn hot_cache_insert(
-    temp_dir: &Path,
-    image_index: &mut HashMap<CacheAddress, PathBuf>,
+    spill: &Arc<SpillFile>,
+    image_index: &mut HashMap<CacheAddress, Arc<SpillSlot>>,
     hot_cache: &mut HotCache,
     address: CacheAddress,
     img: Arc<ImageContainer>,
@@ -533,7 +596,7 @@ fn hot_cache_insert(
             weight,
             hot_cache.capacity()
         );
-        spill_to_disk(temp_dir, image_index, address, &img);
+        spill_to_disk(spill, image_index, address, &img);
         return;
     }
     // Mirrors `CLruCache::put_with_weight`'s own "make room" formula
@@ -547,41 +610,54 @@ fn hot_cache_insert(
         // zero while the condition (which `weight` alone already satisfies
         // being under) still holds.
         let (evicted_address, evicted_image) = hot_cache.pop_back().unwrap();
-        spill_to_disk(temp_dir, image_index, evicted_address, &evicted_image);
+        spill_to_disk(spill, image_index, evicted_address, &evicted_image);
     }
     let _ = hot_cache.put_with_weight(address, img);
 }
 
-/// Writes `img` to a fresh scratch file and records its path in
-/// `image_index` - unless `image_index` already has a path for `address`,
+/// Writes `img` into a free range of the spill file and records its slot in
+/// `image_index` - unless `image_index` already has a slot for `address`,
 /// meaning it was written once before (e.g. loaded back into `hot_cache` by
-/// `get`, then evicted again) and that file is still current: the only way
+/// `get`, then evicted again) and that copy is still current: the only way
 /// an address's value changes is through `ImageCache::insert`, which always
-/// deletes any stale file first.
+/// drops the stale slot first.
 fn spill_to_disk(
-    temp_dir: &Path,
-    image_index: &mut HashMap<CacheAddress, PathBuf>,
+    spill: &Arc<SpillFile>,
+    image_index: &mut HashMap<CacheAddress, Arc<SpillSlot>>,
     address: CacheAddress,
     img: &ImageContainer,
 ) {
     if image_index.contains_key(&address) {
         return;
     }
-    let uuid = fast_uuid_v7::gen_id_u128();
-    let img_path = temp_dir.join(format!("{}", uuid));
+    let len = ImageCache::encoded_len(img);
+    // Freed again (dropped) if the write fails.
+    let slot = SpillSlot {
+        file: Arc::clone(spill),
+        offset: spill.allocate(len),
+        len,
+    };
     let start = Instant::now();
-    if let Err(e) = ImageCache::try_write_to_disk(&img_path, img) {
-        warn!("Could not write image to cache file {:?}: {}", img_path, e);
+    let mut w = BufWriter::new(FileAt {
+        file: &spill.file,
+        position: slot.offset,
+    });
+    if let Err(e) = ImageCache::write_image(&mut w, img) {
+        warn!(
+            "Could not write image to the spill file at {}: {}",
+            slot.offset, e
+        );
         return;
     }
+    drop(w);
     debug!(
-        "Spilled image at {:?} ({} bytes) to cache file {:?} in {:?}",
+        "Spilled image at {:?} ({} bytes) to the spill file at {} in {:?}",
         address,
         img.get_image_memory_usage(),
-        img_path,
+        slot.offset,
         start.elapsed()
     );
-    image_index.insert(address, img_path);
+    image_index.insert(address, Arc::new(slot));
 }
 
 /// Reinterprets a pixel slice as raw bytes in host-native order, for a
@@ -642,10 +718,11 @@ mod tests {
     /// Bypasses `new`'s fixed `DEFAULT_HOT_CACHE_CAPACITY_BYTES`, so eviction
     /// can be exercised without allocating gigabytes of test data.
     fn cache_with_capacity(bytes: usize) -> ImageCache {
-        let temp_dir = tempfile::Builder::new()
-            .prefix("evanalyzer-image-cache-test-")
-            .tempdir()
-            .unwrap();
+        cache_in(bytes, None)
+    }
+
+    /// [`cache_with_capacity`] with its spill file in `dir`.
+    fn cache_in(bytes: usize, dir: Option<&Path>) -> ImageCache {
         let capacity = NonZeroUsize::new(bytes).unwrap();
         ImageCache {
             inner: Mutex::new(ImageCacheInner {
@@ -654,13 +731,21 @@ mod tests {
                     CLruCacheConfig::new(capacity).with_scale(ImageWeight),
                 ),
             }),
-            temp_dir: Arc::new(temp_dir),
+            spill: Arc::new(SpillFile::new(dir).unwrap()),
         }
     }
 
-    fn disk_file_count(cache: &ImageCache) -> usize {
-        fs::read_dir(cache.temp_dir.path()).unwrap().count()
+    /// How many images `cache` holds in its spill file.
+    fn spilled(cache: &ImageCache) -> usize {
+        cache.inner.lock().unwrap().image_index.len()
     }
+
+    fn spill_file_len(cache: &ImageCache) -> u64 {
+        cache.spill.file.metadata().unwrap().len()
+    }
+
+    /// A 4x4 gray image in the spill file: header + 64 bytes of pixels.
+    const SPILLED_4X4: u64 = HEADER_BYTES + 64;
 
     #[test]
     fn insert_under_capacity_never_touches_disk() {
@@ -671,7 +756,7 @@ mod tests {
             gray_container(2, 2, vec![1.0, 2.0, 3.0, 4.0]),
         );
 
-        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(spilled(&cache), 0);
         assert_eq!(cache.len(), 1);
         assert!(cache.contains_key(&CacheAddress::Scratchpad));
 
@@ -681,7 +766,8 @@ mod tests {
             Some([1.0, 2.0, 3.0, 4.0].as_slice())
         );
         // A `get` hit never needs to write anything either.
-        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(spilled(&cache), 0);
+        assert_eq!(spill_file_len(&cache), 0);
     }
 
     #[test]
@@ -693,17 +779,17 @@ mod tests {
         let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
 
         cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
-        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(spilled(&cache), 0);
 
         cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
 
         // `first` no longer fits alongside `second` - it was evicted and
         // spilled to disk. `second` (just inserted, most-recently-used)
-        // stays resident, so still only one file exists.
-        assert_eq!(disk_file_count(&cache), 1);
+        // stays resident, so only one image is spilled.
+        assert_eq!(spilled(&cache), 1);
         assert_eq!(cache.len(), 2);
 
-        // Still transparently retrievable, reloaded from the spilled file.
+        // Still transparently retrievable, reloaded from the spill file.
         let fetched = cache.get(&first).unwrap();
         assert_eq!(fetched.as_f32_slice(), Some([1.0; 16].as_slice()));
     }
@@ -715,12 +801,12 @@ mod tests {
         let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
         cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
         cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
-        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(spilled(&cache), 0);
 
         cache.set_capacity_bytes(100);
 
         // The least recently used went to disk, not lost.
-        assert_eq!(disk_file_count(&cache), 1);
+        assert_eq!(spilled(&cache), 1);
         assert_eq!(cache.len(), 2);
         assert_eq!(
             cache.get(&first).unwrap().as_f32_slice(),
@@ -742,7 +828,7 @@ mod tests {
             gray_container(4, 4, vec![2.0; 16]),
         );
 
-        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(spilled(&cache), 0);
     }
 
     /// The whole slide's merge: every tile's cache is under its own cap,
@@ -761,11 +847,11 @@ mod tests {
                 CacheAddress::Memory(MemoryId::PipelineContext(id)),
                 gray_container(4, 4, vec![id as f32; 16]),
             );
-            assert_eq!(disk_file_count(&tile), 0, "a tile alone fits");
+            assert_eq!(spilled(&tile), 0, "a tile alone fits");
             merged.extend(tile);
         }
 
-        assert_eq!(disk_file_count(&merged), 1);
+        assert_eq!(spilled(&merged), 1);
         assert_eq!(merged.len(), 2);
         let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
         assert_eq!(
@@ -782,11 +868,11 @@ mod tests {
         cache.retain(|_| false);
 
         assert!(cache.is_empty());
-        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(spill_file_len(&cache), 0);
     }
 
     #[test]
-    fn insert_deletes_the_stale_spilled_file_of_the_address_it_replaces() {
+    fn insert_frees_the_stale_spill_of_the_address_it_replaces() {
         let mut cache = cache_with_capacity(100);
         let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
         let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
@@ -794,28 +880,105 @@ mod tests {
         // Force `first` to be spilled by inserting `second` right behind it.
         cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
         cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
-        assert_eq!(disk_file_count(&cache), 1);
+        assert_eq!(spilled(&cache), 1);
+        assert_eq!(spill_file_len(&cache), SPILLED_4X4);
 
-        // Re-inserting `first` with a fresh value must not leave the old
-        // spilled file behind.
+        // Re-inserting `first` with a fresh value frees its old spill -
+        // `second`, spilled to make room, reuses it: the file doesn't grow.
         cache.insert(first, gray_container(4, 4, vec![3.0; 16]));
-        assert_eq!(disk_file_count(&cache), 1);
+        assert_eq!(spilled(&cache), 1);
+        assert_eq!(spill_file_len(&cache), SPILLED_4X4);
 
         let fetched = cache.get(&first).unwrap();
         assert_eq!(fetched.as_f32_slice(), Some([3.0; 16].as_slice()));
+        assert_eq!(
+            cache.get(&second).unwrap().as_f32_slice(),
+            Some([2.0; 16].as_slice())
+        );
+    }
+
+    /// The spill file has no name: nothing in its folder, so nothing is left
+    /// behind when the process is killed - the OS deletes it.
+    #[test]
+    fn spilled_images_leave_no_file_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = cache_in(100, Some(dir.path()));
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
+        cache.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(2)),
+            gray_container(4, 4, vec![2.0; 16]),
+        );
+        assert_eq!(spilled(&cache), 1);
+
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert_eq!(
+            cache.get(&first).unwrap().as_f32_slice(),
+            Some([1.0; 16].as_slice())
+        );
+    }
+
+    /// A copy shares the spilled image's slot: when the original drops the
+    /// image and spills others, the copy still reads its own pixels - the
+    /// range isn't reused while any copy holds it.
+    #[test]
+    fn a_copy_still_reads_a_spilled_image_the_original_dropped() {
+        let mut original = cache_with_capacity(100);
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        original.insert(first, gray_container(4, 4, vec![1.0; 16]));
+        original.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(2)),
+            gray_container(4, 4, vec![2.0; 16]),
+        );
+        let copy = original.clone();
+
+        original.retain(|_| false);
+        for id in 3..=5 {
+            original.insert(
+                CacheAddress::Memory(MemoryId::PipelineContext(id)),
+                gray_container(4, 4, vec![id as f32; 16]),
+            );
+        }
+
+        assert_eq!(
+            copy.get(&first).unwrap().as_f32_slice(),
+            Some([1.0; 16].as_slice())
+        );
+    }
+
+    #[test]
+    fn several_threads_spill_and_read_the_one_file_at_once() {
+        let global = cache_with_capacity(100);
+        std::thread::scope(|scope| {
+            for id in 0..8u32 {
+                let mut tile = global.clone();
+                scope.spawn(move || {
+                    for k in 0..4u32 {
+                        tile.insert(
+                            CacheAddress::Memory(MemoryId::PipelineContext(id * 10 + k)),
+                            gray_container(4, 4, vec![(id * 10 + k) as f32; 16]),
+                        );
+                    }
+                    for k in 0..4u32 {
+                        let value = (id * 10 + k) as f32;
+                        let address = CacheAddress::Memory(MemoryId::PipelineContext(id * 10 + k));
+                        assert_eq!(
+                            tile.get(&address).unwrap().as_f32_slice(),
+                            Some([value; 16].as_slice())
+                        );
+                    }
+                });
+            }
+        });
     }
 
     // ---- disk round trip of every image type ----
 
-    fn spill_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
-        dir.path().join(name)
-    }
-
     fn round_trip(image: &ImageContainer) -> ImageContainer {
-        let dir = tempfile::tempdir().unwrap();
-        let path = spill_path(&dir, "image.bin");
-        ImageCache::try_write_to_disk(&path, image).unwrap();
-        ImageCache::try_load_from_disk(&path).unwrap()
+        let mut bytes = Vec::new();
+        ImageCache::write_image(&mut bytes, image).unwrap();
+        assert_eq!(bytes.len() as u64, ImageCache::encoded_len(image));
+        ImageCache::read_image(&mut bytes.as_slice()).unwrap()
     }
 
     #[test]
@@ -879,53 +1042,30 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_or_unknown_cache_file_is_a_cache_miss_not_a_crash() {
-        let cache = cache_with_capacity(DEFAULT_HOT_CACHE_CAPACITY_BYTES);
-        let dir = tempfile::tempdir().unwrap();
+    fn a_damaged_or_unknown_spilled_image_is_a_cache_miss_not_a_crash() {
+        let mut bytes = Vec::new();
+        ImageCache::write_image(&mut bytes, &gray_container(8, 8, vec![1.0; 64])).unwrap();
 
-        // Truncated: the header promises more pixels than the file holds.
-        let truncated = spill_path(&dir, "truncated.bin");
-        ImageCache::try_write_to_disk(&truncated, &gray_container(8, 8, vec![1.0; 64])).unwrap();
-        let bytes = fs::read(&truncated).unwrap();
-        fs::write(&truncated, &bytes[..bytes.len() / 2]).unwrap();
-        assert!(cache.load_from_disk(&truncated).is_none());
+        // Truncated: the header promises more pixels than there are.
+        let truncated = &bytes[..bytes.len() / 2];
+        assert!(ImageCache::read_image(&mut &truncated[..]).is_err());
 
         // Unknown type tag.
-        let unknown = spill_path(&dir, "unknown.bin");
-        let mut bytes = fs::read(&spill_path(&dir, "truncated.bin")).unwrap();
-        bytes[0] = 99;
-        fs::write(&unknown, &bytes).unwrap();
-        let err = ImageCache::try_load_from_disk(&unknown).unwrap_err();
+        let mut unknown = bytes.clone();
+        unknown[0] = 99;
+        let err = ImageCache::read_image(&mut unknown.as_slice()).unwrap_err();
         assert!(
             err.to_string().contains("unknown image cache tag 99"),
             "{err}"
         );
 
-        // Missing file.
-        assert!(
-            cache
-                .load_from_disk(&spill_path(&dir, "missing.bin"))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_spilled_entry_whose_file_vanished_reads_as_a_miss() {
-        let mut cache = cache_with_capacity(100);
-        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
-        let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
-        cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
-        cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
-        assert_eq!(disk_file_count(&cache), 1);
-
-        // Someone wiped the scratch directory.
-        for entry in fs::read_dir(cache.temp_dir.path()).unwrap() {
-            fs::remove_file(entry.unwrap().path()).unwrap();
-        }
-        assert!(cache.get(&first).is_none());
-        assert!(
-            cache.get(&second).is_some(),
-            "resident entries are unaffected"
-        );
+        // A slot past the file's end.
+        let spill = Arc::new(SpillFile::new(None).unwrap());
+        let slot = SpillSlot {
+            file: Arc::clone(&spill),
+            offset: 1000,
+            len: SPILLED_4X4,
+        };
+        assert!(load_from_disk(&slot).is_none());
     }
 }
