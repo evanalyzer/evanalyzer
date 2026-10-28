@@ -459,6 +459,39 @@ Before your first pull request can be merged, you need to accept the
 contribution to the maintainer, so EVAnalyzer can stay available under both
 non-commercial and commercial licenses.
 
+### Commit messages
+
+Commit messages and pull request titles follow
+[Conventional Commits](https://www.conventionalcommits.org/). The
+`conventional-commits` workflow checks every pull request:
+
+```
+type(scope): description
+```
+
+- `scope` is optional, lowercase (`a-z`, `0-9`, `-`).
+- The description starts right after `": "`, is at most 72 characters and
+  doesn't end with a period.
+- A `!` before the colon (`feat(cfg)!: ...`) marks a breaking change; explain
+  it in a `BREAKING CHANGE:` footer.
+
+| Type | Use it for |
+|---|---|
+| `feat` | A new feature or a new user-visible capability |
+| `fix` | A bug fix, including results that were computed wrongly |
+| `perf` | A speed or memory improvement without changing behavior |
+| `refactor` | Restructured code without changing behavior or performance |
+| `test` | New or changed tests only |
+| `docs` | Documentation and comments only |
+| `build` | Build system, Cargo features, dependencies (`build(deps)`) |
+| `ci` | GitHub workflows and other CI configuration |
+| `style` | Formatting or visual polish without changing behavior |
+| `chore` | Maintenance that fits none of the above |
+| `revert` | Reverting an earlier commit |
+
+Common scopes are the crate or area a change is in: `core`, `gui`, `app`,
+`cfg`, `ai`, `cli`, `server`, `results`, `viewport`, `deps`, `release`.
+
 ## License
 
 EVAnalyzer is licensed under the
