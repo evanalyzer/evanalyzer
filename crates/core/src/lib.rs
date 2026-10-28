@@ -15,6 +15,7 @@ mod algos;
 mod dataset;
 mod image;
 mod job;
+pub mod memory;
 mod object;
 mod pipeline;
 mod storage;
@@ -22,14 +23,11 @@ mod utils;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::job::job_generator::random_job_name;
+pub use crate::memory::analysis::{MAX_TILE_SIZE, estimate_ram_budget, recommended_parallelism};
+pub use crate::memory::{SystemDiagnostics, cpu_ram_diagnostics, system_diagnostics};
 pub use crate::storage::duckdb::shared_connection as open_results_database;
 pub use crate::storage::duckdb::{RESULTS_SCHEMA_VERSION, ResultsConnection, reject_newer_results};
 pub use crate::storage::mask_codec::{decode_mask, encode_mask};
-pub use crate::utils::resources::SystemDiagnostics;
-pub use crate::utils::resources::cpu_ram_diagnostics;
-pub use crate::utils::resources::recommended_parallelism;
-pub use crate::utils::resources::system_diagnostics;
-pub use crate::utils::resources::{MAX_TILE_SIZE, estimate_ram_budget};
 pub use evanalyzer_ai::cuda_is_available;
 
 // Image reader

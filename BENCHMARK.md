@@ -1272,6 +1272,43 @@ are bit-identical.
 CPU +2-6 %: the pixels are read twice (pass 2). Wall is shorter with RAM to
 spare (the pixels are now read in parallel).
 
+## Results files closed when unused, DuckDB's memory in the budget (2026-10-28)
+
+Every results file opened in a session kept its DuckDB instance, buffer
+pool and file handle until the app ended. Now the connection cache counts
+each file's users and closes it with the last one; `finish_run`
+checkpoints.
+
+`bench_results_sessions` (app example): four copies of the 4M-object file
+(`bench_export --images 4000 --objects-per-image 1000`) opened one after
+another, each read (grouped-by-image export) and closed; old / new
+alternated.
+
+| | before | after |
+|---|---|---|
+| RSS after closing file 1 / 2 / 3 / 4 | 276 / 520 / 763 / 1,009 MB | 47-55 MB, flat |
+| Open file handles | 5 → 8 | 4 |
+| Peak RSS | 1,286-1,294 MB | 572-578 MB |
+| Reopening the same file (open + read) | 0.7 s | 0.7 s |
+
+DuckDB itself during a whole-slide run (`bench_whole_slide --coloc 1`,
+`duckdb_memory()` sampled): 1.3-1.6 GB, limit 8 GB here; the WAL is 0 MB at
+the end (large appends go straight into the file). The merged cache now
+leaves it its memory - at most a quarter of the free RAM, never below the
+tiles in work. Reserving the whole limit (from the total RAM: 8 GB with 4 GB
+free) starved the cache: 73 → 307-326 s, system CPU 32 → 800-839 s.
+
+| `tests/haut` + coloc | before | after |
+|---|---|---|
+| 21 threads: wall | 28.2 / 29.3 s | 26.9 / 27.6 s |
+| 21 threads: peak RSS | 7.61-7.63 GB | 7.57-7.59 GB |
+| 4 threads, ~4 GB free: wall | 72.8 / 72.9 / 74.7 / 99.0 s (once over the RAM) | 79.0 / 79.0 s |
+| 4 threads, ~3 GB free: wall | 130.2 / 198.9 s | 129.4 / 334.6 s |
+
+At ~3 GB free both are erratic: four threads leave the merged cache ~0.6 GB
+either way and it reloads tiles from disk (the thread count, not the
+reservation - TODO, RAM rework step 2).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1322,6 +1359,7 @@ graphics driver).
 | Same slide, one cache budget for the merged tiles (a), 4 threads with ~4 / ~6 GB available | 3.5-3.6 / 5.3-5.4 GB (was 5.4-5.5 / 5.9-6.3 GB) | 2026-10-28 | Whole slide: one cache budget for the merged tiles |
 | Exports of 4,000 images / 4M objects: grouped by image, list CSV | 0.65-0.73 GB / 1.1 GB | 2026-10-28 | Exports of a 4,000-image batch |
 | Whole slide `tests/haut` with Measure Object Colocalization, cells covering the slide, 21 threads | 8.0-8.2 GB (was 11.0 GB) | 2026-10-28 | Measure Object Colocalization: one object at a time |
+| Results window, switching between 4M-object results files | ~50 MB after closing each (was +250 MB per file opened) | 2026-10-28 | Results files closed when unused |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

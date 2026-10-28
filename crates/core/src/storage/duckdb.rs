@@ -174,20 +174,13 @@ pub fn shared_connection(path: &Path) -> Result<ResultsConnection, InternalError
     // DuckDB keeps up to 80 % of the RAM for itself by default - per open
     // file, and these stay open (above). Capped, so an older computer keeps
     // RAM for the rest; beyond it DuckDB spills to a temporary file.
-    let limit_mb = duckdb_memory_limit_mb(crate::utils::resources::cpu_ram_diagnostics().1);
+    let limit_mb = crate::memory::storage::results_memory_limit_bytes() >> 20;
     if let Err(e) = anchor.execute_batch(&format!("SET memory_limit = '{limit_mb}MB';")) {
         log::warn!("Could not limit DuckDB's memory to {limit_mb} MB: {e}");
     }
     let conn = anchor.try_clone().map_err(to_io_err)?;
     cache.insert(path.to_path_buf(), SharedDatabase { anchor, users: 1 });
     Ok(handle(conn))
-}
-
-/// The memory DuckDB may use for a results file on this computer (see
-/// [`duckdb_memory_limit_mb`]) - for the analysis' RAM budget: a run writes
-/// into one, and DuckDB uses most of it (`tests/haut`: 1.3-1.6 GB).
-pub fn results_memory_limit_bytes() -> u64 {
-    duckdb_memory_limit_mb(crate::utils::resources::cpu_ram_diagnostics().1) << 20
 }
 
 /// The format of the results files this build writes (`run.schema_version`).
@@ -228,12 +221,6 @@ pub fn reject_newer_results(conn: &Connection) -> Result<(), InternalErrors> {
         )));
     }
     Ok(())
-}
-
-/// The memory DuckDB may use for a results file on a computer with
-/// `total_ram_bytes`: a quarter of it, between 1 GB and 8 GB.
-fn duckdb_memory_limit_mb(total_ram_bytes: u64) -> u64 {
-    (total_ram_bytes / 4 / (1 << 20)).clamp(1024, 8192)
 }
 
 /// Derives the display `image_name` (bare filename) from an image's relative
@@ -1578,7 +1565,7 @@ impl PipelineResultExporter for DuckDbExporter {
     /// DuckDB's memory limit: a run uses most of it (`tests/haut`: 1.3-1.6
     /// GB of 8 GB).
     fn reserved_memory_bytes(&self) -> u64 {
-        results_memory_limit_bytes()
+        crate::memory::storage::results_memory_limit_bytes()
     }
 
     fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
@@ -1842,21 +1829,13 @@ fn parse_object_id(uuid: &str) -> Result<ObjectId, InternalErrors> {
 mod tests {
 
     #[test]
-    fn duckdb_takes_a_quarter_of_the_ram_between_1_and_8_gb() {
-        let gb = |n: u64| n << 30;
-        assert_eq!(duckdb_memory_limit_mb(gb(16)), 4096);
-        assert_eq!(duckdb_memory_limit_mb(gb(2)), 1024);
-        assert_eq!(duckdb_memory_limit_mb(gb(256)), 8192);
-    }
-
-    #[test]
     fn a_shared_results_connection_has_its_memory_capped() {
         let dir = tempfile::tempdir().unwrap();
         let conn = shared_connection(&dir.path().join("capped.evadb")).unwrap();
         let limit: String = conn
             .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
             .unwrap();
-        let want = duckdb_memory_limit_mb(crate::utils::resources::cpu_ram_diagnostics().1);
+        let want = crate::memory::storage::results_memory_limit_bytes() >> 20;
         // DuckDB reports it rounded, in GiB / MiB.
         let mib: f64 = if let Some(v) = limit.strip_suffix(" GiB") {
             v.trim().parse::<f64>().unwrap() * 1024.0

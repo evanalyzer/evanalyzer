@@ -233,7 +233,7 @@ impl ImageCache {
     /// [`DEFAULT_HOT_CACHE_CAPACITY_BYTES`]. For production pipeline runs,
     /// prefer [`with_capacity_bytes`](Self::with_capacity_bytes) with a
     /// budget sized against actual parallelism/available RAM (see
-    /// `resources::recommended_image_cache_bytes`) - this default exists for
+    /// `memory::analysis::recommended_image_cache_bytes`) - this default exists for
     /// callers (tests, ad-hoc/GUI-preview caches) that don't have that
     /// context.
     pub fn new() -> io::Result<Self> {

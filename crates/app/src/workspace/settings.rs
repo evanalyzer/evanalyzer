@@ -340,51 +340,31 @@ pub struct ViewportMemorySettings {
 impl ViewportMemorySettings {
     pub const DEFAULT_TILE_HISTORY_BUDGET_MB: u32 = 512;
     pub const DEFAULT_OBJECT_OVERLAY_MARGIN_PX: u32 = 256;
-    pub const DEFAULT_TILE_CACHE_MB: u32 = 1024;
-    pub const DEFAULT_OVERVIEW_CACHE_MB: u32 = 256;
+    pub const DEFAULT_TILE_CACHE_MB: u32 = evanalyzer_core::memory::viewer::TILE_CACHE_MAX_MB;
+    pub const DEFAULT_OVERVIEW_CACHE_MB: u32 =
+        evanalyzer_core::memory::viewer::OVERVIEW_CACHE_MAX_MB;
     /// Below this a cache can't hold even one typical tile/overview.
-    pub const MIN_CACHE_MB: u32 = 64;
-    /// Share of the RAM the automatic tile cache takes.
-    const AUTO_TILE_CACHE_RAM_PERCENT: u64 = 10;
-    const AUTO_TILE_CACHE_MIN_MB: u32 = 128;
-    const AUTO_OVERVIEW_CACHE_DIVISOR: u32 = 4;
+    pub const MIN_CACHE_MB: u32 = evanalyzer_core::memory::viewer::CACHE_MIN_MB;
     pub const DEFAULT_UNDO_HISTORY_MB: u32 = 256;
     /// Undo steps kept whatever they cost.
     pub const MIN_UNDO_STEPS: usize = 10;
-    const AUTO_UNDO_MIN_MB: u64 = 32;
-    const AUTO_UNDO_MAX_MB: u64 = 1024;
-    /// Share of the RAM left over that the automatic undo history takes.
-    const AUTO_UNDO_PERCENT_OF_SPARE: u64 = 10;
-    /// RAM kept for the app itself and the operating system.
-    const APP_AND_SYSTEM_RESERVE_MB: u64 = 512;
 
     /// Cache sizes (tile, overview) in MB for a computer with
-    /// `total_ram_bytes`: 10 % of the RAM for tiles, between 128 MB and the
-    /// default 1 GB, and a quarter of that for overviews, between 64 MB and
-    /// the default 256 MB - so from 16 GB RAM up it's the defaults, and a
-    /// small machine keeps most of its RAM.
+    /// `total_ram_bytes` - see [`evanalyzer_core::memory::viewer::cache_mb`].
     pub fn auto_cache_mb(total_ram_bytes: u64) -> (u32, u32) {
-        let total_mb = total_ram_bytes / (1024 * 1024);
-        let tile = (total_mb * Self::AUTO_TILE_CACHE_RAM_PERCENT / 100).clamp(
-            Self::AUTO_TILE_CACHE_MIN_MB as u64,
-            Self::DEFAULT_TILE_CACHE_MB as u64,
-        ) as u32;
-        let overview = (tile / Self::AUTO_OVERVIEW_CACHE_DIVISOR)
-            .clamp(Self::MIN_CACHE_MB, Self::DEFAULT_OVERVIEW_CACHE_MB);
-        (tile, overview)
+        evanalyzer_core::memory::viewer::cache_mb(total_ram_bytes)
     }
 
-    /// Preview tiles a computer with `total_ram_bytes` takes: one per 4 GB
-    /// (16 GB: 4), between 1 and 32.
+    /// Preview tiles a computer with `total_ram_bytes` takes - see
+    /// [`evanalyzer_core::memory::viewer::preview_tiles`].
     pub fn auto_preview_tiles(total_ram_bytes: u64) -> u32 {
-        ((total_ram_bytes / (4 << 30)) as u32).clamp(1, 32)
+        evanalyzer_core::memory::viewer::preview_tiles(total_ram_bytes)
     }
 
-    /// Breakpoint tiles a computer with `total_ram_bytes` keeps: about 5 %
-    /// of its RAM at ~250 MB a tile (the images and their render) - 16 GB:
-    /// 3, 8 GB: 1, between 1 and 16.
+    /// Breakpoint tiles a computer with `total_ram_bytes` keeps - see
+    /// [`evanalyzer_core::memory::viewer::breakpoint_tiles`].
     pub fn auto_breakpoint_tiles(total_ram_bytes: u64) -> u32 {
-        ((total_ram_bytes / 20 / (250 << 20)) as u32).clamp(1, 16)
+        evanalyzer_core::memory::viewer::breakpoint_tiles(total_ram_bytes)
     }
 
     /// The preview's tile limit to ask for: `None` lets the computer that
@@ -403,22 +383,16 @@ impl ViewportMemorySettings {
     }
 
     /// The undo history's RAM in MB on a computer with `total_ram_bytes`
-    /// and `cores`, with the caches in effect: 10 % of what is left after a
-    /// full analysis on every core but one (each worker a 4096² tile of 4
-    /// channels, ~0.5 GB - `evanalyzer_core::estimate_ram_budget`), the
-    /// viewport's caches and 512 MB for the app and the system; between 32
-    /// MB and 1 GB. 8 GB / 4 cores: ~510 MB; 16 GB / 22 cores: ~375 MB.
+    /// and `cores`, with the caches in effect - see
+    /// [`evanalyzer_core::memory::viewer::undo_history_mb`].
     pub fn auto_undo_history_mb(&self, total_ram_bytes: u64, cores: usize) -> u32 {
-        const MB: u64 = 1024 * 1024;
-        let tile = evanalyzer_core::MAX_TILE_SIZE;
-        let worker = evanalyzer_core::estimate_ram_budget(tile, tile, 4).total_bytes();
-        let analysis = worker * cores.saturating_sub(1).max(1) as u64;
         let (tile_cache, overview_cache) = self.effective_cache_mb(total_ram_bytes);
-        let reserved = analysis
-            + (tile_cache as u64 + overview_cache as u64 + Self::APP_AND_SYSTEM_RESERVE_MB) * MB;
-        let spare_mb = total_ram_bytes.saturating_sub(reserved) / MB;
-        (spare_mb * Self::AUTO_UNDO_PERCENT_OF_SPARE / 100)
-            .clamp(Self::AUTO_UNDO_MIN_MB, Self::AUTO_UNDO_MAX_MB) as u32
+        evanalyzer_core::memory::viewer::undo_history_mb(
+            total_ram_bytes,
+            cores,
+            tile_cache,
+            overview_cache,
+        )
     }
 
     /// The undo history's RAM in MB in effect on a computer with

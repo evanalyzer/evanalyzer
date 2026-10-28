@@ -1,8 +1,7 @@
-//! # resources
+//! # analysis
 //!
-//! Caps pipeline parallelism and reader-pool size based on how much system
-//! RAM is actually free, instead of fixed constants that can over-commit on
-//! small machines (OOM) or under-use big ones.
+//! The analysis' RAM: how many images/tiles run at once, and the image
+//! caches' caps - from the RAM that is free when the run starts.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-06-28
@@ -11,7 +10,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use sysinfo::System;
+use super::available_memory_bytes;
 
 /// Bytes per pixel for the f32/u32 buffers used throughout a pipeline run
 /// (the working image, scratch pad, segmentation map, instance map, and
@@ -27,7 +26,7 @@ const WORKING_SET_BUFFERS: u64 = 4;
 /// covers a densely segmented tile's per-object bitmasks without needing to
 /// actually run segmentation to know how many objects there will be. Purely
 /// a heuristic guardrail, not a measured bound (same caveat as
-/// [`estimate_ram_per_worker_bytes`] as a whole).
+/// [`RamBudget::total_bytes`] as a whole).
 const OBJECT_CACHE_MARGIN_DIVISOR: u64 = 16;
 
 /// If an image bigger than this size should be loaded it is splitted into tiles of this size
@@ -172,31 +171,6 @@ pub fn merged_cache_bytes(
         .max(budget.min_image_cache_bytes)
 }
 
-/// Formats a byte count in binary (1024-based) units - GiB/MiB - not the
-/// decimal (1000-based) GB/MB a raw byte count is easy to misread as. Only
-/// two tiers: everything this module sizes (a per-worker RAM/cache budget)
-/// falls in the tens-of-MB-to-low-single-digit-GB range, never small enough
-/// to need KiB or large enough to need TiB.
-pub fn format_binary_bytes(bytes: u64) -> String {
-    const MIB: f64 = 1024.0 * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let bytes = bytes as f64;
-    if bytes >= GIB {
-        format!("{:.2} GiB", bytes / GIB)
-    } else {
-        format!("{:.2} MiB", bytes / MIB)
-    }
-}
-
-/// Currently available system RAM, in bytes (free memory plus easily
-/// reclaimable caches/buffers - what the OS would actually hand out to a new
-/// allocation right now).
-fn available_memory_bytes() -> u64 {
-    let mut sys = System::new();
-    sys.refresh_memory();
-    sys.available_memory()
-}
-
 /// Recommended number of images/tiles to analyze in parallel.
 ///
 /// Starts from the number of CPU cores (minus one, to leave a core free for
@@ -214,45 +188,6 @@ pub fn recommended_parallelism(ram_per_worker_bytes: u64) -> usize {
         .unwrap_or(1);
     let ram_capped = (available_memory_bytes() / ram_per_worker_bytes.max(1)).max(1) as usize;
     cores.min(ram_capped).max(1)
-}
-
-/// Snapshot of host machine capabilities, surfaced read-only (e.g. in the
-/// About dialog's System tab). Not used for any sizing decision - see
-/// [`recommended_parallelism`] for that.
-pub struct SystemDiagnostics {
-    pub cpu_cores: usize,
-    pub total_ram_bytes: u64,
-    pub cuda_available: bool,
-}
-
-/// Reads current host CPU core count and total RAM. Cheap and fast (no
-/// driver/device probing) - safe to call on a startup path.
-pub fn cpu_ram_diagnostics() -> (usize, u64) {
-    let cpu_cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-
-    let mut sys = System::new();
-    sys.refresh_memory();
-
-    (cpu_cores, sys.total_memory())
-}
-
-/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
-///
-/// Includes the CUDA probe (see [`cuda_is_available`]), which is slow - don't
-/// call this on a UI startup path; use [`cpu_ram_diagnostics`] plus a
-/// backgrounded [`cuda_is_available`] instead (see `evanalyzer_gui`).
-///
-/// [`cuda_is_available`]: crate::cuda_is_available
-pub fn system_diagnostics() -> SystemDiagnostics {
-    let (cpu_cores, total_ram_bytes) = cpu_ram_diagnostics();
-
-    SystemDiagnostics {
-        cpu_cores,
-        total_ram_bytes,
-        cuda_available: evanalyzer_ai::cuda_is_available(),
-    }
 }
 
 #[cfg(test)]
@@ -435,25 +370,5 @@ mod tests {
             merged_cache_bytes(available, 4, &budget, 8 * GB),
             4 * budget.min_image_cache_bytes
         );
-    }
-
-    #[test]
-    fn system_diagnostics_reports_at_least_one_core_and_nonzero_ram() {
-        let diag = system_diagnostics();
-        assert!(diag.cpu_cores >= 1);
-        assert!(diag.total_ram_bytes > 0);
-    }
-
-    #[test]
-    fn format_binary_bytes_uses_mib_below_one_gib() {
-        assert_eq!(format_binary_bytes(0), "0.00 MiB");
-        assert_eq!(format_binary_bytes(1024 * 1024), "1.00 MiB");
-        assert_eq!(format_binary_bytes(789_000_000), "752.45 MiB");
-    }
-
-    #[test]
-    fn format_binary_bytes_switches_to_gib_at_the_boundary() {
-        assert_eq!(format_binary_bytes(1024 * 1024 * 1024), "1.00 GiB");
-        assert_eq!(format_binary_bytes(2_270_377_496), "2.11 GiB");
     }
 }

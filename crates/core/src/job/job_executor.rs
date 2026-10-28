@@ -13,6 +13,7 @@ use crate::{
     algos::Connectivity,
     dataset::{DatasetAlgorithm, DatasetContext},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
+    memory::analysis::MAX_TILE_SIZE,
     pipeline::{
         image_cache::ImageCache,
         object_cache::ObjectCache,
@@ -22,7 +23,6 @@ use crate::{
         },
     },
     storage::{ImageSummary, PipelineResultExporter},
-    utils::resources::MAX_TILE_SIZE,
 };
 use evanalyzer_cfg::{
     core_types::{
@@ -343,7 +343,7 @@ impl<'a> JobExecutor {
             crate::algos::ai_segmentation::classifier_cache::ClassifierCacheScope::enter();
 
         let ram_budget = self.estimate_ram_budget();
-        let image_cache_bytes = crate::utils::resources::recommended_image_cache_bytes(
+        let image_cache_bytes = crate::memory::analysis::recommended_image_cache_bytes(
             parallelism,
             ram_budget.working_set_bytes + ram_budget.object_cache_margin_bytes,
             ram_budget.min_image_cache_bytes,
@@ -351,14 +351,14 @@ impl<'a> JobExecutor {
         info!(
             "Image cache capacity: {} bytes/worker ({}) x {} worker(s)",
             image_cache_bytes,
-            crate::utils::resources::format_binary_bytes(image_cache_bytes),
+            crate::memory::format_binary_bytes(image_cache_bytes),
             parallelism
         );
         // One image: its tiles run on every worker and are merged into one
         // cache, which gets the whole budget - but the results storage's own
         // memory (DuckDB's limit). Many images: one per worker.
         let merged_cache_bytes = if self.images.len() == 1 {
-            crate::utils::resources::recommended_merged_cache_bytes(
+            crate::memory::analysis::recommended_merged_cache_bytes(
                 parallelism,
                 &ram_budget,
                 self.result_storage.reserved_memory_bytes(),
@@ -368,7 +368,7 @@ impl<'a> JobExecutor {
         };
         info!(
             "Merged image cache capacity: {}",
-            crate::utils::resources::format_binary_bytes(merged_cache_bytes)
+            crate::memory::format_binary_bytes(merged_cache_bytes)
         );
 
         let pool = rayon::ThreadPoolBuilder::new()
@@ -1819,8 +1819,8 @@ impl<'a> JobExecutor {
     }
 
     /// Estimates the peak per-worker RAM breakdown for this job, from the
-    /// images actually being analyzed - see [`RamBudget`](crate::resources::RamBudget)
-    /// for what each component covers, and [`RamBudget::total_bytes`] for
+    /// images actually being analyzed - see [`RamBudget`](crate::memory::analysis::RamBudget)
+    /// for what each component covers, and [`RamBudget::total_bytes`](crate::memory::analysis::RamBudget::total_bytes) for
     /// [`recommended_parallelism`](crate::recommended_parallelism)'s flat
     /// input, which either over-commits on a large/many-channel image or
     /// needlessly caps a small one down to a single thread on a low-RAM
@@ -1828,13 +1828,13 @@ impl<'a> JobExecutor {
     ///
     /// Takes the worst case *total* across every image in the job (not
     /// necessarily the image with the largest tile or the most channels
-    /// individually - see [`RamBudget::total_bytes`]), since parallelism
+    /// individually - see [`RamBudget::total_bytes`](crate::memory::analysis::RamBudget::total_bytes)), since parallelism
     /// (and the resulting image-cache budget, see `run`) are decided once
     /// up front for the whole batch, not per image. Each image's own
     /// dimensions/channel count come from already-scanned metadata
     /// (`ImageEntry`/`SeriesSettings`) - this never reopens a file, so it's
     /// cheap to call before starting a run.
-    pub fn estimate_ram_budget(&self) -> crate::utils::resources::RamBudget {
+    pub fn estimate_ram_budget(&self) -> crate::memory::analysis::RamBudget {
         // A channel read with its own projection is one more channel image.
         let variants = self.channel_variants();
         self.images
@@ -1843,7 +1843,7 @@ impl<'a> JobExecutor {
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::utils::resources::estimate_ram_budget(
+                crate::memory::analysis::estimate_ram_budget(
                     tile_width,
                     tile_height,
                     series.channels.len() + variants.len(),
@@ -1851,7 +1851,7 @@ impl<'a> JobExecutor {
             })
             .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
-                crate::utils::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
+                crate::memory::analysis::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
             })
     }
 
@@ -5239,7 +5239,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
         let job = job_with(images);
 
-        let expected = crate::utils::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
+        let expected = crate::memory::analysis::estimate_ram_budget(2048, 2048, 4).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
@@ -5253,7 +5253,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
         let job = job_with(images);
 
-        let expected = crate::utils::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
+        let expected = crate::memory::analysis::estimate_ram_budget(4096, 4096, 2).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
