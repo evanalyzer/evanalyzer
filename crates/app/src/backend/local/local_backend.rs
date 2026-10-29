@@ -281,7 +281,9 @@ mod home_tests {
         assert!(backend.check_project_paths(None, &project("a.tif")).is_ok());
         for outside in ["../a.tif", "/etc/passwd", r"sub\..\..\a.tif"] {
             assert!(
-                backend.check_project_paths(None, &project(outside)).is_err(),
+                backend
+                    .check_project_paths(None, &project(outside))
+                    .is_err(),
                 "{outside}"
             );
         }

@@ -460,7 +460,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
             ],
         ),
         // Only dataset steps may follow a dataset step.
-        ("SimpleTracker", &[Dataset]),
+        ("TrackNearestNeighbor", &[Dataset]),
         ("AI Stardist Segmentation", &[Extract]),
         ("StructureTensor", &[Segment, Preprocess]),
         // Pinned to `[InstanceSegmentation]` (same as the default for

@@ -11756,7 +11756,7 @@ mod tests {
 
     #[test]
     fn run_all_can_run_only_the_dataset_steps_on_earlier_results() {
-        let (ui, ui_state, controller) = selected(vec![step("SimpleTracker")]);
+        let (ui, ui_state, controller) = selected(vec![step("TrackNearestNeighbor")]);
         ui_state.get_project_write().tmp_settings.current_project =
             Some(PathBuf::from("/data/exp/project.evaproj"));
         let result = |name: &str| ResultItemData {

@@ -953,7 +953,7 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         AiObjectClassifierSettings, BlurSettings, ClassificationMappingSettings,
         ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
-        ImageCacheSettings, MathImageCacheImageCacheModeSettings, SimpleTrackerSettings,
+        ImageCacheSettings, MathImageCacheImageCacheModeSettings, TrackNearestNeighborSettings,
         VoronoiSettings,
     };
     use std::collections::BTreeMap;
@@ -1465,7 +1465,7 @@ mod tests {
             "TRACK",
             vec![command_step(
                 1,
-                PipelineCommand::SimpleTracker(SimpleTrackerSettings {
+                PipelineCommand::TrackNearestNeighbor(TrackNearestNeighborSettings {
                     object_class: ObjectClass::Local(1),
                     ..Default::default()
                 }),

@@ -203,7 +203,7 @@ All RAM rules in one place (`crates/core/src/memory.rs` + `memory/`), then one b
 - [ ] Plate/well queries run the grouping regex 3× per object instead of once per image - [`results_generator.rs:1664-1675`](crates/app/src/backend/local/results/results_generator.rs#L1664). Fix: CTE on `images`, join.
 - [ ] Split view `image_objects` loads every object of the image with masks, no view filter (300-400 MB at 1M objects; more over remote) - [`results_charts.rs:456-545`](crates/app/src/backend/local/results/results_charts.rs#L456). Fix: bbox filter, masks only when zoomed in.
 - [ ] Per-row allocations in list pages (3 HashMaps with String keys per row) and the measurements export (11 `Option<String>` per row) - [`results_generator.rs:3099-3138`](crates/app/src/backend/local/results/results_generator.rs#L3099), [`results_exporter.rs:1131-1145`](crates/app/src/backend/local/results/results_exporter.rs#L1131).
-- [ ] Simple Tracker loads every object of a class across all images (~1.3 GB at 5M), computes an unused `intensity_mean`, writes track ids back row by row as VARCHAR - [`simple_tracker.rs:56`](crates/core/src/dataset/tracking/simple_tracker.rs#L56), [`duckdb.rs:1616-1722`](crates/core/src/storage/duckdb.rs#L1616). Fix: image by image.
+- [ ] Track Nearest Neighbor loads every object of a class across all images (~1.3 GB at 5M), computes an unused `intensity_mean`, writes track ids back row by row as VARCHAR - [`track_nearest_neighbor.rs:56`](crates/core/src/dataset/tracking/track_nearest_neighbor.rs#L56), [`duckdb.rs:1616-1722`](crates/core/src/storage/duckdb.rs#L1616). Fix: image by image.
 - [ ] Coloc Objects builds full intersection masks just for the overlap area, twice per pair - [`coloc_objects.rs:330-340, 565`](crates/core/src/algos/object/coloc_objects.rs#L330). Fix: `Object::overlap_area`.
 
 ### Low
@@ -648,7 +648,7 @@ Decided 2026-10-25: the existing commands are extended to volumes (as scipy.ndim
 ### Later (after phase 3)
 - 3D object extraction: connected components (6/18/26), stitching across tiles in 3D.
 - Tile merge (`tile_merge.rs`) for objects cut at tile borders in 3D.
-- 4D (volumes over time): no schema change (`t_stack`, `track_id`, `frame_interval_s` exist) - each t is analysed as one volume, as today per plane. Only the tracker (`dataset/tracking/simple_tracker.rs`) changes: it groups by `(image, z_stack)` - for 3D objects (z_stack NULL) by image only; distance on the 3D centroid with z scaled by the anisotropy, a 3D grid; `max_distance` in px = xy px (z converted), in nm unambiguous. RAM: one volume per t in `pipeline/image_cache.rs`. (Check: its doc says "centre of the bounding box", the code uses `centroid_px` - the centre of mass since 2026-10-23.)
+- 4D (volumes over time): no schema change (`t_stack`, `track_id`, `frame_interval_s` exist) - each t is analysed as one volume, as today per plane. Only the tracker (`dataset/tracking/track_nearest_neighbor.rs`) changes: it groups by `(image, z_stack)` - for 3D objects (z_stack NULL) by image only; distance on the 3D centroid with z scaled by the anisotropy, a 3D grid; `max_distance` in px = xy px (z converted), in nm unambiguous. RAM: one volume per t in `pipeline/image_cache.rs`. (Check: its doc says "centre of the bounding box", the code uses `centroid_px` - the centre of mass since 2026-10-23.)
 - AI training (pixel / object classifier, `ai_learning_features.rs`): per plane or own 3D features - decide.
 - Docs: parameter descriptions "pixels" -> "pixels/voxels", a 3D section in the user docs.
 - 3D geometry: voxel count, surface area (voxel faces or marching cubes), ellipsoid, 3D feret, 3D convex hull (expensive, optional) - all with anisotropy.
@@ -778,7 +778,7 @@ Feature set is about equal (Gaussian, gradient, LoG, Hessian, structure tensor, 
 - [ ] Optional: difference of Gaussians feature; automatic feature suggestion.
 
 ### Object tracking (CellProfiler level)
-Today: greedy nearest neighbour, no gaps, no divisions (`simple_tracker.rs`).
+Today: greedy nearest neighbour, no gaps, no divisions (`track_nearest_neighbor.rs`).
 - [ ] LAP tracker (Jaqaman et al. 2008): step 1 frame-to-frame optimal assignment (Hungarian; cost = squared distance, optional intensity/area difference); step 2 global assignment for gap closing (missing 1-n frames), splits (divisions) and merges. Hungarian: `kuhn_munkres` in the `pathfinding` crate (MIT/Apache) - check transitive licences.
 - [ ] Overlap mode (IoU linking, for big slow objects).
 - [ ] Track measurements: displacement, speed, lifetime, parent track / lineage.

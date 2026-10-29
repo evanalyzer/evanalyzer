@@ -17,7 +17,7 @@ pub mod tracking;
 pub use self::dataset_context::DatasetContext;
 
 // Commands, flat like `crate::algos::*` - the generated code names them so.
-pub use self::tracking::simple_tracker::SimpleTracker;
+pub use self::tracking::track_nearest_neighbor::TrackNearestNeighbor;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use log::info;

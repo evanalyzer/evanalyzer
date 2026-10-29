@@ -7,4 +7,4 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-pub mod simple_tracker;
+pub mod track_nearest_neighbor;

@@ -1444,8 +1444,8 @@ mod tests {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled,
-            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(PipelineCommand::SimpleTracker(
-                evanalyzer_cfg::settings::pipeline_command_settings::SimpleTrackerSettings::default(
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(PipelineCommand::TrackNearestNeighbor(
+                evanalyzer_cfg::settings::pipeline_command_settings::TrackNearestNeighborSettings::default(
                 ),
             )),
         }

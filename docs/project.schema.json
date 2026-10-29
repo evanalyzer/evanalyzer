@@ -3914,19 +3914,6 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "SIMPLE_TRACKER"
-            }
-          },
-          "$ref": "#/$defs/SimpleTrackerSettings",
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
               "const": "STARDIST"
             }
           },
@@ -3957,6 +3944,19 @@
             }
           },
           "$ref": "#/$defs/ThresholdSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "TRACK_NEAREST_NEIGHBOR"
+            }
+          },
+          "$ref": "#/$defs/TrackNearestNeighborSettings",
           "required": [
             "type"
           ]
@@ -4941,29 +4941,6 @@
         "objects"
       ]
     },
-    "SimpleTrackerSettings": {
-      "description": "Links each object to the nearest one in the next frame.\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
-      "type": "object",
-      "properties": {
-        "maxDistance": {
-          "description": "How far an object may move from one frame to the next.\n\nFarther apart, it starts a new track.",
-          "type": "number",
-          "format": "float",
-          "default": 10000.0,
-          "minimum": 0
-        },
-        "objectClass": {
-          "description": "Object class to track.",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "UNSET"
-        },
-        "unit": {
-          "description": "Unit in which `max_distance` is expressed (e.g. pixels, nm).",
-          "$ref": "#/$defs/SizeUnits",
-          "default": "NANO_METER"
-        }
-      }
-    },
     "SizeUnits": {
       "type": "string",
       "enum": [
@@ -5182,6 +5159,29 @@
       "type": "integer",
       "format": "uint64",
       "minimum": 0
+    },
+    "TrackNearestNeighborSettings": {
+      "description": "Links each object to the nearest one in the next frame.\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
+      "type": "object",
+      "properties": {
+        "maxDistance": {
+          "description": "How far an object may move from one frame to the next.\n\nFarther apart, it starts a new track.",
+          "type": "number",
+          "format": "float",
+          "default": 10000.0,
+          "minimum": 0
+        },
+        "objectClass": {
+          "description": "Object class to track.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "unit": {
+          "description": "Unit in which `max_distance` is expressed (e.g. pixels, nm).",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "NANO_METER"
+        }
+      }
     },
     "TrackSettings": {
       "type": "object",

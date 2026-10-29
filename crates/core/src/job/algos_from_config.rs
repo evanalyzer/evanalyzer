@@ -1124,16 +1124,6 @@ impl From<SegmentationMappingSettings> for SegmentationMapping {
     }
 }
 
-impl From<SimpleTrackerSettings> for SimpleTracker {
-    fn from(_s: SimpleTrackerSettings) -> Self {
-        SimpleTracker {
-            object_class: _s.object_class,
-            unit: _s.unit,
-            max_distance: _s.max_distance.max(0.0),
-        }
-    }
-}
-
 impl From<StardistSettings> for Stardist {
     fn from(_s: StardistSettings) -> Self {
         Stardist {
@@ -1172,6 +1162,16 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
             unit: _s.unit,
             segmentation_class: _s.segmentation_class,
             value_source: ThresholdValueSource::from(_s.value_source),
+        }
+    }
+}
+
+impl From<TrackNearestNeighborSettings> for TrackNearestNeighbor {
+    fn from(_s: TrackNearestNeighborSettings) -> Self {
+        TrackNearestNeighbor {
+            object_class: _s.object_class,
+            unit: _s.unit,
+            max_distance: _s.max_distance.max(0.0),
         }
     }
 }
@@ -1412,9 +1412,6 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::Script(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Script::from(settings),
         ))),
-        PipelineCommand::SimpleTracker(settings) => Ok(PipelineStep::Dataset(Box::new(
-            crate::dataset::SimpleTracker::from(settings),
-        ))),
         PipelineCommand::Stardist(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Stardist::from(settings),
         ))),
@@ -1423,6 +1420,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::Threshold(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Threshold::from(settings),
+        ))),
+        PipelineCommand::TrackNearestNeighbor(settings) => Ok(PipelineStep::Dataset(Box::new(
+            crate::dataset::TrackNearestNeighbor::from(settings),
         ))),
         PipelineCommand::TransformObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::TransformObjects::from(settings),

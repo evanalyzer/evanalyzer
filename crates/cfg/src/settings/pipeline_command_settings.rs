@@ -3337,7 +3337,7 @@ impl Default for MeasureObjectTextureSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct SimpleTrackerSettings {
+pub struct TrackNearestNeighborSettings {
     /// Object class to track.
     pub object_class: ObjectClass,
     /// Unit in which `max_distance` is expressed (e.g. pixels, nm).
@@ -3349,7 +3349,7 @@ pub struct SimpleTrackerSettings {
     pub max_distance: f32,
 }
 
-impl Default for SimpleTrackerSettings {
+impl Default for TrackNearestNeighborSettings {
     fn default() -> Self {
         Self {
             object_class: ObjectClass::default(),

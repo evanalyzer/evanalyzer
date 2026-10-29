@@ -1,4 +1,4 @@
-//! # Simple Tracker
+//! # Track Nearest Neighbor
 //!
 //! Links the objects of a time-lapse into tracks: each object in frame
 //! `t + 1` continues the track of the nearest object in frame `t`, if that
@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, HashMap};
 /// be linked starts a new track.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "dataset")]
-pub struct SimpleTracker {
+pub struct TrackNearestNeighbor {
     /// Object class to track.
     pub object_class: ObjectClass,
 
@@ -46,11 +46,11 @@ pub struct SimpleTracker {
     pub max_distance: f32,
 }
 
-impl DatasetAlgorithm for SimpleTracker {
+impl DatasetAlgorithm for TrackNearestNeighbor {
     fn execute(&self, ctx: &mut DatasetContext) -> Result<(), InternalErrors> {
         if !(self.max_distance > 0.0) {
             return Err(InternalErrors::InvalidArgument(
-                "Simple Tracker: the maximum distance must be greater than 0".into(),
+                "Track Nearest Neighbor: the maximum distance must be greater than 0".into(),
             ));
         }
         let objects = ctx.store.get_objects(&ObjectFilter {
@@ -74,7 +74,7 @@ impl DatasetAlgorithm for SimpleTracker {
     }
 
     fn name(&self) -> &'static str {
-        "Simple Tracker"
+        "Track Nearest Neighbor"
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
@@ -82,7 +82,7 @@ impl DatasetAlgorithm for SimpleTracker {
     }
 }
 
-impl SimpleTracker {
+impl TrackNearestNeighbor {
     /// `max_distance` in pixels of `object`'s image.
     fn max_distance_px(&self, object: &StoredObject) -> Result<f64, InternalErrors> {
         match self.unit {
@@ -90,7 +90,7 @@ impl SimpleTracker {
             SizeUnits::NanoMeter => match object.pixel_size_nm {
                 Some(nm_per_px) if nm_per_px > 0.0 => Ok(self.max_distance as f64 / nm_per_px),
                 _ => Err(InternalErrors::InvalidArgument(format!(
-                    "Simple Tracker: {} has no pixel size - give the maximum distance in pixels",
+                    "Track Nearest Neighbor: {} has no pixel size - give the maximum distance in pixels",
                     object.image_rel_path
                 ))),
             },
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn the_maximum_distance_in_nm_is_converted_with_the_images_pixel_size() {
-        let tracker = SimpleTracker {
+        let tracker = TrackNearestNeighbor {
             object_class: ObjectClass::Global(1),
             unit: SizeUnits::NanoMeter,
             max_distance: 1000.0,
@@ -335,7 +335,7 @@ mod store_tests {
         }
         exporter.export(&cache).unwrap();
 
-        let tracker = SimpleTracker {
+        let tracker = TrackNearestNeighbor {
             object_class: ObjectClass::Global(1),
             unit: SizeUnits::Pixels,
             max_distance: 10.0,
@@ -385,7 +385,7 @@ mod store_tests {
             progress: None,
             cancel: Arc::new(AtomicBool::new(false)),
         };
-        let tracker = SimpleTracker {
+        let tracker = TrackNearestNeighbor {
             object_class: ObjectClass::Global(1),
             unit: SizeUnits::Pixels,
             max_distance: 0.0,
