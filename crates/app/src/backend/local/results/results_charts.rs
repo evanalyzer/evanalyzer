@@ -630,7 +630,17 @@ impl ResultCharts {
                     track_id,
                     class_id: row.get(5).map_err(err)?,
                     points: vec![point],
+                    parent_track_ids: Vec::new(),
                 }),
+            }
+        }
+        // Divisions and fusions: few tracks have parents - read apart.
+        let mut parents = database.track_parents(path)?;
+        if !parents.is_empty() {
+            for track in &mut tracks {
+                if let Some(of) = parents.remove(&track.track_id) {
+                    track.parent_track_ids = of;
+                }
             }
         }
         Ok(ImageTracks {
@@ -1312,6 +1322,45 @@ mod tests {
 
     /// More points than allowed: whole tracks, a sample - the same each
     /// time - and how many there are.
+    /// A daughter's track knows its mother: for the line from the mother
+    /// to it on the image.
+    #[test]
+    fn image_tracks_carry_their_parents() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10).in_track(1),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .in_track(2)
+                .at_plane(0, 1),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .in_track(3)
+                .at_plane(0, 1),
+        ];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_db(&path, &objects);
+        duckdb::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE objects ADD COLUMN parent_track_ids UBIGINT[];
+                 UPDATE objects SET parent_track_ids = [1] WHERE track_id IN (2, 3);",
+            )
+            .unwrap();
+        let generator = ResultsGenerator::open_database(path).expect("open database");
+        let tracks = generator
+            .image_tracks(&ImageTracksFilter {
+                image_rel_path: "img1.tif".into(),
+                z_stack: 0,
+                max_points: 1000,
+            })
+            .unwrap();
+        let parents: Vec<(u64, Vec<u64>)> = tracks
+            .tracks
+            .iter()
+            .map(|t| (t.track_id, t.parent_track_ids.clone()))
+            .collect();
+        assert_eq!(parents, [(1, vec![]), (2, vec![1]), (3, vec![1])]);
+    }
+
     #[test]
     fn image_tracks_beyond_the_limit_are_a_repeatable_sample_of_whole_tracks() {
         let objects: Vec<ObjectSpec> = (1..=20)

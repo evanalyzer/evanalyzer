@@ -34,6 +34,7 @@ use evanalyzer_app::results::ImageHeatmapFilter;
 use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::ResultsSource;
 use evanalyzer_app::results::ScatterFilter;
+use evanalyzer_app::results::TrackHistory;
 use evanalyzer_app::results::WellFilter;
 use evanalyzer_app::results::WellSize;
 use evanalyzer_app::results::{Aggregation, HistogramResult};
@@ -225,6 +226,8 @@ struct ChartFilter {
     pub time_median: bool,
     pub time_relative: bool,
     pub time_tracks: bool,
+    /// Track lines across divisions and fusions.
+    pub time_history: TrackHistory,
 }
 
 impl Default for ChartFilter {
@@ -242,6 +245,7 @@ impl Default for ChartFilter {
             time_median: false,
             time_relative: false,
             time_tracks: false,
+            time_history: TrackHistory::Own,
         }
     }
 }
@@ -1859,6 +1863,10 @@ impl ResultsStateController {
                     filter.time_median = state.get_chart_time_summary() == 1;
                     filter.time_relative = state.get_chart_time_relative();
                     filter.time_tracks = state.get_chart_time_tracks();
+                    filter.time_history = match state.get_chart_time_history() {
+                        1 => TrackHistory::WithParents,
+                        _ => TrackHistory::Own,
+                    };
                 }
                 manager.refresh_charts();
             });
@@ -2699,6 +2707,7 @@ impl ResultsStateController {
             state.set_database_name("".into());
             state.set_run_warning("".into());
             state.set_has_tracks(false);
+            state.set_has_lineage(false);
             state.set_has_measurements(false);
             state.set_list_rows(ModelRc::default());
             state.set_list_selected_row(-1);
@@ -2739,6 +2748,12 @@ impl ResultsStateController {
                     error!("Could not read whether the objects are tracked: {err}");
                     false
                 });
+                // The tracks' history only with divisions or fusions.
+                let has_lineage = has_tracks
+                    && results.has_lineage().unwrap_or_else(|err| {
+                        error!("Could not read whether the tracks divide: {err}");
+                        false
+                    });
                 let ui_weak = self.ui.clone();
                 crate::helper::ui_thread::invoke_from_event_loop(move || {
                     let Some(ui) = ui_weak.upgrade() else {
@@ -2746,6 +2761,7 @@ impl ResultsStateController {
                     };
                     let state = ui.global::<ResultsState>();
                     state.set_has_tracks(has_tracks);
+                    state.set_has_lineage(has_lineage);
                     if !has_tracks && state.get_rail_mode() == ResultsRailMode::Tracks {
                         state.set_rail_mode(ResultsRailMode::List);
                         state.invoke_rail_mode_selected(ResultsRailMode::List);
@@ -3207,6 +3223,7 @@ impl ResultsStateController {
                     }),
                     // The faint tracks: only as many as are drawn.
                     max_tracks: Some(CHART_TIME_MAX_TRACKS),
+                    history: chart_filter.time_history,
                 };
                 let statistics = match chart_filter.time_median {
                     true => vec![
@@ -3424,6 +3441,7 @@ impl ResultsStateController {
             "Statistics",
         ));
         state.set_time_relative(filter.time_relative);
+        state.set_time_with_parents(filter.time_history == TrackHistory::WithParents);
         // The chart's value only.
         let key = filter.column.as_key(&classes);
         let items: Vec<MultiSelectItem> = state
@@ -5313,6 +5331,10 @@ impl ResultsStateController {
                     0 => TimeCourseLayout::Long,
                     1 => TimeCourseLayout::Wide,
                     _ => TimeCourseLayout::Both,
+                },
+                history: match state.get_time_with_parents() {
+                    true => TrackHistory::WithParents,
+                    false => TrackHistory::Own,
                 },
             },
             with_track_summary: state.get_with_tracks(),

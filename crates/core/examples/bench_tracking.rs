@@ -18,11 +18,14 @@
 //     [--merge-split 1] [--no-truth 1]
 //
 // `--no-truth 1` skips the links check, for the tracker's own peak RSS.
+// `--mark-divisions N` then makes a file with lineage for the results
+// benchmarks: every N-th track (by id) gets the track before it as parent.
 
 use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectClass, SizeUnits};
 use evanalyzer_core::{
     DatasetAlgorithm, DatasetContext, DuckDbExporter, MergeSplitAmount, ObjectFilter,
-    PipelineResultExporter, TrackKalman, TrackLap, TrackNearestNeighbor, TrackOverlap,
+    PipelineResultExporter, TrackAssignment, TrackKalman, TrackLap, TrackNearestNeighbor,
+    TrackOverlap,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -169,4 +172,29 @@ fn main() {
         truth.len(),
         found.len() - correct,
     );
+
+    if let Some(every) = arg("--mark-divisions").and_then(|n| n.parse::<u64>().ok()) {
+        let objects = store
+            .get_objects(&ObjectFilter {
+                object_class: Some(class),
+                ..Default::default()
+            })
+            .unwrap();
+        let marked: Vec<TrackAssignment> = objects
+            .into_iter()
+            .filter_map(|o| {
+                let track = o.track_id?;
+                (track % every == 0 && track > 1).then(|| TrackAssignment {
+                    object_id: o.id,
+                    track_id: track,
+                    parent_track_ids: vec![track - 1],
+                })
+            })
+            .collect();
+        store.set_track_ids(&marked).unwrap();
+        println!(
+            "marked every {every}th track as a daughter ({} objects)",
+            marked.len()
+        );
+    }
 }

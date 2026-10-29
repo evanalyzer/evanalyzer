@@ -17,7 +17,7 @@
 
 use crate::api::{
     Aggregation, BoxplotGroup, ChildColumn, ChildValue, ColorSchema, Column, ColumnEntry,
-    ParentColumn, ParentValue, TimeCourseLines,
+    ParentColumn, ParentValue, TimeCourseLines, TrackHistory,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -214,6 +214,8 @@ pub struct ChartView {
     pub time_median: bool,
     pub time_relative: bool,
     pub time_tracks: bool,
+    /// Track lines across divisions and fusions.
+    pub time_history: TrackHistory,
 }
 
 impl Default for ChartView {
@@ -231,6 +233,7 @@ impl Default for ChartView {
             time_median: false,
             time_relative: false,
             time_tracks: false,
+            time_history: TrackHistory::Own,
         }
     }
 }

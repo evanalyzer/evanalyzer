@@ -4,7 +4,9 @@
 //! beside the image (the split pane), their paths as trails on it up to
 //! the time point shown. A row selects its track - its object on the image
 //! (at the track's first time point when it isn't there now) - and a click
-//! on an object selects its track.
+//! on an object selects its track. A tracking step's divisions and fusions
+//! (a track's parents): its family on the card, drawn with it, and how
+//! many of each the image has.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-21
@@ -141,6 +143,83 @@ pub(super) fn table_order(tracks: &ImageTracks, stats: &[TrackStats], sort: i32)
         _ => order.sort_by_key(|&i| tracks.tracks[i].track_id),
     }
     order
+}
+
+/// Track `index`'s parents and children among the image's tracks read
+/// (indices into `tracks.tracks`, which is by id).
+pub(super) fn family(tracks: &ImageTracks, index: usize) -> Vec<usize> {
+    let Some(track) = tracks.tracks.get(index) else {
+        return Vec::new();
+    };
+    let by_id = |id: &u64| tracks.tracks.binary_search_by_key(id, |t| t.track_id).ok();
+    let mut family: Vec<usize> = track.parent_track_ids.iter().filter_map(by_id).collect();
+    family.extend(
+        tracks
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.parent_track_ids.contains(&track.track_id))
+            .map(|(i, _)| i),
+    );
+    family
+}
+
+/// The image's divisions (tracks daughters came out of alone) and fusions
+/// (tracks of two parents or more).
+pub(super) fn lineage_counts(tracks: &ImageTracks) -> (usize, usize) {
+    let mut divided: Vec<u64> = Vec::new();
+    let mut fusions = 0;
+    for track in &tracks.tracks {
+        match track.parent_track_ids.as_slice() {
+            [] => {}
+            [parent] => divided.push(*parent),
+            _ => fusions += 1,
+        }
+    }
+    divided.sort_unstable();
+    divided.dedup();
+    (divided.len(), fusions)
+}
+
+/// The card's "From" and "Into" of track `index`: "#3 (division)", "#5, #6
+/// (division)", "#7 (fusion)" - empty without.
+pub(super) fn lineage_text(tracks: &ImageTracks, index: usize) -> (String, String) {
+    let Some(track) = tracks.tracks.get(index) else {
+        return Default::default();
+    };
+    let ids = |ids: &mut dyn Iterator<Item = u64>| {
+        ids.map(|id| format!("#{id}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let from = match track.parent_track_ids.len() {
+        0 => String::new(),
+        1 => format!(
+            "{} (division)",
+            ids(&mut track.parent_track_ids.iter().copied())
+        ),
+        _ => format!(
+            "{} (fusion)",
+            ids(&mut track.parent_track_ids.iter().copied())
+        ),
+    };
+    let children: Vec<&TrackPath> = tracks
+        .tracks
+        .iter()
+        .filter(|t| t.parent_track_ids.contains(&track.track_id))
+        .collect();
+    let into = match children.is_empty() {
+        true => String::new(),
+        false => {
+            let fusion = children.iter().any(|c| c.parent_track_ids.len() > 1);
+            format!(
+                "{} ({})",
+                ids(&mut children.iter().map(|c| c.track_id)),
+                if fusion { "fusion" } else { "division" }
+            )
+        }
+    };
+    (from, into)
 }
 
 /// A track's color: its own (by its id) or its class's.
@@ -522,7 +601,7 @@ impl ResultsStateController {
                     .unwrap_or_else(|| rel.to_string())
             })
             .unwrap_or_default();
-        let summary = match (tracks.tracks.len(), tracks.total_tracks) {
+        let mut summary = match (tracks.tracks.len(), tracks.total_tracks) {
             (_, 0) => "No tracks".to_string(),
             (shown, total) if shown < total => {
                 format!("{shown} of {total} tracks (a sample - too many to draw all)")
@@ -530,6 +609,20 @@ impl ResultsStateController {
             (_, 1) => "1 track".to_string(),
             (_, total) => format!("{total} tracks"),
         };
+        let plural = |n: usize, one: &str, many: &str| match n {
+            1 => format!("1 {one}"),
+            n => format!("{n} {many}"),
+        };
+        match lineage_counts(&tracks) {
+            (0, 0) => {}
+            (divisions, fusions) => {
+                summary += &format!(
+                    " · {} · {}",
+                    plural(divisions, "division", "divisions"),
+                    plural(fusions, "fusion", "fusions")
+                );
+            }
+        }
         let um = units.um_available();
         let label = units.speed_label();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -565,6 +658,8 @@ impl ResultsStateController {
             None => TrackCard::default(),
             Some((track, stats)) => TrackCard {
                 active: true,
+                from: lineage_text(&tracks, selected.unwrap_or_default()).0.into(),
+                into: lineage_text(&tracks, selected.unwrap_or_default()).1.into(),
                 id: format!("#{}", track.track_id).into(),
                 span: format!("{}–{} ({})", stats.first_t, stats.last_t, stats.points).into(),
                 displacement: units.distance(stats.displacement_px).into(),
@@ -738,12 +833,14 @@ impl ResultsStateController {
                 [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
             })
             .collect();
+        let family = selected.map(|i| family(&tracks, i)).unwrap_or_default();
         Some(Arc::new(TrailsOverlay {
             tracks,
             colors,
             t,
             frames,
             selected,
+            family,
             only_selected: settings.only_selected_track,
         }))
     }
@@ -767,11 +864,54 @@ mod tests {
                     area_px: 10.0 + t as f32,
                 })
                 .collect(),
+            parent_track_ids: Vec::new(),
         }
     }
 
     /// Speed: the path's length over its time points; displacement: first
     /// to last point.
+    /// 1 divides into 2 and 3; 3 and 4 fuse into 5.
+    fn family_tracks() -> ImageTracks {
+        let with = |id: u64, parents: Vec<u64>| TrackPath {
+            parent_track_ids: parents,
+            ..track(id, &[(0, 0.0, 0.0)])
+        };
+        ImageTracks {
+            tracks: vec![
+                with(1, vec![]),
+                with(2, vec![1]),
+                with(3, vec![1]),
+                with(4, vec![]),
+                with(5, vec![3, 4]),
+            ],
+            total_tracks: 5,
+            ..ImageTracks::default()
+        }
+    }
+
+    #[test]
+    fn a_track_shows_its_family() {
+        let tracks = family_tracks();
+        assert_eq!(family(&tracks, 0), [1, 2], "1's daughters");
+        assert_eq!(family(&tracks, 2), [0, 4], "3's mother and its fusion");
+        assert_eq!(family(&tracks, 4), [2, 3], "5's parents");
+        assert!(family(&tracks, 9).is_empty());
+
+        assert_eq!(lineage_counts(&tracks), (1, 1), "one division, one fusion");
+        assert_eq!(
+            lineage_text(&tracks, 0),
+            (String::new(), "#2, #3 (division)".into())
+        );
+        assert_eq!(
+            lineage_text(&tracks, 2),
+            ("#1 (division)".into(), "#5 (fusion)".into())
+        );
+        assert_eq!(
+            lineage_text(&tracks, 4),
+            ("#3, #4 (fusion)".into(), String::new())
+        );
+    }
+
     #[test]
     fn a_tracks_stats_are_from_its_path() {
         let stats = TrackStats::of(&track(1, &[(2, 0.0, 0.0), (3, 3.0, 4.0), (5, 3.0, 0.0)]));

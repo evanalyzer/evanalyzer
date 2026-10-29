@@ -18,12 +18,15 @@
 // 14 the tracks export (a row per track), 15 every track's row kept
 // (Results › Tracks, Full).
 //
-// Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N]
+// `--with-parents`: track lines with their parents' history (results with
+// lineage; the other lines are the same either way).
+//
+// Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N] [--with-parents]
 
 use evanalyzer_app::results::{
     Column, ExportFormat, Grouping, ImageTracksFilter, LocalResultsGenerator, ResultExport,
     TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-    TimeCourseStat, TrackSummaryFilter,
+    TimeCourseStat, TrackHistory, TrackSummaryFilter,
 };
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -60,6 +63,10 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok());
     let runs = |n: usize| case.is_none_or(|c| c == n);
+    let history = match args.iter().any(|a| a == "--with-parents") {
+        true => TrackHistory::WithParents,
+        false => TrackHistory::Own,
+    };
 
     let start = Instant::now();
     let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
@@ -80,6 +87,7 @@ fn main() {
         t_stacks: None,
         z_stacks: None,
         max_tracks: None,
+        history,
     };
     let mean_sd = &TimeCourseStat::DEFAULT[..];
     let median_iqr = &[
@@ -183,6 +191,7 @@ fn main() {
                     TimeCourseExport {
                         lines,
                         layout,
+                        history,
                         ..Default::default()
                     }
                 }),

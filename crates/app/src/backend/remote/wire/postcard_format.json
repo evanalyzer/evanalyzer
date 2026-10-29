@@ -1,5 +1,5 @@
 {
-  "protocol_version": 33,
+  "protocol_version": 34,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1525,6 +1525,9 @@
               "TYPENAME": "TrackSummaryFilter"
             }
           }
+        },
+        "22": {
+          "HasLineage": "UNIT"
         }
       }
     },
@@ -1677,6 +1680,11 @@
           "layout": {
             "TYPENAME": "TimeCourseLayout"
           }
+        },
+        {
+          "history": {
+            "TYPENAME": "TrackHistory"
+          }
         }
       ]
     },
@@ -1750,6 +1758,11 @@
         {
           "max_tracks": {
             "OPTION": "U64"
+          }
+        },
+        {
+          "history": {
+            "TYPENAME": "TrackHistory"
           }
         }
       ]
@@ -1891,6 +1904,39 @@
         }
       }
     },
+    "TrackHistory": {
+      "ENUM": {
+        "0": {
+          "Own": "UNIT"
+        },
+        "1": {
+          "WithParents": "UNIT"
+        }
+      }
+    },
+    "TrackLineage": {
+      "STRUCT": [
+        {
+          "parents": {
+            "SEQ": "U64"
+          }
+        },
+        {
+          "children": {
+            "SEQ": "U64"
+          }
+        },
+        {
+          "root": "U64"
+        },
+        {
+          "generation": "U32"
+        },
+        {
+          "fuses": "BOOL"
+        }
+      ]
+    },
     "TrackPath": {
       "STRUCT": [
         {
@@ -1904,6 +1950,11 @@
             "SEQ": {
               "TYPENAME": "TrackPoint"
             }
+          }
+        },
+        {
+          "parent_track_ids": {
+            "SEQ": "U64"
           }
         }
       ]
@@ -1980,6 +2031,11 @@
             "SEQ": {
               "OPTION": "F64"
             }
+          }
+        },
+        {
+          "lineage": {
+            "TYPENAME": "TrackLineage"
           }
         }
       ]

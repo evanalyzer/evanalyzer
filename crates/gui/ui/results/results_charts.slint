@@ -672,6 +672,22 @@ export component ResultsChartsView inherits Rectangle {
                             ResultsState.chart-time-changed();
                         }
                     }
+                    // Across divisions and fusions - where tracks are drawn.
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.has-lineage
+                        && (ResultsState.chart-time-lines == 3 || ResultsState.chart-time-tracks): InkSegmented {
+                        label: "History";
+                        model: ["Own track", "With parents'"];
+                        tips: ["Each track its own line", "A line per cell, from its first ancestor"];
+                        tip-details: [
+                            "Each track is its own line: a mother's ends at the division, its daughters' start there.",
+                            "Each daughter's line starts with its mother's track; a fused track has a line per parent. The parents' time points count once per line - in Mean ± SD, relative to the first time point and the export.",
+                        ];
+                        selected: ResultsState.chart-time-history;
+                        picked(i) => {
+                            ResultsState.chart-time-history = i;
+                            ResultsState.chart-time-changed();
+                        }
+                    }
                 }
 
                 if ResultsState.chart-kind == ResultsChartKind2.boxplot: InkHint {

@@ -17,12 +17,12 @@ use super::results_generator::{
 };
 use crate::api::{
     Column, PlaneFilter, TimeCourseFilter, TimeCourseLines, TimeCourseNormalize, TimeCoursePoint,
-    TimeCourseResult, TimeCourseStat,
+    TimeCourseResult, TimeCourseStat, TrackHistory,
 };
 use duckdb::arrow::array::{Array, Float64Array, Int64Array, StringArray};
 use duckdb::arrow::record_batch::RecordBatch;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The statistic a normalized one is divided by, at the line's first time
 /// point: SD by the mean, the quartiles by the median, the others by
@@ -84,6 +84,66 @@ struct Plan {
     /// `stats` and, normalized, what they're divided by.
     computed: Vec<TimeCourseStat>,
     normalized: bool,
+    /// Track lines with their parents' history: the lines each track of a
+    /// family is in (by track id) - `None` otherwise, and without lineage.
+    lineage: Option<HashMap<u64, Vec<String>>>,
+}
+
+/// At most this many lines end at one track: each fusion before it doubles
+/// them.
+const MAX_LINES_PER_TRACK: usize = 64;
+
+/// Track lines with their parents' history: the lines each track of a
+/// family (`parents`: a track's parents) is in - a line per way from a
+/// track without parents to one without children, labelled "#5 · from #1
+/// › #3" (the last track, then the ones before it). `leaves`: only the
+/// lines ending at those. Tracks of no family aren't listed: their line is
+/// their own.
+fn lineage_lines(
+    parents: &HashMap<u64, Vec<u64>>,
+    leaves: Option<&HashSet<u64>>,
+) -> HashMap<u64, Vec<String>> {
+    let with_children: HashSet<u64> = parents.values().flatten().copied().collect();
+    let mut ends: Vec<u64> = parents
+        .keys()
+        .copied()
+        .filter(|t| !with_children.contains(t) && leaves.is_none_or(|l| l.contains(t)))
+        .collect();
+    ends.sort_unstable();
+    let mut lines: HashMap<u64, Vec<String>> = HashMap::new();
+    for end in ends {
+        // Every way up, depth first: (track, the way from `end` to it).
+        let mut stack = vec![vec![end]];
+        let mut found = 0;
+        while let Some(way) = stack.pop() {
+            let track = *way.last().expect("a way has a track");
+            match parents.get(&track).filter(|p| !p.is_empty()) {
+                Some(of) => {
+                    for parent in of.iter().rev() {
+                        // A broken file's loop isn't followed.
+                        if !way.contains(parent) {
+                            let mut longer = way.clone();
+                            longer.push(*parent);
+                            stack.push(longer);
+                        }
+                    }
+                }
+                None => {
+                    let before: Vec<String> =
+                        way[1..].iter().rev().map(|t| format!("#{t}")).collect();
+                    let label = format!("#{end} · from {}", before.join(" › "));
+                    for t in &way {
+                        lines.entry(*t).or_default().push(label.clone());
+                    }
+                    found += 1;
+                    if found == MAX_LINES_PER_TRACK {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    lines
 }
 
 /// The time course `filter` asks for, ready to run. Every time point the run
@@ -212,17 +272,54 @@ impl<'a> TimeCourseQuery<'a> {
                     .join(", ")
             ));
         }
+        // With their parents' history: the families (results with lineage
+        // only - one small query; every other time course is as before).
+        let parents: Option<HashMap<u64, Vec<u64>>> = match (filter.lines, filter.history) {
+            (TimeCourseLines::Track, TrackHistory::WithParents) if database.has_lineage()? => Some(
+                database
+                    .all_track_parents()?
+                    .into_values()
+                    .flatten()
+                    .collect(),
+            ),
+            _ => None,
+        };
+        let mut lineage = None;
         if filter.lines == TimeCourseLines::Track {
             object_conditions.push("COALESCE(track_id, 0) <> 0".to_string());
             // A sample of the tracks - the same each time - picked in the
             // database: with many tracks, reading every one only to draw a few
             // hundred takes seconds.
-            if let Some(n) = filter.max_tracks {
-                object_conditions.push(format!(
+            match (filter.max_tracks, &parents) {
+                (Some(n), None) => object_conditions.push(format!(
                     "track_id IN (SELECT track_id FROM (SELECT DISTINCT track_id FROM objects WHERE {}) \
                      USING SAMPLE reservoir({n} ROWS) REPEATABLE (7))",
                     object_conditions.join(" AND ")
-                ));
+                )),
+                // A sample of the lines: of the tracks without children,
+                // then the tracks before them - whole lines.
+                (Some(n), Some(parents)) => {
+                    let sampled = sample_line_ends(
+                        database,
+                        &planes,
+                        &object_conditions.join(" AND "),
+                        parents,
+                        n,
+                    )?;
+                    let mut tracks: HashSet<u64> = sampled.iter().copied().collect();
+                    let mut up: Vec<u64> = sampled.clone();
+                    while let Some(track) = up.pop() {
+                        for parent in parents.get(&track).into_iter().flatten() {
+                            if tracks.insert(*parent) {
+                                up.push(*parent);
+                            }
+                        }
+                    }
+                    object_conditions.push(format!("track_id IN ({})", id_list(&tracks)));
+                    lineage = Some(lineage_lines(parents, Some(&sampled.into_iter().collect())));
+                }
+                (None, Some(parents)) => lineage = Some(lineage_lines(parents, None)),
+                (None, None) => {}
             }
         }
         let mut row_classes = class_blocks(selected_ids.as_deref(), &classes);
@@ -387,12 +484,15 @@ impl<'a> TimeCourseQuery<'a> {
                 stats: stats.clone(),
                 computed,
                 normalized,
+                lineage,
             }),
         })
     }
 
     /// Each point, in order: time point by time point, then z-plane, line and
-    /// class. Read from the database a chunk at a time.
+    /// class - track lines with their parents' history after a plane's
+    /// other lines (each line in time order). Read from the database a chunk
+    /// at a time.
     pub fn for_each(
         &self,
         mut visit: impl FnMut(&TimeCoursePoint) -> Result<(), InternalErrors>,
@@ -417,6 +517,53 @@ impl<'a> TimeCourseQuery<'a> {
         // Normalized: each line's first time point with objects is 100 % -
         // the rows come time point by time point, so it's the first seen.
         let mut starts: HashMap<(u32, String, String, u32), Vec<Option<f64>>> = HashMap::new();
+        // A point's values (normalized), then to `visit`.
+        let mut finish = |point: &mut TimeCoursePoint,
+                          computed_values: &[Option<f64>]|
+         -> Result<(), InternalErrors> {
+            let start = match plan.normalized {
+                false => None,
+                true => {
+                    let key = (
+                        point.z,
+                        point.line.clone(),
+                        point.image.clone(),
+                        point.class_id,
+                    );
+                    if point.n_objects > 0 && !starts.contains_key(&key) {
+                        starts.insert(key.clone(), computed_values.to_vec());
+                    }
+                    starts.get(&key)
+                }
+            };
+            point.values.clear();
+            point.values.extend(
+                (0..plan.n_columns)
+                    .flat_map(|i| plan.stats.iter().map(move |stat| (i, *stat)))
+                    .map(|(i, stat)| {
+                        let value = value_of(point.n_objects, computed_values, i, stat);
+                        match (plan.normalized, start) {
+                            (false, _) => value,
+                            (true, None) => None,
+                            (true, Some(start)) => {
+                                let base =
+                                    value_of(point.n_objects, start, i, normalization_base(stat));
+                                match (value, base) {
+                                    (Some(value), Some(base)) if base != 0.0 => {
+                                        Some(value / base * 100.0)
+                                    }
+                                    _ => None,
+                                }
+                            }
+                        }
+                    }),
+            );
+            visit(point)
+        };
+        // With their parents' history: a chunk's points of families, each
+        // in each of its lines - after the chunk's other points, in order.
+        // Only they are copied and sorted.
+        let mut lined: Vec<(TimeCoursePoint, Vec<Option<f64>>)> = Vec::new();
 
         let mut computed_values = vec![None; n_stats];
         let mut point = TimeCoursePoint::default();
@@ -475,44 +622,30 @@ impl<'a> TimeCourseQuery<'a> {
                     point.n_images = n_images.value(row) as u32;
                     point.n_objects = n_objects.value(row) as u64;
                     point.n_tracks = n_tracks.value(row) as u64;
-                    let start = match plan.normalized {
-                        false => None,
-                        true => {
-                            let key = (point.z, point.line.clone(), point.image.clone(), class_id);
-                            if point.n_objects > 0 && !starts.contains_key(&key) {
-                                starts.insert(key.clone(), computed_values.clone());
-                            }
-                            starts.get(&key)
-                        }
-                    };
-                    point.values.clear();
-                    point.values.extend(
-                        (0..plan.n_columns)
-                            .flat_map(|i| plan.stats.iter().map(move |stat| (i, *stat)))
-                            .map(|(i, stat)| {
-                                let value = value_of(point.n_objects, &computed_values, i, stat);
-                                match (plan.normalized, start) {
-                                    (false, _) => value,
-                                    (true, None) => None,
-                                    (true, Some(start)) => {
-                                        let base = value_of(
-                                            point.n_objects,
-                                            start,
-                                            i,
-                                            normalization_base(stat),
-                                        );
-                                        match (value, base) {
-                                            (Some(value), Some(base)) if base != 0.0 => {
-                                                Some(value / base * 100.0)
-                                            }
-                                            _ => None,
-                                        }
+                    match &plan.lineage {
+                        None => finish(&mut point, &computed_values)?,
+                        Some(lineage) => {
+                            match line.parse::<u64>().ok().and_then(|id| lineage.get(&id)) {
+                                None => finish(&mut point, &computed_values)?,
+                                Some(lines) => {
+                                    for label in lines {
+                                        let mut in_line = point.clone();
+                                        in_line.line.clear();
+                                        in_line.line.push_str(label);
+                                        lined.push((in_line, computed_values.clone()));
                                     }
                                 }
-                            }),
-                    );
-                    visit(&point)?;
+                            }
+                        }
+                    }
                 }
+            }
+            // A query is a plane (or the whole sample): its family lines.
+            lined.sort_by(|(a, _), (b, _)| {
+                (a.t, a.z, &a.line, a.class_id).cmp(&(b.t, b.z, &b.line, b.class_id))
+            });
+            for (mut point, computed_values) in lined.drain(..) {
+                finish(&mut point, &computed_values)?;
             }
         }
         Ok(())
@@ -596,6 +729,61 @@ fn frame_interval(database: &ResultsGenerator, image_where: &str) -> Option<f64>
         .flatten()
 }
 
+/// A repeatable sample of `n` of the tracks (matching `object_where`, on
+/// `planes`) that no other track came from - where a line with its
+/// parents' history ends. Those with children are left out here, not in
+/// SQL: a `NOT IN` list of thousands is checked on every row (~180 ms on
+/// 1.1M objects).
+fn sample_line_ends(
+    database: &ResultsGenerator,
+    planes: &[PlaneFilter],
+    object_where: &str,
+    parents: &HashMap<u64, Vec<u64>>,
+    n: usize,
+) -> Result<Vec<u64>, InternalErrors> {
+    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    let with_children: HashSet<u64> = parents.values().flatten().copied().collect();
+    let planes = planes
+        .iter()
+        .map(|p| format!("({}, {})", p.t_stack, p.z_stack))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "WITH p(t, z) AS (VALUES {planes}) \
+         SELECT DISTINCT track_id FROM objects WHERE {object_where}"
+    );
+    let mut stmt = database.connection().prepare(&sql).map_err(err)?;
+    let mut ends: Vec<u64> = stmt
+        .query_map([], |row| row.get::<_, u64>(0))
+        .map_err(err)?
+        .filter(|id| id.as_ref().map_or(true, |id| !with_children.contains(id)))
+        .collect::<Result<_, _>>()
+        .map_err(err)?;
+    // The same each time: the n with the lowest hash.
+    let hash = |id: u64| {
+        let mut x = id.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^ (x >> 31)
+    };
+    if ends.len() > n {
+        ends.select_nth_unstable_by_key(n, |id| hash(*id));
+        ends.truncate(n);
+    }
+    ends.sort_unstable();
+    Ok(ends)
+}
+
+/// Track ids as "1, 2, 3" (sorted), for `IN (...)`.
+fn id_list(ids: &HashSet<u64>) -> String {
+    let mut ids: Vec<u64> = ids.iter().copied().collect();
+    ids.sort_unstable();
+    ids.iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// `[1, 2, 3]` as an `INTEGER[]` literal.
 fn sql_u32_array(ids: &[u32]) -> String {
     format!(
@@ -659,6 +847,7 @@ mod tests {
             t_stacks: None,
             z_stacks: None,
             max_tracks: None,
+            history: TrackHistory::Own,
         }
     }
 
@@ -768,6 +957,192 @@ mod tests {
 
     /// Track lines: where the track has objects - untracked objects (track
     /// 0) are no track.
+    /// 1 divides into 2 and 3 after T 1; 3 and 4 fuse into 5 at T 3; 6
+    /// has no family. Areas: the track id times 10, plus the time point.
+    fn family() -> Vec<ObjectSpec> {
+        let at = |track: u64, t: i32| {
+            ObjectSpec::new("img1.tif", "ClassA", 1, track * 10 + t as u64)
+                .in_track(track)
+                .at_plane(0, t)
+        };
+        vec![
+            at(1, 0),
+            at(1, 1),
+            at(2, 2),
+            at(3, 2),
+            at(4, 2),
+            at(5, 3),
+            at(6, 0),
+            at(6, 3),
+        ]
+    }
+
+    fn open_family() -> ResultsGenerator {
+        let db = open(&family(), 4, None);
+        db.connection()
+            .execute_batch(
+                "ALTER TABLE objects ADD COLUMN parent_track_ids UBIGINT[];
+                 UPDATE objects SET parent_track_ids = [1] WHERE track_id IN (2, 3);
+                 UPDATE objects SET parent_track_ids = [3, 4] WHERE track_id = 5;",
+            )
+            .unwrap();
+        db
+    }
+
+    /// (line, t, area) of each point.
+    fn lines_of(result: &TimeCourseResult) -> Vec<(String, u32, Option<f64>)> {
+        result
+            .points
+            .iter()
+            .map(|p| (p.line.clone(), p.t, p.values[0]))
+            .collect()
+    }
+
+    #[test]
+    fn a_line_per_way_from_the_first_ancestor_to_a_track_without_children() {
+        let parents = HashMap::from([(2, vec![1]), (3, vec![1]), (5, vec![3, 4])]);
+        let lines = lineage_lines(&parents, None);
+        assert_eq!(lines[&2], ["#2 · from #1"]);
+        assert_eq!(
+            lines[&1],
+            ["#2 · from #1", "#5 · from #1 › #3"],
+            "in every line through it"
+        );
+        assert_eq!(lines[&3], ["#5 · from #1 › #3"]);
+        assert_eq!(lines[&4], ["#5 · from #4"]);
+        assert_eq!(
+            lines[&5],
+            ["#5 · from #1 › #3", "#5 · from #4"],
+            "a fusion: a line per parent"
+        );
+
+        let only = lineage_lines(&parents, Some(&HashSet::from([2])));
+        assert_eq!(only[&1], ["#2 · from #1"]);
+        assert!(!only.contains_key(&5));
+
+        let looped = lineage_lines(&HashMap::from([(1, vec![2]), (2, vec![1])]), None);
+        assert!(
+            looped.is_empty(),
+            "no track without children: no line, no hang"
+        );
+    }
+
+    /// Own track (default): as without lineage. With parents' history:
+    /// each line from the first ancestor on, in time order, a track's
+    /// points in every line through it; a track without family its own.
+    #[test]
+    fn track_lines_with_their_parents_history() {
+        let db = open_family();
+        let own = db
+            .time_course(&filter(TimeCourseLines::Track, &[TimeCourseStat::Mean]))
+            .unwrap();
+        let lines: HashSet<String> = own.points.iter().map(|p| p.line.clone()).collect();
+        assert_eq!(lines.len(), 6, "a line per track: {lines:?}");
+
+        let with = db
+            .time_course(&TimeCourseFilter {
+                history: TrackHistory::WithParents,
+                ..filter(TimeCourseLines::Track, &[TimeCourseStat::Mean])
+            })
+            .unwrap();
+        let line = |label: &str| -> Vec<(u32, Option<f64>)> {
+            lines_of(&with)
+                .into_iter()
+                .filter(|(l, ..)| l == label)
+                .map(|(_, t, v)| (t, v))
+                .collect()
+        };
+        assert_eq!(
+            line("#2 · from #1"),
+            [(0, Some(10.0)), (1, Some(11.0)), (2, Some(22.0))]
+        );
+        assert_eq!(
+            line("#5 · from #1 › #3"),
+            [
+                (0, Some(10.0)),
+                (1, Some(11.0)),
+                (2, Some(32.0)),
+                (3, Some(53.0))
+            ]
+        );
+        assert_eq!(line("#5 · from #4"), [(2, Some(42.0)), (3, Some(53.0))]);
+        assert_eq!(line("#6"), [(0, Some(60.0)), (3, Some(63.0))]);
+        assert!(line("#1").is_empty(), "a mother has no line of its own");
+        let times: Vec<u32> = with.points.iter().map(|p| p.t).collect();
+        assert!(times.is_sorted(), "time point by time point: {times:?}");
+    }
+
+    /// Relative to the first time point: the line's - its first ancestor's.
+    #[test]
+    fn a_line_with_history_is_relative_to_its_first_ancestor() {
+        let with = open_family()
+            .time_course(&TimeCourseFilter {
+                history: TrackHistory::WithParents,
+                normalize: TimeCourseNormalize::RelativeToStart,
+                ..filter(TimeCourseLines::Track, &[TimeCourseStat::Mean])
+            })
+            .unwrap();
+        let daughter = lines_of(&with)
+            .into_iter()
+            .find(|(l, t, _)| l == "#2 · from #1" && *t == 2)
+            .unwrap();
+        assert_eq!(
+            rounded(&[daughter.2]),
+            [Some(220.0)],
+            "22 of the mother's 10"
+        );
+    }
+
+    /// A sample of lines is whole lines: their ends sampled, the tracks
+    /// before them added.
+    #[test]
+    fn a_sample_of_lines_with_history_has_whole_lines() {
+        let with = open_family()
+            .time_course(&TimeCourseFilter {
+                history: TrackHistory::WithParents,
+                max_tracks: Some(2),
+                ..filter(TimeCourseLines::Track, &[TimeCourseStat::Mean])
+            })
+            .unwrap();
+        let mut by_line: HashMap<String, Vec<u32>> = HashMap::new();
+        for p in &with.points {
+            by_line.entry(p.line.clone()).or_default().push(p.t);
+        }
+        assert!(!by_line.is_empty() && by_line.len() <= 3, "{by_line:?}");
+        for (label, times) in &by_line {
+            if label.contains("from #1") {
+                assert_eq!(times[0], 0, "{label} starts with the mother: {times:?}");
+            }
+        }
+    }
+
+    /// Results without lineage: with parents' history is the same as own
+    /// track - no other query.
+    #[test]
+    fn without_lineage_the_history_changes_nothing() {
+        let db = open(&family(), 4, None);
+        let own = db
+            .time_course(&filter(TimeCourseLines::Track, &[TimeCourseStat::Mean]))
+            .unwrap();
+        let with = db
+            .time_course(&TimeCourseFilter {
+                history: TrackHistory::WithParents,
+                ..filter(TimeCourseLines::Track, &[TimeCourseStat::Mean])
+            })
+            .unwrap();
+        assert_eq!(own.points, with.points);
+        let class = db
+            .time_course(&TimeCourseFilter {
+                history: TrackHistory::WithParents,
+                ..filter(TimeCourseLines::Class, &[TimeCourseStat::Mean])
+            })
+            .unwrap();
+        let class_own = db
+            .time_course(&filter(TimeCourseLines::Class, &[TimeCourseStat::Mean]))
+            .unwrap();
+        assert_eq!(class.points, class_own.points, "class lines never change");
+    }
+
     #[test]
     fn track_lines_follow_each_track() {
         let db = open(

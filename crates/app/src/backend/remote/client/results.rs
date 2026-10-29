@@ -273,6 +273,13 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn has_lineage(&self) -> Result<bool, InternalErrors> {
+        match self.query(ResultsQuery::HasLineage)? {
+            ResultsAnswer::Count(n) => Ok(n > 0),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn image_tracks(
         &self,
         filter: &crate::api::ImageTracksFilter,

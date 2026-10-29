@@ -56,6 +56,8 @@ fn main() {
         "list_xlsx" => (ExportFormat::XLSX, true, false),
         "grouped_csv" => (ExportFormat::CSV, false, true),
         "grouped_xlsx" => (ExportFormat::XLSX, false, true),
+        // The whole objects table as Parquet (DuckDB's parquet extension).
+        "parquet" => (ExportFormat::Parquet, false, false),
         other => panic!("unknown mode {other}"),
     };
     let export = ResultExport {

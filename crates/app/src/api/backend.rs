@@ -223,6 +223,9 @@ pub trait ResultsSource: Send + Sync {
     ) -> Result<Vec<crate::api::TrackSummary>, InternalErrors>;
     /// Some of the objects are tracked (Results › Tracks is offered).
     fn has_tracks(&self) -> Result<bool, InternalErrors>;
+    /// A tracking step recorded divisions or fusions (the tracks' history
+    /// is offered).
+    fn has_lineage(&self) -> Result<bool, InternalErrors>;
     /// One image's tracks, their points by time (Results › Tracks).
     fn image_tracks(
         &self,

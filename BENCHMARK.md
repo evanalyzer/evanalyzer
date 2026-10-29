@@ -1497,6 +1497,84 @@ links check), as every `UPDATE` rewrites the table - now one write at the
 end. Writing `parent_track_ids` on every row made Nearest Neighbor 2.5 ×
 slower and +480 MB; it is updated only where parents are or were.
 
+## Lineage in the results, Track Nearest Neighbor image by image (2026-10-29)
+
+Before (`e1249f1d`) / after, alternating order with pauses. Datasets: the
+`make_time_series --wells 8 --fields 2` file of the tracking section, and
+a copy with lineage (`bench_tracking --tracker nn --no-truth 1
+--mark-divisions 10`: every 10th track of class 1 a daughter - 2,400 of
+24,000 tracks).
+
+| What | Before | After |
+|---|---|---|
+| Track Nearest Neighbor, 432,575 objects (same tracks: 65 wrong links) | 0.80-0.88 s, 384 MB | 0.89-0.98 s, 199-229 MB |
+| Track LAP / Kalman / Overlap (untouched) | 1.12-1.21 / 1.07-1.11 / 1.13-1.27 s | 1.17-1.18 / 0.99-1.05 / 1.13-1.24 s |
+| `bench_pipeline` 50 images 2048², 8 threads (untouched) | 1.74-1.90 s, 885-951 MB | 1.76-1.93 s, 908-962 MB |
+| Over time query / export (cases 0, 7), with and without lineage | 44-55 ms, 99-145 MB | 45-50 ms, 98-149 MB |
+| One image's tracks (case 13), without / with lineage | 15.4-16.0 / 15.5-15.7 ms | 16.3-18.3 / 17.3-19.3 ms |
+| Track export, a row per track (case 14), without lineage | 217-222 ms, 202-207 MB | 210-227 ms, 195-218 MB |
+| Track export with lineage (+6 columns, 4.26 → 4.56 MB) | 226-243 ms, 204-218 MB | 232-255 ms, 215-224 MB |
+| Tracks, Full (case 15), without / with lineage | 151-166 / 159-176 ms | 150-165 / 167-173 ms |
+| Trails, 1500 tracks (`bench_trails`): 10 time points / whole | 1.27-2.84 / 4.32-7.17 ms | 1.27-1.52 / 4.57-5.48 ms |
+| Trails, whole, with 149 divisions (lines + rings) | - | 4.44-5.19 ms |
+
+Track Nearest Neighbor now reads one image at a time: -45 % RAM, +10-15 %
+time (16 reads instead of one, ~6 ms each). The lineage of the track
+export and Full table is read in one query for all images (few tracks
+have parents) - read per image it cost +20 % (266-268 / 190-200 ms).
+Generated UI code 57.32 → 57.37 MB (+0.08 %) with the card's From / Into.
+
+## DuckDB: no extensions downloaded or loaded on their own (2026-10-29)
+
+Every connection opens with `autoinstall_known_extensions`,
+`autoload_known_extensions` and `allow_community_extensions` off (before:
+downloaded from extensions.duckdb.org when a query needed one). The
+built-in `parquet` is loaded right before a Parquet export (loading it
+and `json` on every connection cost +10-13 MB per process - measured in
+the next section). Before / after,
+alternating, on the tracking section's time series file (163 MB):
+
+| What | Before | After |
+|---|---|---|
+| Open + one image's tracks (`bench_time_course --case 13`, whole process) | 47-53 ms | 52-54 ms |
+| Parquet export, whole objects table (`bench_results_export --mode parquet`, new mode) | 0.4 s, 1.72-1.81 GB | 0.4 s, 1.76-1.80 GB |
+| List CSV export (`--mode list_csv`) | 2.2-2.5 s, 341-379 MB | 2.4-2.6 s, 358-366 MB |
+
+`bench_open_results` fails on both builds (unrelated): on the synthetic
+file it picks `track_id` for the plate (not aggregable), on
+`tests/20260831_Uptake1_Exp0706_PH1.evadb` the images table lacks
+`disabled_reason` (written before it existed).
+
+## Over time: track lines with their parents' history (2026-10-29)
+
+`bench_time_course --case N [--with-parents]` (new flag), one case per
+process, before (`58f49884`) / after, alternating. Three files: the real
+`tests/20260831_Uptake1_Exp0706_PH1.evadb` (no tracking), the tracking
+section's time series (tracked, no lineage) and its copy with lineage
+(every 10th track a daughter).
+
+| Case | Before | After, own track | After, with parents |
+|---|---|---|---|
+| No tracking: class lines mean ± SD / median + IQR / relative (0-2) | 47-56 / 87 / 47-49 ms | 48-53 / 81-84 / 47-49 ms | (class lines: the same) |
+| No tracking: image / well lines (3, 4) | 66-70 / 57-96 ms | 68-69 / 58-67 ms | - |
+| No tracking: exports per class / well (7, 8) | 100-101 / 115-124 ms | 94-99 / 112-140 ms | - |
+| No tracking: peak RSS, every case | 86-527 MB | the same ±3 MB | - |
+| Tracked, no lineage: faint tracks (5) | 22-23 ms, 140-148 MB | 20 ms, 135-141 MB | 21-23 ms, 144-145 MB |
+| Tracked, no lineage: all tracks (6) | 502-515 ms, 482-487 MB | 505-537 ms, 479-481 MB | 498-522 ms, 476-490 MB |
+| Tracked, no lineage: track export (10) | 804-830 ms | 773-808 ms | 766-790 ms |
+| Lineage: faint tracks (5) | 23-28 ms, 146-149 MB | 25 ms, 148 MB | 32-33 ms, 153-157 MB |
+| Lineage: all tracks (6) | 594-619 ms, 491-500 MB | 594-600 ms, 493-495 MB | 663-668 ms, 491-495 MB |
+| Lineage: track export (10) | 895-938 ms, 217-218 MB | 935-954 ms, 217-220 MB | 996-1034 ms, 220-225 MB |
+
+Results without tracking or without lineage run the same code as before
+(the history needs track lines and parents). Fixed on the way: the
+sample of lines first left out tracks with children in SQL (`NOT IN` a
+list of 2,400: 152 ms) - now in Rust (32 ms); every point of a plane was
+copied and sorted (all tracks +30 %) - now only the families' (+10 %);
+and loading Parquet and JSON on every connection (the DuckDB change
+above) cost +10-13 MB on every query - Parquet is now loaded only for a
+Parquet export, JSON never. Generated UI code 57.37 → 57.43 MB (+0.11 %).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1554,7 +1632,7 @@ graphics driver).
 | Whole slide `tests/haut` + coloc with `--max-ram 8192` / `--max-ram 4096` (real CLI) | 5.30 GB / 3.47 GB | 2026-10-29 | --max-threads, --max-ram |
 | A deep-learning model after an analysis | released: +1 MB (was +764 MB for ~400 MB of weights on two devices, until the app ended) | 2026-10-28 | RAM rework step 5a |
 | Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
-| Track Nearest Neighbor, same objects (all read at once) | 384 MB | 2026-10-29 | Tracking |
+| Track Nearest Neighbor, same objects (image by image; was 384 MB all at once) | 199-229 MB | 2026-10-29 | Lineage in the results, Track Nearest Neighbor image by image |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

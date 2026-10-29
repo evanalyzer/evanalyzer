@@ -14,7 +14,7 @@ use evanalyzer_app::results::PlaneFilter;
 use evanalyzer_app::results::ResultsSource;
 use evanalyzer_app::results::{
     Aggregation, Grouping, TimeCourseExport, TimeCourseLayout, TimeCourseLines,
-    TimeCourseNormalize, TimeCourseStat,
+    TimeCourseNormalize, TimeCourseStat, TrackHistory,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 
@@ -126,6 +126,10 @@ pub fn resolve_grouping(args: &GroupArgs) -> Result<ResolvedGrouping, InternalEr
                     LayoutKind::Long => TimeCourseLayout::Long,
                     LayoutKind::Wide => TimeCourseLayout::Wide,
                     LayoutKind::Both => TimeCourseLayout::Both,
+                },
+                history: match args.with_parents {
+                    true => TrackHistory::WithParents,
+                    false => TrackHistory::Own,
                 },
             },
         }

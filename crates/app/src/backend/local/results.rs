@@ -165,6 +165,10 @@ impl ResultsSource for LocalResults {
         self.with(|db| ResultCharts {}.has_tracks(db))
     }
 
+    fn has_lineage(&self) -> Result<bool, InternalErrors> {
+        self.with(|db| db.has_lineage())
+    }
+
     fn image_tracks(
         &self,
         filter: &crate::api::ImageTracksFilter,

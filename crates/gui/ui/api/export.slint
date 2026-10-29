@@ -64,6 +64,8 @@ export global ExportDialogState {
     in-out property <string> time-stat-summary: "";
     in-out property <bool> time-relative: false;
     in-out property <int> time-layout: 2;
+    // Track lines with their parents' history (results with lineage).
+    in-out property <bool> time-with-parents: false;
     // Tracks (with tracked objects): a row per track - the measurements'
     // statistics over its time points, at least `track-min-points` of
     // them, there from the first time point, not touching the edge.

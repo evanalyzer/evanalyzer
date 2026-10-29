@@ -371,7 +371,15 @@ impl<'a> TrackColumns<'a> {
         if self.head.by_z {
             out.text("Z")?;
         }
-        for column in ["Class", "Track", "First T", "Last T", "Time points"] {
+        for column in ["Class", "Track"] {
+            out.text(column)?;
+        }
+        if self.head.lineage {
+            for column in LINEAGE_COLUMNS {
+                out.text(column)?;
+            }
+        }
+        for column in ["First T", "Last T", "Time points"] {
             out.text(column)?;
         }
         out.text(if self.head.timed {
@@ -402,6 +410,15 @@ impl<'a> TrackColumns<'a> {
         }
         out.text(&track.class_name)?;
         out.number(track.track_id as f64)?;
+        if self.head.lineage {
+            let lineage = &track.lineage;
+            out.text(&id_list(&lineage.parents))?;
+            out.text(&id_list(&lineage.children))?;
+            out.number(lineage.root as f64)?;
+            out.number(f64::from(lineage.generation))?;
+            out.text(lineage.starts_with().label())?;
+            out.text(lineage.ends_with().label())?;
+        }
         out.number(f64::from(track.first_t))?;
         out.number(f64::from(track.last_t))?;
         out.number(f64::from(track.points))?;
@@ -420,6 +437,23 @@ impl<'a> TrackColumns<'a> {
         }
         out.end_row()
     }
+}
+
+/// The family tree columns after "Track" (results with divisions or
+/// fusions): the parents are the tree's edges - with each track's first
+/// and last T enough to draw it. "Lineage": the tree's root track.
+const LINEAGE_COLUMNS: [&str; 6] = [
+    "Parent tracks",
+    "Child tracks",
+    "Lineage",
+    "Generation",
+    "Starts with",
+    "Ends with",
+];
+
+/// Track ids as "3;7" - not "," (the CSV's separator); empty for none.
+fn id_list(ids: &[u64]) -> String {
+    ids.iter().map(u64::to_string).collect::<Vec<_>>().join(";")
 }
 
 /// The wide tables, one per value and statistic (named like it): a row per
@@ -1260,6 +1294,7 @@ impl ResultExport {
             t_stacks: self.t_stacks,
             z_stacks: self.z_stacks,
             max_tracks: None,
+            history: settings.history,
         };
         let query = TimeCourseQuery::prepare(database, &filter)?;
         let long = TimeCourseLong::new(&query.head, settings.lines);
@@ -1899,7 +1934,9 @@ impl ResultExport {
         // string literal would be (doubling it) rather than passed through
         // `params![]`.
         let path_literal = path.to_string_lossy().replace('\'', "''");
-        let sql = format!("COPY objects TO '{path_literal}' (FORMAT parquet);");
+        // Built into DuckDB, loaded only here: no connection carries it
+        // (~10 MB) when nothing is written as Parquet.
+        let sql = format!("LOAD parquet; COPY objects TO '{path_literal}' (FORMAT parquet);");
         database
             .connection()
             .execute_batch(&sql)
@@ -4037,6 +4074,54 @@ mod tests {
             ]
         );
         assert_eq!(lines.len(), 2, "the untracked object isn't a track");
+    }
+
+    /// With divisions: after "Track" its family - parents, children (ids
+    /// as "1;2"), the tree's root, the generation, how it starts and
+    /// ends. The parents are the tree's edges: a script can draw it.
+    #[test]
+    fn the_tracks_export_has_the_family_tree() {
+        let at = |track: u64, t: i32| {
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .in_track(track)
+                .at_plane(0, t)
+        };
+        let (database, out_dir) = open_analysed(&[at(1, 0), at(2, 1), at(3, 1)], 2);
+        database
+            .connection()
+            .execute_batch(
+                "ALTER TABLE objects ADD COLUMN parent_track_ids UBIGINT[];
+                 UPDATE objects SET parent_track_ids = [1] WHERE track_id IN (2, 3);",
+            )
+            .unwrap();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_track_summary: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("tracks export");
+        let csv = std::fs::read_to_string(out_dir.join("tracks.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(
+            lines[0].starts_with(
+                "Image,Well,Class,Track,Parent tracks,Child tracks,Lineage,Generation,\
+                 Starts with,Ends with,First T,"
+            ),
+            "{}",
+            lines[0]
+        );
+        let family = |line: &str| {
+            line.split(',')
+                .skip(3)
+                .take(7)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        assert_eq!(family(lines[1]), "1,,2;3,1,0,,Division");
+        assert_eq!(family(lines[2]), "2,1,,1,1,Division,");
+        assert_eq!(family(lines[3]), "3,1,,1,1,Division,");
     }
 
     /// A wide table per track would have a column per track: refused with

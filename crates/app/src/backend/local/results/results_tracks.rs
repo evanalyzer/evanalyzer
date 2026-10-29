@@ -16,9 +16,9 @@ use super::results_generator::{
     ResultsGenerator, class_filter_sql, column_aggregate_expr, sql_string_in_list,
 };
 use super::results_time_course::stat_sql;
-use crate::api::{Column, TrackSummary, TrackSummaryFilter};
+use crate::api::{Column, TrackLineage, TrackSummary, TrackSummaryFilter};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// What every row holds - known before the rows are read.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +33,8 @@ pub(super) struct TrackSummaryHead {
     pub timed: bool,
     /// The well / group column's name.
     pub group_label: &'static str,
+    /// A tracking step recorded divisions or fusions: the rows' lineage.
+    pub lineage: bool,
 }
 
 /// An image whose tracks are read.
@@ -53,6 +55,9 @@ pub(super) struct TrackSummaryQuery<'a> {
     sql: String,
     first_t: u32,
     n_values: usize,
+    /// Per image, its tracks' parents (with lineage) - read in one go: few
+    /// tracks have any.
+    parents: HashMap<String, HashMap<u64, Vec<u64>>>,
 }
 
 impl<'a> TrackSummaryQuery<'a> {
@@ -145,6 +150,11 @@ impl<'a> TrackSummaryQuery<'a> {
             )
             .map_err(err)?;
         let timed = !images.is_empty() && images.iter().all(|image| image.s_per_frame.is_some());
+        let lineage = database.has_lineage()?;
+        let parents = match lineage {
+            true => database.all_track_parents()?,
+            false => HashMap::new(),
+        };
 
         let values_sql = columns
             .iter()
@@ -193,6 +203,7 @@ impl<'a> TrackSummaryQuery<'a> {
                     crate::api::Grouping::Folder => "Folder",
                     _ => "Well",
                 },
+                lineage,
             },
             images,
             class_names: classes
@@ -202,6 +213,7 @@ impl<'a> TrackSummaryQuery<'a> {
             sql,
             first_t,
             n_values: columns.len() * filter.statistics.len(),
+            parents,
         })
     }
 
@@ -213,6 +225,11 @@ impl<'a> TrackSummaryQuery<'a> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self.database.connection().prepare(&self.sql).map_err(err)?;
         for image in &self.images {
+            // A track never leaves its image: its family neither.
+            let lineages = match self.parents.get(&image.rel_path) {
+                Some(parents) => Lineages::new(parents.clone()),
+                None => Lineages::default(),
+            };
             let rows = stmt
                 .query_map([&image.rel_path], |row| {
                     let class_id = row.get::<_, i64>(2)? as i32;
@@ -240,11 +257,14 @@ impl<'a> TrackSummaryQuery<'a> {
                         values: (0..self.n_values)
                             .map(|k| row.get::<_, Option<f64>>(10 + k))
                             .collect::<Result<_, _>>()?,
+                        lineage: TrackLineage::default(),
                     })
                 })
                 .map_err(err)?;
             for track in rows {
-                visit(&track.map_err(err)?)?;
+                let mut track = track.map_err(err)?;
+                track.lineage = lineages.of(track.track_id);
+                visit(&track)?;
             }
         }
         Ok(())
@@ -261,7 +281,166 @@ impl<'a> TrackSummaryQuery<'a> {
     }
 }
 
+/// An image's family trees, from each track's parents.
+#[derive(Debug, Default)]
+pub(super) struct Lineages {
+    parents: HashMap<u64, Vec<u64>>,
+    children: HashMap<u64, Vec<u64>>,
+}
+
+impl Lineages {
+    pub(super) fn new(parents: HashMap<u64, Vec<u64>>) -> Self {
+        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+        for (&child, of) in &parents {
+            for &parent in of {
+                children.entry(parent).or_default().push(child);
+            }
+        }
+        for list in children.values_mut() {
+            list.sort_unstable();
+        }
+        Self { parents, children }
+    }
+
+    /// Track `id`'s place in its tree.
+    pub(super) fn of(&self, id: u64) -> TrackLineage {
+        if self.parents.is_empty() {
+            return TrackLineage {
+                root: id,
+                ..TrackLineage::default()
+            };
+        }
+        let children = self.children.get(&id).cloned().unwrap_or_default();
+        let fuses = children
+            .iter()
+            .any(|child| self.parents.get(child).is_some_and(|p| p.len() > 1));
+        let (root, generation) = self.ancestry(id);
+        TrackLineage {
+            parents: self.parents.get(&id).cloned().unwrap_or_default(),
+            children,
+            root,
+            generation,
+            fuses,
+        }
+    }
+
+    /// Its root (the lowest of its ancestors without parents) and its
+    /// generation (the longest way up) - walked up, so a family's depth
+    /// (divisions in a movie: tens) is the cost.
+    fn ancestry(&self, id: u64) -> (u64, u32) {
+        // (track, generation below it) - every way up, depth first.
+        let mut stack = vec![(id, 0u32)];
+        let (mut root, mut generation) = (u64::MAX, 0);
+        let mut seen: BTreeMap<u64, u32> = BTreeMap::new();
+        while let Some((track, depth)) = stack.pop() {
+            // Each track once at its deepest - a fusion's parents can share
+            // ancestors (and a broken file can't loop forever).
+            if seen.get(&track).is_some_and(|&d| d >= depth) || depth as usize > self.parents.len()
+            {
+                continue;
+            }
+            seen.insert(track, depth);
+            match self.parents.get(&track).filter(|p| !p.is_empty()) {
+                None => {
+                    root = root.min(track);
+                    generation = generation.max(depth);
+                }
+                Some(parents) => stack.extend(parents.iter().map(|&p| (p, depth + 1))),
+            }
+        }
+        (root, generation)
+    }
+}
+
 impl ResultsGenerator {
+    /// The results hold divisions or fusions (`objects.parent_track_ids`,
+    /// set by a tracking step) - not in results from before it.
+    pub fn has_lineage(&self) -> Result<bool, InternalErrors> {
+        if !self.has_object_column("parent_track_ids")? {
+            return Ok(false);
+        }
+        self.connection()
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM objects WHERE parent_track_ids IS NOT NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    /// Per image, the parents of each of its tracks that has any - none in
+    /// results without lineage.
+    pub(super) fn all_track_parents(
+        &self,
+    ) -> Result<HashMap<String, HashMap<u64, Vec<u64>>>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if !self.has_object_column("parent_track_ids")? {
+            return Ok(HashMap::new());
+        }
+        let mut stmt = self
+            .connection()
+            .prepare(
+                "SELECT image_rel_path, track_id, UNNEST(parents) FROM (SELECT image_rel_path, \
+                     track_id, any_value(parent_track_ids) AS parents FROM objects \
+                     WHERE parent_track_ids IS NOT NULL GROUP BY image_rel_path, track_id) \
+                 ORDER BY 1, 2, 3",
+            )
+            .map_err(err)?;
+        let mut parents: HashMap<String, HashMap<u64, Vec<u64>>> = HashMap::new();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .map_err(err)?;
+        for row in rows {
+            let (image, track, parent) = row.map_err(err)?;
+            parents
+                .entry(image)
+                .or_default()
+                .entry(track)
+                .or_default()
+                .push(parent);
+        }
+        Ok(parents)
+    }
+
+    /// The parents of each track of `image_rel_path` that has any - none
+    /// in results without lineage.
+    pub(super) fn track_parents(
+        &self,
+        image_rel_path: &str,
+    ) -> Result<HashMap<u64, Vec<u64>>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if !self.has_object_column("parent_track_ids")? {
+            return Ok(HashMap::new());
+        }
+        // The same on every object of a track: any one's.
+        let mut stmt = self
+            .connection()
+            .prepare(
+                "SELECT track_id, UNNEST(parents) FROM (SELECT track_id, \
+                     any_value(parent_track_ids) AS parents FROM objects \
+                     WHERE image_rel_path = ? AND parent_track_ids IS NOT NULL \
+                     GROUP BY track_id) ORDER BY 1, 2",
+            )
+            .map_err(err)?;
+        let mut parents: HashMap<u64, Vec<u64>> = HashMap::new();
+        let rows = stmt
+            .query_map([image_rel_path], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))
+            })
+            .map_err(err)?;
+        for row in rows {
+            let (track, parent) = row.map_err(err)?;
+            parents.entry(track).or_default().push(parent);
+        }
+        Ok(parents)
+    }
+
     /// One row per track - see [`TrackSummaryFilter`].
     pub fn track_summary(
         &self,
@@ -423,6 +602,102 @@ mod tests {
             }),
             [8]
         );
+    }
+
+    /// Track 1 divides into 2 and 3 at T 2; 3 and 4 fuse into 5 at T 4.
+    fn family() -> Vec<ObjectSpec> {
+        let at = |track: u64, t: i32| {
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .in_track(track)
+                .at_plane(0, t)
+        };
+        vec![
+            at(1, 0),
+            at(1, 1),
+            at(2, 2),
+            at(2, 3),
+            at(3, 2),
+            at(3, 3),
+            at(4, 2),
+            at(4, 3),
+            at(5, 4),
+        ]
+    }
+
+    const FAMILY_SQL: &str = "ALTER TABLE objects ADD COLUMN parent_track_ids UBIGINT[];
+         UPDATE objects SET parent_track_ids = [1] WHERE track_id IN (2, 3);
+         UPDATE objects SET parent_track_ids = [3, 4] WHERE track_id = 5;";
+
+    /// Each row knows its parents and children, its tree's root and how
+    /// many divisions and fusions lie between, and how it starts and ends.
+    #[test]
+    fn a_track_knows_its_family() {
+        use crate::api::LineageEvent::{Division, Fusion, None as Appears};
+        let db = open(&family(), 5, FAMILY_SQL);
+        let query = TrackSummaryQuery::prepare(&db, &filter()).unwrap();
+        assert!(query.head.lineage);
+        let rows = query.collect().unwrap();
+        let of = |id: u64| &rows.iter().find(|r| r.track_id == id).unwrap().lineage;
+
+        assert_eq!(
+            (of(1).parents.clone(), of(1).children.clone()),
+            (vec![], vec![2, 3])
+        );
+        assert_eq!(
+            (of(1).starts_with(), of(1).ends_with()),
+            (Appears, Division)
+        );
+        assert_eq!((of(1).root, of(1).generation), (1, 0));
+
+        assert_eq!(of(2).parents, [1]);
+        assert_eq!(
+            (of(2).starts_with(), of(2).ends_with()),
+            (Division, Appears)
+        );
+        assert_eq!((of(2).root, of(2).generation), (1, 1));
+
+        assert_eq!(of(3).ends_with(), Fusion, "its child has another parent");
+        assert_eq!((of(4).root, of(4).ends_with()), (4, Fusion));
+
+        let five = of(5);
+        assert_eq!(
+            (five.parents.clone(), five.starts_with()),
+            (vec![3, 4], Fusion)
+        );
+        assert_eq!(
+            (five.root, five.generation),
+            (1, 2),
+            "the lowest root, the longest way up"
+        );
+    }
+
+    /// Results without lineage (no column, or no parents): no lineage,
+    /// every track its own root.
+    #[test]
+    fn results_without_divisions_have_no_lineage() {
+        for sql in [
+            "",
+            "ALTER TABLE objects ADD COLUMN parent_track_ids UBIGINT[];",
+        ] {
+            let db = open(&family(), 5, sql);
+            let query = TrackSummaryQuery::prepare(&db, &filter()).unwrap();
+            assert!(!query.head.lineage, "{sql:?}");
+            let rows = query.collect().unwrap();
+            assert!(
+                rows.iter()
+                    .all(|r| r.lineage.parents.is_empty() && r.lineage.children.is_empty())
+            );
+            assert!(
+                rows.iter().all(|r| r.lineage.root == r.track_id),
+                "its own root"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_family_with_a_loop_still_ends() {
+        let lineages = Lineages::new(HashMap::from([(1, vec![2]), (2, vec![1])]));
+        let _ = lineages.of(1);
     }
 
     /// A pixel size and a frame interval everywhere: µm and seconds can

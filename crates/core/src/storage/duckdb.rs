@@ -19,7 +19,7 @@ use duckdb::arrow::array::{
 };
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::types::Value;
-use duckdb::{Connection, params};
+use duckdb::{Config, Connection, params};
 use evanalyzer_cfg::core_types::{
     InternalErrors, MeasurementInfo, ObjectClass, ObjectId, max_gray_value,
 };
@@ -103,10 +103,10 @@ impl ResultsConnection {
 
     /// An in-memory database (tests): no file, not shared.
     pub fn open_in_memory() -> Result<ResultsConnection, InternalErrors> {
+        let conn = Connection::open_in_memory_with_flags(offline_config()?)
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(ResultsConnection {
-            conn: Some(
-                Connection::open_in_memory().map_err(|e| InternalErrors::Io(e.to_string()))?,
-            ),
+            conn: Some(conn),
             path: PathBuf::new(),
         })
     }
@@ -141,6 +141,21 @@ impl Drop for ResultsConnection {
     }
 }
 
+/// DuckDB's settings for every connection: no extension is downloaded or
+/// loaded on its own (DuckDB would fetch one from extensions.duckdb.org the
+/// first time a query needs it) - no network, the same on an offline
+/// computer, nothing outside the licence audit. The built-in ones are
+/// loaded where used (`LOAD parquet` before a Parquet export), not on every
+/// connection (~10 MB). Not locked (`lock_configuration`): the memory limit
+/// is set later.
+fn offline_config() -> Result<Config, InternalErrors> {
+    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    Config::default()
+        .enable_autoload_extension(false)
+        .and_then(|c| c.with("allow_community_extensions", "false"))
+        .map_err(err)
+}
+
 /// Returns a connection usable for `path`, sharing the resident anchor
 /// connection for that path if one is already open (see `CONNECTION_CACHE`'s
 /// doc comment), opening and caching a fresh one otherwise.
@@ -171,7 +186,7 @@ pub fn shared_connection(path: &Path) -> Result<ResultsConnection, InternalError
         }
     }
 
-    let anchor = Connection::open(path).map_err(to_io_err)?;
+    let anchor = Connection::open_with_flags(path, offline_config()?).map_err(to_io_err)?;
     let conn = anchor.try_clone().map_err(to_io_err)?;
     cache.insert(path.to_path_buf(), SharedDatabase { anchor, users: 1 });
     share_memory_limit(&cache);
@@ -3078,6 +3093,31 @@ mod tests {
             DuckDbExporter::open_existing(&path).is_err(),
             "nor added to"
         );
+    }
+
+    /// No extension is downloaded or loaded on its own - on a results file
+    /// and in memory.
+    #[test]
+    fn extensions_are_never_installed_or_loaded_on_their_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = shared_connection(&dir.path().join("results.evadb")).unwrap();
+        let memory = ResultsConnection::open_in_memory().unwrap();
+        for conn in [&file, &memory] {
+            let setting = |name: &str| -> String {
+                conn.query_row(
+                    "SELECT value FROM duckdb_settings() WHERE name = ?",
+                    params![name],
+                    |row| row.get(0),
+                )
+                .unwrap()
+            };
+            assert_eq!(setting("autoinstall_known_extensions"), "false");
+            assert_eq!(setting("autoload_known_extensions"), "false");
+            assert_eq!(setting("allow_community_extensions"), "false");
+        }
+        // A function of an extension that isn't built in fails instead.
+        let refused = file.execute_batch("SELECT * FROM read_xlsx('x.xlsx')");
+        assert!(refused.is_err());
     }
 
     #[test]

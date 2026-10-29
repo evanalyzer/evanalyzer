@@ -159,6 +159,11 @@ export component ExportDialog inherits InkDialog {
                         text: "Relative to the first time point (%)";
                         checked <=> ExportDialogState.time-relative;
                     }
+                    // Track lines across divisions and fusions.
+                    if ResultsState.has-lineage && ExportDialogState.time-lines == 3: CheckBox {
+                        text: "Each track with its parents' history";
+                        checked <=> ExportDialogState.time-with-parents;
+                    }
                 }
                 // With measurement steps: a row per value, like the database.
                 if ResultsState.has-measurements: CheckBox {

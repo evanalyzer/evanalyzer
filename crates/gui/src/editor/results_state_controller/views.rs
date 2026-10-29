@@ -403,6 +403,7 @@ impl ResultsStateController {
             chart.time_median = view.time_median;
             chart.time_relative = view.time_relative;
             chart.time_tracks = view.time_tracks;
+            chart.time_history = view.time_history;
         }
         *self.view_unavailable.lock().expect("Poisoned") = Some(unavailable);
         missing.dedup();
@@ -490,6 +491,7 @@ impl ResultsStateController {
                 time_median: filter.time_median,
                 time_relative: filter.time_relative,
                 time_tracks: filter.time_tracks,
+                time_history: filter.time_history,
             }
         };
         Some(ViewSettings { list, plate, chart })
@@ -978,6 +980,10 @@ impl ResultsStateController {
             state.set_chart_time_summary(chart.time_median as i32);
             state.set_chart_time_relative(chart.time_relative);
             state.set_chart_time_tracks(chart.time_tracks);
+            state.set_chart_time_history(match chart.time_history {
+                TrackHistory::Own => 0,
+                TrackHistory::WithParents => 1,
+            });
         })
         .ok();
     }

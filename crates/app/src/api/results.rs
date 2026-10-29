@@ -205,6 +205,11 @@ pub struct TrackPath {
     pub track_id: u64,
     pub class_id: i32,
     pub points: Vec<TrackPoint>,
+    /// The tracks it came from: one for a daughter of a division, two or
+    /// more after a fusion - empty for most (and in results without
+    /// lineage).
+    #[serde(default)]
+    pub parent_track_ids: Vec<u64>,
 }
 
 /// See [`ImageTracksFilter`].
@@ -460,6 +465,9 @@ pub struct TimeCourseExport {
     pub statistics: Vec<TimeCourseStat>,
     pub normalize: TimeCourseNormalize,
     pub layout: TimeCourseLayout,
+    /// Track lines across divisions and fusions.
+    #[serde(default)]
+    pub history: TrackHistory,
 }
 
 impl Default for TimeCourseExport {
@@ -469,6 +477,7 @@ impl Default for TimeCourseExport {
             statistics: TimeCourseStat::DEFAULT.to_vec(),
             normalize: TimeCourseNormalize::default(),
             layout: TimeCourseLayout::default(),
+            history: TrackHistory::default(),
         }
     }
 }
@@ -537,6 +546,70 @@ pub struct TrackSummary {
     pub s_per_frame: Option<f64>,
     /// Per column, per statistic (`TrackSummaryFilter` order).
     pub values: Vec<Option<f64>>,
+    /// Where it came from and went - all empty / 0 in results without
+    /// lineage.
+    #[serde(default)]
+    pub lineage: TrackLineage,
+}
+
+/// A track's place in its family tree (a tracking step's divisions and
+/// fusions): enough to draw the tree - the parents are its edges.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackLineage {
+    /// The tracks it came from: one after a division, two or more after
+    /// a fusion.
+    pub parents: Vec<u64>,
+    /// The tracks that came from it.
+    pub children: Vec<u64>,
+    /// The tree it belongs to: the lowest id of the tracks it descends
+    /// from that have no parent (its own id for one without parents).
+    pub root: u64,
+    /// Divisions and fusions since its root (0: the root).
+    pub generation: u32,
+    /// Its children are a fusion (they have other parents too), not a
+    /// division.
+    pub fuses: bool,
+}
+
+/// How a track starts or ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineageEvent {
+    /// Appears or disappears - no parent, or no child.
+    None,
+    Division,
+    Fusion,
+}
+
+impl LineageEvent {
+    /// For the export and the table: empty for `None`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Division => "Division",
+            Self::Fusion => "Fusion",
+        }
+    }
+}
+
+impl TrackLineage {
+    /// Out of a division (one parent) or a fusion (more).
+    pub fn starts_with(&self) -> LineageEvent {
+        match self.parents.len() {
+            0 => LineageEvent::None,
+            1 => LineageEvent::Division,
+            _ => LineageEvent::Fusion,
+        }
+    }
+
+    /// Into a division (its children have it as their only parent) or a
+    /// fusion.
+    pub fn ends_with(&self) -> LineageEvent {
+        match (self.children.is_empty(), self.fuses) {
+            (true, _) => LineageEvent::None,
+            (false, true) => LineageEvent::Fusion,
+            (false, false) => LineageEvent::Division,
+        }
+    }
 }
 
 impl TrackSummary {
@@ -614,6 +687,20 @@ pub enum TimeCourseLines {
     Track,
 }
 
+/// What a track's line holds across a division or fusion (results with
+/// lineage) - for track lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackHistory {
+    /// Each track its own line: a mother's ends at the division, its
+    /// daughters' start there.
+    #[default]
+    Own,
+    /// A line per cell: from its first ancestor to a track without children
+    /// - a daughter's starts with its mother's track, a fused track has a
+    /// line per parent. A track's points are in every line through it.
+    WithParents,
+}
+
 /// A statistic of a time course point, over the line's objects there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimeCourseStat {
@@ -681,6 +768,9 @@ pub struct TimeCourseFilter {
     /// Track lines: at most this many tracks, a random but repeatable sample
     /// (the chart's faint tracks); `None`: every track.
     pub max_tracks: Option<usize>,
+    /// Track lines across divisions and fusions.
+    #[serde(default)]
+    pub history: TrackHistory,
 }
 
 /// One point of a time course: a line at one time point (and z-plane).

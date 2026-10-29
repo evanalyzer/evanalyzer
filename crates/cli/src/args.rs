@@ -321,6 +321,12 @@ pub struct GroupArgs {
     #[arg(long, value_enum, default_value = "long")]
     pub layout: LayoutKind,
 
+    /// Time course per track: each track with its parents' history - a
+    /// daughter's line starts with its mother's track, a fused track has a
+    /// line per parent (results with divisions or fusions)
+    #[arg(long)]
+    pub with_parents: bool,
+
     /// Additionally split each group by object class
     #[arg(long)]
     pub group_by_class: bool,

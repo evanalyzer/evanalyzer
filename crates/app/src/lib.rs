@@ -132,12 +132,13 @@ pub mod results {
     pub use crate::api::view_settings;
     pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
     pub use crate::api::{
-        ImageObjectsFilter, ImageTracks, ImageTracksFilter, ResultObject, TrackPath, TrackPoint,
+        ImageObjectsFilter, ImageTracks, ImageTracksFilter, LineageEvent, ResultObject,
+        TrackLineage, TrackPath, TrackPoint,
     };
     pub use crate::api::{
         TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-        TimeCoursePoint, TimeCourseResult, TimeCourseStat, TrackSummary, TrackSummaryExport,
-        TrackSummaryFilter,
+        TimeCoursePoint, TimeCourseResult, TimeCourseStat, TrackHistory, TrackSummary,
+        TrackSummaryExport, TrackSummaryFilter,
     };
     pub use crate::backend::local::results::{colorize, colorize_thumbnail};
 

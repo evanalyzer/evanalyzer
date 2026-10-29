@@ -53,27 +53,36 @@ impl DatasetAlgorithm for TrackNearestNeighbor {
                 "Track Nearest Neighbor: the maximum distance must be greater than 0".into(),
             ));
         }
-        let objects = ctx.store.get_objects(&ObjectFilter {
-            object_class: Some(self.object_class),
-            ..Default::default()
-        })?;
         // Continue after the tracks other steps (other classes) made, so
         // that track ids stay unique.
-        let first_id = ctx.store.max_track_id_except(self.object_class)? + 1;
-
-        let tracks = link_tracks(&objects, first_id, |object| self.max_distance_px(object))?;
-        if ctx.is_cancelled() {
-            return Err(InternalErrors::Cancelled);
+        let mut next_id = ctx.store.max_track_id_except(self.object_class)? + 1;
+        // Image by image: only one image's objects in memory (a track never
+        // leaves its image) - every object's new track written at the end,
+        // as an update per image would rewrite the table every time.
+        let mut ids = Vec::new();
+        for image in ctx.store.image_rel_paths(self.object_class)? {
+            if ctx.is_cancelled() {
+                return Err(InternalErrors::Cancelled);
+            }
+            let objects = ctx.store.get_objects(&ObjectFilter {
+                image_rel_path: Some(image),
+                object_class: Some(self.object_class),
+                ..Default::default()
+            })?;
+            let tracks = link_tracks(&objects, &mut next_id, |object| {
+                self.max_distance_px(object)
+            })?;
+            ids.extend(
+                objects
+                    .iter()
+                    .zip(tracks)
+                    .map(|(object, track_id)| TrackAssignment {
+                        object_id: object.id.clone(),
+                        track_id,
+                        parent_track_ids: Vec::new(),
+                    }),
+            );
         }
-        let ids: Vec<_> = objects
-            .iter()
-            .zip(tracks)
-            .map(|(object, track_id)| TrackAssignment {
-                object_id: object.id.clone(),
-                track_id,
-                parent_track_ids: Vec::new(),
-            })
-            .collect();
         ctx.store.set_track_ids(&ids)
     }
 
@@ -102,12 +111,12 @@ impl TrackNearestNeighbor {
     }
 }
 
-/// The track id of each of `objects` (same order), numbered from `first_id`
-/// in image, z-plane and frame order. `max_distance_px` gives the linking
+/// The track id of each of `objects` (same order), numbered from `*next_id`
+/// on (advanced) in image, z-plane and frame order. `max_distance_px` gives the linking
 /// distance for an object's image.
 fn link_tracks(
     objects: &[StoredObject],
-    first_id: u64,
+    next_id: &mut u64,
     max_distance_px: impl Fn(&StoredObject) -> Result<f64, InternalErrors>,
 ) -> Result<Vec<u64>, InternalErrors> {
     // image, z -> frame -> object indices
@@ -122,7 +131,6 @@ fn link_tracks(
     }
 
     let mut tracks = vec![0u64; objects.len()];
-    let mut next_id = first_id;
     for frames in stacks.values() {
         let Some(&first) = frames.values().next().and_then(|f| f.first()) else {
             continue;
@@ -140,8 +148,8 @@ fn link_tracks(
                 tracks[i] = match links.get(&i) {
                     Some(&from) => tracks[from],
                     None => {
-                        next_id += 1;
-                        next_id - 1
+                        *next_id += 1;
+                        *next_id - 1
                     }
                 };
             }
@@ -228,7 +236,7 @@ mod tests {
     }
 
     fn link(objects: &[StoredObject], max_distance: f64) -> Vec<u64> {
-        link_tracks(objects, 1, |_| Ok(max_distance)).unwrap()
+        link_tracks(objects, &mut 1, |_| Ok(max_distance)).unwrap()
     }
 
     #[test]

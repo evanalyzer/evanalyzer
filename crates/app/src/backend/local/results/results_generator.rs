@@ -2869,7 +2869,7 @@ impl ResultsGenerator {
         })
     }
 
-    fn has_object_column(&self, column: &str) -> Result<bool, InternalErrors> {
+    pub(super) fn has_object_column(&self, column: &str) -> Result<bool, InternalErrors> {
         if let Some(columns) = &*self.object_columns_cache.borrow() {
             return Ok(columns.contains(column));
         }

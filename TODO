@@ -203,7 +203,7 @@ All RAM rules in one place (`crates/core/src/memory.rs` + `memory/`), then one b
 - [ ] Plate/well queries run the grouping regex 3× per object instead of once per image - [`results_generator.rs:1664-1675`](crates/app/src/backend/local/results/results_generator.rs#L1664). Fix: CTE on `images`, join.
 - [ ] Split view `image_objects` loads every object of the image with masks, no view filter (300-400 MB at 1M objects; more over remote) - [`results_charts.rs:456-545`](crates/app/src/backend/local/results/results_charts.rs#L456). Fix: bbox filter, masks only when zoomed in.
 - [ ] Per-row allocations in list pages (3 HashMaps with String keys per row) and the measurements export (11 `Option<String>` per row) - [`results_generator.rs:3099-3138`](crates/app/src/backend/local/results/results_generator.rs#L3099), [`results_exporter.rs:1131-1145`](crates/app/src/backend/local/results/results_exporter.rs#L1131).
-- [ ] Track Nearest Neighbor loads every object of a class across all images (~1.3 GB at 5M), computes an unused `intensity_mean`, writes track ids back row by row as VARCHAR - [`track_nearest_neighbor.rs:56`](crates/core/src/dataset/tracking/track_nearest_neighbor.rs#L56), [`duckdb.rs:1616-1722`](crates/core/src/storage/duckdb.rs#L1616). Fix: image by image.
+- [x] Track Nearest Neighbor loads every object of a class across all images (~1.3 GB at 5M) - image by image since 2026-10-29. Left: `get_objects` computes an unused `intensity_mean`, the track ids go to DuckDB as VARCHAR object ids - [`duckdb.rs`](crates/core/src/storage/duckdb.rs) `set_track_ids`.
 - [ ] Coloc Objects builds full intersection masks just for the overlap area, twice per pair - [`coloc_objects.rs:330-340, 565`](crates/core/src/algos/object/coloc_objects.rs#L330). Fix: `Object::overlap_area`.
 
 ### Low
@@ -783,8 +783,12 @@ Today (2026-10-29): Track Nearest Neighbor (greedy), Track LAP, Track Kalman and
 - [x] Overlap mode (IoU linking, for big slow objects).
 - [x] Kalman (constant velocity) for directed motion - vesicles.
 - [ ] Data-driven cutoffs and alternative costs (Jaqaman Supplementary Note 3 - not read yet; today 1.05 x the user's cutoff) and their mixed Brownian/linear motion model (Supplementary Note 7).
-- [ ] Results: show/export `parent_track_ids` (lineage tree, division/merge events); the time course treats a daughter as a new track.
-- [ ] Track Nearest Neighbor: image by image like the LAP trackers (see the RAM item above).
+- [x] Lineage in the results (2026-10-29): track export columns Parent tracks / Child tracks / Lineage (root) / Generation / Starts with / Ends with (only with divisions or fusions); Results › Tracks: line + ring from the parent on the image, the selected track's family shown with it, From/Into on its card, divisions/fusions per image in the summary.
+- [ ] Lineage tree view: time on one axis, a branch per division, a join per fusion; click a branch to show its track. Design pass (Ink, canvas first); draw only what is visible (144k tracks). ~3-5 days.
+- [x] "Over time" along the lineage (2026-10-29): A (own track) default, B "History: With parents'" in the chart's DISPLAY group (results with lineage, where tracks are drawn), the export dialog's "Each track with its parents' history", CLI `--with-parents`. Design: https://claude.ai/artifact/FE6uzACa86Nz8FY7DtE2SZ.
+- [ ] `bench_open_results` is broken on both test files (picks `track_id` for the plate; old file lacks `images.disabled_reason`).
+- [ ] Divisions/fusions per well as a value of the plate/charts (today: per image in Results › Tracks, per well by pivoting the track export).
+- [x] Track Nearest Neighbor: image by image like the LAP trackers (2026-10-29).
 - [ ] Track measurements: displacement, speed, lifetime.
 - ~1 week. ilastik's conservation tracking (ILP solver, learned division/merger classifiers) is not planned - LAP is enough for most users.
 

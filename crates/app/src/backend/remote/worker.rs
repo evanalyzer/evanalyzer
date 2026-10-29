@@ -793,6 +793,7 @@ fn answer_query(
         }
         ResultsQuery::ImageTracks(filter) => ResultsAnswer::Tracks(source.image_tracks(&filter)?),
         ResultsQuery::HasTracks => ResultsAnswer::Count(u32::from(source.has_tracks()?)),
+        ResultsQuery::HasLineage => ResultsAnswer::Count(u32::from(source.has_lineage()?)),
         ResultsQuery::TrackSummary(filter) => {
             ResultsAnswer::TrackSummary(source.track_summary(&filter)?)
         }

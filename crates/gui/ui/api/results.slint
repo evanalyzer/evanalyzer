@@ -114,6 +114,9 @@ export struct TrackCard {
     span: string,
     displacement: string,
     speed: string,
+    // Its parents and children ("#3 (division)") - empty without.
+    from: string,
+    into: string,
 }
 
 // Split with image, Plate: one of the well's images under the image.
@@ -271,6 +274,9 @@ export global ResultsState {
 
     // -- Tracks (with tracked objects): one image's tracks, beside it --
     in-out property <bool> has-tracks: false;
+    // A tracking step recorded divisions or fusions: the tracks' history is
+    // offered (Over time).
+    in-out property <bool> has-lineage: false;
     // The open analysis has measurements (a measurement step ran).
     in-out property <bool> has-measurements: false;
     // The image's tracks in the table's order, the selected row (-1 none).
@@ -750,6 +756,8 @@ export global ResultsState {
     in-out property <int> chart-time-summary: 0;
     in-out property <bool> chart-time-relative: false;
     in-out property <bool> chart-time-tracks: false;
+    // Track lines across divisions: 0 own track, 1 with the parents'.
+    in-out property <int> chart-time-history: 0;
     in property <[ChartTimeLine]> chart-time-data: [];
     // The faint tracks' paths (same box).
     in property <[string]> chart-time-faint: [];

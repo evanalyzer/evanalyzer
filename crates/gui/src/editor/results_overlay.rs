@@ -7,6 +7,8 @@
 //! (Results › Tracks) each track's path up to the time point shown goes
 //! under them as a trail, fading into the past. Drawn instead of the
 //! project's objects (see `ViewportController::sync_objects_to_slint_viewport`).
+//! A division or fusion (a track's parents) is a line from the parent's
+//! last point before it to the track's first, and a ring where it happened.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-17
@@ -89,6 +91,9 @@ pub struct TrailsOverlay {
     pub frames: Option<u32>,
     /// Index into `tracks.tracks`: its whole path faint, its trail white.
     pub selected: Option<usize>,
+    /// The selected track's parents and children (indices into
+    /// `tracks.tracks`): their whole paths faint too, shown with it.
+    pub family: Vec<usize>,
     /// Only the selected track's.
     pub only_selected: bool,
 }
@@ -97,6 +102,8 @@ pub struct TrailsOverlay {
 const TRAIL_ALPHA: f32 = 0.9;
 /// The selected track's whole path, behind its trail.
 const GHOST_ALPHA: f32 = 0.22;
+/// The ring where a division or fusion happened, in screen pixels.
+const EVENT_RING_RADIUS: f32 = 4.0;
 const SELECTED_TRAIL_RGB: [u8; 3] = [255, 255, 255];
 
 /// Draws `overlay` into `buffer` (`buf_w` × `buf_h`, transparent before),
@@ -164,19 +171,48 @@ fn draw_trails(
         w: buf_w as i64,
         h: buf_h as i64,
     };
-    // The selected one last: on top.
-    let order = (0..trails.tracks.tracks.len())
-        .filter(|i| Some(*i) != trails.selected && !trails.only_selected)
-        .chain(trails.selected.filter(|s| *s < trails.tracks.tracks.len()));
+    let tracks = &trails.tracks.tracks;
+    let in_family = |i: usize| trails.family.contains(&i);
+    // The family, then the selected one last: on top. Only the selected:
+    // with its family.
+    let order = (0..tracks.len())
+        .filter(|i| Some(*i) != trails.selected && !in_family(*i) && !trails.only_selected)
+        .chain(
+            trails
+                .family
+                .iter()
+                .copied()
+                .filter(|i| Some(*i) != trails.selected),
+        )
+        .chain(trails.selected)
+        .filter(|i| *i < tracks.len());
     for i in order {
-        let track = &trails.tracks.tracks[i];
+        let track = &tracks[i];
         let selected = trails.selected == Some(i);
         let rgb = match selected {
             true => SELECTED_TRAIL_RGB,
             false => trails.colors.get(i).copied().unwrap_or(SELECTED_TRAIL_RGB),
         };
+        // Where it came from: a line from each parent's last point before
+        // it, a ring there - once its first point is in the trail.
+        if let Some(first) = track.points.first()
+            && first.t <= trails.t
+            && from.is_none_or(|from| first.t >= from)
+        {
+            for parent in &track.parent_track_ids {
+                let Ok(p) = tracks.binary_search_by_key(parent, |t| t.track_id) else {
+                    continue; // Not read (a sample).
+                };
+                let before = tracks[p].points.partition_point(|q| q.t < first.t);
+                let Some(at) = before.checked_sub(1).map(|k| &tracks[p].points[k]) else {
+                    continue;
+                };
+                canvas.line(screen(at), screen(first), rgb, TRAIL_ALPHA, selected);
+                ring(&mut canvas, screen(at), rgb, TRAIL_ALPHA);
+            }
+        }
         // Its whole path, faint: where it comes from and goes.
-        if selected {
+        if selected || in_family(i) {
             for pair in track.points.windows(2) {
                 canvas.line(screen(&pair[0]), screen(&pair[1]), rgb, GHOST_ALPHA, false);
             }
@@ -193,6 +229,22 @@ fn draw_trails(
             let alpha = TRAIL_ALPHA * (1.0 - 0.75 * age.min(1.0));
             canvas.line(screen(&pair[0]), screen(&pair[1]), rgb, alpha, selected);
         }
+    }
+}
+
+/// A small ring around `centre` (screen pixels): where a division or
+/// fusion happened.
+fn ring(canvas: &mut Canvas, centre: (f32, f32), rgb: [u8; 3], alpha: f32) {
+    const SIDES: usize = 12;
+    let at = |k: usize| {
+        let angle = k as f32 / SIDES as f32 * std::f32::consts::TAU;
+        (
+            centre.0 + EVENT_RING_RADIUS * angle.cos(),
+            centre.1 + EVENT_RING_RADIUS * angle.sin(),
+        )
+    };
+    for k in 0..SIDES {
+        canvas.line(at(k), at(k + 1), rgb, alpha, false);
     }
 }
 
@@ -281,6 +333,7 @@ mod tests {
                     area_px: 1.0,
                 })
                 .collect(),
+            parent_track_ids: Vec::new(),
         };
         ResultsOverlay {
             sources: Vec::new(),
@@ -296,6 +349,7 @@ mod tests {
                 t,
                 frames,
                 selected,
+                family: Vec::new(),
                 only_selected,
             })),
         }
@@ -338,15 +392,39 @@ mod tests {
                             }
                         })
                         .collect(),
+                    parent_track_ids: Vec::new(),
                 }
             })
             .collect();
+        // The same with divisions: every 10th track a daughter of the one
+        // before, from its 24th time point, starting where its mother is
+        // (a short line and a ring each).
+        let mut divided = tracks.clone();
+        for i in (10..divided.len()).step_by(10) {
+            let (mother, mother_id) = (divided[i - 1].points[23], divided[i - 1].track_id);
+            let daughter = &mut divided[i];
+            daughter.parent_track_ids = vec![mother_id];
+            daughter.points.drain(..24);
+            let (dx, dy) = (
+                mother.x - daughter.points[0].x,
+                mother.y - daughter.points[0].y,
+            );
+            for p in &mut daughter.points {
+                p.x += dx + 3.0;
+                p.y += dy + 3.0;
+            }
+        }
+        let divided = Arc::new(ImageTracks {
+            total_tracks: divided.len(),
+            tracks: divided,
+            ..ImageTracks::default()
+        });
         let tracks = Arc::new(ImageTracks {
             total_tracks: tracks.len(),
             tracks,
             ..ImageTracks::default()
         });
-        let overlay = |frames, selected, only_selected| ResultsOverlay {
+        let with = |tracks: &Arc<ImageTracks>, frames, selected, only_selected| ResultsOverlay {
             sources: Vec::new(),
             links: Vec::new(),
             objects: Vec::new(),
@@ -356,9 +434,12 @@ mod tests {
                 t: 30,
                 frames,
                 selected,
+                family: Vec::new(),
                 only_selected,
             })),
         };
+        let overlay =
+            |frames, selected, only_selected| with(&tracks, frames, selected, only_selected);
         for (label, overlay) in [
             (
                 "trails of 10 time points",
@@ -366,6 +447,7 @@ mod tests {
             ),
             ("whole tracks up to t", overlay(None, Some(5), false)),
             ("the selected track only", overlay(Some(10), Some(5), true)),
+            ("whole, 149 divisions", with(&divided, None, Some(5), false)),
         ] {
             let mut times = Vec::new();
             for _ in 0..15 {
@@ -377,6 +459,59 @@ mod tests {
             times.sort_by(f64::total_cmp);
             println!("{label:<28} {:>7.2} ms", times[times.len() / 2]);
         }
+    }
+
+    /// Track 1 along y = 10 (t 0-9); track 2 along y = 30 from t 5 - with
+    /// `parents`. Its whole trail up to t 9, `selected`/`family` as given.
+    fn daughter(
+        parents: Vec<u64>,
+        selected: Option<usize>,
+        family: Vec<usize>,
+        only: bool,
+    ) -> Vec<slint::Rgba8Pixel> {
+        let ResultsOverlay { trails, .. } = trails(9, None, selected, only);
+        let mut trails = (*trails.unwrap()).clone();
+        let mut tracks = (*trails.tracks).clone();
+        tracks.tracks[1].points.drain(..5);
+        tracks.tracks[1].parent_track_ids = parents;
+        trails.tracks = Arc::new(tracks);
+        trails.family = family;
+        let overlay = ResultsOverlay {
+            trails: Some(Arc::new(trails)),
+            ..ResultsOverlay::default()
+        };
+        let mut buf = buffer(100, 40);
+        draw_results_overlay(&mut buf, &overlay, 100, 40, 1.0, 0.0, 0.0, FILL);
+        buf
+    }
+
+    /// A daughter: a line from its mother's point before it (t 4 at
+    /// x 40) to its first (t 5 at x 50), and a ring at the mother's.
+    #[test]
+    fn a_division_is_a_line_from_the_mother_and_a_ring() {
+        let with = daughter(vec![1], None, vec![], false);
+        let without = daughter(vec![], None, vec![], false);
+        assert!(alpha_at(&with, 45, 20) > 0, "the line half way");
+        assert_eq!(alpha_at(&without, 45, 20), 0);
+        assert!(alpha_at(&with, 40, 14) > 0, "the ring's bottom");
+        assert_eq!(alpha_at(&without, 40, 14), 0);
+        assert_eq!(
+            with[(20 * 100 + 45) as usize].b,
+            255,
+            "in the daughter's colour"
+        );
+    }
+
+    /// Only the selected track: its family with it, the rest not.
+    #[test]
+    fn only_the_selected_track_shows_its_family_too() {
+        let alone = daughter(vec![1], Some(1), vec![], true);
+        assert_eq!(alpha_at(&alone, 20, 10), 0, "the mother isn't shown");
+        let family = daughter(vec![1], Some(1), vec![0], true);
+        assert!(
+            alpha_at(&family, 20, 10) > 0,
+            "with its family: the mother is"
+        );
     }
 
     /// A trail ends at the time point shown; the older part is fainter.
