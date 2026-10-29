@@ -1447,14 +1447,24 @@ pub struct IntensityTransformationSettings {
 /// The Laplacian is a second-order derivative operator used to find regions of
 /// rapid intensity change. It is particularly effective for detecting edges
 /// and fine details, though it is highly sensitive to noise.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct LaplacianSettings {
     /// The size of the discrete Laplacian aperture.
     ///
     /// Typically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)
     /// more closely but are more computationally expensive. Must be an odd number.
+    #[schemars(range(min = 3, max = 7))]
     pub kernel_size: usize,
+}
+
+impl Default for LaplacianSettings {
+    fn default() -> Self {
+        Self {
+            kernel_size: 3usize,
+        }
+    }
 }
 
 fn _serde_default_loadchannel_projection() -> MathLoadChannelChannelZProjectionSettings {

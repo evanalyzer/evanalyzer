@@ -93,13 +93,25 @@ impl ImageAlgorithm for IntensityTransformation {
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::DANMAYR]
+        vec![&HUMMEL_1977]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
     }
 }
+
+/// The histogram equalization of the automatic mode.
+const HUMMEL_1977: CitationMetadata = CitationMetadata {
+    cite_key: "hummel1977image",
+    title: "Image Enhancement by Histogram Transformation",
+    authors: &["Robert Hummel"],
+    year: 1977,
+    container: Some("Computer Graphics and Image Processing"),
+    doi: Some("10.1016/S0146-664X(77)80011-7"),
+    url: Some("https://doi.org/10.1016/S0146-664X(77)80011-7"),
+    pages: Some("184-195"),
+};
 
 impl IntensityTransformation {
     fn process_f32_image<const C: usize>(
@@ -280,7 +292,7 @@ mod tests {
             brightness: 0.0,
         };
         assert_eq!(algo.name(), "Intensity Transformation");
-        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
+        assert_eq!(algo.cite()[0].cite_key, "hummel1977image");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 

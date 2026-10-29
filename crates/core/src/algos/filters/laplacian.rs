@@ -31,6 +31,7 @@ pub struct Laplacian {
     ///
     /// Typically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)
     /// more closely but are more computationally expensive. Must be an odd number.
+    #[cmdsmeta(default = 3, min = 3, max = 7, summary = true, step = 2)]
     pub kernel_size: usize,
 }
 impl ImageAlgorithm for Laplacian {
@@ -60,10 +61,12 @@ impl ImageAlgorithm for Laplacian {
         match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
                 apply_laplacian(input, output, self.kernel_size)?;
+                ctx.swap()?;
                 Ok(())
             }
             (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
                 apply_laplacian(input, output, self.kernel_size)?;
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {
@@ -78,7 +81,7 @@ impl ImageAlgorithm for Laplacian {
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::DANMAYR]
+        vec![&GONZALEZ_2018]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -86,33 +89,74 @@ impl ImageAlgorithm for Laplacian {
     }
 }
 
-fn get_1d_kernel(kernel_size: usize) -> Vec<f32> {
-    match kernel_size {
-        1 | 3 => vec![1.0, -2.0, 1.0],
-        5 => vec![1.0, 2.0, -6.0, 2.0, 1.0],
-        7 => vec![1.0, 4.0, 1.0, -12.0, 1.0, 4.0, 1.0],
-        _ => vec![1.0, -2.0, 1.0], // Default fallback
+/// The textbook discrete Laplacian (spatial filtering chapter).
+const GONZALEZ_2018: CitationMetadata = CitationMetadata {
+    cite_key: "gonzalez2018digital",
+    title: "Digital Image Processing",
+    authors: &["Rafael C. Gonzalez", "Richard E. Woods"],
+    year: 2018,
+    container: Some("Pearson, 4th edition, ISBN 978-0-13-335672-4"),
+    doi: None,
+    url: None,
+    pages: None,
+};
+
+/// The second-derivative and smoothing kernels of an aperture of size 5 or
+/// 7: binomial smoothing, and binomial smoothing of size `k - 2` convolved
+/// with `[1, -2, 1]`. Both are normalized, so every aperture estimates the
+/// Laplacian of the image in the same units as the 3x3 stencil (a quadratic
+/// `x^2` gives 2 for every size).
+fn separable_kernels(k: usize) -> ([f32; 7], [f32; 7]) {
+    let (derivative, smoothing): (&[f32], &[f32]) = match k {
+        5 => (&[1.0, 0.0, -2.0, 0.0, 1.0], &[1.0, 4.0, 6.0, 4.0, 1.0]),
+        _ => (
+            &[1.0, 2.0, -1.0, -4.0, -1.0, 2.0, 1.0],
+            &[1.0, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0],
+        ),
+    };
+    // Sum of the smoothing weights: 2^(k-1). Response of the derivative to
+    // x^2, divided by 2: 2^(k-3).
+    let smoothing_sum = (1u32 << (k - 1)) as f32;
+    let derivative_gain = (1u32 << (k - 3)) as f32;
+    let mut d = [0.0; 7];
+    let mut g = [0.0; 7];
+    for i in 0..k {
+        d[i] = derivative[i] / derivative_gain;
+        g[i] = smoothing[i] / smoothing_sum;
     }
+    (d, g)
 }
 
+/// Writes the Laplacian of `input` into `output`. `kernel_size` 1 or 3 is the
+/// 5-point stencil; 5 and 7 smooth across the derivative direction
+/// (d²/dx² * smoothing(y) + smoothing(x) * d²/dy²). Pixels closer than
+/// half the aperture to the border are 0.
 fn apply_laplacian<const C: usize>(
     input: &Image<f32, C>,
     output: &mut Image<f32, C>,
     kernel_size: usize,
 ) -> Result<(), InternalErrors> {
+    let k = match kernel_size {
+        0 | 1 | 3 => 3,
+        5 | 7 => kernel_size,
+        _ => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Laplacian: kernel size must be 1, 3, 5 or 7, got {kernel_size}"
+            )));
+        }
+    };
     let (h, w) = (input.size().height, input.size().width);
-
-    // Standard OpenCV-style kernel size mapping
-    let k = if kernel_size == 1 { 3 } else { kernel_size };
     let pad = k / 2;
-
-    if h < k || w < k {
-        return Ok(());
-    }
 
     // Map views with error handling
     let in_view = ArrayView3::from_shape((h, w, C), input.as_slice())?;
     let mut out_view = ArrayViewMut3::from_shape((h, w, C), output.as_slice_mut())?;
+    // The scratch pad holds an earlier step's pixels: clear the border.
+    out_view.fill(0.0);
+
+    if h < k || w < k {
+        return Ok(());
+    }
 
     if k == 3 {
         // If k=3, we use the hardcoded stencil which is extremely fast.
@@ -127,27 +171,16 @@ fn apply_laplacian<const C: usize>(
         // This single line triggers SIMD instructions (vectorization)
         out_slice.assign(&(&top + &bottom + &left + &right - (4.0 * &center)));
     } else {
-        //  Parallel ZIP (For larger kernels)
+        let (d, g) = separable_kernels(k);
         let mut out_slice = out_view.slice_mut(ndarray::s![pad..h - pad, pad..w - pad, ..]);
-        let kernel_1d = get_1d_kernel(kernel_size);
-        let center_idx = k / 2;
-
-        // Using ndarray::Zip without .indexed() if possible, as it's faster
         ndarray::Zip::indexed(&mut out_slice).for_each(|(y_inner, x_inner, c), out_pixel| {
             let mut val = 0.0;
-            let yc = y_inner + pad;
-            let xc = x_inner + pad;
-
-            // Outside the loop, handle the center pixel contribution exactly once
-            val += in_view[[yc, xc, c]] * kernel_1d[center_idx];
-
-            for i in 0..k {
-                if i == center_idx {
-                    continue;
-                } // Already added
-                let offset = i as isize - center_idx as isize;
-                val += in_view[[yc, (xc as isize + offset) as usize, c]] * kernel_1d[i]; // Horizontal
-                val += in_view[[(yc as isize + offset) as usize, xc, c]] * kernel_1d[i]; // Vertical
+            for j in 0..k {
+                let y = y_inner + j;
+                for i in 0..k {
+                    let x = x_inner + i;
+                    val += in_view[[y, x, c]] * (d[i] * g[j] + g[i] * d[j]);
+                }
             }
             *out_pixel = val;
         });
@@ -222,29 +255,83 @@ mod tests {
         }
     }
 
+    /// Every aperture estimates the Laplacian in the same units: x² + y²
+    /// has a Laplacian of 4 everywhere.
     #[test]
-    fn test_laplacian_kernel_5() {
+    fn every_kernel_size_gives_the_laplacian_of_a_quadratic() {
         let size = ImageSize {
-            width: 7,
-            height: 7,
+            width: 9,
+            height: 9,
         };
         let mut input = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
-        let mut output = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
-
-        // Set center to 10.0
         {
-            let mut view = ArrayViewMut3::from_shape((7, 7, 1), input.as_slice_mut()).unwrap();
-            view[[3, 3, 0]] = 10.0;
+            let mut view = ArrayViewMut3::from_shape((9, 9, 1), input.as_slice_mut()).unwrap();
+            for y in 0..9 {
+                for x in 0..9 {
+                    view[[y, x, 0]] = (x * x + y * y) as f32;
+                }
+            }
         }
+        for k in [1, 3, 5, 7] {
+            let mut output = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+            apply_laplacian(&input, &mut output, k).unwrap();
+            let out_view = ArrayView3::from_shape((9, 9, 1), output.as_slice()).unwrap();
+            assert!((out_view[[4, 4, 0]] - 4.0).abs() < 1e-4, "kernel size {k}");
+        }
+    }
 
-        // Apply Laplacian with kernel size 5
-        apply_laplacian(&input, &mut output, 5).unwrap();
+    #[test]
+    fn larger_kernels_respond_to_a_flat_image_with_zero_and_clear_the_border() {
+        let size = ImageSize {
+            width: 9,
+            height: 9,
+        };
+        let input = Image::<f32, 1>::from_size_val(size, 0.5).unwrap();
+        for k in [5, 7] {
+            // A stale scratch pad: every pixel must be overwritten.
+            let mut output = Image::<f32, 1>::from_size_val(size, 9.0).unwrap();
+            apply_laplacian(&input, &mut output, k).unwrap();
+            assert!(
+                output.as_slice().iter().all(|v| v.abs() < 1e-6),
+                "kernel size {k}"
+            );
+        }
+    }
 
-        let out_view = ArrayView3::from_shape((7, 7, 1), output.as_slice()).unwrap();
+    #[test]
+    fn unsupported_kernel_sizes_are_rejected() {
+        let size = ImageSize {
+            width: 9,
+            height: 9,
+        };
+        let input = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+        let mut output = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+        for k in [2, 4, 9] {
+            assert!(
+                apply_laplacian(&input, &mut output, k).is_err(),
+                "kernel size {k}"
+            );
+        }
+    }
 
-        // The center should reflect the kernel weight for 5: -6.0 * center_value
-        // -6.0 * 10.0 = -60.0
-        assert_eq!(out_view[[3, 3, 0]], -60.0);
+    #[test]
+    fn execute_puts_the_result_into_the_image() {
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
+        let mut input = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+        input.as_slice_mut()[12] = 1.0;
+        let mut ctx = PipelineContext::new_from_image_test(input).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        Laplacian { kernel_size: 3 }
+            .execute(&mut ctx, &mut cache)
+            .unwrap();
+        let ImageContainer::F32Gray(result) = ctx.image.as_ref() else {
+            panic!("expected F32Gray");
+        };
+        assert_eq!(result.as_slice()[12], -4.0);
+        assert_eq!(result.as_slice()[7], 1.0);
     }
 
     #[test]
@@ -277,5 +364,6 @@ mod tests {
     fn test_laplacian_name() {
         let filter = Laplacian { kernel_size: 3 };
         assert_eq!(filter.name(), "Laplacian");
+        assert_eq!(filter.cite()[0].cite_key, "gonzalez2018digital");
     }
 }

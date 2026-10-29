@@ -1365,12 +1365,11 @@
           "description": "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "default": 3,
+          "maximum": 7,
+          "minimum": 3
         }
-      },
-      "required": [
-        "kernelSize"
-      ]
+      }
     },
     "LibsLinkingMergeSplitAmountSettings": {
       "description": "What a merge adds up and a split divides - telling a true merge or\nsplit from objects that only pass close by.",

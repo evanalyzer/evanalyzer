@@ -59,6 +59,25 @@ impl CitationMetadata {
         pages: Some("671-675"),
     };
 
+    /// kornia-rs - for commands whose filter is kornia-rs's implementation
+    /// (Gaussian blur).
+    pub const KORNIA_RS: CitationMetadata = CitationMetadata {
+        cite_key: "riba2025kornia",
+        title: "Kornia-rs: A Low-Level 3D Computer Vision Library In Rust",
+        authors: &[
+            "Edgar Riba",
+            "Jian Shi",
+            "Aditya Kumar",
+            "Andrew Shen",
+            "Gary Bradski",
+        ],
+        year: 2025,
+        container: Some("arXiv"),
+        doi: Some("10.48550/arXiv.2505.12425"),
+        url: Some("https://arxiv.org/abs/2505.12425"),
+        pages: None,
+    };
+
     /// The exact Euclidean feature transform (nearest pixel) - for commands
     /// that grow objects or dilate with it.
     pub const MAURER_2003: CitationMetadata = CitationMetadata {

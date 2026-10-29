@@ -92,7 +92,7 @@ impl ImageAlgorithm for GaussianBlur {
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::DANMAYR]
+        vec![&CitationMetadata::KORNIA_RS]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

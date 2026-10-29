@@ -163,7 +163,7 @@ impl ImageAlgorithm for WeightedDeviation {
     }
 
     fn cite(&self) -> Vec<&'static CitationMetadata> {
-        vec![&CitationMetadata::DANMAYR]
+        vec![&CitationMetadata::KORNIA_RS, &CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -316,7 +316,7 @@ mod tests {
             sigma: 1.0,
         };
         assert_eq!(algo.name(), "Weighted Deviation");
-        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
+        assert_eq!(algo.cite()[0].cite_key, "riba2025kornia");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }
