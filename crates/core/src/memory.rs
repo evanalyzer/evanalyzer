@@ -13,7 +13,8 @@
 //!   user can set each by hand (Settings › Viewport).
 //!
 //! Also here: what the computer has ([`SystemRam`], [`SystemDiagnostics`]) -
-//! within a container's memory limit and [`RAM_LIMIT_ENV`].
+//! within a container's memory limit and the user's [`ResourceLimits`]
+//! (`--max-threads`, `--max-ram`, Settings › Performance).
 //!
 //! Not bounded yet: a whole slide's objects until export, deep-learning
 //! models (loaded until the app ends), the editor's preview objects.
@@ -29,6 +30,7 @@ pub mod analysis;
 pub mod storage;
 pub mod viewer;
 
+use std::sync::OnceLock;
 use sysinfo::System;
 
 /// The computer's RAM now - in a container with a memory limit (a cgroup:
@@ -56,8 +58,8 @@ impl SystemRam {
             Some(limits) => ram.within(limits.total_memory, limits.free_memory),
             None => ram,
         };
-        match ram_limit_from_env() {
-            Some(limit) => ram.within(limit, limit),
+        match resource_limits().max_ram_mb {
+            Some(mb) => ram.within(mb << 20, mb << 20),
             None => ram,
         }
     }
@@ -71,20 +73,63 @@ impl SystemRam {
     }
 }
 
-/// The environment variable that limits the RAM EVAnalyzer plans with, in
-/// MB - as if the computer had no more: a server shared with others, or a
-/// small computer simulated on a big one (the benchmarks). Its total RAM
-/// and what is free are capped.
-pub const RAM_LIMIT_ENV: &str = "EVANALYZER_RAM_LIMIT_MB";
-
-/// [`RAM_LIMIT_ENV`] in bytes, if set to a number.
-fn ram_limit_from_env() -> Option<u64> {
-    parse_ram_limit_mb(&std::env::var(RAM_LIMIT_ENV).ok()?)
+/// How much of the computer EVAnalyzer may use, set by the user: the
+/// command line (`--max-threads`, `--max-ram`) or Settings › Performance.
+/// `None`: no limit of the user's (the computer's and a container's apply).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResourceLimits {
+    /// Most CPU cores - threads for the analysis, the AI engine, DuckDB and
+    /// the general thread pool.
+    pub max_threads: Option<usize>,
+    /// Most RAM in MB EVAnalyzer plans with - as if the computer had no
+    /// more (see [`SystemRam`]). A planning limit: the caches, threads and
+    /// DuckDB are sized within it; it isn't enforced on every allocation
+    /// (the operating system does that, e.g. a container's limit).
+    pub max_ram_mb: Option<u64>,
 }
 
-fn parse_ram_limit_mb(value: &str) -> Option<u64> {
-    let mb: u64 = value.trim().parse().ok()?;
-    (mb > 0).then(|| mb << 20)
+static LIMITS: OnceLock<ResourceLimits> = OnceLock::new();
+
+/// Sets this process' [`ResourceLimits`]. Once, at startup, before anything
+/// sizes itself; `false` (nothing changed) if they were set or read before.
+/// With a thread limit, the general thread pool (viewer, exports, the
+/// steps' own parallel loops) gets that many threads too - it is built here,
+/// before its first use.
+pub fn set_resource_limits(limits: ResourceLimits) -> bool {
+    let set = LIMITS
+        .set(ResourceLimits {
+            max_threads: limits.max_threads.map(|n| n.max(1)),
+            max_ram_mb: limits.max_ram_mb.map(|mb| mb.max(1)),
+        })
+        .is_ok();
+    if set && limits.max_threads.is_some() {
+        let threads = cpu_cores();
+        if let Err(e) = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+        {
+            log::warn!("Could not limit the thread pool to {threads} threads: {e}");
+        }
+    }
+    set
+}
+
+/// This process' [`ResourceLimits`] - none until set.
+pub fn resource_limits() -> ResourceLimits {
+    *LIMITS.get_or_init(ResourceLimits::default)
+}
+
+/// CPU cores EVAnalyzer may use: the computer's (within its affinity and a
+/// container's quota) within [`ResourceLimits::max_threads`].
+pub fn cpu_cores() -> usize {
+    cores_within(
+        std::thread::available_parallelism().map_or(1, |n| n.get()),
+        resource_limits().max_threads,
+    )
+}
+
+fn cores_within(cores: usize, max_threads: Option<usize>) -> usize {
+    max_threads.map_or(cores, |max| cores.min(max)).max(1)
 }
 
 /// Currently available system RAM, in bytes - [`SystemRam::available`].
@@ -113,14 +158,11 @@ pub struct SystemDiagnostics {
     pub cuda_available: bool,
 }
 
-/// Reads current host CPU core count and total RAM. Cheap and fast (no
-/// driver/device probing) - safe to call on a startup path.
+/// The CPU cores and total RAM EVAnalyzer may use ([`cpu_cores`],
+/// [`SystemRam::total`]) - within the user's [`ResourceLimits`]. Cheap and
+/// fast (no driver/device probing) - safe to call on a startup path.
 pub fn cpu_ram_diagnostics() -> (usize, u64) {
-    let cpu_cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-
-    (cpu_cores, SystemRam::now().total)
+    (cpu_cores(), SystemRam::now().total)
 }
 
 /// Reads current host CPU/RAM/CUDA availability once, for display purposes.
@@ -163,12 +205,12 @@ mod tests {
     const GB: u64 = 1 << 30;
 
     #[test]
-    fn the_ram_limit_is_read_in_mb() {
-        assert_eq!(parse_ram_limit_mb("8192"), Some(8 * GB));
-        assert_eq!(parse_ram_limit_mb(" 512 "), Some(512 << 20));
-        assert_eq!(parse_ram_limit_mb("0"), None);
-        assert_eq!(parse_ram_limit_mb("8G"), None);
-        assert_eq!(parse_ram_limit_mb(""), None);
+    fn the_cores_stay_within_the_users_limit() {
+        assert_eq!(cores_within(22, None), 22);
+        assert_eq!(cores_within(22, Some(4)), 4);
+        // A limit above the computer's cores changes nothing.
+        assert_eq!(cores_within(4, Some(64)), 4);
+        assert_eq!(cores_within(4, Some(0)), 1);
     }
 
     /// In a container the smaller of its limit and the host's RAM counts.

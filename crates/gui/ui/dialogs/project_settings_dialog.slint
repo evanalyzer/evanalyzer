@@ -113,6 +113,8 @@ export component ProjectSettingsDialog inherits InkDialog {
     property <string> kw-breakpoint-tiles: "Breakpoint tiles image compare memory RAM automatic";
     property <string> kw-undo-history: "Undo history redo steps memory RAM MB automatic";
     property <string> kw-renderer: "Draw in software renderer graphics card GPU driver virtual machine remote desktop RAM";
+    property <string> kw-max-threads: "Most CPU cores threads processors limit performance analysis keep computer usable";
+    property <string> kw-max-ram: "Most RAM memory MB limit performance analysis caches";
     property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
     property <string> kw-free-caches: "Small caches while an analysis runs free release memory RAM analysis run";
     property <string> kw-objects-table: "Objects as a table list default view bottom";
@@ -152,7 +154,7 @@ export component ProjectSettingsDialog inherits InkDialog {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || root.matches(root.kw-masks) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
-        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-preview-tiles) || root.matches(root.kw-breakpoint-tiles) || root.matches(root.kw-undo-history) || root.matches(root.kw-renderer) || root.matches(root.kw-free-caches) || root.matches(root.kw-objects-table) || root.matches(root.kw-reduce-motion) || root.matches(root.kw-auto-scale) || root.matches(root.kw-channel-colors))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-preview-tiles) || root.matches(root.kw-breakpoint-tiles) || root.matches(root.kw-undo-history) || root.matches(root.kw-renderer) || root.matches(root.kw-max-threads) || root.matches(root.kw-max-ram) || root.matches(root.kw-free-caches) || root.matches(root.kw-objects-table) || root.matches(root.kw-reduce-motion) || root.matches(root.kw-auto-scale) || root.matches(root.kw-channel-colors))
     }
 
     pure function shows-section(section: int) -> bool {
@@ -642,6 +644,48 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             alignment: end;
                                             Switch {
                                                 checked <=> ViewportMemoryState.software_renderer;
+                                            }
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-max-threads): InkSettingRow {
+                                        control-width: 200px;
+                                        label: "Most CPU cores";
+                                        description: "For the analysis, AI models and everything else - fewer keep this computer usable during a long analysis. Auto: all of them (" + ViewportMemoryState.resources_note + "). Takes effect after a restart; --max-threads on the command line wins.";
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            alignment: end;
+                                            Switch {
+                                                text: "Auto";
+                                                checked <=> ViewportMemoryState.max_threads_auto;
+                                            }
+                                            SpinBox {
+                                                width: 96px;
+                                                enabled: !ViewportMemoryState.max_threads_auto;
+                                                minimum: 1;
+                                                maximum: 1024;
+                                                step-size: 1;
+                                                value <=> ViewportMemoryState.max_threads;
+                                            }
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-max-ram): InkSettingRow {
+                                        control-width: 200px;
+                                        label: "Most RAM";
+                                        description: "In MB: caches, threads and the results database are sized as if this computer had no more - not a hard limit on every allocation. Auto: all of it. Takes effect after a restart; --max-ram on the command line wins.";
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            alignment: end;
+                                            Switch {
+                                                text: "Auto";
+                                                checked <=> ViewportMemoryState.max_ram_auto;
+                                            }
+                                            SpinBox {
+                                                width: 96px;
+                                                enabled: !ViewportMemoryState.max_ram_auto;
+                                                minimum: 512;
+                                                maximum: 4194304;
+                                                step-size: 512;
+                                                value <=> ViewportMemoryState.max_ram_mb;
                                             }
                                         }
                                     }

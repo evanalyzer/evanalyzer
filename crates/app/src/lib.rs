@@ -80,6 +80,7 @@ pub mod global {
     pub use crate::workspace::settings::ColorScheme;
     pub use crate::workspace::settings::NavigatorMode;
     pub use crate::workspace::settings::PanelSettings;
+    pub use crate::workspace::settings::PerformanceSettings;
     pub use crate::workspace::settings::PredictionOverlayPrefs;
     pub use crate::workspace::settings::RecentProject;
     pub use crate::workspace::settings::RecentServer;
@@ -226,7 +227,9 @@ pub mod backends {
     pub use crate::api::SystemInfo;
     pub mod local {
         pub use crate::backend::LocalBackend;
-        pub use crate::backend::local::system::cpu_ram_diagnostics;
+        pub use crate::backend::local::system::{
+            ResourceLimits, cpu_ram_diagnostics, set_resource_limits,
+        };
     }
     pub mod remote {
         pub use crate::backend::RemoteBackend;

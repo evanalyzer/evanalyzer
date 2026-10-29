@@ -130,6 +130,14 @@ export global ViewportMemoryState {
     in-out property <bool> breakpoint_tiles_auto: true;
     // Drawn in software, not by the graphics card (after a restart).
     in-out property <bool> software_renderer: false;
+    // How much of this computer EVAnalyzer may use (after a restart; the
+    // command line's --max-threads / --max-ram win): auto = all of it.
+    in-out property <bool> max_threads_auto: true;
+    in-out property <int> max_threads: 1;
+    in-out property <bool> max_ram_auto: true;
+    in-out property <int> max_ram_mb: 1024;
+    // What is in effect now, e.g. "now: 22 cores, 62 GB" - set from Rust.
+    in property <string> resources_note;
     in-out property <int> breakpoint_tiles: 1;
     // What automatic gives on this computer, e.g. "16 GB RAM: 4" - set from
     // Rust.

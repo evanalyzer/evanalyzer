@@ -229,6 +229,16 @@ pub fn merged_cache_bytes(
         .max(budget.min_image_cache_bytes)
 }
 
+/// Cores an analysis takes of `cores`: all but one (for the window and
+/// the operating system) - or the user's `max_threads`, when it leaves the
+/// rest of the computer free anyway.
+fn analysis_cores(cores: usize, max_threads: Option<usize>) -> usize {
+    match max_threads {
+        Some(max) if max < cores => max.max(1),
+        _ => cores.saturating_sub(1).max(1),
+    }
+}
+
 /// Recommended number of images/tiles to analyze in parallel.
 ///
 /// Starts from the number of CPU cores (minus one, to leave a core free for
@@ -241,9 +251,10 @@ pub fn merged_cache_bytes(
 /// over-commits on a large/many-channel image or, just as bad, needlessly
 /// caps a small/modest image down to a single thread on a low-RAM machine.
 pub fn recommended_parallelism(ram_per_worker_bytes: u64) -> usize {
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).max(1))
-        .unwrap_or(1);
+    let cores = analysis_cores(
+        std::thread::available_parallelism().map_or(1, |n| n.get()),
+        super::resource_limits().max_threads,
+    );
     let ram_capped = (available_memory_bytes() / ram_per_worker_bytes.max(1)).max(1) as usize;
     cores.min(ram_capped).max(1)
 }
@@ -263,6 +274,15 @@ mod tests {
     #[test]
     fn recommended_parallelism_is_never_zero() {
         assert!(recommended_parallelism(modest_ram_per_worker_bytes()) >= 1);
+    }
+
+    #[test]
+    fn an_analysis_leaves_a_core_free_unless_the_user_limits_the_cores() {
+        assert_eq!(analysis_cores(22, None), 21);
+        assert_eq!(analysis_cores(22, Some(4)), 4);
+        assert_eq!(analysis_cores(22, Some(22)), 21);
+        assert_eq!(analysis_cores(22, Some(64)), 21);
+        assert_eq!(analysis_cores(1, None), 1);
     }
 
     #[test]

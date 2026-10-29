@@ -130,6 +130,9 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
     session_management.worker_idle_timeout_minutes = Some(config.workers.idle_timeout_minutes);
     session_management.worker_ai_devices = config.workers.ai_devices.clone();
     session_management.worker_gpu_slots = config.workers.gpu_slots.clone();
+    session_management.worker_ai_plugin = config.workers.ai_plugin.clone();
+    session_management.worker_max_threads = config.workers.max_threads;
+    session_management.worker_max_ram_mb = config.workers.max_ram_mb;
     session_management.max_workers = config.limits.max_workers;
     Server {
         tls: tls.map(|tls| tls.config),

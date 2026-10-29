@@ -92,6 +92,39 @@ pub struct AppSettings {
     /// on isn't kept: it starts off).
     #[serde(default)]
     pub prediction_overlay: PredictionOverlayPrefs,
+
+    /// How much of this computer EVAnalyzer may use (Settings ›
+    /// Performance) - read at startup; `--max-threads` / `--max-ram` win.
+    #[serde(default)]
+    pub performance: PerformanceSettings,
+}
+
+/// How much of this computer EVAnalyzer may use - for a computer that also
+/// does other work during a long analysis. `None`: as much as there is.
+/// Read at startup: the thread pools and the AI engine are set up once.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PerformanceSettings {
+    /// Most CPU cores.
+    pub max_threads: Option<u32>,
+    /// Most RAM in MB EVAnalyzer plans with (caches, threads, results
+    /// database) - not a hard limit on every allocation.
+    pub max_ram_mb: Option<u32>,
+}
+
+impl PerformanceSettings {
+    /// These limits, with the command line's (`--max-threads`, `--max-ram`)
+    /// in place of the saved ones where given.
+    pub fn with_overrides(
+        &self,
+        max_threads: Option<usize>,
+        max_ram_mb: Option<u64>,
+    ) -> crate::backends::local::ResourceLimits {
+        crate::backends::local::ResourceLimits {
+            max_threads: max_threads.or(self.max_threads.map(|n| n as usize)),
+            max_ram_mb: max_ram_mb.or(self.max_ram_mb.map(u64::from)),
+        }
+    }
 }
 
 /// The prediction overlay's look, kept between sessions.
@@ -581,6 +614,45 @@ pub fn save_app_settings_to(path: &Path, settings: &AppSettings) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The command line wins over the saved limits; what it doesn't give
+    /// stays as saved.
+    #[test]
+    fn the_command_line_wins_over_the_saved_performance_limits() {
+        let saved = PerformanceSettings {
+            max_threads: Some(4),
+            max_ram_mb: Some(8192),
+        };
+        let limits = saved.with_overrides(None, None);
+        assert_eq!(
+            (limits.max_threads, limits.max_ram_mb),
+            (Some(4), Some(8192))
+        );
+        let limits = saved.with_overrides(Some(2), None);
+        assert_eq!(
+            (limits.max_threads, limits.max_ram_mb),
+            (Some(2), Some(8192))
+        );
+        let limits = PerformanceSettings::default().with_overrides(None, Some(1024));
+        assert_eq!((limits.max_threads, limits.max_ram_mb), (None, Some(1024)));
+    }
+
+    /// Settings saved before there were limits load without them.
+    #[test]
+    fn settings_without_performance_limits_load() {
+        let settings: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.performance, PerformanceSettings::default());
+        let json = serde_json::to_string(&AppSettings {
+            performance: PerformanceSettings {
+                max_threads: Some(6),
+                max_ram_mb: None,
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let back: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.performance.max_threads, Some(6));
+    }
 
     /// The automatic undo history leaves a full analysis on every core its
     /// RAM: 10 % of what is left, between 32 MB and 1 GB.

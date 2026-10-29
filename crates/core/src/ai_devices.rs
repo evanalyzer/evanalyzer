@@ -41,6 +41,9 @@ pub struct AiDeviceOptions {
     pub devices: AiDeviceSelection,
     /// Parallel inferences per GPU, at least 1 (see [`parse_gpu_slots`]).
     pub gpu_slots: usize,
+    /// The AI plugin library to try first (`--ai-plugin`), see
+    /// [`evanalyzer_ai::set_plugin_path`].
+    pub plugin: Option<std::path::PathBuf>,
 }
 
 impl Default for AiDeviceOptions {
@@ -48,6 +51,7 @@ impl Default for AiDeviceOptions {
         Self {
             devices: AiDeviceSelection::default(),
             gpu_slots: DEFAULT_GPU_SLOTS,
+            plugin: None,
         }
     }
 }
@@ -58,6 +62,9 @@ static OPTIONS: OnceLock<AiDeviceOptions> = OnceLock::new();
 /// before the first AI step runs; returns `false` (and changes nothing) if
 /// options were already set or AI inference already started.
 pub fn configure_ai_devices(options: AiDeviceOptions) -> bool {
+    if let Some(plugin) = &options.plugin {
+        evanalyzer_ai::set_plugin_path(plugin.clone());
+    }
     OPTIONS
         .set(AiDeviceOptions {
             gpu_slots: options.gpu_slots.max(1),
@@ -87,7 +94,7 @@ fn engine_config() -> EngineConfig {
             AiDeviceSelection::Gpus(gpus) => DeviceSelection::Gpus(gpus.clone()),
         },
         gpu_slots: options.gpu_slots,
-        cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
+        cores: crate::memory::cpu_cores(),
     }
 }
 

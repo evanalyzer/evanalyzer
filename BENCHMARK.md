@@ -219,7 +219,7 @@ real model, one 1024² image, old build vs. new, alternated:
 ```sh
 cargo run --release -p evanalyzer_core --features libtorch --example bench_cellpose -- \
   <workdir> --model tests/cpsam_v2.pt --channels 3 --images 1 --size 1024 --repeat 2
-# with EVANALYZER_AI_PLUGIN=target/release/libevanalyzer_ai.so and libtorch on LD_LIBRARY_PATH
+# with --plugin target/release/libevanalyzer_ai.so (then EVANALYZER_AI_PLUGIN) and libtorch on LD_LIBRARY_PATH
 ```
 
 | Build | Time per image | Peak RAM |
@@ -1321,7 +1321,7 @@ several tiles, the most threads at which the merged cache still holds
 `JobExecutor::recommended_parallelism`; a thread count set by hand is kept).
 Also: the merged cache's cap measured again at every plane (after
 `malloc_trim`, so what the planes before freed counts as free), and a
-container's memory limit (cgroup) or `EVANALYZER_RAM_LIMIT_MB` caps the RAM
+container's memory limit (cgroup) or the user's RAM limit (`--max-ram`; then `EVANALYZER_RAM_LIMIT_MB`) caps the RAM
 EVAnalyzer plans with.
 
 Where the threshold comes from - `tests/haut` + coloc, ~2.9 GB free, threads
@@ -1360,7 +1360,7 @@ all of them together, shared out when a file opens or closes
 
 `bench_results_sessions --together` (app example): copies of the 4M-object
 file open at once, each read in full (the list as CSV), on a simulated 8 GB
-computer (`EVANALYZER_RAM_LIMIT_MB=8192`: DuckDB 2 GB in all); before = the
+computer (`--max-ram 8192`, then `EVANALYZER_RAM_LIMIT_MB=8192`: DuckDB 2 GB in all); before = the
 same build with every file getting the whole limit, alternated.
 
 | | before | after |
@@ -1415,6 +1415,28 @@ The cost: panning back during an analysis reads tiles again that no longer
 fit. This slide fills the tile cache to only ~184 MB; a bigger one or a
 longer look grew it to the full 1 GB + 256 MB during an analysis before.
 
+## Most CPU cores and most RAM: --max-threads, --max-ram (2026-10-29)
+
+New global options of every mode (and Settings › Performance, read at
+startup; the command line wins): `--max-threads N` - the analysis, its
+thread pool, the general pool (viewer, exports), the AI engine and DuckDB;
+`--max-ram MB` - EVAnalyzer plans as if the computer had no more (a
+planning limit, not enforced on every allocation). A server passes
+`[workers] max_threads / max_ram_mb` to each worker. Replaces the
+environment variables `EVANALYZER_RAM_LIMIT_MB` and `EVANALYZER_AI_PLUGIN`
+(now `--ai-plugin`).
+
+The real program, `evanalyzer [options] cli analyze` on `tests/haut` + coloc
+(project saved by `bench_whole_slide`), 22 cores, 62 GB:
+
+| Options | Threads | Image cache per worker / merged | Wall | CPU (user + sys) | Cores busy (CPU / wall) | Peak RSS |
+|---|---|---|---|---|---|---|
+| none | 21 | 2.00 / 26.0 GiB | 27.3-28.4 s | 285 + 9 s | 10.7 | 7.67 GB |
+| `--max-threads 4` | 4 | 11.6 / 36.7 GiB | 53.9 s | 177 + 6 s | 3.4 | |
+| `--max-ram 8192` | 11 | 0.47 / 1.08 GiB | 44.5-47.0 s | 220 + 70 s | 6.5 | 5.30 GB |
+| `--max-ram 4096` | | | 59.4 s | | | 3.47 GB |
+| both | 4 | 1.75 / 3.48 GiB | 64.5 s | 186 + 23 s | 3.2 | |
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1468,6 +1490,7 @@ graphics driver).
 | Results window, switching between 4M-object results files | ~50 MB after closing each (was +250 MB per file opened) | 2026-10-28 | Results files closed when unused |
 | Whole slide `tests/haut` + coloc, automatic threads, ~4 GB free | 2.97-3.22 GB (was 4.31-4.41 GB, and 3.6-3.9 × slower) | 2026-10-28 | RAM rework step 2 |
 | Three 4M-object results files open at once, 8 GB computer (simulated) | 2.43-2.45 GB (was 2.68-2.71 GB); DuckDB at most 2 GB in all | 2026-10-28 | RAM rework step 3 |
+| Whole slide `tests/haut` + coloc with `--max-ram 8192` / `--max-ram 4096` (real CLI) | 5.30 GB / 3.47 GB | 2026-10-29 | --max-threads, --max-ram |
 | A deep-learning model after an analysis | released: +1 MB (was +764 MB for ~400 MB of weights on two devices, until the app ended) | 2026-10-28 | RAM rework step 5a |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill

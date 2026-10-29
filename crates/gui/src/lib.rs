@@ -375,6 +375,35 @@ impl UiState {
         }
     }
 
+    /// How much of this computer EVAnalyzer may use (Settings ›
+    /// Performance) - always this computer's.
+    pub fn performance_settings(&self) -> evanalyzer_app::global::PerformanceSettings {
+        self.local_backend
+            .load_app_settings()
+            .map(|settings| settings.performance)
+            .unwrap_or_default()
+    }
+
+    /// Saves the performance settings on this computer - in effect from
+    /// the next start.
+    pub fn save_performance_settings(
+        &self,
+        performance: evanalyzer_app::global::PerformanceSettings,
+    ) {
+        // As `save_viewport_memory_settings`: the cached preferences too.
+        self.app_settings.lock().unwrap().performance = performance;
+        let result = self
+            .local_backend
+            .load_app_settings()
+            .and_then(|mut settings| {
+                settings.performance = performance;
+                self.local_backend.save_app_settings(&settings)
+            });
+        if let Err(e) = result {
+            log::warn!("Could not save the performance settings: {e}");
+        }
+    }
+
     /// The file dialog's places: the folders the user added are kept in the
     /// user settings.
     pub fn attach_file_browser(self: &Arc<Self>, ui: &AppWindow) {

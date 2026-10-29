@@ -17,7 +17,7 @@ use crate::{
     ImagePixelInfo, IntensityProjection, LayoutState, ViewportMemoryState,
     ViewportState as ViewportSlintState, WarningState,
 };
-use evanalyzer_app::global::ViewportMemorySettings;
+use evanalyzer_app::global::{PerformanceSettings, ViewportMemorySettings};
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
@@ -124,7 +124,7 @@ impl ViewportImageController {
             state.set_breakpoint_tiles_auto(settings.breakpoint_tiles_auto);
             state.set_software_renderer(settings.software_renderer);
             state.set_breakpoint_tiles(settings.effective_breakpoint_tiles(ram) as i32);
-            let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let cores = evanalyzer_app::backends::local::cpu_ram_diagnostics().0;
             state.set_auto_undo_history_note(
                 format!(
                     "{gb:.0} GB RAM, {cores} cores: {} MB",
@@ -136,6 +136,44 @@ impl ViewportImageController {
             state.set_undo_history_mb(settings.effective_undo_history_mb(ram, cores) as i32);
             state.set_auto_scale_new_images(settings.auto_scale_new_images);
             state.set_color_channels_without_wavelength(settings.color_channels_without_wavelength);
+        }
+    }
+
+    /// Shows `performance` (how much of this computer EVAnalyzer may use)
+    /// in the settings dialog; with Auto the numbers in effect now.
+    fn show_performance_settings(&self, performance: &PerformanceSettings) {
+        if let Some(ui) = self.ui.upgrade() {
+            let state = ui.global::<ViewportMemoryState>();
+            let (cores, ram) = evanalyzer_app::backends::local::cpu_ram_diagnostics();
+            let ram_mb = (ram / (1024 * 1024)) as u32;
+            state.set_resources_note(
+                format!(
+                    "now: {cores} cores, {:.0} GB",
+                    ram as f64 / (1024.0 * 1024.0 * 1024.0)
+                )
+                .into(),
+            );
+            state.set_max_threads_auto(performance.max_threads.is_none());
+            state.set_max_threads(performance.max_threads.unwrap_or(cores as u32) as i32);
+            state.set_max_ram_auto(performance.max_ram_mb.is_none());
+            state.set_max_ram_mb(performance.max_ram_mb.unwrap_or(ram_mb) as i32);
+        }
+    }
+
+    /// Takes over the performance settings the dialog shows now - saved if
+    /// they changed (in effect from the next start).
+    fn apply_performance_settings_from_ui(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<ViewportMemoryState>();
+        let performance = PerformanceSettings {
+            max_threads: (!state.get_max_threads_auto())
+                .then(|| state.get_max_threads().max(1) as u32),
+            max_ram_mb: (!state.get_max_ram_auto()).then(|| state.get_max_ram_mb().max(1) as u32),
+        };
+        if performance != self.app_state.performance_settings() {
+            self.app_state.save_performance_settings(performance);
         }
     }
 
@@ -215,21 +253,25 @@ impl ViewportImageController {
             // dialog): shown when it opens, taken over on Apply.
             let settings = self.viewport_controller.memory_settings();
             self.show_memory_settings(&settings);
+            self.show_performance_settings(&self.app_state.performance_settings());
             // The objects' view to start with.
             ui.global::<LayoutState>()
                 .set_objects_as_table(settings.objects_as_table);
             let manager = self.clone();
             ui.global::<ViewportMemoryState>().on_load(move || {
                 manager.show_memory_settings(&manager.viewport_controller.memory_settings());
+                manager.show_performance_settings(&manager.app_state.performance_settings());
             });
             let manager = self.clone();
             ui.global::<ViewportMemoryState>().on_apply(move || {
                 manager.apply_memory_settings_from_ui();
+                manager.apply_performance_settings_from_ui();
             });
             let manager = self.clone();
             ui.global::<ViewportMemoryState>()
                 .on_reset_to_defaults(move || {
                     manager.show_memory_settings(&ViewportMemorySettings::default());
+                    manager.show_performance_settings(&PerformanceSettings::default());
                 });
 
             // Viewport size changed
@@ -1529,6 +1571,44 @@ mod tests {
             ui_state.viewport_memory_settings(),
             expected,
             "saved on this computer"
+        );
+    }
+
+    /// Most cores / most RAM: Auto shows the numbers in effect, a number
+    /// set is saved on this computer, Defaults goes back to Auto.
+    #[test]
+    fn the_performance_limits_are_saved_from_the_settings_dialog() {
+        let (ui, ui_state, _) = attached();
+        let state = ui.global::<ViewportMemoryState>();
+        state.invoke_load();
+        assert!(state.get_max_threads_auto() && state.get_max_ram_auto());
+        assert!(state.get_max_threads() >= 1 && state.get_max_ram_mb() >= 1);
+        assert!(state.get_resources_note().contains("cores"));
+
+        state.set_max_threads_auto(false);
+        state.set_max_threads(3);
+        state.set_max_ram_auto(false);
+        state.set_max_ram_mb(6144);
+        state.invoke_apply();
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.performance_settings(),
+            PerformanceSettings {
+                max_threads: Some(3),
+                max_ram_mb: Some(6144),
+            }
+        );
+
+        state.invoke_load();
+        assert!(!state.get_max_threads_auto());
+        assert_eq!((state.get_max_threads(), state.get_max_ram_mb()), (3, 6144));
+
+        state.invoke_reset_to_defaults();
+        state.invoke_apply();
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.performance_settings(),
+            PerformanceSettings::default()
         );
     }
 

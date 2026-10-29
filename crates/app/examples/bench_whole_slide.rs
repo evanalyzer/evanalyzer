@@ -18,7 +18,10 @@
 // folder so its size is the image cache's alone.
 //
 // Usage: TMPDIR=<empty dir> cargo run --release -p evanalyzer_app --example bench_whole_slide -- \
-//     <images dir> <work dir> [--threads N] [--channel C] [--coloc 1]
+//     <images dir> <work dir> [--threads N] [--channel C] [--coloc 1] [--trace 1] \
+//     [--max-threads N] [--max-ram MB]
+//
+// `--max-threads` / `--max-ram`: the app's resource limits (as its options).
 //
 // `--coloc 1` adds Measure Object Colocalization of the Voronoi cells
 // (channels 0 and 1, threshold 15 %, Costes "Faster"). `--voronoi-radius R`
@@ -102,6 +105,13 @@ fn main() {
     let images_dir = PathBuf::from(std::env::args().nth(1).expect("images dir"));
     let workdir = PathBuf::from(std::env::args().nth(2).expect("work dir"));
     let threads = arg("--threads", 0);
+    let trace = arg("--trace", 0) == 1;
+    evanalyzer_app::backends::local::set_resource_limits(
+        evanalyzer_app::backends::local::ResourceLimits {
+            max_threads: Some(arg("--max-threads", 0)).filter(|&n| n > 0),
+            max_ram_mb: Some(arg("--max-ram", 0) as u64).filter(|&mb| mb > 0),
+        },
+    );
     let channel = arg("--channel", 0) as u32;
     let coloc = arg("--coloc", 0) == 1;
     let voronoi_radius = arg("--voronoi-radius", 50) as f32;
@@ -204,8 +214,7 @@ fn main() {
         let (spill_peak, stop) = (spill_peak.clone(), stop.clone());
         let (duckdb_peak, results_dir) = (duckdb_peak.clone(), results_dir.clone());
         std::thread::spawn(move || {
-            // `BENCH_TRACE=1`: RSS and spill size over time, on stderr.
-            let trace = std::env::var("BENCH_TRACE").is_ok();
+            // `--trace 1`: RSS and spill size over time, on stderr.
             let start = Instant::now();
             while !stop.load(Ordering::Relaxed) {
                 let spill = dir_bytes(&tmp) + open_deleted_bytes(&tmp);

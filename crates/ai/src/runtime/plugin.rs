@@ -16,9 +16,9 @@
 //! for this build (and the CPU is not asked for), else the CPU one; a package with only the CUDA
 //! one uses it on the CPU too (CUDA libtorch runs without a GPU, just
 //! larger). A plugin
-//! next to the program itself (a `cargo build` of the workspace) or at
-//! `EVANALYZER_AI_PLUGIN` (a file path, for development and tests) is
-//! taken first. A loaded plugin stays loaded: libtorch cannot be unloaded.
+//! chosen with `--ai-plugin` (a file path, for development and tests, see
+//! [`set_path`]) or next to the program itself (a `cargo build` of the
+//! workspace) is taken first. A loaded plugin stays loaded: libtorch cannot be unloaded.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-19
@@ -39,8 +39,14 @@ use crate::api::{
 use libloading::Library;
 use std::path::{Path, PathBuf};
 
-/// Overrides where the plugin is looked for: the path of the library file.
-const PLUGIN_ENV: &str = "EVANALYZER_AI_PLUGIN";
+/// The plugin file chosen with `--ai-plugin`, tried before the others.
+static CHOSEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The plugin file to try first (`--ai-plugin`). Once, before the first
+/// model run; `false` if one was already chosen.
+pub(crate) fn set_path(path: PathBuf) -> bool {
+    CHOSEN.set(path).is_ok()
+}
 
 /// A loaded plugin, set up.
 struct PluginEngine {
@@ -60,11 +66,7 @@ pub(crate) fn load(config: &EngineConfig) -> Result<Box<dyn InferenceEngine>, St
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let wants_gpu = config.devices != DeviceSelection::Cpu && !cuda_probe::usable_gpus().is_empty();
-    let candidates = candidates(
-        std::env::var_os(PLUGIN_ENV).map(PathBuf::from),
-        exe_dir.as_deref(),
-        wants_gpu,
-    );
+    let candidates = candidates(CHOSEN.get().cloned(), exe_dir.as_deref(), wants_gpu);
     let mut errors = Vec::new();
     for path in candidates.iter().filter(|p| p.is_file()) {
         log::info!("Loading the AI plugin {}", path.display());
@@ -119,9 +121,9 @@ fn library_name() -> PathBuf {
 
 /// Where the plugin is looked for, in this order (files that don't exist
 /// are skipped by the caller).
-fn candidates(env: Option<PathBuf>, exe_dir: Option<&Path>, wants_gpu: bool) -> Vec<PathBuf> {
+fn candidates(chosen: Option<PathBuf>, exe_dir: Option<&Path>, wants_gpu: bool) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = env {
+    if let Some(path) = chosen {
         paths.push(path);
     }
     if let Some(dir) = exe_dir {

@@ -15,7 +15,7 @@ use evanalyzer_app::ai::{
     AiDeviceOptions, AiDeviceSelection, DEFAULT_GPU_SLOTS, configure_ai_devices,
 };
 use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backends::local::{LocalBackend, ResourceLimits, set_resource_limits};
 use evanalyzer_app::backends::remote::TlsTrust;
 use evanalyzer_app::global::Frontend;
 use evanalyzer_app::project::ProjectOwner;
@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.log_level.clone(),
                 &args.ai_devices,
                 args.gpu_slots,
+                (args.ai_plugin.clone(), args.max_threads, args.max_ram),
             )
             .unwrap_or_else(|e| {
                 // `main`'s error return would print it Debug-formatted, which
@@ -58,12 +59,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(config) => &config.log_level,
         None => args.log_level.as_deref().unwrap_or("info"),
     });
+    // Before anything sizes itself (thread pools, caches, the AI engine).
+    let limits = resource_limits(&args);
+    if limits != ResourceLimits::default() {
+        info!(
+            "Resource limits: {} threads, {} MB RAM",
+            limits.max_threads.map_or("all".into(), |n| n.to_string()),
+            limits.max_ram_mb.map_or("all".into(), |mb| mb.to_string())
+        );
+    }
+    set_resource_limits(limits);
     // A server only forwards these to its workers (see `server_config`);
     // everywhere else the analysis may run in this process.
     if server_config.is_none() {
         configure_ai_devices(AiDeviceOptions {
             devices: args.ai_devices.clone().unwrap_or_default(),
             gpu_slots: args.gpu_slots.unwrap_or(DEFAULT_GPU_SLOTS),
+            plugin: args.ai_plugin.clone(),
         });
     }
 
@@ -222,6 +234,21 @@ fn start_worker(
 
 /// The server's settings: defaults, then the `--config` file, then the
 /// command-line arguments.
+/// How much of the computer this process may use: the command line, and -
+/// where the user runs EVAnalyzer on their own computer (the GUI, `cli`) -
+/// the saved Settings › Performance under it. A server passes its
+/// `[workers]` limits on to each worker as arguments.
+fn resource_limits(args: &args::Args) -> ResourceLimits {
+    let saved = match &args.command {
+        None | Some(TopCommand::Cli { .. }) => LocalBackend::default()
+            .load_app_settings()
+            .map(|settings| settings.performance)
+            .unwrap_or_default(),
+        _ => Default::default(),
+    };
+    saved.with_overrides(args.max_threads, args.max_ram)
+}
+
 fn server_config(
     file: Option<&std::path::Path>,
     listen: Option<String>,
@@ -229,6 +256,7 @@ fn server_config(
     log_level: Option<String>,
     ai_devices: &Option<AiDeviceSelection>,
     gpu_slots: Option<usize>,
+    (ai_plugin, max_threads, max_ram_mb): (Option<PathBuf>, Option<usize>, Option<u64>),
 ) -> std::io::Result<ServerConfig> {
     let config = match file {
         Some(file) => ServerConfig::load(file)?,
@@ -236,7 +264,8 @@ fn server_config(
     };
     let config = config
         .with_overrides(listen, data_dir, log_level)
-        .with_worker_ai_overrides(ai_devices.as_ref().map(ToString::to_string), gpu_slots);
+        .with_worker_ai_overrides(ai_devices.as_ref().map(ToString::to_string), gpu_slots)
+        .with_worker_resource_overrides(ai_plugin, max_threads, max_ram_mb);
     // Checked here, so a typo in the file fails at startup instead of in
     // every worker.
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, e);
@@ -247,6 +276,12 @@ fn server_config(
     }
     if config.workers.gpu_slots == Some(0) {
         return Err(invalid("workers.gpu_slots must be at least 1".into()));
+    }
+    if config.workers.max_threads == Some(0) {
+        return Err(invalid("workers.max_threads must be at least 1".into()));
+    }
+    if config.workers.max_ram_mb == Some(0) {
+        return Err(invalid("workers.max_ram_mb must be at least 1".into()));
     }
     Ok(config)
 }
@@ -400,6 +435,7 @@ mod tests {
             Some("debug".into()),
             &Some(AiDeviceSelection::Cpu),
             Some(2),
+            (Some("/opt/a.so".into()), Some(8), Some(16384)),
         )
         .unwrap();
 
@@ -408,11 +444,15 @@ mod tests {
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.workers.ai_devices.as_deref(), Some("cpu"));
         assert_eq!(config.workers.gpu_slots, Some(2));
+        assert_eq!(config.workers.ai_plugin, Some("/opt/a.so".into()));
+        assert_eq!(config.workers.max_threads, Some(8));
+        assert_eq!(config.workers.max_ram_mb, Some(16384));
     }
 
     #[test]
     fn no_settings_at_all_give_the_default_server_config() {
-        let config = server_config(None, None, None, None, &None, None).unwrap();
+        let config =
+            server_config(None, None, None, None, &None, None, (None, None, None)).unwrap();
 
         assert_eq!(config, ServerConfig::default());
     }
@@ -424,7 +464,16 @@ mod tests {
             "listen = \"127.0.0.1:7500\"\nlog_level = \"warn\"\n",
         );
 
-        let from_file = server_config(Some(&file.0), None, None, None, &None, None).unwrap();
+        let from_file = server_config(
+            Some(&file.0),
+            None,
+            None,
+            None,
+            &None,
+            None,
+            (None, None, None),
+        )
+        .unwrap();
         let overridden = server_config(
             Some(&file.0),
             Some("127.0.0.1:7600".into()),
@@ -432,6 +481,7 @@ mod tests {
             None,
             &None,
             None,
+            (None, None, None),
         )
         .unwrap();
 
@@ -447,25 +497,82 @@ mod tests {
     fn a_missing_config_file_is_an_error() {
         let missing = std::env::temp_dir().join("evanalyzer-bin-test-does-not-exist.toml");
 
-        assert!(server_config(Some(&missing), None, None, None, &None, None).is_err());
+        assert!(
+            server_config(
+                Some(&missing),
+                None,
+                None,
+                None,
+                &None,
+                None,
+                (None, None, None)
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn a_misspelled_ai_device_list_in_the_file_fails_at_startup() {
         let file = TempFile::with("devices.toml", "[workers]\nai_devices = \"gpu\"\n");
 
-        let e = server_config(Some(&file.0), None, None, None, &None, None).unwrap_err();
+        let e = server_config(
+            Some(&file.0),
+            None,
+            None,
+            None,
+            &None,
+            None,
+            (None, None, None),
+        )
+        .unwrap_err();
 
         assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
         assert!(e.to_string().starts_with("workers.ai_devices:"), "{e}");
     }
 
     #[test]
+    fn zero_worker_limits_in_the_file_are_refused() {
+        for (text, key) in [
+            (
+                "[workers]\nmax_threads = 0\n",
+                "max_threads must be at least 1",
+            ),
+            (
+                "[workers]\nmax_ram_mb = 0\n",
+                "max_ram_mb must be at least 1",
+            ),
+        ] {
+            let file = TempFile::with("limits.toml", text);
+            let e = server_config(
+                Some(&file.0),
+                None,
+                None,
+                None,
+                &None,
+                None,
+                (None, None, None),
+            )
+            .unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(e.to_string().contains(key), "{e}");
+        }
+    }
+
+    #[test]
     fn zero_gpu_slots_are_refused() {
         let file = TempFile::with("slots.toml", "[workers]\ngpu_slots = 0\n");
 
-        let from_file = server_config(Some(&file.0), None, None, None, &None, None);
-        let from_command_line = server_config(None, None, None, None, &None, Some(0));
+        let from_file = server_config(
+            Some(&file.0),
+            None,
+            None,
+            None,
+            &None,
+            None,
+            (None, None, None),
+        );
+        let from_command_line =
+            server_config(None, None, None, None, &None, Some(0), (None, None, None));
 
         for result in [from_file, from_command_line] {
             let e = result.unwrap_err();

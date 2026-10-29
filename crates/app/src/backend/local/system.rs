@@ -16,10 +16,15 @@
 /// which reader features `evanalyzer_core` was built with.
 pub use evanalyzer_core::supported_image_formats;
 
-/// Logical CPU cores and total RAM in bytes.
+/// CPU cores and total RAM in bytes EVAnalyzer may use - within the
+/// user's [`ResourceLimits`].
 pub fn cpu_ram_diagnostics() -> (usize, u64) {
     evanalyzer_core::cpu_ram_diagnostics()
 }
+
+/// How much of the computer EVAnalyzer may use (`--max-threads`,
+/// `--max-ram`, Settings › Performance) - set once at startup.
+pub use evanalyzer_core::memory::{ResourceLimits, set_resource_limits};
 
 /// Whether a CUDA device is usable. Slow on first call (loads the driver and
 /// creates a context), so call it off the UI thread.

@@ -201,7 +201,7 @@ The plugin is compiled against `libs/libtorch` (`LIBTORCH` in
 
 **Where the app looks for it** (first found wins):
 
-1. `EVANALYZER_AI_PLUGIN=/path/to/libevanalyzer_ai.so`
+1. `--ai-plugin /path/to/libevanalyzer_ai.so` (a command-line option of every mode)
 2. next to the `evanalyzer` binary
 3. `ai/cuda/` next to the binary - first when the NVIDIA driver sees a GPU new
    enough for this build

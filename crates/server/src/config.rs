@@ -101,6 +101,15 @@ pub struct WorkersConfig {
     pub ai_devices: Option<String>,
     /// Parallel AI inferences per GPU, at least 1. Default 1.
     pub gpu_slots: Option<usize>,
+    /// The AI plugin library the workers try first (`--ai-plugin`).
+    /// Default: the one next to the program.
+    pub ai_plugin: Option<PathBuf>,
+    /// Most CPU cores each worker uses (`--max-threads`), at least 1.
+    /// Default: all of them.
+    pub max_threads: Option<usize>,
+    /// Most RAM in MB each worker plans with (`--max-ram`), at least 1.
+    /// Default: the computer's.
+    pub max_ram_mb: Option<u64>,
 }
 
 impl Default for WorkersConfig {
@@ -109,6 +118,9 @@ impl Default for WorkersConfig {
             idle_timeout_minutes: 120,
             ai_devices: None,
             gpu_slots: None,
+            ai_plugin: None,
+            max_threads: None,
+            max_ram_mb: None,
         }
     }
 }
@@ -357,6 +369,26 @@ impl ServerConfig {
         }
         if let Some(gpu_slots) = gpu_slots {
             self.workers.gpu_slots = Some(gpu_slots);
+        }
+        self
+    }
+
+    /// The workers' plugin and resource limits given on the command line
+    /// replacing the file's.
+    pub fn with_worker_resource_overrides(
+        mut self,
+        ai_plugin: Option<PathBuf>,
+        max_threads: Option<usize>,
+        max_ram_mb: Option<u64>,
+    ) -> Self {
+        if ai_plugin.is_some() {
+            self.workers.ai_plugin = ai_plugin;
+        }
+        if max_threads.is_some() {
+            self.workers.max_threads = max_threads;
+        }
+        if max_ram_mb.is_some() {
+            self.workers.max_ram_mb = max_ram_mb;
         }
         self
     }
@@ -633,6 +665,30 @@ mod tests {
             let error = parse(text).unwrap_err();
             assert!(error.contains(key), "{text}: {error}");
         }
+    }
+
+    /// The workers' limits: from the file, the command line replacing them.
+    #[test]
+    fn workers_get_their_resource_limits_from_the_file_or_the_command_line() {
+        let file =
+            parse("[workers]\nmax_threads = 8\nmax_ram_mb = 16384\nai_plugin = \"/opt/a.so\"")
+                .unwrap();
+        assert_eq!(file.workers.max_threads, Some(8));
+        assert_eq!(file.workers.max_ram_mb, Some(16384));
+        assert_eq!(file.workers.ai_plugin, Some(PathBuf::from("/opt/a.so")));
+        let config = file.with_worker_resource_overrides(None, Some(4), None);
+        assert_eq!(config.workers.max_threads, Some(4));
+        assert_eq!(config.workers.max_ram_mb, Some(16384));
+        assert_eq!(config.workers.ai_plugin, Some(PathBuf::from("/opt/a.so")));
+        let none = parse("").unwrap();
+        assert_eq!(
+            (
+                none.workers.max_threads,
+                none.workers.max_ram_mb,
+                none.workers.ai_plugin
+            ),
+            (None, None, None)
+        );
     }
 
     #[test]

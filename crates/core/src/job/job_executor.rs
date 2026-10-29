@@ -336,6 +336,9 @@ impl<'a> JobExecutor {
         progress: Sender<ProgressEvent>,
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
+        // A thread count set by hand (`cli analyze --threads`) stays within
+        // the user's limit (`--max-threads`) too.
+        let parallelism = parallelism.clamp(1, crate::memory::cpu_cores());
         info!("Starting pipeline with {} parallel threads", parallelism);
         let start = Instant::now();
         // Trained models are loaded once for this run and dropped after it.

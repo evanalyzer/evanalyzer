@@ -191,12 +191,13 @@ fn share_memory_limit(cache: &HashMap<PathBuf, SharedDatabase>) {
         crate::memory::SystemRam::now().total,
         cache.len(),
     );
+    // DuckDB's own threads: the cores EVAnalyzer may use (`--max-threads`).
+    let threads = crate::memory::cpu_cores();
     for shared in cache.values() {
-        if let Err(e) = shared
-            .anchor
-            .execute_batch(&format!("SET memory_limit = '{limit_mb}MB';"))
-        {
-            log::warn!("Could not limit DuckDB's memory to {limit_mb} MB: {e}");
+        if let Err(e) = shared.anchor.execute_batch(&format!(
+            "SET memory_limit = '{limit_mb}MB'; SET threads = {threads};"
+        )) {
+            log::warn!("Could not limit DuckDB to {limit_mb} MB and {threads} threads: {e}");
         }
     }
 }

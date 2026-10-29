@@ -13,14 +13,14 @@
 // See BENCHMARK.md ("AI models: Cellpose").
 //
 // Usage: cargo run --release -p evanalyzer_core --features libtorch --example bench_cellpose -- \
-//     <workdir> --model <model.pt> [--images N] [--size PX] [--threads N] [--channels N] [--repeat N]
+//     <workdir> --model <model.pt> [--plugin <file>] [--images N] [--size PX] [--threads N] [--channels N] [--repeat N]
 //
 // `--repeat N` runs the job N times in one process: the first run includes
 // setting up the engine, loading the model and libtorch's warm-up; the
 // others are the steady state (their median is printed).
 //
 // `--features libtorch` runs the model through the plugin (build it with
-// `cargo build-ai-plugin --release`, point at it with EVANALYZER_AI_PLUGIN),
+// `cargo build-ai-plugin --release`, point at it with `--plugin <file>`),
 // `--features libtorch-in-process` with libtorch linked in.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
@@ -92,6 +92,14 @@ fn main() {
     env_logger::init();
     let workdir = PathBuf::from(std::env::args().nth(1).expect("workdir"));
     let model = PathBuf::from(arg("--model").expect("--model <model.pt>"));
+    if let Some(plugin) = arg("--plugin") {
+        evanalyzer_core::ai_devices::configure_ai_devices(
+            evanalyzer_core::ai_devices::AiDeviceOptions {
+                plugin: Some(PathBuf::from(plugin)),
+                ..Default::default()
+            },
+        );
+    }
     let images = num("--images", 4);
     let size = num("--size", 1024) as u32;
     let threads = num("--threads", 0);

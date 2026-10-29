@@ -103,6 +103,25 @@ pub struct Args {
     #[arg(long, global = true, value_name = "N", value_parser = parse_gpu_slots, help_heading = "AI")]
     pub gpu_slots: Option<usize>,
 
+    /// The AI plugin library to try first (`libevanalyzer_ai.so`,
+    /// `evanalyzer_ai.dll`, `libevanalyzer_ai.dylib`) - for development and
+    /// tests; a package finds its own next to the program.
+    #[arg(long, global = true, value_name = "FILE", help_heading = "AI")]
+    pub ai_plugin: Option<std::path::PathBuf>,
+
+    /// Most CPU cores EVAnalyzer uses - the analysis, AI models, the results
+    /// database and everything else - e.g. to keep a computer usable during
+    /// a long analysis. Default: Settings › Performance, else all of them.
+    #[arg(long, global = true, value_name = "N", value_parser = parse_at_least_one::<usize>, help_heading = "Resources")]
+    pub max_threads: Option<usize>,
+
+    /// Most RAM in MB EVAnalyzer plans with - caches, threads and the
+    /// results database are sized as if the computer had no more. Not a
+    /// hard limit on every allocation (a container's limit is). Default:
+    /// Settings › Performance, else the computer's RAM.
+    #[arg(long, global = true, value_name = "MB", value_parser = parse_at_least_one::<u64>, help_heading = "Resources")]
+    pub max_ram: Option<u64>,
+
     #[command(subcommand)]
     pub command: Option<TopCommand>,
 }
@@ -171,6 +190,14 @@ pub fn parse_args() -> Args {
     Args::parse()
 }
 
+/// A number of at least 1, for `--max-threads` and `--max-ram`.
+fn parse_at_least_one<T: std::str::FromStr + PartialOrd + From<u8>>(s: &str) -> Result<T, String> {
+    match s.trim().parse::<T>() {
+        Ok(n) if n >= T::from(1) => Ok(n),
+        _ => Err(format!("`{s}` is not a number of at least 1")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +220,10 @@ mod tests {
             "AI:",
             "--ai-devices",
             "--gpu-slots",
+            "--ai-plugin",
+            "Resources:",
+            "--max-threads",
+            "--max-ram",
         ] {
             assert!(help.contains(shown), "{shown} missing in:\n{help}");
         }
@@ -224,6 +255,39 @@ mod tests {
 
         assert!(Args::try_parse_from(["evanalyzer", "--ai-devices", "gpu"]).is_err());
         assert!(Args::try_parse_from(["evanalyzer", "--gpu-slots", "0"]).is_err());
+    }
+
+    #[test]
+    fn resource_limits_parse_in_every_mode() {
+        let args = Args::try_parse_from(["evanalyzer", "--max-threads", "4", "--max-ram", "8192"])
+            .unwrap();
+        assert_eq!((args.max_threads, args.max_ram), (Some(4), Some(8192)));
+
+        // Global: also after a subcommand (a server passes them to workers).
+        let args = Args::try_parse_from([
+            "evanalyzer",
+            "worker",
+            "--max-threads",
+            "2",
+            "--ai-plugin",
+            "/opt/a.so",
+        ])
+        .unwrap();
+        assert_eq!(args.max_threads, Some(2));
+        assert_eq!(args.ai_plugin, Some(std::path::PathBuf::from("/opt/a.so")));
+
+        let defaults = Args::try_parse_from(["evanalyzer"]).unwrap();
+        assert_eq!((defaults.max_threads, defaults.max_ram), (None, None));
+
+        for wrong in [
+            ["--max-threads", "0"],
+            ["--max-ram", "0"],
+            ["--max-ram", "8G"],
+        ] {
+            let mut args = vec!["evanalyzer"];
+            args.extend(wrong);
+            assert!(Args::try_parse_from(args).is_err(), "{wrong:?}");
+        }
     }
 
     #[test]

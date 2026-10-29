@@ -17,8 +17,11 @@
 // running analysis), each read in full (the list as CSV: every object's
 // columns) - RSS and DuckDB's memory with all of them open.
 //
+// `--max-ram MB` first: the app's RAM limit (as `evanalyzer --max-ram`) -
+// a smaller computer for DuckDB's limit.
+//
 // Usage: cargo run --release -p evanalyzer_app --example bench_results_sessions -- \
-//     <out dir> [--together] <a.evadb> <b.evadb> ...
+//     <out dir> [--max-ram MB] [--together] <a.evadb> <b.evadb> ...
 
 use evanalyzer_app::results::{
     Aggregation, Column, ExportFormat, LocalResultsGenerator, ResultExport,
@@ -96,7 +99,17 @@ fn together(out: &std::path::Path, dbs: &[String]) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    if args.get(2).is_some_and(|a| a == "--max-ram") {
+        let mb: u64 = args[3].parse().expect("--max-ram MB");
+        evanalyzer_app::backends::local::set_resource_limits(
+            evanalyzer_app::backends::local::ResourceLimits {
+                max_threads: None,
+                max_ram_mb: Some(mb),
+            },
+        );
+        args.drain(2..4);
+    }
     let out = PathBuf::from(&args[1]);
     println!("start: rss={} MB", status_mb("VmRSS:"));
     if args[2] == "--together" {

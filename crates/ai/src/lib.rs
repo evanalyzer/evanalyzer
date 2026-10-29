@@ -61,6 +61,17 @@ pub fn infer(
     engine.infer(request, image)
 }
 
+/// The AI plugin library to try first (`--ai-plugin`; for development and
+/// tests - a package finds its own). Once, before the first model run;
+/// `false` if one was already chosen or this build loads no plugin.
+#[allow(unused_variables)]
+pub fn set_plugin_path(path: std::path::PathBuf) -> bool {
+    #[cfg(feature = "torch-plugin")]
+    return runtime::plugin::set_path(path);
+    #[allow(unreachable_code)]
+    false
+}
+
 /// Lets go of every AI model loaded so far - each takes hundreds of MB up
 /// to GBs, on every device, and stayed until the app ended. The next run
 /// loads them again. Nothing to do when no model ran yet.

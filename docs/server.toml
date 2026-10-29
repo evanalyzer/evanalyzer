@@ -96,6 +96,17 @@ idle_timeout_minutes = 120
 # Parallel AI inferences per GPU, at least 1. Raise it for GPUs with memory
 # to spare; a GPU that runs out of memory goes back down by itself.
 #gpu_slots = 1
+# The AI plugin library the workers try first. Default: the one next to the
+# program.
+#ai_plugin = "/opt/evanalyzer/ai/cuda/libevanalyzer_ai.so"
+# Most CPU cores each worker uses (the analysis, AI models, the results
+# database), at least 1 - each logged-in user has a worker, so the server
+# uses up to this many per user. Default: all of them.
+#max_threads = 8
+# Most RAM in MB each worker plans with: caches, threads and the results
+# database are sized as if the computer had no more. Not a hard limit on
+# every allocation. Default: the computer's (or the container's limit).
+#max_ram_mb = 16384
 
 [limits]
 # Not set: no limit.

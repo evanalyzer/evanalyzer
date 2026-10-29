@@ -88,6 +88,11 @@ pub struct SessionManagement {
     /// Passed to every worker as `--ai-devices` / `--gpu-slots`.
     pub worker_ai_devices: Option<String>,
     pub worker_gpu_slots: Option<usize>,
+    /// Passed to every worker as `--ai-plugin` / `--max-threads` /
+    /// `--max-ram` - the limits are each worker's.
+    pub worker_ai_plugin: Option<PathBuf>,
+    pub worker_max_threads: Option<usize>,
+    pub worker_max_ram_mb: Option<u64>,
     /// At most this many workers at once (`limits.max_workers`).
     pub max_workers: Option<usize>,
     state: Mutex<State>,
@@ -130,6 +135,9 @@ impl SessionManagement {
             worker_idle_timeout_minutes: None,
             worker_ai_devices: None,
             worker_gpu_slots: None,
+            worker_ai_plugin: None,
+            worker_max_threads: None,
+            worker_max_ram_mb: None,
             max_workers: None,
             state: Mutex::new(State {
                 sessions,
@@ -246,6 +254,15 @@ impl SessionManagement {
         }
         if let Some(slots) = self.worker_gpu_slots {
             command.arg("--gpu-slots").arg(slots.to_string());
+        }
+        if let Some(plugin) = &self.worker_ai_plugin {
+            command.arg("--ai-plugin").arg(plugin);
+        }
+        if let Some(threads) = self.worker_max_threads {
+            command.arg("--max-threads").arg(threads.to_string());
+        }
+        if let Some(mb) = self.worker_max_ram_mb {
+            command.arg("--max-ram").arg(mb.to_string());
         }
         command
             .current_dir(&user.home)
@@ -604,6 +621,9 @@ pub(crate) mod tests {
         sessions.worker_idle_timeout_minutes = Some(45);
         sessions.worker_ai_devices = Some("0,1".into());
         sessions.worker_gpu_slots = Some(2);
+        sessions.worker_ai_plugin = Some(PathBuf::from("/opt/eva/libevanalyzer_ai.so"));
+        sessions.worker_max_threads = Some(8);
+        sessions.worker_max_ram_mb = Some(16384);
         let mut alice = user("alice");
         alice.home = dir.path().to_path_buf();
 
@@ -615,6 +635,9 @@ pub(crate) mod tests {
         assert_eq!(value_of("--idle-timeout"), "45");
         assert_eq!(value_of("--ai-devices"), "0,1");
         assert_eq!(value_of("--gpu-slots"), "2");
+        assert_eq!(value_of("--ai-plugin"), "/opt/eva/libevanalyzer_ai.so");
+        assert_eq!(value_of("--max-threads"), "8");
+        assert_eq!(value_of("--max-ram"), "16384");
         sessions.close_session(&entry.session_token).unwrap();
     }
 
