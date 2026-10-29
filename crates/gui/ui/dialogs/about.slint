@@ -497,27 +497,6 @@ export component AboutDialog inherits Rectangle {
                         vertical-stretch: 1;
                     }
 
-                    // Made with Slint - Slint's own AboutSlint, as its
-                    // Royalty-free license asks. It picks its logo by
-                    // std-widgets' color scheme, so it sits on that
-                    // scheme's background to stay readable. Its size is
-                    // fixed: the logo then keeps its aspect ratio (padding
-                    // 2 x 12 + logo 136 x 62 + 8 + two 10 px lines).
-                    HorizontalLayout {
-                        padding-bottom: 14px;
-                        alignment: start;
-                        Rectangle {
-                            width: 160px;
-                            height: 122px;
-                            border-radius: 10px;
-                            background: Palette.background;
-                            made-with-slint := AboutSlint {
-                                width: parent.width;
-                                height: parent.height;
-                            }
-                        }
-                    }
-
                     Text {
                         text: "VERSION";
                         font-size: Ink.fs-caption;
