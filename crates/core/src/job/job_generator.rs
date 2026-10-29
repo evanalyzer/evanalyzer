@@ -25,7 +25,7 @@ use crate::{
 use chrono::Utc;
 use evanalyzer_cfg::{
     PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
-    core_types::{ImageAddress, is_valid_measurement_id},
+    core_types::{ImageAddress, is_contained_rel_path, is_valid_measurement_id},
 };
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, StepId},
@@ -474,6 +474,26 @@ pub fn check_series(config: &ProjectSettings) -> Result<(), InternalErrors> {
     Err(InternalErrors::InvalidArgument(message))
 }
 
+/// Refuses a project with an image path that leaves its image folder
+/// (absolute, a drive, `..`): a shared project - or a client's, on a
+/// server - would make the job read that file, and Save Image write next
+/// to it. Checked on the string, the same on every system.
+pub fn check_image_paths(config: &ProjectSettings) -> Result<(), InternalErrors> {
+    match config
+        .images
+        .list
+        .0
+        .keys()
+        .find(|path| !is_contained_rel_path(&path.to_string_lossy()))
+    {
+        None => Ok(()),
+        Some(path) => Err(InternalErrors::InvalidArgument(format!(
+            "Cannot start: the image path \"{}\" is outside the image folder",
+            path.display()
+        ))),
+    }
+}
+
 /// Writes a full copy of `config` as `<job_name>.evaproj` next to the run's
 /// `.evadb` file. Best-effort: a snapshot failure is logged, not propagated -
 /// it must never fail an otherwise-successful analysis run.
@@ -525,6 +545,7 @@ fn generate_job_from_project_settings_intenal(
     output_path: PathBuf,
     result_storage: Arc<dyn PipelineResultExporter>,
 ) -> Result<JobExecutor, InternalErrors> {
+    check_image_paths(&config)?;
     let Some(image_base_path) = config.images.root else {
         return Err(InternalErrors::InvalidArgument(
             "No image base path set".into(),
@@ -843,6 +864,38 @@ mod tests {
         let mut unread = image_with_series("c.vsi", &[]);
         unread.selected_series = 5;
         assert_eq!(active_series(&unread, None), 5, "series not read yet");
+    }
+
+    /// An image path leaving the image folder refuses the start - also of
+    /// a preview, before anything is read.
+    #[test]
+    fn an_image_path_outside_the_image_folder_refuses_the_start() {
+        let project_with_image = |path: &str| {
+            let mut project = project_with(Some(PathBuf::from("/data/images")), Vec::new());
+            Arc::make_mut(&mut project.images.list.0)
+                .insert(PathBuf::from(path), Arc::new(image_with_series(path, &[])));
+            project
+        };
+        for inside in ["a.tif", "plate 1/A01.tif"] {
+            assert!(
+                check_image_paths(&project_with_image(inside)).is_ok(),
+                "{inside}"
+            );
+        }
+        for outside in [
+            "/etc/passwd",
+            "../other/a.tif",
+            r"..\other\a.tif",
+            "C:/a.tif",
+        ] {
+            let project = project_with_image(outside);
+            let error = check_image_paths(&project).unwrap_err().to_string();
+            assert!(error.contains("outside the image folder"), "{error}");
+
+            let dir = tempfile::tempdir().unwrap();
+            let job = generate_preview_job_from_project_settings(project, dir.path().to_path_buf());
+            assert!(job.is_err(), "{outside}: the preview doesn't start");
+        }
     }
 
     #[test]

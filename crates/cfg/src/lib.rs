@@ -90,6 +90,7 @@ pub mod core_types {
     pub use crate::types::measurement::is_valid_measurement_id;
     pub use crate::types::measurement::measurement_label;
     pub use crate::types::measurement::next_measurement_id;
+    pub use crate::types::paths::{is_contained_rel_path, is_file_name_part};
     pub use crate::types::units::PixelUnits;
     pub use crate::types::units::SizeUnits;
     pub use crate::types::units::SizeUnitsRel;

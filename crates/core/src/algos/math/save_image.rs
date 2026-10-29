@@ -11,7 +11,9 @@ use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, Pipeline
 use crate::image::{ImageContainer, Point2d};
 use crate::object::Object;
 use crate::pipeline::scope::Scope;
-use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ObjectClass, is_file_name_part,
+};
 use image::{DynamicImage, ImageBuffer, Luma, Rgb, RgbImage};
 use kornia_image::Image;
 use macros::CommandsMeta;
@@ -74,6 +76,14 @@ impl ImageAlgorithm for SaveImage {
         let Some(output_path) = ctx.output_path.clone() else {
             return Err(InternalErrors::Io("No output path!".into()));
         };
+        // Part of a file name in the output folder - a shared pipeline's
+        // "/home/…" or "../" would write the PNGs anywhere.
+        if !is_file_name_part(&self.name) {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Save Image: the name \"{}\" must not contain a folder (/, \\, .., a drive)",
+                self.name
+            )));
+        }
 
         // Control images are grouped per source image (its relative path, minus
         // extension, becomes its own output folder) so e.g. every image's
@@ -503,13 +513,15 @@ mod tests {
 
         let input_img = Image::new(size, data).unwrap();
         let dir = tempfile::tempdir().unwrap();
+        // The output "folder" is a file: its images folder can't be made.
+        let not_a_folder = dir.path().join("file");
+        std::fs::write(&not_a_folder, b"").unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        ctx.output_path = Some(dir.path().to_path_buf());
+        ctx.output_path = Some(not_a_folder);
         let mut cache = GlobalPipelineCache::default();
 
-        // Try saving to an illegal path (e.g., a directory that doesn't exist)
         let saver = SaveImage {
-            name: "/non_existent_folder/file.png".into(),
+            name: "file".into(),
             display_classes: vec![],
             source: ImageSource::Image,
             opacity: 50,
@@ -522,6 +534,43 @@ mod tests {
             Err(InternalErrors::Io(_)) => (), // This hits the map_err branch!
             _ => panic!("Expected Io error"),
         }
+    }
+
+    /// A name with a folder (a shared pipeline's) is refused - nothing is
+    /// written, inside the output folder or outside.
+    #[test]
+    fn a_name_with_a_folder_writes_nothing() {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("out");
+        let outside = dir.path().join("outside");
+        for name in [
+            outside.join("x").to_string_lossy().into_owned(),
+            "../../../outside/x".into(),
+            r"..\..\..\outside\x".into(),
+            "sub/x".into(),
+            "C:x".into(),
+        ] {
+            let image = Image::new(size, vec![0.0f32; 2 * 2 * 3]).unwrap();
+            let mut ctx = PipelineContext::new_from_image_test_rgb(image).unwrap();
+            ctx.output_path = Some(output.clone());
+            let saver = SaveImage {
+                name: name.clone(),
+                display_classes: vec![],
+                source: ImageSource::Image,
+                opacity: 50,
+            };
+            let result = saver.execute(&mut ctx, &mut GlobalPipelineCache::default());
+            assert!(
+                matches!(result, Err(InternalErrors::InvalidArgument(_))),
+                "{name}: {result:?}"
+            );
+        }
+        assert!(!output.exists(), "nothing written in the output folder");
+        assert!(!outside.exists(), "nor outside");
     }
 
     #[test]

@@ -93,7 +93,8 @@ impl LocalBackend {
         if let Some(root) = &settings.images.root {
             self.files.check(root)?;
         }
-        Ok(())
+        // Each image joined onto that root stays in it.
+        evanalyzer_core::check_image_paths(settings)
     }
 }
 
@@ -259,6 +260,31 @@ mod home_tests {
                 .is_err(),
             "the rest of the home stays outside the allowed folders"
         );
+    }
+
+    /// A client's project with an image outside the allowed folders (`..`,
+    /// absolute) is refused before any job - analysis, preview, training -
+    /// reads it.
+    #[test]
+    fn a_restricted_worker_refuses_images_outside_its_folders() {
+        let data = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::restricted_to(&[data.path().to_path_buf()]).unwrap();
+        let project = |image: &str| {
+            let mut settings =
+                evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+            settings.images.root = Some(data.path().to_path_buf());
+            std::sync::Arc::make_mut(&mut settings.images.list.0)
+                .insert(PathBuf::from(image), Default::default());
+            settings
+        };
+
+        assert!(backend.check_project_paths(None, &project("a.tif")).is_ok());
+        for outside in ["../a.tif", "/etc/passwd", r"sub\..\..\a.tif"] {
+            assert!(
+                backend.check_project_paths(None, &project(outside)).is_err(),
+                "{outside}"
+            );
+        }
     }
 }
 
