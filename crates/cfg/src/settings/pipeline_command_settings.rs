@@ -424,6 +424,22 @@ pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
     Cross,
 }
 
+/// What a merge adds up and a split divides - telling a true merge or
+/// split from objects that only pass close by.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LibsLinkingMergeSplitAmountSettings {
+    /// The area: for objects that keep their size (e.g. cells).
+    #[default]
+    #[serde(alias = "area")]
+    Area,
+    /// The summed intensity of `channel` (mean times area): for spots
+    /// below the resolution limit (e.g. vesicles), whose brightness adds
+    /// up but whose size doesn't.
+    #[serde(alias = "intensity")]
+    Intensity,
+}
+
 /// The specific morphological transformation to perform.
 ///
 /// Morphological operations process images based on shapes, typically used to
@@ -3328,6 +3344,134 @@ impl Default for MeasureObjectTextureSettings {
 
 // ============ DATASET ============
 
+/// Links objects into tracks by the globally best assignment, predicting
+/// each track's next position from its velocity (directed motion).
+///
+/// Objects of `object_class` in two consecutive frames of the same image and
+/// z-plane are linked so that the sum of the squared distances to the
+/// predicted positions is smallest, each object once. Each track's velocity
+/// is followed by a Kalman filter. Then track ends are linked to starts up
+/// to `max_gap_frames` later, and - if switched on - track ends into other
+/// tracks (merge) and starts out of them (split), as in Track LAP.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackKalmanSettings {
+    /// Object class to track.
+    pub object_class: ObjectClass,
+    /// Unit of the distances (e.g. pixels, nm).
+    pub unit: SizeUnits,
+    /// How far a new track's second object may be from its first - the
+    /// fastest an object moves per frame.
+    #[schemars(range(min = 0))]
+    pub initial_max_distance: f32,
+    /// How far an object may be from where its track predicts it - also
+    /// the farthest a merge or split partner may be.
+    #[schemars(range(min = 0))]
+    pub max_distance: f32,
+    /// How many frames in a row an object may be missing and its track
+    /// still continue. 0: no gap closing.
+    #[schemars(range(min = 0, max = 100))]
+    pub max_gap_frames: usize,
+    /// How far an object may be from where its track predicts it after a
+    /// gap.
+    #[schemars(range(min = 0))]
+    pub max_gap_distance: f32,
+    /// How exactly an object's position is known (its standard deviation)
+    /// - the larger, the more the predictions follow the velocity rather
+    /// than the last position.
+    #[schemars(range(min = 0))]
+    pub position_noise: f32,
+    /// How much the velocity changes from one frame to the next (standard
+    /// deviation) - the larger, the faster a track follows a turn.
+    #[schemars(range(min = 0))]
+    pub velocity_noise: f32,
+    /// Detect two objects merging into one (e.g. vesicle fusion).
+    pub merging: bool,
+    /// Detect one object splitting into two (e.g. a vesicle budding off).
+    pub splitting: bool,
+    /// What a merge adds up and a split divides.
+    pub merge_split_amount: LibsLinkingMergeSplitAmountSettings,
+    /// The channel of the intensity, if `merge_split_amount` is the
+    /// intensity.
+    pub channel: ImageChannelIdx,
+}
+
+impl Default for TrackKalmanSettings {
+    fn default() -> Self {
+        Self {
+            object_class: ObjectClass::default(),
+            unit: SizeUnits::default(),
+            initial_max_distance: 15000.0f32,
+            max_distance: 5000.0f32,
+            max_gap_frames: 2usize,
+            max_gap_distance: 10000.0f32,
+            position_noise: 200.0f32,
+            velocity_noise: 1000.0f32,
+            merging: bool::default(),
+            splitting: bool::default(),
+            merge_split_amount: LibsLinkingMergeSplitAmountSettings::Intensity,
+            channel: ImageChannelIdx::default(),
+        }
+    }
+}
+
+/// Links objects into tracks by the globally best assignment, for objects
+/// moving at random (Brownian motion).
+///
+/// Objects of `object_class` in two consecutive frames of the same image and
+/// z-plane are linked so that the sum of the squared distances is smallest,
+/// each object once (Jaqaman et al., 2008). Then track ends are linked to
+/// starts up to `max_gap_frames` later (an object missed by the
+/// segmentation), and - if switched on - track ends into other tracks
+/// (merge) and starts out of them (split). A merge or split starts new
+/// tracks, with the old ones as parents.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackLapSettings {
+    /// Object class to track.
+    pub object_class: ObjectClass,
+    /// Unit of the distances (e.g. pixels, nm).
+    pub unit: SizeUnits,
+    /// How far an object may move from one frame to the next - also the
+    /// farthest a merge or split partner may be.
+    #[schemars(range(min = 0))]
+    pub max_distance: f32,
+    /// How many frames in a row an object may be missing and its track
+    /// still continue. 0: no gap closing.
+    #[schemars(range(min = 0, max = 100))]
+    pub max_gap_frames: usize,
+    /// How far an object may move while it is missing.
+    #[schemars(range(min = 0))]
+    pub max_gap_distance: f32,
+    /// Detect two objects merging into one (e.g. vesicle fusion).
+    pub merging: bool,
+    /// Detect one object splitting into two (e.g. cell division).
+    pub splitting: bool,
+    /// What a merge adds up and a split divides.
+    pub merge_split_amount: LibsLinkingMergeSplitAmountSettings,
+    /// The channel of the intensity, if `merge_split_amount` is the
+    /// intensity.
+    pub channel: ImageChannelIdx,
+}
+
+impl Default for TrackLapSettings {
+    fn default() -> Self {
+        Self {
+            object_class: ObjectClass::default(),
+            unit: SizeUnits::default(),
+            max_distance: 10000.0f32,
+            max_gap_frames: 2usize,
+            max_gap_distance: 15000.0f32,
+            merging: bool::default(),
+            splitting: bool::default(),
+            merge_split_amount: LibsLinkingMergeSplitAmountSettings::Area,
+            channel: ImageChannelIdx::default(),
+        }
+    }
+}
+
 /// Links each object to the nearest one in the next frame.
 ///
 /// Objects of `object_class` in two consecutive frames of the same image and
@@ -3355,6 +3499,56 @@ impl Default for TrackNearestNeighborSettings {
             object_class: ObjectClass::default(),
             unit: SizeUnits::default(),
             max_distance: 10000.0f32,
+        }
+    }
+}
+
+/// Links objects into tracks by the globally best assignment of
+/// overlapping masks.
+///
+/// Objects of `object_class` in two consecutive frames of the same image and
+/// z-plane are linked so that they overlap the most in total, each object
+/// once - two objects can be linked if their intersection over union is
+/// at least `min_overlap`. Then track ends are linked to starts up to
+/// `max_gap_frames` later, and - if switched on - track ends into other
+/// tracks (merge) and starts out of them (split). A merge or split starts
+/// new tracks, with the old ones as parents.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackOverlapSettings {
+    /// Object class to track.
+    pub object_class: ObjectClass,
+    /// How much two objects must overlap to be linked: intersection over
+    /// union, from 0 to 1 (1: the same mask). For a merge or split, the
+    /// part of the smaller object inside the bigger one.
+    #[schemars(range(min = 0.01, max = 1))]
+    pub min_overlap: f32,
+    /// How many frames in a row an object may be missing and its track
+    /// still continue. 0: no gap closing.
+    #[schemars(range(min = 0, max = 100))]
+    pub max_gap_frames: usize,
+    /// Detect two objects merging into one.
+    pub merging: bool,
+    /// Detect one object splitting into two (e.g. cell division).
+    pub splitting: bool,
+    /// What a merge adds up and a split divides.
+    pub merge_split_amount: LibsLinkingMergeSplitAmountSettings,
+    /// The channel of the intensity, if `merge_split_amount` is the
+    /// intensity.
+    pub channel: ImageChannelIdx,
+}
+
+impl Default for TrackOverlapSettings {
+    fn default() -> Self {
+        Self {
+            object_class: ObjectClass::default(),
+            min_overlap: 0.3f32,
+            max_gap_frames: 2usize,
+            merging: bool::default(),
+            splitting: bool::default(),
+            merge_split_amount: LibsLinkingMergeSplitAmountSettings::Area,
+            channel: ImageChannelIdx::default(),
         }
     }
 }

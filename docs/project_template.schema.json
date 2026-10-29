@@ -1383,6 +1383,21 @@
         "kernelSize"
       ]
     },
+    "LibsLinkingMergeSplitAmountSettings": {
+      "description": "What a merge adds up and a split divides - telling a true merge or\nsplit from objects that only pass close by.",
+      "oneOf": [
+        {
+          "description": "The area: for objects that keep their size (e.g. cells).",
+          "type": "string",
+          "const": "AREA"
+        },
+        {
+          "description": "The summed intensity of `channel` (mean times area): for spots\nbelow the resolution limit (e.g. vesicles), whose brightness adds\nup but whose size doesn't.",
+          "type": "string",
+          "const": "INTENSITY"
+        }
+      ]
+    },
     "LoadAnnotatedObjectsSettings": {
       "description": "Loads the hand-annotated objects of the image into the pipeline.\n\nEvery loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
       "type": "object",
@@ -3379,10 +3394,49 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "TRACK_KALMAN"
+            }
+          },
+          "$ref": "#/$defs/TrackKalmanSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "TRACK_LAP"
+            }
+          },
+          "$ref": "#/$defs/TrackLapSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "TRACK_NEAREST_NEIGHBOR"
             }
           },
           "$ref": "#/$defs/TrackNearestNeighborSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "TRACK_OVERLAP"
+            }
+          },
+          "$ref": "#/$defs/TrackOverlapSettings",
           "required": [
             "type"
           ]
@@ -4322,6 +4376,143 @@
         "thresholds"
       ]
     },
+    "TrackKalmanSettings": {
+      "description": "Links objects into tracks by the globally best assignment, predicting\neach track's next position from its velocity (directed motion).\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances to the\npredicted positions is smallest, each object once. Each track's velocity\nis followed by a Kalman filter. Then track ends are linked to starts up\nto `max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split), as in Track LAP.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel of the intensity, if `merge_split_amount` is the\nintensity.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "initialMaxDistance": {
+          "description": "How far a new track's second object may be from its first - the\nfastest an object moves per frame.",
+          "type": "number",
+          "format": "float",
+          "default": 15000.0,
+          "minimum": 0
+        },
+        "maxDistance": {
+          "description": "How far an object may be from where its track predicts it - also\nthe farthest a merge or split partner may be.",
+          "type": "number",
+          "format": "float",
+          "default": 5000.0,
+          "minimum": 0
+        },
+        "maxGapDistance": {
+          "description": "How far an object may be from where its track predicts it after a\ngap.",
+          "type": "number",
+          "format": "float",
+          "default": 10000.0,
+          "minimum": 0
+        },
+        "maxGapFrames": {
+          "description": "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "maximum": 100,
+          "minimum": 0
+        },
+        "mergeSplitAmount": {
+          "description": "What a merge adds up and a split divides.",
+          "$ref": "#/$defs/LibsLinkingMergeSplitAmountSettings",
+          "default": "INTENSITY"
+        },
+        "merging": {
+          "description": "Detect two objects merging into one (e.g. vesicle fusion).",
+          "type": "boolean",
+          "default": false
+        },
+        "objectClass": {
+          "description": "Object class to track.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "positionNoise": {
+          "description": "How exactly an object's position is known (its standard deviation)\n- the larger, the more the predictions follow the velocity rather\nthan the last position.",
+          "type": "number",
+          "format": "float",
+          "default": 200.0,
+          "minimum": 0
+        },
+        "splitting": {
+          "description": "Detect one object splitting into two (e.g. a vesicle budding off).",
+          "type": "boolean",
+          "default": false
+        },
+        "unit": {
+          "description": "Unit of the distances (e.g. pixels, nm).",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "NANO_METER"
+        },
+        "velocityNoise": {
+          "description": "How much the velocity changes from one frame to the next (standard\ndeviation) - the larger, the faster a track follows a turn.",
+          "type": "number",
+          "format": "float",
+          "default": 1000.0,
+          "minimum": 0
+        }
+      }
+    },
+    "TrackLapSettings": {
+      "description": "Links objects into tracks by the globally best assignment, for objects\nmoving at random (Brownian motion).\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances is smallest,\neach object once (Jaqaman et al., 2008). Then track ends are linked to\nstarts up to `max_gap_frames` later (an object missed by the\nsegmentation), and - if switched on - track ends into other tracks\n(merge) and starts out of them (split). A merge or split starts new\ntracks, with the old ones as parents.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel of the intensity, if `merge_split_amount` is the\nintensity.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "maxDistance": {
+          "description": "How far an object may move from one frame to the next - also the\nfarthest a merge or split partner may be.",
+          "type": "number",
+          "format": "float",
+          "default": 10000.0,
+          "minimum": 0
+        },
+        "maxGapDistance": {
+          "description": "How far an object may move while it is missing.",
+          "type": "number",
+          "format": "float",
+          "default": 15000.0,
+          "minimum": 0
+        },
+        "maxGapFrames": {
+          "description": "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "maximum": 100,
+          "minimum": 0
+        },
+        "mergeSplitAmount": {
+          "description": "What a merge adds up and a split divides.",
+          "$ref": "#/$defs/LibsLinkingMergeSplitAmountSettings",
+          "default": "AREA"
+        },
+        "merging": {
+          "description": "Detect two objects merging into one (e.g. vesicle fusion).",
+          "type": "boolean",
+          "default": false
+        },
+        "objectClass": {
+          "description": "Object class to track.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "splitting": {
+          "description": "Detect one object splitting into two (e.g. cell division).",
+          "type": "boolean",
+          "default": false
+        },
+        "unit": {
+          "description": "Unit of the distances (e.g. pixels, nm).",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "NANO_METER"
+        }
+      }
+    },
     "TrackNearestNeighborSettings": {
       "description": "Links each object to the nearest one in the next frame.\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
       "type": "object",
@@ -4342,6 +4533,53 @@
           "description": "Unit in which `max_distance` is expressed (e.g. pixels, nm).",
           "$ref": "#/$defs/SizeUnits",
           "default": "NANO_METER"
+        }
+      }
+    },
+    "TrackOverlapSettings": {
+      "description": "Links objects into tracks by the globally best assignment of\noverlapping masks.\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that they overlap the most in total, each object\nonce - two objects can be linked if their intersection over union is\nat least `min_overlap`. Then track ends are linked to starts up to\n`max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split). A merge or split starts\nnew tracks, with the old ones as parents.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel of the intensity, if `merge_split_amount` is the\nintensity.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "maxGapFrames": {
+          "description": "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "maximum": 100,
+          "minimum": 0
+        },
+        "mergeSplitAmount": {
+          "description": "What a merge adds up and a split divides.",
+          "$ref": "#/$defs/LibsLinkingMergeSplitAmountSettings",
+          "default": "AREA"
+        },
+        "merging": {
+          "description": "Detect two objects merging into one.",
+          "type": "boolean",
+          "default": false
+        },
+        "minOverlap": {
+          "description": "How much two objects must overlap to be linked: intersection over\nunion, from 0 to 1 (1: the same mask). For a merge or split, the\npart of the smaller object inside the bigger one.",
+          "type": "number",
+          "format": "float",
+          "default": 0.30000001192092896,
+          "maximum": 1,
+          "minimum": 0.01
+        },
+        "objectClass": {
+          "description": "Object class to track.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "splitting": {
+          "description": "Detect one object splitting into two (e.g. cell division).",
+          "type": "boolean",
+          "default": false
         }
       }
     },

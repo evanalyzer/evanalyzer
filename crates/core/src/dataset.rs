@@ -12,12 +12,17 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod dataset_context;
+pub(crate) mod libs;
 pub mod tracking;
 
 pub use self::dataset_context::DatasetContext;
 
 // Commands, flat like `crate::algos::*` - the generated code names them so.
+pub use self::libs::linking::MergeSplitAmount;
+pub use self::tracking::track_kalman::TrackKalman;
+pub use self::tracking::track_lap::TrackLap;
 pub use self::tracking::track_nearest_neighbor::TrackNearestNeighbor;
+pub use self::tracking::track_overlap::TrackOverlap;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use log::info;

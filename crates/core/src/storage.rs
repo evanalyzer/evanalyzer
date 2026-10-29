@@ -9,9 +9,9 @@
 
 use crate::{
     pipeline::pipeline_cache::GlobalPipelineCache,
-    storage::stored_object::{ObjectFilter, StoredObject},
+    storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment},
 };
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 pub mod duckdb;
 pub mod file;
 pub mod mask_codec;
@@ -86,9 +86,13 @@ pub trait DatasetStore: Send + Sync {
     /// The objects matching `filter`, ordered by image, frame and object id.
     fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<StoredObject>, InternalErrors>;
 
-    /// Sets the track of each listed object (`0`: none). Objects not
+    /// The images that have objects of `class`, sorted - for a step that
+    /// works image by image instead of reading every object at once.
+    fn image_rel_paths(&self, class: ObjectClass) -> Result<Vec<String>, InternalErrors>;
+
+    /// Sets the track and parent tracks of each listed object. Objects not
     /// listed keep theirs.
-    fn set_track_ids(&self, tracks: &[(ObjectId, u64)]) -> Result<(), InternalErrors>;
+    fn set_track_ids(&self, tracks: &[TrackAssignment]) -> Result<(), InternalErrors>;
 
     /// The highest track id of the objects that don't carry `class` - `0`
     /// if none is tracked - so a step tracking `class` can number its

@@ -393,7 +393,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 55] = [
+    let expected: [(&str, &[CommandCategory]); 58] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -461,6 +461,9 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ),
         // Only dataset steps may follow a dataset step.
         ("TrackNearestNeighbor", &[Dataset]),
+        ("Track LAP", &[Dataset]),
+        ("Track Kalman", &[Dataset]),
+        ("Track Overlap", &[Dataset]),
         ("AI Stardist Segmentation", &[Extract]),
         ("StructureTensor", &[Segment, Preprocess]),
         // Pinned to `[InstanceSegmentation]` (same as the default for

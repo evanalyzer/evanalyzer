@@ -11,7 +11,7 @@ use crate::ImageDimensionality;
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, MeasurementValues};
-use crate::storage::stored_object::{ObjectFilter, StoredObject};
+use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
 use crate::storage::{DatasetStore, ImageSummary, PipelineResultExporter};
 use duckdb::arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float64Builder, Int32Builder,
@@ -416,6 +416,12 @@ impl DuckDbExporter {
                  {RESULTS_SCHEMA_VERSION} - run the analysis again"
             )));
         }
+        // Added after version 1 shipped, without a version bump: files
+        // written before it get it here, at the end as in `CREATE_TABLES`.
+        conn.execute_batch(
+            "ALTER TABLE objects ADD COLUMN IF NOT EXISTS parent_track_ids UBIGINT[]",
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
         let object_indices = existing_object_indices(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -625,6 +631,8 @@ struct ObjectColumns {
     measurement_values: ListBuilder<Float64Builder>,
     /// The mask, run-length encoded (`mask_codec`); NULL when not stored.
     mask: BinaryBuilder,
+    /// Always NULL on export: tracking steps set it afterwards.
+    parent_track_ids: ListBuilder<UInt64Builder>,
     ndim: UInt8Builder,
     bbox_z_px: [UInt32Builder; 2],
     volume_px: UInt64Builder,
@@ -707,6 +715,7 @@ impl ObjectColumns {
             ),
             measurement_values: ListBuilder::new(Float64Builder::new()),
             mask: BinaryBuilder::with_capacity(rows, rows * 16),
+            parent_track_ids: ListBuilder::new(UInt64Builder::new()),
             ndim: UInt8Builder::with_capacity(rows),
             bbox_z_px: std::array::from_fn(|_| UInt32Builder::with_capacity(rows)),
             volume_px: UInt64Builder::with_capacity(rows),
@@ -942,6 +951,7 @@ impl ObjectColumns {
         columns.push(("coloc_partner_ids", arr(&mut self.coloc_partner_ids)));
         columns.push(("measurement_values", arr(&mut self.measurement_values)));
         columns.push(("mask", arr(&mut self.mask)));
+        columns.push(("parent_track_ids", arr(&mut self.parent_track_ids)));
         RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))
     }
 }
@@ -1277,7 +1287,12 @@ CREATE TABLE IF NOT EXISTS objects (
     -- volume plane by plane from bbox_zmin_px): the lengths of its
     -- alternating unset / set runs as LEB128 varints (see evanalyzer_core's
     -- mask_codec.rs). NULL when not stored.
-    mask                         BLOB
+    mask                         BLOB,
+    -- The tracks this object's track came from (a tracking step): one for
+    -- a daughter of a division, two or more for a merge; NULL for most.
+    -- The same on every object of the track. Last, as files written
+    -- before it get it added at the end (`open_existing`).
+    parent_track_ids             UBIGINT[]
 );
 
 CREATE TABLE IF NOT EXISTS images (
@@ -1570,6 +1585,7 @@ impl DuckDbExporter {
             } else {
                 c.mask.append_null();
             }
+            c.parent_track_ids.append_null();
             c.append_z_extent(object, pxx, pxy, pxz);
         }
         columns.finish().map(Some)
@@ -1736,7 +1752,8 @@ impl DatasetStore for DuckDbExporter {
                         area_px, object_class_id,
                         list_transform(intensity_mean_gray,
                             v -> v / ((1::UBIGINT << image_bit_depth) - 1)),
-                        NULLIF(pixel_size_x_nm, 0), NULLIF(track_id, 0)
+                        NULLIF(pixel_size_x_nm, 0), NULLIF(track_id, 0),
+                        CASE WHEN ?4 THEN mask END
                  FROM objects
                  WHERE (?1 IS NULL OR image_rel_path = ?1)
                    AND (?2 IS NULL OR t_stack = ?2)
@@ -1746,7 +1763,12 @@ impl DatasetStore for DuckDbExporter {
             .map_err(io)?;
         let rows = stmt
             .query_map(
-                params![filter.image_rel_path, filter.t_stack, class_id],
+                params![
+                    filter.image_rel_path,
+                    filter.t_stack,
+                    class_id,
+                    filter.with_masks
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -1772,14 +1794,23 @@ impl DatasetStore for DuckDbExporter {
                                     _ => None,
                                 })
                                 .collect(),
+                            mask: None,
                         },
+                        row.get::<_, Option<Vec<u8>>>(15)?,
                     ))
                 },
             )
             .map_err(io)?;
         rows.map(|row| {
-            let (id, mut row) = row.map_err(io)?;
+            let (id, mut row, mask) = row.map_err(io)?;
             row.id = parse_object_id(&id)?;
+            if let Some(mask) = mask {
+                let [x0, y0, x1, y1] = row.bbox_px;
+                let len =
+                    (x1.saturating_sub(x0) as usize + 1) * (y1.saturating_sub(y0) as usize + 1);
+                // A volume's mask covers all its planes: it doesn't fit, none.
+                row.mask = crate::storage::mask_codec::decode_mask(&mask, len);
+            }
             Ok(row)
         })
         .collect()
@@ -1800,30 +1831,82 @@ impl DatasetStore for DuckDbExporter {
             .map_err(|e| InternalErrors::Io(e.to_string()))
     }
 
-    fn set_track_ids(&self, tracks: &[(ObjectId, u64)]) -> Result<(), InternalErrors> {
+    fn image_rel_paths(&self, class: ObjectClass) -> Result<Vec<String>, InternalErrors> {
+        let ObjectClass::Global(class_id) = class else {
+            return Ok(Vec::new());
+        };
+        let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = self.lock_conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT image_rel_path FROM objects
+                 WHERE list_contains(object_class_id, ?) ORDER BY image_rel_path",
+            )
+            .map_err(io)?;
+        stmt.query_map(params![class_id as i32], |row| row.get(0))
+            .map_err(io)?
+            .collect::<Result<_, _>>()
+            .map_err(io)
+    }
+
+    fn set_track_ids(&self, tracks: &[TrackAssignment]) -> Result<(), InternalErrors> {
         let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let conn = self.lock_conn();
         // All or nothing; `unchecked_transaction` is safe as in `export`.
         let tx = conn.unchecked_transaction().map_err(io)?;
         // One join instead of an UPDATE per object (there can be millions).
+        // The parents apart, as text ("3,7" - the appender takes no lists):
+        // updating a list column is slow, and most objects have none.
         tx.execute_batch(
-            "CREATE OR REPLACE TEMP TABLE new_track_ids (object_id VARCHAR, track_id UBIGINT)",
+            "CREATE OR REPLACE TEMP TABLE new_track_ids (object_id VARCHAR, track_id UBIGINT);
+             CREATE OR REPLACE TEMP TABLE new_parents (object_id VARCHAR, parents VARCHAR);",
         )
         .map_err(io)?;
         {
-            let mut appender = tx.appender("new_track_ids").map_err(io)?;
-            for (id, track) in tracks {
-                appender
-                    .append_row(params![id.to_string(), track])
+            let mut ids = tx.appender("new_track_ids").map_err(io)?;
+            for track in tracks {
+                ids.append_row(params![track.object_id.to_string(), track.track_id])
+                    .map_err(io)?;
+            }
+            let mut parents = tx.appender("new_parents").map_err(io)?;
+            for track in tracks.iter().filter(|t| !t.parent_track_ids.is_empty()) {
+                let list: Vec<String> = track.parent_track_ids.iter().map(u64::to_string).collect();
+                parents
+                    .append_row(params![track.object_id.to_string(), list.join(",")])
                     .map_err(io)?;
             }
         }
         tx.execute_batch(
             "UPDATE objects SET track_id = n.track_id FROM new_track_ids n
-                 WHERE objects.object_id = CAST(n.object_id AS UUID);
-             DROP TABLE new_track_ids;",
+                 WHERE objects.object_id = CAST(n.object_id AS UUID)",
         )
         .map_err(io)?;
+        let had_parents: bool = tx
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM objects WHERE parent_track_ids IS NOT NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(io)?;
+        if had_parents {
+            tx.execute_batch(
+                "UPDATE objects SET parent_track_ids = NULL
+                     WHERE parent_track_ids IS NOT NULL
+                       AND object_id IN (SELECT CAST(object_id AS UUID) FROM new_track_ids)",
+            )
+            .map_err(io)?;
+        }
+        if tracks.iter().any(|t| !t.parent_track_ids.is_empty()) {
+            tx.execute_batch(
+                "UPDATE objects
+                     SET parent_track_ids = CAST(string_split(p.parents, ',') AS UBIGINT[])
+                     FROM new_parents p
+                     WHERE objects.object_id = CAST(p.object_id AS UUID)",
+            )
+            .map_err(io)?;
+        }
+        tx.execute_batch("DROP TABLE new_track_ids; DROP TABLE new_parents;")
+            .map_err(io)?;
         tx.commit().map_err(io)
     }
 }
@@ -3137,5 +3220,113 @@ mod tests {
             [None, Some(0.5)],
             "channel 0 not measured"
         );
+    }
+
+    #[test]
+    fn dataset_steps_read_masks_and_images_and_write_parent_tracks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        for (image, objects) in [
+            ("b.tif", vec![frame_object(3, 1, 0)]),
+            ("a.tif", vec![frame_object(1, 1, 0), frame_object(2, 2, 0)]),
+        ] {
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_rel_path = PathBuf::from(image);
+            cache.image_meta.nr_of_bits = 8;
+            for object in objects {
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            exporter.export(&cache).unwrap();
+        }
+        let store = exporter.dataset_store().unwrap();
+        assert_eq!(
+            store.image_rel_paths(ObjectClass::Global(1)).unwrap(),
+            ["a.tif", "b.tif"]
+        );
+        assert_eq!(
+            store.image_rel_paths(ObjectClass::Global(2)).unwrap(),
+            ["a.tif"]
+        );
+        assert!(
+            store
+                .image_rel_paths(ObjectClass::Unset)
+                .unwrap()
+                .is_empty()
+        );
+
+        let objects = |with_masks| {
+            store
+                .get_objects(&ObjectFilter {
+                    with_masks,
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+        assert!(
+            objects(false).iter().all(|o| o.mask.is_none()),
+            "not asked for"
+        );
+        let mask = objects(true)[0].mask.clone().expect("asked for");
+        assert_eq!(mask.len(), 5 * 11);
+        assert_eq!(mask.count_ones(), 4);
+
+        let id = |n: u128| ObjectId(u128::MAX - n);
+        store
+            .set_track_ids(&[
+                TrackAssignment {
+                    object_id: id(1),
+                    track_id: 5,
+                    parent_track_ids: vec![2, 3],
+                },
+                TrackAssignment {
+                    object_id: id(3),
+                    track_id: 6,
+                    parent_track_ids: vec![],
+                },
+            ])
+            .unwrap();
+        let parents = |n: u128| -> (Option<u64>, Option<String>) {
+            exporter
+                .lock_conn()
+                .query_row(
+                    "SELECT track_id, parent_track_ids::VARCHAR FROM objects
+                     WHERE object_id = CAST(? AS UUID)",
+                    params![id(n).to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(parents(1), (Some(5), Some("[2, 3]".into())));
+        assert_eq!(parents(3), (Some(6), None));
+        assert_eq!(parents(2), (Some(0), None), "not listed: untouched");
+    }
+
+    #[test]
+    fn a_results_file_from_before_parent_tracks_gets_the_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        drop(test_exporter(&path));
+        let conn = shared_connection(&path).unwrap();
+        conn.execute_batch("ALTER TABLE objects DROP COLUMN parent_track_ids")
+            .unwrap();
+        drop(conn);
+
+        let exporter = DuckDbExporter::open_existing(&path).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        let object = frame_object(1, 1, 0);
+        cache.object_cache.insert(object.id.clone(), object);
+        exporter.export(&cache).unwrap();
+        exporter
+            .dataset_store()
+            .unwrap()
+            .set_track_ids(&[TrackAssignment {
+                object_id: ObjectId(u128::MAX - 1),
+                track_id: 1,
+                parent_track_ids: vec![4],
+            }])
+            .unwrap();
     }
 }

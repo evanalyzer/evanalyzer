@@ -107,7 +107,11 @@ pub use crate::storage::{ImageSummary, PipelineResultExporter};
 // Dataset
 pub use crate::dataset::DatasetAlgorithm;
 pub use crate::dataset::DatasetContext;
-pub use crate::dataset::tracking::track_nearest_neighbor::TrackNearestNeighbor;
+pub use crate::dataset::{
+    MergeSplitAmount, TrackKalman, TrackLap, TrackNearestNeighbor, TrackOverlap,
+};
+pub use crate::storage::DatasetStore;
+pub use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
 
 // AI classifier training
 pub use crate::ai_learning::model::SavedClassifier;

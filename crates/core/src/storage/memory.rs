@@ -8,7 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
-use crate::storage::stored_object::{ObjectFilter, StoredObject};
+use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
 use crate::storage::{DatasetStore, PipelineResultExporter};
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, ObjectId, PipelineMeasurements, TrackId},
@@ -83,7 +83,7 @@ impl DatasetStore for MemoryExporter {
         let mut rows: Vec<StoredObject> = objects
             .iter()
             .filter(|o| filter.t_stack.is_none_or(|t| o.t_stack == t))
-            .map(object_row)
+            .map(|o| object_row(o, filter.with_masks))
             .filter(|row| filter.matches_classes(&row.object_classes))
             .collect();
         rows.sort_by(|a, b| (a.t_stack, &a.id).cmp(&(b.t_stack, &b.id)));
@@ -103,16 +103,30 @@ impl DatasetStore for MemoryExporter {
             .unwrap_or(0))
     }
 
-    fn set_track_ids(&self, tracks: &[(ObjectId, u64)]) -> Result<(), InternalErrors> {
-        let tracks: std::collections::HashMap<&ObjectId, u64> =
-            tracks.iter().map(|(id, track)| (id, *track)).collect();
+    fn image_rel_paths(&self, class: ObjectClass) -> Result<Vec<String>, InternalErrors> {
+        let objects = self
+            .out_objects
+            .lock()
+            .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
+        Ok(if objects.iter().any(|o| o.object_class.contains(&class)) {
+            vec![String::new()]
+        } else {
+            Vec::new()
+        })
+    }
+
+    /// A preview's objects keep one parent track: the first.
+    fn set_track_ids(&self, tracks: &[TrackAssignment]) -> Result<(), InternalErrors> {
+        let tracks: std::collections::HashMap<&ObjectId, &TrackAssignment> =
+            tracks.iter().map(|t| (&t.object_id, t)).collect();
         let mut objects = self
             .out_objects
             .lock()
             .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
         for object in objects.iter_mut() {
             if let Some(track) = tracks.get(&object.id) {
-                object.track.id = TrackId(*track);
+                object.track.id = TrackId(track.track_id);
+                object.track.parent_track = track.parent_track_ids.first().map(|id| TrackId(*id));
             }
         }
         Ok(())
@@ -120,7 +134,7 @@ impl DatasetStore for MemoryExporter {
 }
 
 /// `object` as a dataset row - the same values the results database stores.
-fn object_row(object: &ObjectMetricSettings) -> StoredObject {
+fn object_row(object: &ObjectMetricSettings, with_mask: bool) -> StoredObject {
     let [x_min, y_min, x_max, y_max] = object.bbox;
     let channels = object
         .intensities
@@ -153,6 +167,7 @@ fn object_row(object: &ObjectMetricSettings) -> StoredObject {
         intensity_mean: (0..channels)
             .map(|c| object.intensities.get(&(c as i32)).map(|i| i.avg_intensity))
             .collect(),
+        mask: with_mask.then(|| object.mask_data.clone()),
     }
 }
 

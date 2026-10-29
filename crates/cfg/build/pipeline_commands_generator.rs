@@ -1259,13 +1259,15 @@ fn extract_doc_comments(attrs: &[syn::Attribute]) -> Vec<String> {
 
 fn extract_source_module(file_path: &Path) -> String {
     let path_str = file_path.to_string_lossy();
-    if let Some(pos) = path_str.find("algos/") {
-        let after_algos = &path_str[pos + 6..];
-        let without_rs = after_algos.strip_suffix(".rs").unwrap_or(after_algos);
-        without_rs.replace("/", "_").replace("\\", "_")
-    } else {
-        "unknown".to_string()
+    // The path below the module root (`algos/` or `dataset/`).
+    for root in ["algos/", "dataset/"] {
+        if let Some(pos) = path_str.find(root) {
+            let after_root = &path_str[pos + root.len()..];
+            let without_rs = after_root.strip_suffix(".rs").unwrap_or(after_root);
+            return without_rs.replace("/", "_").replace("\\", "_");
+        }
     }
+    "unknown".to_string()
 }
 
 fn extract_fields(item_struct: &ItemStruct) -> Vec<FieldInfo> {

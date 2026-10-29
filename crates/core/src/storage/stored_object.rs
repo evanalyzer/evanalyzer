@@ -10,6 +10,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 
 /// Which stored objects to read. `None` matches all.
@@ -20,6 +21,9 @@ pub struct ObjectFilter {
     /// Objects that carry this class (among others). `Unset` matches none:
     /// it is never stored as an object's class.
     pub object_class: Option<ObjectClass>,
+    /// Also read the objects' masks ([`StoredObject::mask`]) - off by
+    /// default, they are by far the biggest part of an object.
+    pub with_masks: bool,
 }
 
 impl ObjectFilter {
@@ -31,8 +35,8 @@ impl ObjectFilter {
 }
 
 /// An analysed object as the results storage keeps it - the `objects`
-/// table's values, without the mask (which isn't stored). Read back by
-/// whoever works on finished results, e.g. dataset steps.
+/// table's values. Read back by whoever works on finished results, e.g.
+/// dataset steps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredObject {
     pub id: ObjectId,
@@ -52,4 +56,20 @@ pub struct StoredObject {
     /// Mean intensity per channel (index = channel), normalized to 0..1;
     /// `None` for a channel that wasn't measured.
     pub intensity_mean: Vec<Option<f64>>,
+    /// The mask, a bit per pixel of `bbox_px` (inclusive) row by row -
+    /// `None` unless [`ObjectFilter::with_masks`] asked for it, or when the
+    /// results keep no masks.
+    pub mask: Option<BitVec<u64, Lsb0>>,
+}
+
+/// The track an object belongs to, as a dataset step sets it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackAssignment {
+    pub object_id: ObjectId,
+    /// `0`: none.
+    pub track_id: u64,
+    /// The tracks this one came from: one for a daughter of a division,
+    /// two (or more) for the track two objects merged into - empty for
+    /// most. The same for every object of the track.
+    pub parent_track_ids: Vec<u64>,
 }

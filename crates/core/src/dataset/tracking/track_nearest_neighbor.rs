@@ -19,7 +19,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::dataset::{DatasetAlgorithm, DatasetContext};
-use crate::storage::stored_object::{ObjectFilter, StoredObject};
+use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, SizeUnits};
 use macros::CommandsMeta;
 use std::collections::{BTreeMap, HashMap};
@@ -68,7 +68,11 @@ impl DatasetAlgorithm for TrackNearestNeighbor {
         let ids: Vec<_> = objects
             .iter()
             .zip(tracks)
-            .map(|(object, track)| (object.id.clone(), track))
+            .map(|(object, track_id)| TrackAssignment {
+                object_id: object.id.clone(),
+                track_id,
+                parent_track_ids: Vec::new(),
+            })
             .collect();
         ctx.store.set_track_ids(&ids)
     }
@@ -219,6 +223,7 @@ mod tests {
             area_px: 1,
             object_classes: vec![ObjectClass::Global(1)],
             intensity_mean: Vec::new(),
+            mask: None,
         }
     }
 

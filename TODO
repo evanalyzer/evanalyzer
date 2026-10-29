@@ -778,10 +778,14 @@ Feature set is about equal (Gaussian, gradient, LoG, Hessian, structure tensor, 
 - [ ] Optional: difference of Gaussians feature; automatic feature suggestion.
 
 ### Object tracking (CellProfiler level)
-Today: greedy nearest neighbour, no gaps, no divisions (`track_nearest_neighbor.rs`).
-- [ ] LAP tracker (Jaqaman et al. 2008): step 1 frame-to-frame optimal assignment (Hungarian; cost = squared distance, optional intensity/area difference); step 2 global assignment for gap closing (missing 1-n frames), splits (divisions) and merges. Hungarian: `kuhn_munkres` in the `pathfinding` crate (MIT/Apache) - check transitive licences.
-- [ ] Overlap mode (IoU linking, for big slow objects).
-- [ ] Track measurements: displacement, speed, lifetime, parent track / lineage.
+Today (2026-10-29): Track Nearest Neighbor (greedy), Track LAP, Track Kalman and Track Overlap (`dataset/tracking/`), the last three on the sparse LAP solver and the two linking steps of Jaqaman et al. 2008 in `dataset/libs/` (gap closing, merges, splits; lineage in `objects.parent_track_ids`). No crate: `pathfinding`/`lapjv` (licences fine) only solve dense matrices - (n+m)^2 per frame.
+- [x] LAP tracker (Jaqaman et al. 2008): frame to frame, then gap closing, splits and merges with the intensity penalty (eq. 5-6).
+- [x] Overlap mode (IoU linking, for big slow objects).
+- [x] Kalman (constant velocity) for directed motion - vesicles.
+- [ ] Data-driven cutoffs and alternative costs (Jaqaman Supplementary Note 3 - not read yet; today 1.05 x the user's cutoff) and their mixed Brownian/linear motion model (Supplementary Note 7).
+- [ ] Results: show/export `parent_track_ids` (lineage tree, division/merge events); the time course treats a daughter as a new track.
+- [ ] Track Nearest Neighbor: image by image like the LAP trackers (see the RAM item above).
+- [ ] Track measurements: displacement, speed, lifetime.
 - ~1 week. ilastik's conservation tracking (ILP solver, learned division/merger classifiers) is not planned - LAP is enough for most users.
 
 ### Measurements (CellProfiler level)

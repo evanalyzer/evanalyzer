@@ -1474,6 +1474,29 @@ Without any lines (measured once): 12.9 / 17.3 ms with the parent
 selected - a line costs 0.04 ms (fitted) to 0.1 ms (zoomed in, longer on
 screen).
 
+## Tracking: Track LAP, Track Kalman, Track Overlap (2026-10-29)
+
+Core `bench_tracking <copy.evadb> --class 1 --distance 10 --tracker ...` on
+a `make_time_series --wells 8 --fields 2` file (16 images × 48 time
+points, 1,500 tracks per image; class 1: 432,575 objects). Links found: of
+the 423,071 links of the file's own tracks. Peak RSS with `--no-truth 1`
+(the tracker alone).
+
+| Tracker | Time | Peak RSS | Links found (wrong) |
+|---|---|---|---|
+| Nearest Neighbor (before / after the store change) | 0.82-0.98 / 0.85-0.95 s | 384 MB | 423,006 (65) |
+| LAP | 1.00-1.18 s | 203 MB | 423,038 (33) |
+| Kalman | 1.00-1.17 s | 219 MB | 423,032 (39) |
+| Overlap (masks read) | 1.28-1.29 s | 219 MB | 423,031 (40) |
+| LAP / Overlap with merges and splits | 1.30-1.46 / 1.40-1.53 s | 356 / 385 MB | 423,013 (32) / 423,028 (38) |
+
+The LAP trackers read one image at a time; the nearest neighbour tracker
+still reads all objects of the class at once. Their first version wrote
+the tracks per image: 7.4-7.8 s and 1.3-1.7 GB (with the benchmark's
+links check), as every `UPDATE` rewrites the table - now one write at the
+end. Writing `parent_track_ids` on every row made Nearest Neighbor 2.5 ×
+slower and +480 MB; it is updated only where parents are or were.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1530,6 +1553,8 @@ graphics driver).
 | Three 4M-object results files open at once, 8 GB computer (simulated) | 2.43-2.45 GB (was 2.68-2.71 GB); DuckDB at most 2 GB in all | 2026-10-28 | RAM rework step 3 |
 | Whole slide `tests/haut` + coloc with `--max-ram 8192` / `--max-ram 4096` (real CLI) | 5.30 GB / 3.47 GB | 2026-10-29 | --max-threads, --max-ram |
 | A deep-learning model after an analysis | released: +1 MB (was +764 MB for ~400 MB of weights on two devices, until the app ended) | 2026-10-28 | RAM rework step 5a |
+| Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
+| Track Nearest Neighbor, same objects (all read at once) | 384 MB | 2026-10-29 | Tracking |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

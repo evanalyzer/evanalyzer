@@ -302,12 +302,22 @@ pub enum PipelineCommand {
     StructureTensor(StructureTensorSettings),
     #[serde(alias = "threshold")]
     Threshold(ThresholdSettings),
+    #[serde(alias = "track-kalman", alias = "trackKalman", alias = "track_kalman")]
+    TrackKalman(TrackKalmanSettings),
+    #[serde(alias = "track-lap", alias = "trackLap", alias = "track_lap")]
+    TrackLap(TrackLapSettings),
     #[serde(
         alias = "track-nearest-neighbor",
         alias = "trackNearestNeighbor",
         alias = "track_nearest_neighbor"
     )]
     TrackNearestNeighbor(TrackNearestNeighborSettings),
+    #[serde(
+        alias = "track-overlap",
+        alias = "trackOverlap",
+        alias = "track_overlap"
+    )]
+    TrackOverlap(TrackOverlapSettings),
     #[serde(
         alias = "transform-objects",
         alias = "transformObjects",
@@ -680,48 +690,69 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 48,
+            name: "Track Kalman",
+            category: CommandCategory::Dataset,
+            summary: "Links objects into tracks by the globally best assignment, predicting each track's next position from its velocity (directed motion).",
+            description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances to the\npredicted positions is smallest, each object once. Each track's velocity\nis followed by a Kalman filter. Then track ends are linked to starts up\nto `max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split), as in Track LAP.",
+        },
+        CommandMeta {
+            id: 49,
+            name: "Track LAP",
+            category: CommandCategory::Dataset,
+            summary: "Links objects into tracks by the globally best assignment, for objects moving at random (Brownian motion).",
+            description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances is smallest,\neach object once (Jaqaman et al., 2008). Then track ends are linked to\nstarts up to `max_gap_frames` later (an object missed by the\nsegmentation), and - if switched on - track ends into other tracks\n(merge) and starts out of them (split). A merge or split starts new\ntracks, with the old ones as parents.",
+        },
+        CommandMeta {
+            id: 50,
             name: "TrackNearestNeighbor",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 49,
+            id: 51,
+            name: "Track Overlap",
+            category: CommandCategory::Dataset,
+            summary: "Links objects into tracks by the globally best assignment of overlapping masks.",
+            description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that they overlap the most in total, each object\nonce - two objects can be linked if their intersection over union is\nat least `min_overlap`. Then track ends are linked to starts up to\n`max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split). A merge or split starts\nnew tracks, with the old ones as parents.",
+        },
+        CommandMeta {
+            id: 52,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.\n\nA transformed shape with no pixels left (e.g. `Shrink` by more than the object's own\nsize) is not an object: no new object is created, and in place the input object is removed.",
         },
         CommandMeta {
-            id: 50,
+            id: 53,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 51,
+            id: 54,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 52,
+            id: 55,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 53,
+            id: 56,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 54,
+            id: 57,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -845,19 +876,24 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             StructureTensorSettings::default(),
         )),
         47 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        48 => Some(PipelineCommand::TrackNearestNeighbor(
+        48 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
+        49 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
+        50 => Some(PipelineCommand::TrackNearestNeighbor(
             TrackNearestNeighborSettings::default(),
         )),
-        49 => Some(PipelineCommand::TransformObjects(
+        51 => Some(PipelineCommand::TrackOverlap(
+            TrackOverlapSettings::default(),
+        )),
+        52 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        50 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        51 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        52 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        53 => Some(PipelineCommand::WeightedDeviation(
+        53 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        54 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        55 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        56 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        54 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        57 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -915,7 +951,10 @@ impl PipelineCommand {
         "stardist",
         "structure_tensor",
         "threshold",
+        "track_kalman",
+        "track_lap",
         "track_nearest_neighbor",
+        "track_overlap",
         "transform_objects",
         "u_net",
         "voronoi",
@@ -975,7 +1014,10 @@ impl PipelineCommand {
             Self::Stardist(_) => "stardist",
             Self::StructureTensor(_) => "structure_tensor",
             Self::Threshold(_) => "threshold",
+            Self::TrackKalman(_) => "track_kalman",
+            Self::TrackLap(_) => "track_lap",
             Self::TrackNearestNeighbor(_) => "track_nearest_neighbor",
+            Self::TrackOverlap(_) => "track_overlap",
             Self::TransformObjects(_) => "transform_objects",
             Self::UNet(_) => "u_net",
             Self::Voronoi(_) => "voronoi",
@@ -1080,9 +1122,12 @@ impl PipelineCommand {
             "stardist" => Some(Self::Stardist(StardistSettings::default())),
             "structure_tensor" => Some(Self::StructureTensor(StructureTensorSettings::default())),
             "threshold" => Some(Self::Threshold(ThresholdSettings::default())),
+            "track_kalman" => Some(Self::TrackKalman(TrackKalmanSettings::default())),
+            "track_lap" => Some(Self::TrackLap(TrackLapSettings::default())),
             "track_nearest_neighbor" => Some(Self::TrackNearestNeighbor(
                 TrackNearestNeighborSettings::default(),
             )),
+            "track_overlap" => Some(Self::TrackOverlap(TrackOverlapSettings::default())),
             "transform_objects" => {
                 Some(Self::TransformObjects(TransformObjectsSettings::default()))
             }
@@ -1147,7 +1192,10 @@ impl PipelineCommand {
             Self::Stardist(_) => "AI Stardist Segmentation",
             Self::StructureTensor(_) => "StructureTensor",
             Self::Threshold(_) => "Threshold",
+            Self::TrackKalman(_) => "Track Kalman",
+            Self::TrackLap(_) => "Track LAP",
             Self::TrackNearestNeighbor(_) => "TrackNearestNeighbor",
+            Self::TrackOverlap(_) => "Track Overlap",
             Self::TransformObjects(_) => "TransformObjects",
             Self::UNet(_) => "AI UNet Segmentation",
             Self::Voronoi(_) => "Voronoi",
@@ -1213,7 +1261,10 @@ impl PipelineCommand {
             Self::Stardist(_) => &CommandCategory::Segment,
             Self::StructureTensor(_) => &CommandCategory::Preprocess,
             Self::Threshold(_) => &CommandCategory::Segment,
+            Self::TrackKalman(_) => &CommandCategory::Dataset,
+            Self::TrackLap(_) => &CommandCategory::Dataset,
             Self::TrackNearestNeighbor(_) => &CommandCategory::Dataset,
+            Self::TrackOverlap(_) => &CommandCategory::Dataset,
             Self::TransformObjects(_) => &CommandCategory::Object,
             Self::UNet(_) => &CommandCategory::Segment,
             Self::Voronoi(_) => &CommandCategory::Object,
@@ -1333,7 +1384,10 @@ impl PipelineCommand {
             Self::Stardist(_) => &[CommandCategory::Extract],
             Self::StructureTensor(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Threshold(_) => &[CommandCategory::InstanceSegmentation],
+            Self::TrackKalman(_) => &[CommandCategory::Dataset],
+            Self::TrackLap(_) => &[CommandCategory::Dataset],
             Self::TrackNearestNeighbor(_) => &[CommandCategory::Dataset],
+            Self::TrackOverlap(_) => &[CommandCategory::Dataset],
             Self::TransformObjects(_) => &[
                 CommandCategory::Object,
                 CommandCategory::Measure,
@@ -1401,7 +1455,10 @@ impl PipelineCommand {
             Self::Stardist(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a grid cell is considered a candidate object center.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "nms_threshold".to_string(), display_name: "Nms Threshold".to_string(), description: "Pixel-overlap ratio (intersection / union) above which a lower-scoring\ncandidate polygon is suppressed in favor of an overlapping higher-scoring one.".to_string(), value: format!("{}", _s.nms_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.3f32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::StructureTensor(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: match _s.mode { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, param_type: ParamType::Dropdown, options: vec!["Eigenvalues X".to_string(), "Eigenvalues Y".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersStructureTensorTensorModeSettings::default()) { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation for the Gaussian weighting of the integration window.\n\nControls the spatial \"reach\" of the neighborhood analysis.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Threshold(_s) => vec![ParameterDef { name: "thresholds".to_string(), display_name: "Thresholds".to_string(), description: "A list of thresholding layers. Overlapping ranges are resolved\nby the order of the vector (last-in priority).".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.thresholds.iter().map(|__item| [vec![ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "The algorithm to use (Manual or Automatic).".to_string(), value: match __item.method { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu { .. } => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string(), SegmentationThresholdThresholdMethodSettings::RobustBackground { .. } => "Robust Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Manual".to_string(), "Li".to_string(), "Min Error".to_string(), "Triangle".to_string(), "Moments".to_string(), "Huang".to_string(), "Intermodes".to_string(), "Iso Data".to_string(), "Max Entropy".to_string(), "Mean".to_string(), "Minimum".to_string(), "Otsu".to_string(), "Percentile".to_string(), "Renyi Entropy".to_string(), "Shanbhag".to_string(), "Yen".to_string(), "Robust Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdThresholdMethodSettings :: Manual) { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu { .. } => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string(), SegmentationThresholdThresholdMethodSettings::RobustBackground { .. } => "Robust Background".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false], section: String::new() }], match &__item.method { SegmentationThresholdThresholdMethodSettings::None => vec![], SegmentationThresholdThresholdMethodSettings::Manual => vec![], SegmentationThresholdThresholdMethodSettings::Li => vec![], SegmentationThresholdThresholdMethodSettings::MinError => vec![], SegmentationThresholdThresholdMethodSettings::Triangle => vec![], SegmentationThresholdThresholdMethodSettings::Moments => vec![], SegmentationThresholdThresholdMethodSettings::Huang => vec![], SegmentationThresholdThresholdMethodSettings::Intermodes => vec![], SegmentationThresholdThresholdMethodSettings::IsoData => vec![], SegmentationThresholdThresholdMethodSettings::MaxEntropy => vec![], SegmentationThresholdThresholdMethodSettings::Mean => vec![], SegmentationThresholdThresholdMethodSettings::Minimum => vec![], SegmentationThresholdThresholdMethodSettings::Otsu { classes } => [vec![ParameterDef { name: "method.classes".to_string(), display_name: "Classes".to_string(), description: "".to_string(), value: match classes { SegmentationThresholdOtsuClassesSettings::Two => "Two".to_string(), SegmentationThresholdOtsuClassesSettings::Three { .. } => "Three".to_string() }, param_type: ParamType::Dropdown, options: vec!["Two".to_string(), "Three".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdOtsuClassesSettings :: Two) { SegmentationThresholdOtsuClassesSettings::Two => "Two".to_string(), SegmentationThresholdOtsuClassesSettings::Three { .. } => "Three".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], match &classes { SegmentationThresholdOtsuClassesSettings::Two => vec![], SegmentationThresholdOtsuClassesSettings::Three { middle_class } => vec![ParameterDef { name: "method.classes.middle_class".to_string(), display_name: "Middle Class".to_string(), description: "".to_string(), value: match middle_class { SegmentationThresholdOtsuMiddleClassSettings::Foreground => "Foreground".to_string(), SegmentationThresholdOtsuMiddleClassSettings::Background => "Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["Foreground".to_string(), "Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdOtsuMiddleClassSettings :: Background) { SegmentationThresholdOtsuMiddleClassSettings::Foreground => "Foreground".to_string(), SegmentationThresholdOtsuMiddleClassSettings::Background => "Background".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }] }].concat(), SegmentationThresholdThresholdMethodSettings::Percentile => vec![], SegmentationThresholdThresholdMethodSettings::RenyiEntropy => vec![], SegmentationThresholdThresholdMethodSettings::Shanbhag => vec![], SegmentationThresholdThresholdMethodSettings::Yen => vec![], SegmentationThresholdThresholdMethodSettings::RobustBackground { lower_outlier_fraction, upper_outlier_fraction, averaging_method, deviations_above_average } => [vec![ParameterDef { name: "method.lower_outlier_fraction".to_string(), display_name: "Lower Outlier Fraction".to_string(), description: "".to_string(), value: format!("{}", lower_outlier_fraction), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "method.upper_outlier_fraction".to_string(), display_name: "Upper Outlier Fraction".to_string(), description: "".to_string(), value: format!("{}", upper_outlier_fraction), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "method.averaging_method".to_string(), display_name: "Averaging Method".to_string(), description: "".to_string(), value: match averaging_method { SegmentationThresholdAveragingSettings::Mean => "Mean".to_string(), SegmentationThresholdAveragingSettings::Median => "Median".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean".to_string(), "Median".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdAveragingSettings :: Mean) { SegmentationThresholdAveragingSettings::Mean => "Mean".to_string(), SegmentationThresholdAveragingSettings::Median => "Median".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "method.deviations_above_average".to_string(), display_name: "Deviations Above Average".to_string(), description: "".to_string(), value: format!("{}", deviations_above_average), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat() }, vec![ParameterDef { name: "min_threshold".to_string(), display_name: "Min Threshold".to_string(), description: "The lower intensity bound. Used directly in `Manual` mode, or as a\nfloor for auto-methods.".to_string(), value: format!("{}", __item.min_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_threshold".to_string(), display_name: "Max Threshold".to_string(), description: "The upper intensity bound. Used directly in `Manual` mode, or as a\nceiling for auto-methods.".to_string(), value: format!("{}", __item.max_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (65535.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit used for the threshold value.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match __item.unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (PixelUnits :: Bit) { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The classification ID assigned to pixels falling within this threshold range.".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "value_source".to_string(), display_name: "Value Source".to_string(), description: "Defines which image should be taken for calculating the threhold value.\n\nThis is the source which is used to calculate the threshold value.\nThe value itself is applied to the actual image the pipeline stands.".to_string(), value: match __item.value_source { SegmentationThresholdThresholdValueSourceSettings::ActualImage => "Actual Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::RawImage => "Raw Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::Memory(_) => "Memory".to_string() }, param_type: ParamType::Dropdown, options: vec!["Actual Image".to_string(), "Raw Image".to_string(), "Memory".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdThresholdValueSourceSettings :: ActualImage) { SegmentationThresholdThresholdValueSourceSettings::ActualImage => "Actual Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::RawImage => "Raw Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::Memory(_) => "Memory".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], match &__item.value_source { SegmentationThresholdThresholdValueSourceSettings::ActualImage => vec![], SegmentationThresholdThresholdValueSourceSettings::RawImage => vec![], SegmentationThresholdThresholdValueSourceSettings::Memory(__inner) => vec![] }].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }],
+            Self::TrackKalman(_s) => [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class to track.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of the distances (e.g. pixels, nm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "initial_max_distance".to_string(), display_name: "Initial Max Distance".to_string(), description: "How far a new track's second object may be from its first - the\nfastest an object moves per frame.".to_string(), value: format!("{}", _s.initial_max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (15000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_distance".to_string(), display_name: "Max Distance".to_string(), description: "How far an object may be from where its track predicts it - also\nthe farthest a merge or split partner may be.".to_string(), value: format!("{}", _s.max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (5000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_frames".to_string(), display_name: "Max Gap Frames".to_string(), description: "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.".to_string(), value: format!("{}", _s.max_gap_frames), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_distance".to_string(), display_name: "Max Gap Distance".to_string(), description: "How far an object may be from where its track predicts it after a\ngap.".to_string(), value: format!("{}", _s.max_gap_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (10000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "position_noise".to_string(), display_name: "Position Noise".to_string(), description: "How exactly an object's position is known (its standard deviation)\n- the larger, the more the predictions follow the velocity rather\nthan the last position.".to_string(), value: format!("{}", _s.position_noise), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 10.0000f32, groups: vec![], default_value: format!("{}", (200.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "velocity_noise".to_string(), display_name: "Velocity Noise".to_string(), description: "How much the velocity changes from one frame to the next (standard\ndeviation) - the larger, the faster a track follows a turn.".to_string(), value: format!("{}", _s.velocity_noise), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 10.0000f32, groups: vec![], default_value: format!("{}", (1000.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merging".to_string(), display_name: "Merging".to_string(), description: "Detect two objects merging into one (e.g. vesicle fusion).".to_string(), value: format!("{}", _s.merging), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "splitting".to_string(), display_name: "Splitting".to_string(), description: "Detect one object splitting into two (e.g. a vesicle budding off).".to_string(), value: format!("{}", _s.splitting), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merge_split_amount".to_string(), display_name: "Merge Split Amount".to_string(), description: "What a merge adds up and a split divides.".to_string(), value: match _s.merge_split_amount { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, param_type: ParamType::Dropdown, options: vec!["Area".to_string(), "Intensity".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (LibsLinkingMergeSplitAmountSettings :: Intensity) { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel of the intensity, if `merge_split_amount` is the\nintensity.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::TrackLap(_s) => [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class to track.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of the distances (e.g. pixels, nm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_distance".to_string(), display_name: "Max Distance".to_string(), description: "How far an object may move from one frame to the next - also the\nfarthest a merge or split partner may be.".to_string(), value: format!("{}", _s.max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (10000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_frames".to_string(), display_name: "Max Gap Frames".to_string(), description: "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.".to_string(), value: format!("{}", _s.max_gap_frames), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_distance".to_string(), display_name: "Max Gap Distance".to_string(), description: "How far an object may move while it is missing.".to_string(), value: format!("{}", _s.max_gap_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (15000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merging".to_string(), display_name: "Merging".to_string(), description: "Detect two objects merging into one (e.g. vesicle fusion).".to_string(), value: format!("{}", _s.merging), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "splitting".to_string(), display_name: "Splitting".to_string(), description: "Detect one object splitting into two (e.g. cell division).".to_string(), value: format!("{}", _s.splitting), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merge_split_amount".to_string(), display_name: "Merge Split Amount".to_string(), description: "What a merge adds up and a split divides.".to_string(), value: match _s.merge_split_amount { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, param_type: ParamType::Dropdown, options: vec!["Area".to_string(), "Intensity".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (LibsLinkingMergeSplitAmountSettings :: Area) { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel of the intensity, if `merge_split_amount` is the\nintensity.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::TrackNearestNeighbor(_s) => [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class to track.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit in which `max_distance` is expressed (e.g. pixels, nm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_distance".to_string(), display_name: "Max Distance".to_string(), description: "How far an object may move from one frame to the next.\n\nFarther apart, it starts a new track.".to_string(), value: format!("{}", _s.max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (10000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::TrackOverlap(_s) => [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class to track.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_overlap".to_string(), display_name: "Min Overlap".to_string(), description: "How much two objects must overlap to be linked: intersection over\nunion, from 0 to 1 (1: the same mask). For a merge or split, the\npart of the smaller object inside the bigger one.".to_string(), value: format!("{}", _s.min_overlap), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0500f32, groups: vec![], default_value: format!("{}", (0.3f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_frames".to_string(), display_name: "Max Gap Frames".to_string(), description: "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.".to_string(), value: format!("{}", _s.max_gap_frames), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merging".to_string(), display_name: "Merging".to_string(), description: "Detect two objects merging into one.".to_string(), value: format!("{}", _s.merging), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "splitting".to_string(), display_name: "Splitting".to_string(), description: "Detect one object splitting into two (e.g. cell division).".to_string(), value: format!("{}", _s.splitting), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merge_split_amount".to_string(), display_name: "Merge Split Amount".to_string(), description: "What a merge adds up and a split divides.".to_string(), value: match _s.merge_split_amount { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, param_type: ParamType::Dropdown, options: vec!["Area".to_string(), "Intensity".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (LibsLinkingMergeSplitAmountSettings :: Area) { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel of the intensity, if `merge_split_amount` is the\nintensity.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::TransformObjects(_s) => [vec![ParameterDef { name: "function".to_string(), display_name: "Function".to_string(), description: "Geometric transform applied to each input object".to_string(), value: match _s.function { ObjectTransformObjectsTransformFunctionSettings::Scale { .. } => "Scale".to_string(), ObjectTransformObjectsTransformFunctionSettings::SnapArea { .. } => "Snap Area".to_string(), ObjectTransformObjectsTransformFunctionSettings::MinCircle { .. } => "Min Circle".to_string(), ObjectTransformObjectsTransformFunctionSettings::DrawCircle { .. } => "Draw Circle".to_string(), ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { .. } => "Fitting Ellipse".to_string(), ObjectTransformObjectsTransformFunctionSettings::Expand { .. } => "Expand".to_string(), ObjectTransformObjectsTransformFunctionSettings::ExpandWithoutOverlap { .. } => "Expand Without Overlap".to_string(), ObjectTransformObjectsTransformFunctionSettings::Shrink { .. } => "Shrink".to_string() }, param_type: ParamType::Dropdown, options: vec!["Scale".to_string(), "Snap Area".to_string(), "Min Circle".to_string(), "Draw Circle".to_string(), "Fitting Ellipse".to_string(), "Expand".to_string(), "Expand Without Overlap".to_string(), "Shrink".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectTransformObjectsTransformFunctionSettings::default()) { ObjectTransformObjectsTransformFunctionSettings::Scale { .. } => "Scale".to_string(), ObjectTransformObjectsTransformFunctionSettings::SnapArea { .. } => "Snap Area".to_string(), ObjectTransformObjectsTransformFunctionSettings::MinCircle { .. } => "Min Circle".to_string(), ObjectTransformObjectsTransformFunctionSettings::DrawCircle { .. } => "Draw Circle".to_string(), ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { .. } => "Fitting Ellipse".to_string(), ObjectTransformObjectsTransformFunctionSettings::Expand { .. } => "Expand".to_string(), ObjectTransformObjectsTransformFunctionSettings::ExpandWithoutOverlap { .. } => "Expand Without Overlap".to_string(), ObjectTransformObjectsTransformFunctionSettings::Shrink { .. } => "Shrink".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false], section: String::new() }], match &_s.function { ObjectTransformObjectsTransformFunctionSettings::Scale { factor } => vec![ParameterDef { name: "function.factor".to_string(), display_name: "Factor".to_string(), description: "Unitless scale factor".to_string(), value: format!("{}", factor), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], ObjectTransformObjectsTransformFunctionSettings::SnapArea { extra_size, unit } => [vec![ParameterDef { name: "function.extra_size".to_string(), display_name: "Extra Size".to_string(), description: "Size added on top of the object's bounding-box diameter".to_string(), value: format!("{}", extra_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "function.unit".to_string(), display_name: "Unit".to_string(), description: "Unit `extra_size` is expressed in".to_string(), value: match unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(), ObjectTransformObjectsTransformFunctionSettings::MinCircle { min_diameter, unit } => [vec![ParameterDef { name: "function.min_diameter".to_string(), display_name: "Min Diameter".to_string(), description: "Minimum circle diameter".to_string(), value: format!("{}", min_diameter), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "function.unit".to_string(), display_name: "Unit".to_string(), description: "Unit `min_diameter` is expressed in".to_string(), value: match unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(), ObjectTransformObjectsTransformFunctionSettings::DrawCircle { diameter, unit } => [vec![ParameterDef { name: "function.diameter".to_string(), display_name: "Diameter".to_string(), description: "Circle diameter (0 = use the object's bounding box)".to_string(), value: format!("{}", diameter), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "function.unit".to_string(), display_name: "Unit".to_string(), description: "Unit `diameter` is expressed in".to_string(), value: match unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(), ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale } => vec![ParameterDef { name: "function.scale".to_string(), display_name: "Scale".to_string(), description: "Unitless scale factor for the fitted ellipse".to_string(), value: format!("{}", scale), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], ObjectTransformObjectsTransformFunctionSettings::Expand { margin, unit } => [vec![ParameterDef { name: "function.margin".to_string(), display_name: "Margin".to_string(), description: "Margin added on every side of the mask's contour".to_string(), value: format!("{}", margin), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "function.unit".to_string(), display_name: "Unit".to_string(), description: "Unit `margin` is expressed in".to_string(), value: match unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(), ObjectTransformObjectsTransformFunctionSettings::ExpandWithoutOverlap { margin, unit } => [vec![ParameterDef { name: "function.margin".to_string(), display_name: "Margin".to_string(), description: "How far the objects grow at most".to_string(), value: format!("{}", margin), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "function.unit".to_string(), display_name: "Unit".to_string(), description: "Unit `margin` is expressed in".to_string(), value: match unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(), ObjectTransformObjectsTransformFunctionSettings::Shrink { margin, unit } => [vec![ParameterDef { name: "function.margin".to_string(), display_name: "Margin".to_string(), description: "Margin removed from every side of the mask's contour".to_string(), value: format!("{}", margin), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "function.unit".to_string(), display_name: "Unit".to_string(), description: "Unit `margin` is expressed in".to_string(), value: match unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: NanoMeter) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat() }, vec![ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "ROIs carrying this class are the input to the transform".to_string(), value: _s.input_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "If unset, the transformed shape replaces the input object in place.\n\nIf set, a new object carrying this class is created for each transformed input object instead,\nleaving the input object untouched.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::UNet(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a pixel is classified as foreground.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_mode".to_string(), display_name: "Output Mode".to_string(), description: "How to interpret the model output when it has more than one channel.\nIgnored for single-channel outputs.".to_string(), value: match _s.output_mode { AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses => "Softmax Classes".to_string(), AiSegmentationUnetUNetOutputModeSettings::IndependentChannels => "Independent Channels".to_string() }, param_type: ParamType::Dropdown, options: vec!["Softmax Classes".to_string(), "Independent Channels".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (AiSegmentationUnetUNetOutputModeSettings :: SoftmaxClasses) { AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses => "Softmax Classes".to_string(), AiSegmentationUnetUNetOutputModeSettings::IndependentChannels => "Independent Channels".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "foreground_channel".to_string(), display_name: "Foreground Channel".to_string(), description: "Index of the channel holding the foreground probability, used only\nwhen the model output has more than one channel. Out-of-range values\nare clamped to the last available channel.\n\n* For `SoftmaxClasses`, this is typically the last channel (e.g. `1`\nfor a 2-class background/foreground head).\n* For `IndependentChannels`, this is whichever channel the model\ndedicates to the foreground mask — commonly `0` for boundary-aware\nmodels, which conventionally output mask before boundary.".to_string(), value: format!("{}", _s.foreground_channel), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 16.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (1i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "boundary_channel".to_string(), display_name: "Boundary Channel".to_string(), description: "Index of an optional **boundary** channel for boundary-aware models\n(e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,\nwhich outputs mask in channel 0 and boundary in channel 1). Set to `-1`\nto disable.\n\nWhen enabled, a pixel is classified as foreground only where the\nforeground probability reaches `probability_threshold` **and** the\nboundary probability stays below `boundary_threshold`. This carves the\npredicted boundaries out as thin gaps, so a following `ConnectedComponents`\nseparates touching objects directly — which is the whole point of a\nboundary model and the only way to split nuclei a plain mask merges.".to_string(), value: format!("{}", _s.boundary_channel), param_type: ParamType::Spinner, options: vec![], min: -1.0f32, max: 16.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (-1i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "boundary_threshold".to_string(), display_name: "Boundary Threshold".to_string(), description: "Boundary probability at or above which a pixel is treated as an object\nboundary and excluded from the foreground. Only used when\n`boundary_channel` is enabled (>= 0). Lower values cut wider gaps\n(separate more aggressively); higher values cut thinner gaps.".to_string(), value: format!("{}", _s.boundary_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Voronoi(_s) => [vec![ParameterDef { name: "centers".to_string(), display_name: "Centers".to_string(), description: "Object class whose instances act as Voronoi seed points.".to_string(), value: _s.centers.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "center_filter_classes".to_string(), display_name: "Center Filter Classes".to_string(), description: "Additional label filters applied to center objects before tessellation.\n\nOnly center objects that carry all listed classes pass the filter.\nLeave empty to include all objects of `centers`.".to_string(), value: _s.center_filter_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.center_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask".to_string(), display_name: "Mask".to_string(), description: "Object class used to spatially constrain the Voronoi areas.\n\nEach computed Voronoi region is intersected with the union of all mask objects,\ndiscarding pixels that fall outside the mask. Set to `Unset` to expand\nto the full image boundary instead.".to_string(), value: _s.mask.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask_filter_classes".to_string(), display_name: "Mask Filter Classes".to_string(), description: "Additional label filters applied to mask objects.\n\nOnly mask objects that carry all listed classes pass the filter.\nLeave empty to include all objects of `mask`.".to_string(), value: _s.mask_filter_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.mask_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Object class assigned to the resulting Voronoi region ROIs.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit in which `max_radius` is expressed (e.g. pixels, nm, µm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_radius".to_string(), display_name: "Max Radius".to_string(), description: "Maximum expansion radius for a Voronoi region.\n\nPixels farther than this distance from the nearest seed center are excluded\nfrom the region. Use `0` or a negative value to disable the limit.".to_string(), value: format!("{}", _s.max_radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_areas_at_the_edges".to_string(), display_name: "Exclude Areas At The Edges".to_string(), description: "Discard Voronoi regions that touch the image border.".to_string(), value: format!("{}", _s.exclude_areas_at_the_edges), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_areas_with_no_center".to_string(), display_name: "Exclude Areas With No Center".to_string(), description: "Discard Voronoi regions whose originating center object was filtered out or missing.".to_string(), value: format!("{}", _s.exclude_areas_with_no_center), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1514,7 +1571,10 @@ impl PipelineCommand {
             Self::Stardist(_) => String::new(),
             Self::StructureTensor(_) => String::new(),
             Self::Threshold(_) => String::new(),
+            Self::TrackKalman(_) => String::new(),
+            Self::TrackLap(_) => String::new(),
             Self::TrackNearestNeighbor(_) => String::new(),
+            Self::TrackOverlap(_) => String::new(),
             Self::TransformObjects(s) => format!(
                 "Function: {}",
                 match s.function {
@@ -1764,7 +1824,16 @@ impl PipelineCommand {
                     ));
                 }
             }
+            Self::TrackKalman(s) => {
+                classes.push(s.object_class);
+            }
+            Self::TrackLap(s) => {
+                classes.push(s.object_class);
+            }
             Self::TrackNearestNeighbor(s) => {
+                classes.push(s.object_class);
+            }
+            Self::TrackOverlap(s) => {
                 classes.push(s.object_class);
             }
             Self::TransformObjects(s) => {
@@ -3274,6 +3343,113 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::TrackKalman(s) => {
+                if param_name == "object_class" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.object_class = v;
+                    }
+                }
+                if param_name == "unit" {
+                    s.unit = match value {
+                        "nm" => SizeUnits::NanoMeter,
+                        _ => SizeUnits::Pixels,
+                    };
+                }
+                if param_name == "initial_max_distance" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.initial_max_distance = v;
+                    }
+                }
+                if param_name == "max_distance" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.max_distance = v;
+                    }
+                }
+                if param_name == "max_gap_frames" {
+                    if let Ok(v) = value.parse::<usize>() {
+                        s.max_gap_frames = v;
+                    }
+                }
+                if param_name == "max_gap_distance" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.max_gap_distance = v;
+                    }
+                }
+                if param_name == "position_noise" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.position_noise = v;
+                    }
+                }
+                if param_name == "velocity_noise" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.velocity_noise = v;
+                    }
+                }
+                if param_name == "merging" {
+                    s.merging = value == "true";
+                }
+                if param_name == "splitting" {
+                    s.splitting = value == "true";
+                }
+                if param_name == "merge_split_amount" {
+                    s.merge_split_amount = match value {
+                        "Area" => LibsLinkingMergeSplitAmountSettings::Area,
+                        "Intensity" => LibsLinkingMergeSplitAmountSettings::Intensity,
+                        _ => (s.merge_split_amount).clone(),
+                    };
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
+                    }
+                }
+            }
+            Self::TrackLap(s) => {
+                if param_name == "object_class" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.object_class = v;
+                    }
+                }
+                if param_name == "unit" {
+                    s.unit = match value {
+                        "nm" => SizeUnits::NanoMeter,
+                        _ => SizeUnits::Pixels,
+                    };
+                }
+                if param_name == "max_distance" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.max_distance = v;
+                    }
+                }
+                if param_name == "max_gap_frames" {
+                    if let Ok(v) = value.parse::<usize>() {
+                        s.max_gap_frames = v;
+                    }
+                }
+                if param_name == "max_gap_distance" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.max_gap_distance = v;
+                    }
+                }
+                if param_name == "merging" {
+                    s.merging = value == "true";
+                }
+                if param_name == "splitting" {
+                    s.splitting = value == "true";
+                }
+                if param_name == "merge_split_amount" {
+                    s.merge_split_amount = match value {
+                        "Area" => LibsLinkingMergeSplitAmountSettings::Area,
+                        "Intensity" => LibsLinkingMergeSplitAmountSettings::Intensity,
+                        _ => (s.merge_split_amount).clone(),
+                    };
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
+                    }
+                }
+            }
             Self::TrackNearestNeighbor(s) => {
                 if param_name == "object_class" {
                     if let Some(v) = ObjectClass::from_text(value) {
@@ -3289,6 +3465,41 @@ impl PipelineCommand {
                 if param_name == "max_distance" {
                     if let Ok(v) = value.parse::<f32>() {
                         s.max_distance = v;
+                    }
+                }
+            }
+            Self::TrackOverlap(s) => {
+                if param_name == "object_class" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.object_class = v;
+                    }
+                }
+                if param_name == "min_overlap" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.min_overlap = v;
+                    }
+                }
+                if param_name == "max_gap_frames" {
+                    if let Ok(v) = value.parse::<usize>() {
+                        s.max_gap_frames = v;
+                    }
+                }
+                if param_name == "merging" {
+                    s.merging = value == "true";
+                }
+                if param_name == "splitting" {
+                    s.splitting = value == "true";
+                }
+                if param_name == "merge_split_amount" {
+                    s.merge_split_amount = match value {
+                        "Area" => LibsLinkingMergeSplitAmountSettings::Area,
+                        "Intensity" => LibsLinkingMergeSplitAmountSettings::Intensity,
+                        _ => (s.merge_split_amount).clone(),
+                    };
+                }
+                if param_name == "channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.channel = ImageChannelIdx(v);
                     }
                 }
             }
@@ -3775,7 +3986,10 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::TrackKalman(_) => {}
+            Self::TrackLap(_) => {}
             Self::TrackNearestNeighbor(_) => {}
+            Self::TrackOverlap(_) => {}
             Self::TransformObjects(_) => {}
             Self::UNet(_) => {}
             Self::Voronoi(_) => {}
@@ -3867,7 +4081,10 @@ impl PipelineCommand {
                     s.thresholds.remove(idx);
                 }
             }
+            Self::TrackKalman(_) => {}
+            Self::TrackLap(_) => {}
             Self::TrackNearestNeighbor(_) => {}
+            Self::TrackOverlap(_) => {}
             Self::TransformObjects(_) => {}
             Self::UNet(_) => {}
             Self::Voronoi(_) => {}

@@ -243,6 +243,15 @@ impl From<MorphologyMorphologicalTransformationKernelShapesSettings> for KernelS
     }
 }
 
+impl From<LibsLinkingMergeSplitAmountSettings> for MergeSplitAmount {
+    fn from(_s: LibsLinkingMergeSplitAmountSettings) -> Self {
+        match _s {
+            LibsLinkingMergeSplitAmountSettings::Area => MergeSplitAmount::Area,
+            LibsLinkingMergeSplitAmountSettings::Intensity => MergeSplitAmount::Intensity,
+        }
+    }
+}
+
 impl From<MorphologyMorphologicalTransformationMorphOpsSettings> for MorphOps {
     fn from(_s: MorphologyMorphologicalTransformationMorphOpsSettings) -> Self {
         match _s {
@@ -1166,12 +1175,61 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
     }
 }
 
+impl From<TrackKalmanSettings> for TrackKalman {
+    fn from(_s: TrackKalmanSettings) -> Self {
+        TrackKalman {
+            object_class: _s.object_class,
+            unit: _s.unit,
+            initial_max_distance: _s.initial_max_distance.max(0.0),
+            max_distance: _s.max_distance.max(0.0),
+            max_gap_frames: _s.max_gap_frames,
+            max_gap_distance: _s.max_gap_distance.max(0.0),
+            position_noise: _s.position_noise.max(0.0),
+            velocity_noise: _s.velocity_noise.max(0.0),
+            merging: _s.merging,
+            splitting: _s.splitting,
+            merge_split_amount: MergeSplitAmount::from(_s.merge_split_amount),
+            channel: _s.channel,
+        }
+    }
+}
+
+impl From<TrackLapSettings> for TrackLap {
+    fn from(_s: TrackLapSettings) -> Self {
+        TrackLap {
+            object_class: _s.object_class,
+            unit: _s.unit,
+            max_distance: _s.max_distance.max(0.0),
+            max_gap_frames: _s.max_gap_frames,
+            max_gap_distance: _s.max_gap_distance.max(0.0),
+            merging: _s.merging,
+            splitting: _s.splitting,
+            merge_split_amount: MergeSplitAmount::from(_s.merge_split_amount),
+            channel: _s.channel,
+        }
+    }
+}
+
 impl From<TrackNearestNeighborSettings> for TrackNearestNeighbor {
     fn from(_s: TrackNearestNeighborSettings) -> Self {
         TrackNearestNeighbor {
             object_class: _s.object_class,
             unit: _s.unit,
             max_distance: _s.max_distance.max(0.0),
+        }
+    }
+}
+
+impl From<TrackOverlapSettings> for TrackOverlap {
+    fn from(_s: TrackOverlapSettings) -> Self {
+        TrackOverlap {
+            object_class: _s.object_class,
+            min_overlap: _s.min_overlap.clamp(0.01, 1.0),
+            max_gap_frames: _s.max_gap_frames,
+            merging: _s.merging,
+            splitting: _s.splitting,
+            merge_split_amount: MergeSplitAmount::from(_s.merge_split_amount),
+            channel: _s.channel,
         }
     }
 }
@@ -1421,8 +1479,17 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         PipelineCommand::Threshold(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Threshold::from(settings),
         ))),
+        PipelineCommand::TrackKalman(settings) => Ok(PipelineStep::Dataset(Box::new(
+            crate::dataset::TrackKalman::from(settings),
+        ))),
+        PipelineCommand::TrackLap(settings) => Ok(PipelineStep::Dataset(Box::new(
+            crate::dataset::TrackLap::from(settings),
+        ))),
         PipelineCommand::TrackNearestNeighbor(settings) => Ok(PipelineStep::Dataset(Box::new(
             crate::dataset::TrackNearestNeighbor::from(settings),
+        ))),
+        PipelineCommand::TrackOverlap(settings) => Ok(PipelineStep::Dataset(Box::new(
+            crate::dataset::TrackOverlap::from(settings),
         ))),
         PipelineCommand::TransformObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::TransformObjects::from(settings),
