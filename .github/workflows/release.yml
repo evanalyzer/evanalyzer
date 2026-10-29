@@ -183,6 +183,13 @@ jobs:
           cp libs/libtorch/lib/*.so*                               dist/ai/cpu/ 2>/dev/null || true
           tar -czf evanalyzer-linux-x86_64.tar.gz -C dist .
 
+      - name: Check the oldest glibc it runs on
+        # Every program and library in the package must run with glibc
+        # 2.39 (Ubuntu 24.04+, Debian 13+, Fedora 40+, RHEL 10+ - see the
+        # download page). Fails when the toolchain image moved to a newer
+        # base and raised that floor unnoticed.
+        run: bash .github/scripts/check-glibc.sh 2.39 dist
+
       - uses: actions/upload-artifact@v4
         with:
           name: evanalyzer-linux-x86_64
@@ -434,6 +441,13 @@ jobs:
           size=$(stat -c %s evanalyzer-linux-x86_64-cuda.7z)
           echo "evanalyzer-linux-x86_64-cuda.7z: $((size / 1048576)) MiB"
           [ "$size" -lt 2147483648 ] || { echo "::error::evanalyzer-linux-x86_64-cuda.7z is over GitHub's 2 GiB release asset limit"; exit 1; }
+
+      - name: Check the oldest glibc it runs on
+        # Every program and library in the package must run with glibc
+        # 2.39 (Ubuntu 24.04+, Debian 13+, Fedora 40+, RHEL 10+ - see the
+        # download page). Fails when the toolchain image moved to a newer
+        # base and raised that floor unnoticed.
+        run: bash .github/scripts/check-glibc.sh 2.39 dist
 
       - uses: actions/upload-artifact@v4
         with:
@@ -804,6 +818,13 @@ jobs:
           platforms.
           EOF
           tar -czf evanalyzer-linux-arm64.tar.gz -C dist .
+
+      - name: Check the oldest glibc it runs on
+        # Every program and library in the package must run with glibc
+        # 2.39 (Ubuntu 24.04+, Debian 13+, Fedora 40+, RHEL 10+ - see the
+        # download page). Fails when the toolchain image moved to a newer
+        # base and raised that floor unnoticed.
+        run: bash .github/scripts/check-glibc.sh 2.39 dist
 
       - uses: actions/upload-artifact@v4
         with:
