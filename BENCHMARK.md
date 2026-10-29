@@ -1437,6 +1437,19 @@ The real program, `evanalyzer [options] cli analyze` on `tests/haut` + coloc
 | `--max-ram 4096` | | | 59.4 s | | | 3.47 GB |
 | both | 4 | 1.75 / 3.48 GiB | 64.5 s | 186 + 23 s | 3.2 | |
 
+## Everyday images on a small computer (2026-10-29)
+
+For the system requirements' smallest case (students' laptops): core
+`bench_pipeline --images 50 --size 2048 --threads N` (Gaussian blur →
+threshold → objects, 52,103 objects, results written), peak RSS sampled
+from `/proc`. This container's desktop CPU - a laptop core is slower.
+
+| Threads | Peak RSS | 50 images |
+|---|---|---|
+| 1 | 226 MB | 10.2 s (4.9 images/s) |
+| 2 | 326 MB | 5.4 s (9.2 images/s) |
+| 4 | 499 MB | 2.9 s (17.5 images/s) |
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1446,6 +1459,7 @@ graphics driver).
 | Activity | Peak RAM | Measured | Where |
 |---|---|---|---|
 | App idle after start (AI not loaded) | 207 MB | 2026-10-19 | The real app above |
+| Analysis of 50 images 2048², 1 / 2 / 4 threads | 226 / 326 / 499 MB | 2026-10-29 | Everyday images on a small computer |
 | Image viewer, whole slide, default caches | ~280 MB above start | 2026-10-17 | Image viewer |
 | Image viewer, 2 threads, small caches | ~190 MB above start | 2026-10-17 | Image viewer |
 | Viewer with a breakpoint tile compared | ~400 MB | 2026-10-18 | Breakpoint compare |
