@@ -339,6 +339,9 @@ pub struct ViewportController {
     /// This computer's viewport memory settings - see
     /// [`ViewportMemorySettings`].
     pub(crate) memory_settings: RwLock<ViewportMemorySettings>,
+    /// The caches are held small while a local analysis runs (see
+    /// [`Self::release_preview_memory_for_analysis`]).
+    pub(crate) caches_small_for_analysis: AtomicBool,
     /// Full-resolution size of the current image, for the navigator, which
     /// pan/zoom update without a render.
     pub(crate) full_image_size: Mutex<(i64, i64)>,
@@ -439,6 +442,7 @@ impl ViewportController {
             high_res_is_ready: AtomicBool::new(false),
             content_generation: AtomicU64::new(0),
             memory_settings: RwLock::new(app_state.viewport_memory_settings()),
+            caches_small_for_analysis: AtomicBool::new(false),
             full_image_size: Mutex::new((0, 0)),
             viewport_cache,
             results_overlay: RwLock::new(None),
@@ -638,7 +642,7 @@ impl ViewportController {
         let margin_changed =
             self.memory_settings().object_overlay_margin_px != settings.object_overlay_margin_px;
         let budget = tile_history_budget(&settings);
-        let (tile_mb, overview_mb) = effective_cache_mb(&settings);
+        let (tile_mb, overview_mb) = self.cache_limits_mb(&settings);
         self.viewport_cache.set_limits(tile_mb, overview_mb);
         *self.memory_settings.write().expect("Poisoned") = settings;
 
@@ -661,10 +665,24 @@ impl ViewportController {
         }
     }
 
-    /// Frees what the viewport keeps beyond what is on screen - the tile
-    /// and overview caches and the kept earlier renders - if the settings
-    /// ask for it. Called when an analysis starts on this computer; the
-    /// caches fill up again as the viewport is used.
+    /// The (tile, overview) cache limits in MB for `settings` - the
+    /// smallest while a local analysis runs.
+    fn cache_limits_mb(&self, settings: &ViewportMemorySettings) -> (u32, u32) {
+        if self.caches_small_for_analysis.load(Ordering::SeqCst) {
+            let floor = ViewportMemorySettings::MIN_CACHE_MB;
+            (floor, floor)
+        } else {
+            effective_cache_mb(settings)
+        }
+    }
+
+    /// Frees what the viewport keeps beyond what is on screen - the kept
+    /// earlier renders, and, if the settings ask for it, the tile and
+    /// overview caches down to their smallest size (64 MB each, the most
+    /// recently used tiles) until the analysis ends. Called when an
+    /// analysis starts on this computer. Before, the caches were emptied
+    /// and filled up to their full size again while the user looked at
+    /// images during the analysis - RAM the analysis had counted on.
     pub fn release_preview_memory_for_analysis(&self) {
         // The breakpoint images always: up to ~190 MB a tile.
         self.clear_breakpoint();
@@ -672,11 +690,16 @@ impl ViewportController {
             return;
         }
         let (tiles, overviews) = self.viewport_cache.held_bytes();
-        self.viewport_cache.clear();
+        self.caches_small_for_analysis.store(true, Ordering::SeqCst);
+        let (tile_mb, overview_mb) = self.cache_limits_mb(&self.memory_settings());
+        self.viewport_cache.set_limits(tile_mb, overview_mb);
+        let (tiles_after, overviews_after) = self.viewport_cache.held_bytes();
         log::info!(
-            "Freed the viewport caches for the analysis: {} tiles, {} overviews",
+            "Viewport caches held small for the analysis: tiles {} → {}, overviews {} → {}",
             format_bytes(tiles as f64),
-            format_bytes(overviews as f64)
+            format_bytes(tiles_after as f64),
+            format_bytes(overviews as f64),
+            format_bytes(overviews_after as f64)
         );
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -687,6 +710,16 @@ impl ViewportController {
             return_freed_memory_to_os();
         })
         .ok();
+    }
+
+    /// The analysis ended: the caches get their full size again (see
+    /// [`Self::release_preview_memory_for_analysis`]).
+    pub fn restore_preview_memory_after_analysis(&self) {
+        if !self.caches_small_for_analysis.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let (tile_mb, overview_mb) = self.cache_limits_mb(&self.memory_settings());
+        self.viewport_cache.set_limits(tile_mb, overview_mb);
     }
 
     /// Lets a 'not ready' from the next low-res render of new content hide

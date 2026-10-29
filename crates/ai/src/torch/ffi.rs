@@ -99,6 +99,20 @@ pub extern "C" fn eva_ai_api_version() -> u32 {
     API_VERSION
 }
 
+/// See [`crate::api::ffi::ReleaseModelsFn`].
+#[unsafe(no_mangle)]
+pub extern "C" fn eva_ai_release_models() {
+    let result = guarded(|| {
+        if let Some(engine) = ENGINE.get() {
+            engine.release_models();
+        }
+        Ok(())
+    });
+    if let Err(e) = result {
+        log::warn!("Could not release the AI models: {e}");
+    }
+}
+
 /// See [`crate::api::ffi::InitFn`].
 ///
 /// # Safety

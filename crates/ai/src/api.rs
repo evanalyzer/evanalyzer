@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 /// Bumped on every change to the types or the C functions below: a plugin
 /// built against another version is refused.
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 
 /// Which devices AI inference may use.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -260,6 +260,8 @@ pub trait InferenceEngine: Send + Sync {
     fn info(&self) -> EngineInfo;
     /// Errors are the messages shown to the user.
     fn infer(&self, request: &Request, image: Image<'_>) -> Result<Response, String>;
+    /// Lets go of every loaded model (they load again on their next run).
+    fn release_models(&self) {}
 }
 
 /// The C interface of an engine plugin library - stable across compilers,
@@ -360,11 +362,15 @@ pub mod ffi {
     ) -> i32;
     /// `void eva_ai_free(Buf)` - gives a buffer back to the plugin.
     pub type FreeFn = unsafe extern "C" fn(buf: Buf);
+    /// `void eva_ai_release_models(void)` - lets go of every loaded model
+    /// (interface version 3).
+    pub type ReleaseModelsFn = unsafe extern "C" fn();
 
     pub const SYMBOL_API_VERSION: &[u8] = b"eva_ai_api_version\0";
     pub const SYMBOL_INIT: &[u8] = b"eva_ai_init\0";
     pub const SYMBOL_INFER: &[u8] = b"eva_ai_infer\0";
     pub const SYMBOL_FREE: &[u8] = b"eva_ai_free\0";
+    pub const SYMBOL_RELEASE_MODELS: &[u8] = b"eva_ai_release_models\0";
 
     /// postcard bytes of `value`.
     pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {

@@ -42,8 +42,6 @@ pub(crate) fn start_analysis(
             job_name,
         )?,
     };
-    let parallelism = threads.unwrap_or_else(|| {
-        evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes())
-    });
+    let parallelism = threads.unwrap_or_else(|| job.recommended_parallelism());
     Ok(spawn_job(job, parallelism, None))
 }

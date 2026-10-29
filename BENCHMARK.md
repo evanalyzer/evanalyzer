@@ -1309,6 +1309,112 @@ At ~3 GB free both are erratic: four threads leave the merged cache ~0.6 GB
 either way and it reloads tiles from disk (the thread count, not the
 reservation - TODO, RAM rework step 2).
 
+## RAM rework step 2: threads that keep the merged cache, RAM per plane, containers (2026-10-28)
+
+The automatic thread count only asked whether each worker's tile fits the
+free RAM; on one tiled image every worker more also took a tile's worth from
+the merged cache. With little RAM free the cache got too small and reloaded
+tiles from disk again and again (a cliff, not a slope). Now, for one image of
+several tiles, the most threads at which the merged cache still holds
+`MERGED_CACHE_MIN_TILES` = 2 tiles of every channel
+(`memory::analysis::tiled_image_parallelism`, through
+`JobExecutor::recommended_parallelism`; a thread count set by hand is kept).
+Also: the merged cache's cap measured again at every plane (after
+`malloc_trim`, so what the planes before freed counts as free), and a
+container's memory limit (cgroup) or `EVANALYZER_RAM_LIMIT_MB` caps the RAM
+EVAnalyzer plans with.
+
+Where the threshold comes from - `tests/haut` + coloc, ~2.9 GB free, threads
+set by hand (the merged cache with them):
+
+| Threads | Merged cache | Wall | CPU (user + sys) |
+|---|---|---|---|
+| 4 | ~0.4 GB (~1 tile) | 307.2 s (the kernel killed the memory holder) | 206 + 763 s |
+| 3 | ~1.0 GB (~2.7 tiles) | **88.6 s** | 196 + 32 s |
+| 2 | | 120.3 s | 186 + 28 s |
+| 1 | | 190.4 s | 171 + 20 s |
+
+`bench_whole_slide --coloc 1` with the thread count chosen automatically
+(as the app does), before / after alternated:
+
+| | before | after |
+|---|---|---|
+| ~3 GB free: threads / wall | 4 / 225.5, 278.7 s | 3 / **95.1, 85.4 s** |
+| ~3 GB free: CPU | 199 + 511, 193 + 732 s | 195 + 32, 185 + 31 s |
+| ~3 GB free: peak RSS | 2.91-3.03 GB | 2.74-2.76 GB |
+| ~4 GB free: threads / wall | 6 / 270.8, 250.6 s | 5 / **69.1, 70.2 s** |
+| ~4 GB free: CPU | 199 + 992, 202 + 897 s | 192 + 59, 193 + 60 s |
+| ~4 GB free: peak RSS | 4.31-4.41 GB | 2.97-3.22 GB |
+| plenty of RAM: threads / wall | 21 / 27.2, 27.8 s | 21 / 26.9, 27.9 s |
+| plenty of RAM: peak RSS | 7.62-7.64 GB | 7.57-7.68 GB |
+
+With ~4 GB free the app picked 6 threads before - 3.6-3.9 × slower than
+with the 5 it picks now; nothing changes with RAM to spare.
+
+## RAM rework step 3: one DuckDB limit for all open results files (2026-10-28)
+
+Each open results file got DuckDB's whole limit (a quarter of the RAM,
+1-8 GB) - the results window and a running analysis twice. Now one limit for
+all of them together, shared out when a file opens or closes
+(`results_memory_limit_per_file_mb`, at least 512 MB each).
+
+`bench_results_sessions --together` (app example): copies of the 4M-object
+file open at once, each read in full (the list as CSV), on a simulated 8 GB
+computer (`EVANALYZER_RAM_LIMIT_MB=8192`: DuckDB 2 GB in all); before = the
+same build with every file getting the whole limit, alternated.
+
+| | before | after |
+|---|---|---|
+| 2 files: DuckDB per file / peak RSS | 743 MB / 1.91-1.94 GB | 743 MB / 1.93-1.96 GB |
+| 3 files: DuckDB per file / peak RSS | 743 MB / 2.68-2.71 GB | 614-621 MB / 2.43-2.45 GB |
+| 3 files: wall / CPU | 45.8-46.4 s / 120-121 s | 46.2-47.0 s / 120-121 s |
+
+Two files stay under their share (1 GB each) with this reading; from three on
+the share caps DuckDB at no measurable cost in time. The total is now at most
+the one limit (2 GB here), not 2 GB per open file.
+
+## RAM rework step 5a: AI models released after an analysis (2026-10-28)
+
+Deep-learning models stayed loaded on every device until the app ended.
+Now released after every analysis (not after a preview, which runs again and
+again): `evanalyzer_ai::release_models` → the plugin's
+`eva_ai_release_models` (interface version 2 → 3). No real Cellpose model on
+this machine - a synthetic TorchScript model with ~400 MB of weights (a
+constant traced into it), loaded on two devices (`bench_released_models_free_their_ram`,
+evanalyzer_ai with `test-support`):
+
+| | RSS |
+|---|---|
+| before loading | 115 MB |
+| loaded on two devices | 879 MB (+764) |
+| released (+ `malloc_trim`) | 116 MB (+1) |
+
+The next analysis loads the model again - how long that takes for a real
+Cellpose-SAM model is not measured here (no model file on this machine).
+
+## RAM rework step 4: viewer caches held small during an analysis (2026-10-28)
+
+When a local analysis started, the viewer's tile and overview caches were
+emptied - and grew back to their full size (1 GB + 256 MB automatic) while
+the user looked at images during the analysis. Now they are held at their
+smallest size (64 MB each, the most recently used tiles) until it ends.
+
+`bench_viewport_whole_slide` (gui, release, `BENCH_TRIM=1`) on `tests/haut`:
+open, zoom, 8 pans right, 8 back; with `BENCH_DURING_ANALYSIS=1` the
+analysis starts after the open. Without it the caches behave as they did
+during an analysis before (after the start's emptying). Two rounds each:
+
+| | before | after |
+|---|---|---|
+| Cache (tiles + overviews) after the walk | 184 + 29 MB, still growing | 62 + 29 MB, flat |
+| Peak RSS (process) | 552-571 MB | 484-492 MB |
+| Pan right (new tiles) | 66-112 ms | 68-85 ms |
+| Pan back (seen before) | 9-17 ms | 9-91 ms |
+
+The cost: panning back during an analysis reads tiles again that no longer
+fit. This slide fills the tile cache to only ~184 MB; a bigger one or a
+longer look grew it to the full 1 GB + 256 MB during an analysis before.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1360,6 +1466,9 @@ graphics driver).
 | Exports of 4,000 images / 4M objects: grouped by image, list CSV | 0.65-0.73 GB / 1.1 GB | 2026-10-28 | Exports of a 4,000-image batch |
 | Whole slide `tests/haut` with Measure Object Colocalization, cells covering the slide, 21 threads | 8.0-8.2 GB (was 11.0 GB) | 2026-10-28 | Measure Object Colocalization: one object at a time |
 | Results window, switching between 4M-object results files | ~50 MB after closing each (was +250 MB per file opened) | 2026-10-28 | Results files closed when unused |
+| Whole slide `tests/haut` + coloc, automatic threads, ~4 GB free | 2.97-3.22 GB (was 4.31-4.41 GB, and 3.6-3.9 × slower) | 2026-10-28 | RAM rework step 2 |
+| Three 4M-object results files open at once, 8 GB computer (simulated) | 2.43-2.45 GB (was 2.68-2.71 GB); DuckDB at most 2 GB in all | 2026-10-28 | RAM rework step 3 |
+| A deep-learning model after an analysis | released: +1 MB (was +764 MB for ~400 MB of weights on two devices, until the app ended) | 2026-10-28 | RAM rework step 5a |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

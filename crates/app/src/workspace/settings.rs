@@ -288,8 +288,8 @@ pub struct ViewportMemorySettings {
     /// and channel combination recently shown).
     pub overview_cache_mb: u32,
 
-    /// Empty both caches when an analysis starts on this computer, so it
-    /// gets that RAM; they fill up again as the viewport is used.
+    /// Hold both caches at their smallest size while an analysis runs on
+    /// this computer, so it gets that RAM; they grow again when it ends.
     pub free_caches_on_analysis: bool,
 
     /// The objects open as a table at the bottom, not as a list in the

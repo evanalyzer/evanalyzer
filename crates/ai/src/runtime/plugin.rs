@@ -32,8 +32,8 @@ use crate::api::{
     API_VERSION, DeviceSelection, EngineConfig, EngineInfo, Image, InferenceEngine, Request,
     Response,
     ffi::{
-        ApiVersionFn, Buf, FreeFn, InferFn, InitFn, SYMBOL_API_VERSION, SYMBOL_FREE, SYMBOL_INFER,
-        SYMBOL_INIT, decode, encode,
+        ApiVersionFn, Buf, FreeFn, InferFn, InitFn, ReleaseModelsFn, SYMBOL_API_VERSION,
+        SYMBOL_FREE, SYMBOL_INFER, SYMBOL_INIT, SYMBOL_RELEASE_MODELS, decode, encode,
     },
 };
 use libloading::Library;
@@ -47,6 +47,7 @@ struct PluginEngine {
     info: EngineInfo,
     infer: InferFn,
     free: FreeFn,
+    release_models: ReleaseModelsFn,
     /// Keeps the functions above valid; never unloaded (see the module).
     _library: Option<Library>,
     /// libtorch's CUDA part (CUDA build), kept loaded.
@@ -215,6 +216,11 @@ impl PluginEngine {
             let free = *library
                 .get::<FreeFn>(SYMBOL_FREE)
                 .map_err(|e| PluginError::Failed(format!("{}: {e}", symbol(SYMBOL_FREE))))?;
+            let release_models = *library
+                .get::<ReleaseModelsFn>(SYMBOL_RELEASE_MODELS)
+                .map_err(|e| {
+                    PluginError::Failed(format!("{}: {e}", symbol(SYMBOL_RELEASE_MODELS)))
+                })?;
 
             // libtorch's CUDA part registers itself when it is loaded -
             // nothing in the plugin needs one of its symbols, so it is
@@ -252,6 +258,7 @@ impl PluginEngine {
                 info,
                 infer,
                 free,
+                release_models,
                 _library: None,
                 _torch_cuda: cuda,
             })
@@ -283,6 +290,11 @@ fn load_torch_cuda(plugin: &Path) -> Option<Library> {
 impl InferenceEngine for PluginEngine {
     fn info(&self) -> EngineInfo {
         self.info.clone()
+    }
+
+    fn release_models(&self) {
+        // SAFETY: the plugin's own function, valid while it is loaded.
+        unsafe { (self.release_models)() }
     }
 
     fn infer(&self, request: &Request, image: Image<'_>) -> Result<Response, String> {

@@ -135,6 +135,7 @@ impl Drop for ResultsConnection {
                 // Dropped under the lock: an open of the same file waits
                 // until it is closed.
                 cache.remove(&self.path);
+                share_memory_limit(&cache);
             }
         }
     }
@@ -171,16 +172,33 @@ pub fn shared_connection(path: &Path) -> Result<ResultsConnection, InternalError
     }
 
     let anchor = Connection::open(path).map_err(to_io_err)?;
-    // DuckDB keeps up to 80 % of the RAM for itself by default - per open
-    // file, and these stay open (above). Capped, so an older computer keeps
-    // RAM for the rest; beyond it DuckDB spills to a temporary file.
-    let limit_mb = crate::memory::storage::results_memory_limit_bytes() >> 20;
-    if let Err(e) = anchor.execute_batch(&format!("SET memory_limit = '{limit_mb}MB';")) {
-        log::warn!("Could not limit DuckDB's memory to {limit_mb} MB: {e}");
-    }
     let conn = anchor.try_clone().map_err(to_io_err)?;
     cache.insert(path.to_path_buf(), SharedDatabase { anchor, users: 1 });
+    share_memory_limit(&cache);
     Ok(handle(conn))
+}
+
+/// Gives every open results file its share of one memory limit (see
+/// [`crate::memory::storage::results_memory_limit_per_file_mb`]) - when a
+/// file opens or closes. DuckDB keeps up to 80 % of the RAM for itself by
+/// default, per open file; capped, an older computer keeps RAM for the
+/// rest, and beyond it DuckDB spills to a temporary file.
+fn share_memory_limit(cache: &HashMap<PathBuf, SharedDatabase>) {
+    if cache.is_empty() {
+        return;
+    }
+    let limit_mb = crate::memory::storage::results_memory_limit_per_file_mb(
+        crate::memory::SystemRam::now().total,
+        cache.len(),
+    );
+    for shared in cache.values() {
+        if let Err(e) = shared
+            .anchor
+            .execute_batch(&format!("SET memory_limit = '{limit_mb}MB';"))
+        {
+            log::warn!("Could not limit DuckDB's memory to {limit_mb} MB: {e}");
+        }
+    }
 }
 
 /// The format of the results files this build writes (`run.schema_version`).
@@ -1828,16 +1846,13 @@ fn parse_object_id(uuid: &str) -> Result<ObjectId, InternalErrors> {
 #[cfg(test)]
 mod tests {
 
-    #[test]
-    fn a_shared_results_connection_has_its_memory_capped() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = shared_connection(&dir.path().join("capped.evadb")).unwrap();
+    /// DuckDB's memory limit of `conn`, in MB (it reports it rounded, in
+    /// GiB or MiB).
+    fn memory_limit_mb(conn: &Connection) -> f64 {
         let limit: String = conn
             .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
             .unwrap();
-        let want = crate::memory::storage::results_memory_limit_bytes() >> 20;
-        // DuckDB reports it rounded, in GiB / MiB.
-        let mib: f64 = if let Some(v) = limit.strip_suffix(" GiB") {
+        let mib = if let Some(v) = limit.strip_suffix(" GiB") {
             v.trim().parse::<f64>().unwrap() * 1024.0
         } else {
             limit
@@ -1846,10 +1861,47 @@ mod tests {
                 .parse::<f64>()
                 .unwrap()
         };
+        mib * 1_048_576.0 / 1_000_000.0
+    }
+
+    /// Capped - at most the whole limit, at least a file's floor (other
+    /// tests may have files open at the same time: they share it).
+    #[test]
+    fn a_shared_results_connection_has_its_memory_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = shared_connection(&dir.path().join("capped.evadb")).unwrap();
+        let mb = memory_limit_mb(&conn);
+        let whole = (crate::memory::storage::results_memory_limit_bytes() >> 20) as f64;
+        let floor = crate::memory::storage::RESULTS_FILE_MIN_MB as f64;
         assert!(
-            (mib - want as f64 * 1_000_000.0 / 1_048_576.0).abs() < 64.0,
-            "{limit} vs {want} MB"
+            mb <= whole + 64.0 && mb >= floor - 64.0,
+            "{mb} MB of {whole}"
         );
+    }
+
+    /// Two open files share one limit; with one closed, the other has all.
+    #[test]
+    fn open_results_files_share_one_memory_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = |name: &str| SharedDatabase {
+            anchor: Connection::open(dir.path().join(name)).unwrap(),
+            users: 1,
+        };
+        let total = crate::memory::SystemRam::now().total;
+        let share = |n| crate::memory::storage::results_memory_limit_per_file_mb(total, n) as f64;
+        let mut files = HashMap::new();
+        files.insert(PathBuf::from("a"), open("a.evadb"));
+        files.insert(PathBuf::from("b"), open("b.evadb"));
+
+        share_memory_limit(&files);
+        for shared in files.values() {
+            assert!((memory_limit_mb(&shared.anchor) - share(2)).abs() < 64.0);
+        }
+
+        files.remove(&PathBuf::from("b"));
+        share_memory_limit(&files);
+        let a = &files[&PathBuf::from("a")].anchor;
+        assert!((memory_limit_mb(a) - share(1)).abs() < 64.0);
     }
 
     use super::*;

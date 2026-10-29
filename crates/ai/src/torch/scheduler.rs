@@ -244,6 +244,17 @@ impl TorchScheduler {
         }
     }
 
+    /// Lets go of the models on every device. A run using one keeps it (its
+    /// `Arc`) until it is done; the next run loads it again.
+    pub(crate) fn release_models(&self) {
+        for TorchDevice { models, .. } in &self.devices {
+            models
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
+        }
+    }
+
     /// The model at `path` on device `index`, loaded once per device.
     fn model(&self, index: usize, path: &Path) -> std::result::Result<Arc<CModule>, TchError> {
         let TorchDevice { device, models } = &self.devices[index];
@@ -397,6 +408,72 @@ mod tests {
         let first = scheduler.model(0, &path).unwrap();
         assert!(Arc::ptr_eq(&first, &scheduler.model(0, &path).unwrap()));
         assert!(!Arc::ptr_eq(&first, &scheduler.model(1, &path).unwrap()));
+    }
+
+    /// Released: no device keeps a model; a run still holding one keeps
+    /// it, and the next run loads it again.
+    #[test]
+    fn released_models_are_loaded_again() {
+        let (_dir, path) = test_model();
+        let scheduler = devices(&[1, 1], 8);
+        let held = scheduler.model(0, &path).unwrap();
+        scheduler.model(1, &path).unwrap();
+
+        scheduler.release_models();
+
+        for device in &scheduler.devices {
+            assert!(device.models.lock().unwrap().is_empty());
+        }
+        let again = scheduler.model(0, &path).unwrap();
+        assert!(!Arc::ptr_eq(&held, &again), "loaded again");
+        assert_eq!(scheduler.devices[0].models.lock().unwrap().len(), 1);
+    }
+
+    /// The RAM a loaded model takes goes back when it is released: a model
+    /// with ~400 MB of weights (a constant traced into it), loaded on two
+    /// devices, released. Run with
+    /// `LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release -p evanalyzer_ai --features test-support bench_released_models_free_their_ram -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_released_models_free_their_ram() {
+        let rss_mb = || {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("VmRSS:"))
+                        .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                })
+                .unwrap_or(0)
+                / 1024
+        };
+        let trim = || {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            // SAFETY: malloc_trim only releases free memory of the allocator.
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        };
+        let weights = tch::Tensor::rand([100_000_000], (tch::Kind::Float, Device::Cpu));
+        let (_dir, path) = crate::torch::test_support::trace_and_save_model(1, 1, 2, |x| {
+            x + weights.sum(tch::Kind::Float) * 0.0
+        });
+        drop(weights);
+        trim();
+        let scheduler = devices(&[1, 1], 8);
+        let start = rss_mb();
+        scheduler.model(0, &path).unwrap();
+        scheduler.model(1, &path).unwrap();
+        let loaded = rss_mb();
+        scheduler.release_models();
+        trim();
+        let released = rss_mb();
+        println!(
+            "rss: before {start} MB, two devices loaded {loaded} MB (+{}), released {released} MB (+{})",
+            loaded - start,
+            released.saturating_sub(start)
+        );
+        assert!(released < loaded - 500, "{start} / {loaded} / {released}");
     }
 
     #[test]

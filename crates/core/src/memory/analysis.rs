@@ -148,6 +148,64 @@ pub fn recommended_merged_cache_bytes(
     )
 }
 
+/// Tiles (of every channel) the merged cache of a tiled image must hold:
+/// fewer, and the cache reloads tiles from disk again and again - see
+/// [`tiled_image_parallelism`]. Measured on `tests/haut` with 2.9 GB free:
+/// 4 threads left the cache ~1 tile (307 s, 763 s system CPU), 3 threads
+/// ~2.7 tiles (89 s), 2 threads (120 s).
+pub const MERGED_CACHE_MIN_TILES: u64 = 2;
+
+/// Threads for one image of `tiles` tiles, at most `wanted`: the most at
+/// which the merged cache ([`merged_cache_bytes`] with `available` RAM)
+/// still holds [`MERGED_CACHE_MIN_TILES`] tiles (or all of them, if fewer) -
+/// each more thread takes a tile's worth of RAM from it, and below that the
+/// run gets slower, not faster.
+pub fn tiled_image_parallelism(
+    available: u64,
+    wanted: usize,
+    tiles: u64,
+    budget: &RamBudget,
+    reserved_bytes: u64,
+) -> usize {
+    let needed = MERGED_CACHE_MIN_TILES.min(tiles.max(1)) * budget.min_image_cache_bytes;
+    (1..=wanted.max(1))
+        .rev()
+        .find(|&threads| merged_cache_bytes(available, threads, budget, reserved_bytes) >= needed)
+        .unwrap_or(1)
+}
+
+/// The cap of a plane's merged cache.
+#[derive(Debug, Clone, Copy)]
+pub enum MergedCacheBudget {
+    /// The same for every plane - many images, one per worker.
+    Fixed(u64),
+    /// One tiled image on every worker: [`recommended_merged_cache_bytes`]
+    /// from the RAM free when the plane starts - what the planes before
+    /// left, the results file and the viewer took meanwhile.
+    PerPlane {
+        parallelism: usize,
+        budget: RamBudget,
+        reserved_bytes: u64,
+    },
+}
+
+impl MergedCacheBudget {
+    pub fn bytes(&self) -> u64 {
+        match *self {
+            Self::Fixed(bytes) => bytes,
+            Self::PerPlane {
+                parallelism,
+                budget,
+                reserved_bytes,
+            } => {
+                // The planes before freed their caches: counted as free.
+                super::return_freed_memory_to_os();
+                recommended_merged_cache_bytes(parallelism, &budget, reserved_bytes)
+            }
+        }
+    }
+}
+
 /// [`recommended_merged_cache_bytes`] with `available` RAM.
 ///
 /// The storage's share is at most a quarter of `available` (DuckDB's limit
@@ -339,6 +397,44 @@ mod tests {
     }
 
     const GB: u64 = 1 << 30;
+
+    #[test]
+    fn a_tiled_image_keeps_every_thread_with_ram_to_spare() {
+        let budget = estimate_ram_budget(4096, 4096, 6);
+        assert_eq!(
+            tiled_image_parallelism(64 * GB, 21, 21, &budget, 2 * GB),
+            21
+        );
+    }
+
+    /// Little RAM: threads go until the merged cache holds its tiles again -
+    /// one thread more would leave it less.
+    #[test]
+    fn a_tiled_image_with_little_ram_runs_fewer_threads() {
+        let budget = estimate_ram_budget(4096, 4096, 6);
+        let needed = MERGED_CACHE_MIN_TILES * budget.min_image_cache_bytes;
+        let available = 3 * GB;
+        let threads = tiled_image_parallelism(available, 4, 21, &budget, 8 * GB);
+        assert!(threads < 4, "{threads}");
+        assert!(merged_cache_bytes(available, threads, &budget, 8 * GB) >= needed);
+        assert!(merged_cache_bytes(available, threads + 1, &budget, 8 * GB) < needed);
+    }
+
+    #[test]
+    fn a_tiled_image_always_gets_a_thread() {
+        let budget = estimate_ram_budget(4096, 4096, 6);
+        assert_eq!(tiled_image_parallelism(0, 8, 21, &budget, 0), 1);
+        assert_eq!(tiled_image_parallelism(64 * GB, 0, 21, &budget, 0), 1);
+    }
+
+    /// An image of two tiles needs no more than its two in the cache.
+    #[test]
+    fn a_tiled_image_needs_no_more_tiles_than_it_has() {
+        let budget = estimate_ram_budget(4096, 4096, 6);
+        let two = 2 * budget.min_image_cache_bytes;
+        let available = 4 * budget.total_bytes() + two;
+        assert_eq!(tiled_image_parallelism(available, 4, 2, &budget, 0), 4);
+    }
 
     #[test]
     fn the_merged_cache_leaves_the_storage_its_memory() {

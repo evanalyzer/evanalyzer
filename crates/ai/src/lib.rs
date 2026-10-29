@@ -61,6 +61,15 @@ pub fn infer(
     engine.infer(request, image)
 }
 
+/// Lets go of every AI model loaded so far - each takes hundreds of MB up
+/// to GBs, on every device, and stayed until the app ended. The next run
+/// loads them again. Nothing to do when no model ran yet.
+pub fn release_models() {
+    if let Some(Ok(engine)) = ENGINE.get() {
+        engine.release_models();
+    }
+}
+
 /// Whether a CUDA GPU can run models: the NVIDIA driver finds one new enough
 /// for this build, and the build can use it. Slow (loads the driver) - not
 /// for a UI startup path.

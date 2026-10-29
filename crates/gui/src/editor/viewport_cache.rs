@@ -292,11 +292,13 @@ impl ViewportCache {
             .resize(mb_to_bytes(overview_cache_mb));
     }
 
-    /// Empties both caches. What is on screen stays (it holds its own
-    /// references); anything else is read from disk again when needed.
-    pub fn clear(&self) {
-        self.cache_high_res.lock().unwrap().clear();
-        self.cache_low_res.lock().unwrap().clear();
+    /// The (tile, overview) cache's limits in bytes.
+    #[cfg(test)]
+    pub fn capacity_bytes(&self) -> (usize, usize) {
+        (
+            self.cache_high_res.lock().unwrap().cache.capacity(),
+            self.cache_low_res.lock().unwrap().cache.capacity(),
+        )
     }
 
     /// Bytes held by the (tile, overview) cache.

@@ -114,7 +114,7 @@ export component ProjectSettingsDialog inherits InkDialog {
     property <string> kw-undo-history: "Undo history redo steps memory RAM MB automatic";
     property <string> kw-renderer: "Draw in software renderer graphics card GPU driver virtual machine remote desktop RAM";
     property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
-    property <string> kw-free-caches: "Free caches when an analysis starts release memory RAM analysis run";
+    property <string> kw-free-caches: "Small caches while an analysis runs free release memory RAM analysis run";
     property <string> kw-objects-table: "Objects as a table list default view bottom";
     property <string> kw-reduce-motion: "Reduce motion animation fly move accessibility";
     property <string> kw-auto-scale: "Auto-scale new images histogram open first time brightness contrast";
@@ -647,8 +647,8 @@ export component ProjectSettingsDialog inherits InkDialog {
                                     }
                                     if root.shows(3, root.kw-free-caches): InkSettingRow {
                                         control-width: 168px;
-                                        label: "Free caches when an analysis starts";
-                                        description: "Gives a local analysis the RAM of both caches; they fill up again as you use the viewport.";
+                                        label: "Small caches while an analysis runs";
+                                        description: "Gives a local analysis the RAM of both caches: they keep 64 MB each until it ends.";
                                         HorizontalLayout {
                                             alignment: end;
                                             Switch {

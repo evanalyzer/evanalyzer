@@ -2014,8 +2014,11 @@ mod tests {
         assert_eq!(r.view().get_retained_tiles().row_count(), 0);
     }
 
+    /// An analysis holds the caches at their smallest size (they would
+    /// fill up again while the user looks at images) - unless the settings
+    /// say otherwise - and they get their full size back when it ends.
     #[test]
-    fn an_analysis_start_empties_the_caches_unless_the_settings_say_otherwise() {
+    fn an_analysis_holds_the_caches_small_unless_the_settings_say_otherwise() {
         let mut r = render_fixture(project_with_fixture_image());
         enable_tile_history(&r);
         zoom_in_and_out(&mut r);
@@ -2023,35 +2026,43 @@ mod tests {
         let cache = r.worker.viewport_cache.clone();
         let (tiles, overviews) = cache.held_bytes();
         assert!(tiles > 0 && overviews > 0);
+        let full = cache.capacity_bytes();
+        let floor = ViewportMemorySettings::MIN_CACHE_MB as usize * 1024 * 1024;
+        assert!(full.0 > floor && full.1 >= floor, "{full:?}");
+        let controller = &r.worker.viewport_controller;
 
-        r.worker
-            .viewport_controller
-            .set_memory_settings(ViewportMemorySettings {
-                tile_history_enabled: true,
-                free_caches_on_analysis: false,
-                ..Default::default()
-            });
-        r.worker
-            .viewport_controller
-            .release_preview_memory_for_analysis();
+        controller.set_memory_settings(ViewportMemorySettings {
+            tile_history_enabled: true,
+            free_caches_on_analysis: false,
+            ..Default::default()
+        });
+        controller.release_preview_memory_for_analysis();
         drain_ui_queue();
         assert_eq!(cache.held_bytes(), (tiles, overviews), "switched off: kept");
+        assert_eq!(cache.capacity_bytes(), full);
+        controller.restore_preview_memory_after_analysis();
+        assert_eq!(cache.capacity_bytes(), full);
 
-        r.worker
-            .viewport_controller
-            .set_memory_settings(ViewportMemorySettings {
-                tile_history_enabled: true,
-                ..Default::default()
-            });
-        r.worker
-            .viewport_controller
-            .release_preview_memory_for_analysis();
+        controller.set_memory_settings(ViewportMemorySettings {
+            tile_history_enabled: true,
+            ..Default::default()
+        });
+        controller.release_preview_memory_for_analysis();
         drain_ui_queue();
-        assert_eq!(cache.held_bytes(), (0, 0));
+        assert_eq!(cache.capacity_bytes(), (floor, floor));
+        // The fixture's tiles fit: kept (the most recently used ones would).
+        assert_eq!(cache.held_bytes(), (tiles, overviews));
         assert_eq!(r.view().get_retained_tiles().row_count(), 0);
         // What is on screen stays.
         assert!(r.ui.get_display_image().size().width > 0);
         assert!(r.view().get_high_res_ready());
+
+        // A settings change during the analysis keeps them small.
+        controller.set_memory_settings(ViewportMemorySettings::default());
+        assert_eq!(cache.capacity_bytes(), (floor, floor));
+
+        controller.restore_preview_memory_after_analysis();
+        assert_eq!(cache.capacity_bytes(), full);
     }
 
     /// The prediction overlay lands in the object layer at its place,
@@ -2719,6 +2730,16 @@ mod tests {
             &[TaskDispatch::LowRes, TaskDispatch::HighRes],
             new_image_task(),
         );
+        // BENCH_DURING_ANALYSIS=1: the rest browses while an analysis runs
+        // (the caches held small). Without it they grow as they did during
+        // an analysis before - emptied when it started, then back to full.
+        if std::env::var("BENCH_DURING_ANALYSIS").is_ok() {
+            r.worker
+                .viewport_controller
+                .release_preview_memory_for_analysis();
+            drain_ui_queue();
+            println!("--- an analysis runs from here: caches held small");
+        }
         let (channels, ctx) = r.worker.viewport_cache.get_image_references();
         println!(
             "channels: {:?}, bit depth {}",

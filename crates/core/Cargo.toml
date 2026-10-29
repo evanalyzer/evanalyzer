@@ -55,6 +55,9 @@ libtorch-in-process = ["evanalyzer_ai/test-support"]
 [target.'cfg(target_os = "linux")'.dependencies]
 duckdb = { workspace = true, features = ["bundled"] }
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 approx = { workspace = true }
 env_logger = { workspace = true }

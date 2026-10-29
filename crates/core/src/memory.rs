@@ -12,7 +12,8 @@
 //!   preview and breakpoint tiles, undo history) - from the total RAM; the
 //!   user can set each by hand (Settings › Viewport).
 //!
-//! Also here: what the computer has ([`SystemRam`], [`SystemDiagnostics`]).
+//! Also here: what the computer has ([`SystemRam`], [`SystemDiagnostics`]) -
+//! within a container's memory limit and [`RAM_LIMIT_ENV`].
 //!
 //! Not bounded yet: a whole slide's objects until export, deep-learning
 //! models (loaded until the app ends), the editor's preview objects.
@@ -30,7 +31,8 @@ pub mod viewer;
 
 use sysinfo::System;
 
-/// The computer's RAM now.
+/// The computer's RAM now - in a container with a memory limit (a cgroup:
+/// Docker, Kubernetes, a server's systemd slice), the container's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemRam {
     /// All of it.
@@ -44,16 +46,62 @@ impl SystemRam {
     pub fn now() -> Self {
         let mut sys = System::new();
         sys.refresh_memory();
-        Self {
+        let ram = Self {
             total: sys.total_memory(),
             available: sys.available_memory(),
+        };
+        // The host's RAM otherwise: a container limited to 4 GB on a 64 GB
+        // host was sized for 64 GB - and killed by its limit.
+        let ram = match sys.cgroup_limits() {
+            Some(limits) => ram.within(limits.total_memory, limits.free_memory),
+            None => ram,
+        };
+        match ram_limit_from_env() {
+            Some(limit) => ram.within(limit, limit),
+            None => ram,
         }
     }
+
+    /// This RAM within a limit of `total` with `free` of it unused.
+    fn within(self, total: u64, free: u64) -> Self {
+        Self {
+            total: self.total.min(total),
+            available: self.available.min(free),
+        }
+    }
+}
+
+/// The environment variable that limits the RAM EVAnalyzer plans with, in
+/// MB - as if the computer had no more: a server shared with others, or a
+/// small computer simulated on a big one (the benchmarks). Its total RAM
+/// and what is free are capped.
+pub const RAM_LIMIT_ENV: &str = "EVANALYZER_RAM_LIMIT_MB";
+
+/// [`RAM_LIMIT_ENV`] in bytes, if set to a number.
+fn ram_limit_from_env() -> Option<u64> {
+    parse_ram_limit_mb(&std::env::var(RAM_LIMIT_ENV).ok()?)
+}
+
+fn parse_ram_limit_mb(value: &str) -> Option<u64> {
+    let mb: u64 = value.trim().parse().ok()?;
+    (mb > 0).then(|| mb << 20)
 }
 
 /// Currently available system RAM, in bytes - [`SystemRam::available`].
 pub(crate) fn available_memory_bytes() -> u64 {
     SystemRam::now().available
+}
+
+/// Hands freed heap memory back to the operating system. glibc keeps freed
+/// chunks of its heap for reuse instead - the RAM measured free afterwards
+/// would leave out what this process already freed. Elsewhere large blocks
+/// go back on their own.
+pub fn return_freed_memory_to_os() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only releases free memory of the allocator.
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }
 
 /// Snapshot of host machine capabilities, surfaced read-only (e.g. in the
@@ -111,6 +159,35 @@ pub fn format_binary_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GB: u64 = 1 << 30;
+
+    #[test]
+    fn the_ram_limit_is_read_in_mb() {
+        assert_eq!(parse_ram_limit_mb("8192"), Some(8 * GB));
+        assert_eq!(parse_ram_limit_mb(" 512 "), Some(512 << 20));
+        assert_eq!(parse_ram_limit_mb("0"), None);
+        assert_eq!(parse_ram_limit_mb("8G"), None);
+        assert_eq!(parse_ram_limit_mb(""), None);
+    }
+
+    /// In a container the smaller of its limit and the host's RAM counts.
+    #[test]
+    fn a_container_limit_caps_the_ram() {
+        let host = SystemRam {
+            total: 64 * GB,
+            available: 50 * GB,
+        };
+        assert_eq!(
+            host.within(4 * GB, 3 * GB),
+            SystemRam {
+                total: 4 * GB,
+                available: 3 * GB
+            }
+        );
+        // A limit above the host's RAM changes nothing.
+        assert_eq!(host.within(128 * GB, 100 * GB), host);
+    }
 
     #[test]
     fn format_binary_bytes_uses_mib_below_one_gib() {

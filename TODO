@@ -170,10 +170,12 @@ Goal: small PCs (8 GB RAM, 4 cores, software renderer), whole slides and 100k+ i
 ### RAM rework (planned 2026-10-28)
 All RAM rules in one place (`crates/core/src/memory.rs` + `memory/`), then one budget every part draws from instead of separate rules on different bases (viewer caches, undo, DuckDB: total RAM; analysis: free RAM once per run) that nobody adds up.
 - [x] 1. Moved, no behaviour change (2026-10-28): `memory::analysis` (threads, image caches, merged cache, `MAX_TILE_SIZE`), `memory::storage` (DuckDB's limit), `memory::viewer` (the editor's Auto sizes), `SystemRam` / diagnostics in `memory.rs`; `utils/resources.rs` gone.
-- [ ] 2. Analysis: a thread count that keeps the merged cache (below ~3 GB free, 4 threads leave ~0.6 GB: 130-335 s instead of ~75 s on `tests/haut`), available RAM per plane, cgroup limits (containers/servers).
-- [ ] 3. DuckDB: one limit for all open results files together (today each gets ¼ of the total RAM - results window + running analysis = twice).
-- [ ] 4. Viewer caches and undo from the same budget; shrink to their floor during an analysis instead of emptying.
-- [ ] 5. Bound what isn't: deep-learning models (unload after a run / when idle), a whole slide's objects (`TileObjectStore`), preview objects.
+- [x] 2. Analysis (2026-10-28): for one tiled image the most threads at which the merged cache still holds 2 tiles (`tiled_image_parallelism`; previews and hand-set thread counts keep theirs); the merged cache measured again per plane (after `malloc_trim`); a container's memory limit (cgroup) and `EVANALYZER_RAM_LIMIT_MB` cap the RAM. `tests/haut` + coloc, automatic threads: ~4 GB free 6 threads 251-271 s → 5 threads 69-70 s, ~3 GB 4 → 3 threads 226-279 → 85-95 s; unchanged with RAM to spare (BENCHMARK.md "RAM rework step 2").
+- [x] 3. DuckDB (2026-10-28): one limit for all open results files together, shared out when a file opens or closes (`results_memory_limit_per_file_mb`, at least 512 MB each) - BENCHMARK.md "RAM rework step 3".
+- [x] 4. Viewer caches (2026-10-28): held at 64 MB each while a local analysis runs (they were emptied, then grew back to 1 GB + 256 MB while the user looked at images), full size again when it ends; Settings › Viewport "Small caches while an analysis runs". The undo history's automatic size already counts a full analysis - left as it is.
+- [x] 5a. Deep-learning models (2026-10-28): released after every analysis (not after a preview - it runs again and again), `eva_ai_release_models`, AI plugin interface 2 → 3. A ~400 MB model on two devices: +764 MB → +1 MB after the release.
+- [ ] 5b. A whole slide's objects stay in RAM until export (~1-1.5 GB per 1M objects) and aren't counted in the merged cache's budget: the whole-image steps (Tile Merge, Voronoi, Relate, coloc) work on all of a plane's objects at once - on disk (`TileObjectStore`) needs those steps redesigned to stream. At least: reserve an estimate per object in the plane's budget.
+- [ ] 5c. Preview objects: bounded by the preview's tiles (Settings › Viewport › Preview tiles) - nothing to do unless a single tile has millions.
 - [ ] Then: the minimum RAM requirement as a function of the plan (reserve + floors).
 
 ### Medium

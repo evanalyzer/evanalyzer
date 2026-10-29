@@ -557,6 +557,8 @@ impl PipelineWorker {
                 self.pipeline_controller
                     .analysis_running
                     .store(false, std::sync::atomic::Ordering::SeqCst);
+                self.viewport_controller
+                    .restore_preview_memory_after_analysis();
             }
             let backend = self.app_state.backend();
             let connection_lost = job_result.is_err() && !backend.is_connected();

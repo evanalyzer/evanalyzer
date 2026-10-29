@@ -13,7 +13,7 @@ use crate::{
     algos::Connectivity,
     dataset::{DatasetAlgorithm, DatasetContext},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
-    memory::analysis::MAX_TILE_SIZE,
+    memory::analysis::{MAX_TILE_SIZE, MergedCacheBudget},
     pipeline::{
         image_cache::ImageCache,
         object_cache::ObjectCache,
@@ -356,20 +356,17 @@ impl<'a> JobExecutor {
         );
         // One image: its tiles run on every worker and are merged into one
         // cache, which gets the whole budget - but the results storage's own
-        // memory (DuckDB's limit). Many images: one per worker.
-        let merged_cache_bytes = if self.images.len() == 1 {
-            crate::memory::analysis::recommended_merged_cache_bytes(
+        // memory (DuckDB's limit) - measured again for every plane. Many
+        // images: one per worker.
+        let merged_cache = if self.images.len() == 1 {
+            MergedCacheBudget::PerPlane {
                 parallelism,
-                &ram_budget,
-                self.result_storage.reserved_memory_bytes(),
-            )
+                budget: ram_budget,
+                reserved_bytes: self.result_storage.reserved_memory_bytes(),
+            }
         } else {
-            image_cache_bytes
+            MergedCacheBudget::Fixed(image_cache_bytes)
         };
-        info!(
-            "Merged image cache capacity: {}",
-            crate::memory::format_binary_bytes(merged_cache_bytes)
-        );
 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
@@ -408,7 +405,7 @@ impl<'a> JobExecutor {
                     cancel.clone(),
                     Some(progress.clone()),
                     image_cache_bytes,
-                    merged_cache_bytes,
+                    merged_cache,
                 ) {
                     Ok(()) => {
                         progress
@@ -467,7 +464,7 @@ impl<'a> JobExecutor {
                         cancel.clone(),
                         None,
                         image_cache_bytes,
-                        merged_cache_bytes,
+                        merged_cache,
                     ) {
                         Ok(()) => {
                             let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -518,6 +515,13 @@ impl<'a> JobExecutor {
         let result = result.and_then(|()| self.run_dataset_steps(&progress, &cancel));
 
         info!("Pipeline completed in {:?}", start.elapsed());
+        // An analysis' AI models (hundreds of MB to GBs each) aren't kept
+        // until the app ends any more; a preview's are - it runs again and
+        // again while the user changes settings (a batch run's
+        // `preview_tile_settings` is always `None`).
+        if self.preview_tile_settings.is_none() {
+            evanalyzer_ai::release_models();
+        }
         // Before `Finished`: whoever reads the results next sees the outcome.
         if let Err(e) = self.result_storage.finish_run(&result) {
             warn!("Could not record how the run ended: {e}");
@@ -623,7 +627,7 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
         progress: Option<Sender<ProgressEvent>>,
         image_cache_bytes: u64,
-        merged_cache_bytes: u64,
+        merged_cache: MergedCacheBudget,
     ) -> Result<(), InternalErrors> {
         let start_image = Instant::now();
         const RES_IDX: i32 = 0;
@@ -1054,9 +1058,14 @@ impl<'a> JobExecutor {
                 };
 
                 // Every finished tile is merged into this one cache, one at a
-                // time: one cap for all of them (`merged_cache_bytes`), so the
+                // time: one cap for all of them (`merged_cache`), so the
                 // channel tiles spill to disk while the tiles still run. Not a
                 // `try_reduce`: each of its partial results had the full cap.
+                let merged_cache_bytes = merged_cache.bytes();
+                info!(
+                    "{image_rel_path:?} t={t} z={z}: merged image cache capacity {}",
+                    crate::memory::format_binary_bytes(merged_cache_bytes)
+                );
                 let merged = Mutex::new({
                     let mut merged = global_cache.clone();
                     merged.image_cache.set_capacity_bytes(merged_cache_bytes);
@@ -1853,6 +1862,41 @@ impl<'a> JobExecutor {
             .unwrap_or_else(|| {
                 crate::memory::analysis::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
             })
+    }
+
+    /// Threads to run this job with, when the user didn't choose: as many as
+    /// the cores and the free RAM allow
+    /// ([`recommended_parallelism`](crate::recommended_parallelism)), and for
+    /// an analysis of one image of several tiles (a whole slide) no more
+    /// than leave its merged cache enough tiles
+    /// ([`tiled_image_parallelism`](crate::memory::analysis::tiled_image_parallelism)).
+    pub fn recommended_parallelism(&self) -> usize {
+        let budget = self.estimate_ram_budget();
+        let threads = crate::memory::analysis::recommended_parallelism(budget.total_bytes());
+        // A preview runs a few small tiles (the visible ones), not the
+        // whole slide into the merged cache.
+        if self.preview_tile_settings.is_some() {
+            return threads;
+        }
+        let mut images = self.images.values();
+        let (Some(entry), None) = (images.next(), images.next()) else {
+            return threads;
+        };
+        let Some(series) = entry.series.get(&self.active_series(entry)) else {
+            return threads;
+        };
+        let tiles = |size: u64| size.div_ceil(MAX_TILE_SIZE as u64);
+        let tiles = tiles(series.image_width) * tiles(series.image_height);
+        if tiles <= 1 {
+            return threads;
+        }
+        crate::memory::analysis::tiled_image_parallelism(
+            crate::memory::SystemRam::now().available,
+            threads,
+            tiles,
+            &budget,
+            self.result_storage.reserved_memory_bytes(),
+        )
     }
 
     /// Flat total of [`estimate_ram_budget`](Self::estimate_ram_budget) -
@@ -5230,6 +5274,42 @@ mod estimate_ram_per_worker_bytes_tests {
             None,
             Default::default(),
         )
+    }
+
+    /// The thread count without the tiled-image rule.
+    fn plain_threads(job: &JobExecutor) -> usize {
+        crate::memory::analysis::recommended_parallelism(job.estimate_ram_per_worker_bytes())
+    }
+
+    /// Several images, one image of a single tile, a preview: the threads
+    /// the cores and the RAM allow, as before - the rule is for one image's
+    /// tiles in one merged cache.
+    #[test]
+    fn only_a_whole_slide_analysis_may_get_fewer_threads() {
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("a.tif"), image_entry(20_000, 20_000, 5));
+        images.insert(PathBuf::from("b.tif"), image_entry(20_000, 20_000, 5));
+        let job = job_with(images);
+        assert_eq!(job.recommended_parallelism(), plain_threads(&job));
+
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("small.tif"), image_entry(2048, 2048, 5));
+        let job = job_with(images);
+        assert_eq!(job.recommended_parallelism(), plain_threads(&job));
+
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("slide.tif"), image_entry(20_000, 20_000, 5));
+        let mut job = job_with(images);
+        assert!(job.recommended_parallelism() <= plain_threads(&job));
+        job.preview_tile_settings = Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1920.0,
+            viewport_height: 1080.0,
+            zoom: 1.0,
+            process_all_tiles: false,
+        });
+        assert_eq!(job.recommended_parallelism(), plain_threads(&job));
     }
 
     #[test]

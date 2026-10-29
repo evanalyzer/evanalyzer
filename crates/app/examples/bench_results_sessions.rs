@@ -13,8 +13,12 @@
 // again before the next. Reports RSS after each file is closed: what the
 // earlier files still hold.
 //
+// `--together`: every file open at once instead (the results window and a
+// running analysis), each read in full (the list as CSV: every object's
+// columns) - RSS and DuckDB's memory with all of them open.
+//
 // Usage: cargo run --release -p evanalyzer_app --example bench_results_sessions -- \
-//     <out dir> <a.evadb> <b.evadb> ...
+//     <out dir> [--together] <a.evadb> <b.evadb> ...
 
 use evanalyzer_app::results::{
     Aggregation, Column, ExportFormat, LocalResultsGenerator, ResultExport,
@@ -35,10 +39,70 @@ fn status_mb(key: &str) -> u64 {
         / 1024
 }
 
+/// DuckDB's memory of `db` (open), in MB.
+fn duckdb_mb(db: &str) -> i64 {
+    evanalyzer_core::open_results_database(std::path::Path::new(db))
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT sum(memory_usage_bytes)::BIGINT FROM duckdb_memory()",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(|e| evanalyzer_cfg::core_types::InternalErrors::Io(e.to_string()))
+        })
+        .unwrap_or(0)
+        / 1_000_000
+}
+
+fn together(out: &std::path::Path, dbs: &[String]) {
+    let databases: Vec<_> = dbs
+        .iter()
+        .map(|db| LocalResultsGenerator::open_database(PathBuf::from(db)).expect("open database"))
+        .collect();
+    let start = Instant::now();
+    for (i, database) in databases.iter().enumerate() {
+        let _ = std::fs::remove_dir_all(out);
+        std::fs::create_dir_all(out).unwrap();
+        let export = ResultExport {
+            output_dir: out.to_path_buf(),
+            format: ExportFormat::CSV,
+            columns: vec![
+                Column::AreaSizePx,
+                Column::IntensityAvg(0),
+                Column::Circularity,
+            ],
+            with_list_view: true,
+            ..Default::default()
+        };
+        export
+            .start_export(database, &AtomicBool::new(false), &mut |_, _, _| {})
+            .expect("export");
+        let duckdb: Vec<String> = dbs[..=i]
+            .iter()
+            .map(|db| duckdb_mb(db).to_string())
+            .collect();
+        println!(
+            "file {} read: rss={} MB, duckdb per file=[{}] MB",
+            i + 1,
+            status_mb("VmRSS:"),
+            duckdb.join(", ")
+        );
+    }
+    println!(
+        "all read in {:.1}s, peak_rss={} MB",
+        start.elapsed().as_secs_f64(),
+        status_mb("VmHWM:")
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let out = PathBuf::from(&args[1]);
     println!("start: rss={} MB", status_mb("VmRSS:"));
+    if args[2] == "--together" {
+        together(&out, &args[3..]);
+        return;
+    }
     for (i, db) in args[2..].iter().enumerate() {
         let _ = std::fs::remove_dir_all(&out);
         std::fs::create_dir_all(&out).unwrap();

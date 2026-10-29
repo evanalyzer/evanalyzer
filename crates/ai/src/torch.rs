@@ -59,6 +59,10 @@ impl InferenceEngine for TorchEngine {
         }
     }
 
+    fn release_models(&self) {
+        self.scheduler.release_models();
+    }
+
     fn infer(&self, request: &Request, image: Image<'_>) -> Result<Response> {
         let expected = image.width * image.height * image.channels;
         if image.data.len() < expected || image.channels == 0 {

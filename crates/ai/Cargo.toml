@@ -42,3 +42,6 @@ required-features = ["test-support"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
+libc = { workspace = true }
