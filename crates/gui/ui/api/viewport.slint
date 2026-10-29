@@ -100,6 +100,13 @@ export global ViewportState {
 
     in-out property <bool> high_res_ready: true;
     in-out property <bool> object_ready: false;
+    // A new image (or series) still loading, nothing of it shown yet, and
+    // its name. `opening_shown` puts the pill over the image up - only once
+    // the loading takes a while (no flash on fast opens), then for a
+    // moment at least; a preview's pill says "Opening" while `opening`.
+    in-out property <bool> opening: false;
+    in-out property <bool> opening_shown: false;
+    in-out property <string> opening_name: "";
 
     in-out property <float> zoom_factor: 1.0;
     callback report_viewport_size(float, float);

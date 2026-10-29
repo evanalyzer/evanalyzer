@@ -18,6 +18,7 @@ use crate::editor::results_overlay::{ResultsOverlay, draw_results_overlay};
 use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
+use crate::helper::delayed_indicator::DelayedIndicator;
 use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
 use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, RetainedTile, UiState};
 use evanalyzer_app::global::ViewportMemorySettings;
@@ -26,10 +27,54 @@ use evanalyzer_app::project::{ObjectExt, ProjectExt};
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use slint::{Color, ComponentHandle, Model, VecModel};
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+
+/// "Opening" over the image while new content loads: the indicator, the
+/// content generation it waits for (0: none) and the window it shows in.
+/// On the UI thread only, so a start and the render ending it always apply
+/// in queue order.
+struct Opening {
+    indicator: DelayedIndicator,
+    generation: Cell<u64>,
+    window: slint::Weak<AppWindow>,
+}
+
+impl Opening {
+    fn new(window: &slint::Weak<AppWindow>) -> Self {
+        Self {
+            indicator: DelayedIndicator::new(|ui, on| {
+                ui.global::<ViewportSlintState>().set_opening_shown(on)
+            }),
+            generation: Cell::new(0),
+            window: window.clone(),
+        }
+    }
+}
+
+thread_local! {
+    static OPENING: RefCell<Option<Opening>> = const { RefCell::new(None) };
+}
+
+/// `f` with the "Opening" state of `window` - a fresh one for another
+/// window than the last (the last one closed).
+fn with_opening(window: &slint::Weak<AppWindow>, f: impl FnOnce(&Opening)) {
+    OPENING.with(|opening| {
+        let mut opening = opening.borrow_mut();
+        if opening
+            .as_ref()
+            .is_none_or(|o| o.window.upgrade().is_none())
+        {
+            *opening = Some(Opening::new(window));
+        }
+        if let Some(opening) = opening.as_ref() {
+            f(opening);
+        }
+    })
+}
 
 /// Which buffer the breakpoint preview renders. Mirrors the `int` values
 /// used on the Slint side (`PipelinesPanelState.breakpoint-view-mode`).
@@ -767,11 +812,58 @@ impl ViewportController {
         self.high_res_last_count_at_false.store(0, Ordering::SeqCst);
     }
 
+    /// New content (image or series) of the current generation: "Opening"
+    /// until a render of it arrives or its read fails - see
+    /// [`Self::opening_done`].
+    fn start_opening(&self) {
+        let generation = self.content_generation();
+        let name = self
+            .app_state
+            .get_project()
+            .get_current_image_path_cloned()
+            .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let view_state = ui.global::<ViewportSlintState>();
+                view_state.set_opening_name(name.into());
+                view_state.set_opening(true);
+            }
+            with_opening(&ui_weak, |opening| {
+                opening.generation.set(generation);
+                opening.indicator.set_busy(&ui_weak, true);
+            });
+        })
+        .ok();
+    }
+
+    /// Content of `generation` is shown (or could not be read): "Opening"
+    /// ends if it waits for that content or older.
+    fn opening_done(&self, generation: u64) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            with_opening(&ui_weak, |opening| {
+                let waiting_for = opening.generation.get();
+                if waiting_for == 0 || generation < waiting_for {
+                    return;
+                }
+                opening.generation.set(0);
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.global::<ViewportSlintState>().set_opening(false);
+                }
+                opening.indicator.set_busy(&ui_weak, false);
+            });
+        })
+        .ok();
+    }
+
     pub fn trigger_new_image_redraw(&self) {
         // Another image: the last one's prediction doesn't belong to it.
         self.prediction.clear();
         self.bump_content_generation();
         self.reset_high_res_barrier();
+        self.start_opening();
         let mut task: DrawingTask = DrawingTask::default();
         task.auto_adjust_if_not_set = true;
         task.auto_adjust_selected = false;
@@ -786,6 +878,7 @@ impl ViewportController {
         self.prediction.clear();
         self.bump_content_generation();
         self.reset_high_res_barrier();
+        self.start_opening();
         let mut task: DrawingTask = DrawingTask::default();
         task.auto_adjust_if_not_set = true;
         task.auto_adjust_selected = false;
@@ -941,6 +1034,8 @@ impl ViewportController {
         generation: u64,
         is_low_res: bool,
     ) {
+        // New content shown: its "Opening" ends with this picture.
+        self.opening_done(generation);
         let budget = tile_history_budget(&self.memory_settings());
         let generation = generation as i32;
         let ui_weak = self.ui.clone();
@@ -1176,6 +1271,8 @@ impl ViewportController {
     }
 
     pub fn clear_rendered_image(&self) {
+        // A read that failed: nothing is opening anymore.
+        self.opening_done(self.content_generation());
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
@@ -1193,6 +1290,7 @@ impl ViewportController {
     /// compare are gone.
     pub fn clear_shown_image(&self) {
         self.bump_content_generation();
+        self.opening_done(self.content_generation());
         *self.breakpoint_tiles.write().unwrap() = Vec::new();
         self.prediction.clear();
         self.bump_compare();

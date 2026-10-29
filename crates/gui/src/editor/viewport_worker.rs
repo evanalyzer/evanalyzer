@@ -1935,6 +1935,62 @@ mod tests {
         assert!(r.view().get_high_res_ready());
     }
 
+    /// A slow open: "Opening" with the image's name from the start (the
+    /// status bar, a preview's pill), its own pill only after 400 ms - gone
+    /// with the first frame, the pill kept for a moment.
+    #[test]
+    fn a_slow_open_shows_opening_until_the_first_frame() {
+        use i_slint_backend_testing::mock_elapsed_time;
+        use std::time::Duration;
+        let mut r = render_fixture(project_with_fixture_image());
+        r.worker.viewport_controller.trigger_new_image_redraw();
+        drain_ui_queue();
+        let name = crate::editor::test_support::fixture_image_path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(r.view().get_opening());
+        assert_eq!(r.view().get_opening_name(), name.as_str());
+        assert!(!r.view().get_opening_shown(), "not for a fast open");
+
+        mock_elapsed_time(Duration::from_millis(450));
+        assert!(r.view().get_opening_shown());
+
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        assert!(!r.view().get_opening());
+        assert!(r.view().get_opening_shown(), "kept for at least 400 ms");
+        mock_elapsed_time(Duration::from_millis(450));
+        assert!(!r.view().get_opening_shown());
+    }
+
+    /// A fast open never puts the pill up.
+    #[test]
+    fn a_fast_open_never_shows_the_opening_pill() {
+        use i_slint_backend_testing::mock_elapsed_time;
+        use std::time::Duration;
+        let mut r = render_fixture(project_with_fixture_image());
+        r.worker.viewport_controller.trigger_new_image_redraw();
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(!r.view().get_opening());
+        mock_elapsed_time(Duration::from_millis(1000));
+        assert!(!r.view().get_opening_shown());
+    }
+
+    /// An image that can't be read: not "Opening" forever.
+    #[test]
+    fn an_unreadable_image_ends_opening() {
+        let missing = std::env::temp_dir().join("evanalyzer-missing-image.tif");
+        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(
+            missing,
+        ));
+        r.worker.viewport_controller.trigger_new_image_redraw();
+        drain_ui_queue();
+        assert!(r.view().get_opening());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        assert!(!r.view().get_opening());
+    }
+
     /// Renders the fixture at its fitted zoom, then 4x zoomed in, then at
     /// the fitted zoom again - returns the fitted zoom.
     fn zoom_in_and_out(r: &mut Render) -> f32 {

@@ -9,6 +9,7 @@
 
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
+use crate::helper::delayed_indicator::DelayedIndicator;
 
 pub(crate) mod split;
 mod tracks;
@@ -120,72 +121,11 @@ impl DbWorker {
     }
 }
 
-/// "Loading" in the status bar only for work that takes a while: shown
-/// after [`LOADING_SHOW_AFTER`] (fast queries never flash it), then kept at
-/// least [`LOADING_SHOW_FOR`] (no flash when the work ends right after).
-const LOADING_SHOW_AFTER: std::time::Duration = std::time::Duration::from_millis(400);
-const LOADING_SHOW_FOR: std::time::Duration = std::time::Duration::from_millis(400);
-
-/// The "Loading" indicator's state, on the UI thread.
-#[derive(Default)]
-struct LoadingIndicator {
-    busy: std::cell::Cell<bool>,
-    shown_since: std::cell::Cell<Option<std::time::Instant>>,
-    timer: slint::Timer,
-}
-
 thread_local! {
-    static LOADING: LoadingIndicator = LoadingIndicator::default();
-}
-
-impl LoadingIndicator {
-    fn set_busy(&self, ui: &slint::Weak<AppWindow>, busy: bool) {
-        self.busy.set(busy);
-        let show = |ui: &slint::Weak<AppWindow>, on: bool| {
-            if let Some(ui) = ui.upgrade() {
-                ui.global::<ResultsState>().set_loading(on);
-            }
-        };
-        match (busy, self.shown_since.get()) {
-            // Shown already: stays (a pending hide is off).
-            (true, Some(_)) => self.timer.stop(),
-            (true, None) => {
-                let ui = ui.clone();
-                self.timer.start(
-                    slint::TimerMode::SingleShot,
-                    LOADING_SHOW_AFTER,
-                    move || {
-                        LOADING.with(|indicator| {
-                            if indicator.busy.get() && indicator.shown_since.get().is_none() {
-                                indicator.shown_since.set(Some(std::time::Instant::now()));
-                                show(&ui, true);
-                            }
-                        })
-                    },
-                );
-            }
-            // Never shown: nothing to hide.
-            (false, None) => self.timer.stop(),
-            (false, Some(since)) => {
-                let hide = move |ui: &slint::Weak<AppWindow>| {
-                    LOADING.with(|indicator| {
-                        if !indicator.busy.get() {
-                            indicator.shown_since.set(None);
-                            show(ui, false);
-                        }
-                    })
-                };
-                match LOADING_SHOW_FOR.checked_sub(since.elapsed()) {
-                    None => hide(ui),
-                    Some(left) => {
-                        let ui = ui.clone();
-                        self.timer
-                            .start(slint::TimerMode::SingleShot, left, move || hide(&ui));
-                    }
-                }
-            }
-        }
-    }
+    /// "Loading" in the status bar only for work that takes a while - see
+    /// [`DelayedIndicator`].
+    static LOADING: DelayedIndicator =
+        DelayedIndicator::new(|ui, on| ui.global::<ResultsState>().set_loading(on));
 }
 
 const CHART_HISTOGRAM_BINS: usize = 24;

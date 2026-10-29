@@ -1,15 +1,17 @@
 // Copyright 2026 Joachim Danmayr.
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
-// dialogs/preview_rendering_dialog.slint — while the preview renders: a
-// small pill at the top of the image with the progress and ✕ (cancel, or
-// dismiss a finished one). A failure too long for the pill is a card with
-// the whole message, where it failed, "Show step" and "Copy message". Both
-// stay in the free part of the image between the floating panels. Not a
-// dialog: the image stays usable.
+// dialogs/preview_rendering_dialog.slint — while an image opens or the
+// preview renders: a small pill at the top of the image with the progress
+// and ✕ (cancel, or dismiss a finished preview; none while only opening).
+// A failure too long for the pill is a card with the whole message, where
+// it failed, "Show step" and "Copy message". Both stay in the free part of
+// the image between the floating panels. Not a dialog: the image stays
+// usable.
 
 import { PreviewRunState } from "../api/pipeline_running.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { ViewportState } from "../api/viewport.slint";
 import { Ink, InkIcons, InkBusy, InkTipZone } from "../ink/ink.slint";
 
 // The overlay is dark in every theme: the dark theme's error red, which
@@ -99,7 +101,10 @@ export component PreviewRendering inherits Rectangle {
         }
     }
 
-    property <bool> failed: PreviewRunState.done && PreviewRunState.has-error;
+    // The image still loading: says so in place of the preview (it waits
+    // for the image anyway), and only that when there is no preview.
+    property <bool> opening: ViewportState.opening || !PreviewRunState.shown;
+    property <bool> failed: !root.opening && PreviewRunState.done && PreviewRunState.has-error;
     property <string> failed-in: PreviewRunState.failed-where == "" ? "" : " in " + PreviewRunState.failed-where;
     property <length> max-w: min(560px, root.free-w - 32px);
     // A failure the pill can't show in full: the card instead.
@@ -112,7 +117,7 @@ export component PreviewRendering inherits Rectangle {
         height: 32px;
         visible: !root.as-card;
         accessible-role: groupbox;
-        accessible-label: "Preview";
+        accessible-label: root.opening ? "Opening image" : "Preview";
 
         face := Rectangle {
             border-radius: 16px;
@@ -122,16 +127,17 @@ export component PreviewRendering inherits Rectangle {
 
             row := HorizontalLayout {
                 padding-left: 12px;
-                padding-right: 4px;
+                // No ✕ while only opening: the same edge as on the left.
+                padding-right: PreviewRunState.shown ? 4px : 12px;
                 spacing: 8px;
 
                 Rectangle {
                     width: 13px;
-                    if !PreviewRunState.done: InkBusy {
+                    if root.opening || !PreviewRunState.done: InkBusy {
                         size: 13px;
                         tint: #FFFFFF;
                     }
-                    if PreviewRunState.done: Image {
+                    if !root.opening && PreviewRunState.done: Image {
                         source: root.failed ? InkIcons.error : InkIcons.check;
                         width: 13px;
                         colorize: root.failed ? Overlay.err : #FFFFFF;
@@ -139,7 +145,8 @@ export component PreviewRendering inherits Rectangle {
                 }
 
                 Text {
-                    text: !PreviewRunState.done
+                    text: root.opening ? (ViewportState.opening_name == "" ? "Opening image…" : "Opening " + ViewportState.opening_name + "…")
+                        : !PreviewRunState.done
                         ? (PreviewRunState.whole-image ? "Previewing the whole image…" : "Generating preview…")
                         : root.failed ? "Preview failed" + root.failed-in + ": " + PreviewRunState.status-message
                         : PreviewRunState.whole-image && PreviewRunState.outdated ? "Whole image: outdated - settings changed"
@@ -147,12 +154,12 @@ export component PreviewRendering inherits Rectangle {
                         : "Preview ready";
                     font-size: Ink.fs-body;
                     color: root.failed ? Overlay.err
-                        : PreviewRunState.done && PreviewRunState.outdated ? Ink.warn : #FFFFFF;
+                        : !root.opening && PreviewRunState.done && PreviewRunState.outdated ? Ink.warn : #FFFFFF;
                     vertical-alignment: center;
                     overflow: elide;
                 }
 
-                if PreviewRunState.total > 0 && !PreviewRunState.done: Text {
+                if !root.opening && PreviewRunState.total > 0 && !PreviewRunState.done: Text {
                     text: PreviewRunState.processed + " / " + PreviewRunState.total
                         + " · " + round(PreviewRunState.processed * 100 / PreviewRunState.total) + "%";
                     font-size: Ink.fs-secondary;
@@ -161,7 +168,7 @@ export component PreviewRendering inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                OverlayIconButton {
+                if PreviewRunState.shown: OverlayIconButton {
                     y: (parent.height - self.height) / 2;
                     icon: InkIcons.close;
                     tip: "Close";

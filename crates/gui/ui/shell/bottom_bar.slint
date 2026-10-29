@@ -132,8 +132,8 @@ export component BottomBar inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                     }
                     InkStatusItem {
-                        icon: !ViewportState.high_res_ready ? InkIcons.busy : InkIcons.check;
-                        text: ViewportObjectState.is_drawing ? "Drawing" : !ViewportState.high_res_ready ? "Rendering" : "Ready";
+                        icon: ViewportState.opening || !ViewportState.high_res_ready ? InkIcons.busy : InkIcons.check;
+                        text: ViewportObjectState.is_drawing ? "Drawing" : ViewportState.opening ? "Opening" : !ViewportState.high_res_ready ? "Rendering" : "Ready";
                     }
                     InkStatusItem {
                         icon: InkIcons.objects;

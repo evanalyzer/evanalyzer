@@ -8,6 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod color_generators;
+pub(crate) mod delayed_indicator;
 pub(crate) mod markdown;
 pub mod size_formater;
 pub(crate) mod ui_thread;

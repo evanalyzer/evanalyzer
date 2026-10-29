@@ -33,6 +33,7 @@ import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { StartState } from "../api/start.slint";
 import { StartPage } from "start_page.slint";
 import { PipelineRunningState, PreviewRunState } from "../api/pipeline_running.slint";
+import { ViewportState } from "../api/viewport.slint";
 
 // Gap between the panels and the edges.
 global Float {
@@ -138,8 +139,9 @@ export component Workspace inherits Rectangle {
         y: LayoutState.annotate ? Float.gap + 44px + 8px : 12px;
     }
 
-    // Covers only the image, never the bars.
-    if PreviewRunState.shown: PreviewRendering {
+    // Covers only the image, never the bars. One pill for opening and
+    // preview: an auto preview after opening only changes its text.
+    if PreviewRunState.shown || (ViewportState.opening_shown && root.on-image): PreviewRendering {
         width: 100%;
         height: 100%;
         free-x: root.dock-x;
