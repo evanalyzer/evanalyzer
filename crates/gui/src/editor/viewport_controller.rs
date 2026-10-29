@@ -74,6 +74,15 @@ pub struct ImageRect {
 }
 
 impl ImageRect {
+    /// Whether an object with the inclusive `bbox` (`[x0, y0, x1, y1]`,
+    /// pixels `x0..=x1`) has a pixel in this area.
+    pub fn intersects(&self, [x0, y0, x1, y1]: [u32; 4]) -> bool {
+        (x0 as f32) < self.x + self.w
+            && (x1 as f32 + 1.0) > self.x
+            && (y0 as f32) < self.y + self.h
+            && (y1 as f32 + 1.0) > self.y
+    }
+
     /// The image area under the screen rectangle (`x`, `y`, `w`, `h`) of a
     /// buffer rendered at `zoom` and `offset_x`/`offset_y`.
     pub fn from_screen(
@@ -372,6 +381,34 @@ pub struct ViewportController {
 /// How many of the objects an object classifier is least sure of the
 /// training panel lists.
 const UNSURE_OBJECTS_LISTED: usize = 5;
+
+/// Most lines drawn from the selected object to its children and parents:
+/// each costs 0.04-0.1 ms a redraw, and 100,000 of them (a region all cells
+/// are related to) took 4-10 s per pan or zoom - and only filled the screen.
+const MAX_FAMILY_LINKS: usize = 1000;
+
+/// The lines from the selected object (its centre `to`) to the members of
+/// its family `members` (bounding box, centre): only to those with a pixel
+/// in `area` (the view and its margin), the [`MAX_FAMILY_LINKS`] closest to
+/// it. The others are shown by their colour alone.
+fn family_links(
+    members: impl Iterator<Item = ([u32; 4], (f32, f32))>,
+    to: (f32, f32),
+    area: &ImageRect,
+) -> Vec<crate::editor::object_render::Link> {
+    let distance = |(x, y): (f32, f32)| (x - to.0).powi(2) + (y - to.1).powi(2);
+    let mut in_view: Vec<(f32, f32)> = members
+        .filter(|(bbox, _)| area.intersects(*bbox))
+        .map(|(_, centre)| centre)
+        .collect();
+    if in_view.len() > MAX_FAMILY_LINKS {
+        in_view.select_nth_unstable_by(MAX_FAMILY_LINKS, |a, b| {
+            distance(*a).total_cmp(&distance(*b))
+        });
+        in_view.truncate(MAX_FAMILY_LINKS);
+    }
+    in_view.into_iter().map(|centre| (centre, to)).collect()
+}
 
 fn merge_into_slot(pair: &(Mutex<Option<DrawingTask>>, Condvar), t: DrawingTask) {
     let (lock, cvar) = pair;
@@ -1531,13 +1568,20 @@ impl ViewportController {
                     (o.bbox[1] + o.bbox[3]) as f32 / 2.0 + 0.5,
                 )
             };
-            let links = children
-                .iter()
-                .chain(parents.iter())
-                .map(|o| (centre(o), centre(selected)))
-                .collect::<Vec<_>>();
-            let children: Vec<_> = children.iter().map(|o| o.id.clone()).collect();
-            let parents: Vec<_> = parents.iter().map(|o| o.id.clone()).collect();
+            let links = family_links(
+                children
+                    .iter()
+                    .chain(parents.iter())
+                    .map(|o| (o.bbox, centre(o))),
+                centre(selected),
+                &rect,
+            );
+            // Sets: every object drawn is looked up in them (a `Vec` made
+            // that O(objects × children) - 13 s a redraw with 100,000).
+            let children: std::collections::HashSet<_> =
+                children.iter().map(|o| o.id.clone()).collect();
+            let parents: std::collections::HashSet<_> =
+                parents.iter().map(|o| o.id.clone()).collect();
             Some((children, parents, links))
         });
 
@@ -1549,6 +1593,11 @@ impl ViewportController {
 
         let prediction_alphas = self.prediction.object_alphas();
         for object in objects.iter().chain(auto_objects.iter()) {
+            // Only what reaches the buffer (the view and its margin): the
+            // rest wouldn't draw a pixel, but was coloured and sorted.
+            if !rect.intersects(object.bbox) {
+                continue;
+            }
             if !is_object_drawn(&*project, hide_unclassified, &object.object_class) {
                 continue;
             }
@@ -2123,6 +2172,64 @@ mod tile_history_tests {
     }
 
     const PLENTY: Option<u64> = Some(1 << 30);
+
+    /// Lines only to the family members in view - those reaching in with a
+    /// pixel too - all of them while there are few.
+    #[test]
+    fn the_family_gets_lines_to_its_members_in_view() {
+        let area = rect(0.0, 0.0, 100.0, 100.0);
+        let to = (50.0, 50.0);
+        let members = [
+            ([10, 10, 12, 12], (11.5, 11.5)),       // in view
+            ([95, 95, 120, 120], (108.0, 108.0)),   // reaches in
+            ([200, 200, 210, 210], (205.0, 205.0)), // outside
+        ];
+        let links = family_links(members.into_iter(), to, &area);
+        assert_eq!(links, vec![((11.5, 11.5), to), ((108.0, 108.0), to)]);
+    }
+
+    /// More members in view than lines allowed: the closest to the
+    /// selected object get one.
+    #[test]
+    fn a_huge_family_gets_lines_to_its_closest_members() {
+        let area = rect(0.0, 0.0, 10_000.0, 10_000.0);
+        let to = (0.0, 0.0);
+        let members = (0..MAX_FAMILY_LINKS as u32 + 500)
+            .rev()
+            .map(|i| ([i, 0, i, 0], (i as f32 + 0.5, 0.5)));
+        let links = family_links(members, to, &area);
+        assert_eq!(links.len(), MAX_FAMILY_LINKS);
+        let farthest = links.iter().map(|(from, _)| from.0).fold(0.0, f32::max);
+        assert_eq!(farthest, MAX_FAMILY_LINKS as f32 - 0.5, "the closest ones");
+    }
+
+    /// An object with a pixel in the area is in, also with just its last
+    /// column or row (the bounding box is inclusive); touching it from
+    /// outside is out.
+    #[test]
+    fn an_object_is_drawn_when_a_pixel_of_its_box_is_in_the_area() {
+        let area = rect(100.0, 50.0, 200.0, 100.0); // x 100..300, y 50..150
+        assert!(area.intersects([150, 60, 160, 70]), "inside");
+        assert!(
+            area.intersects([90, 60, 100, 70]),
+            "its last column at x 100"
+        );
+        assert!(
+            area.intersects([299, 149, 400, 400]),
+            "its first pixel at the far corner"
+        );
+        assert!(area.intersects([0, 0, 1000, 1000]), "around the area");
+        assert!(!area.intersects([90, 60, 99, 70]), "ends just left of it");
+        assert!(
+            !area.intersects([300, 60, 310, 70]),
+            "starts just right of it"
+        );
+        assert!(
+            !area.intersects([150, 150, 160, 160]),
+            "starts just below it"
+        );
+        assert!(!area.intersects([150, 0, 160, 49]), "ends just above it");
+    }
 
     #[test]
     fn a_screen_rectangle_maps_back_to_the_image_pixels_under_it() {

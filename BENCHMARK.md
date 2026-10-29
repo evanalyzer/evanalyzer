@@ -1450,6 +1450,30 @@ from `/proc`. This container's desktop CPU - a laptop core is slower.
 | 2 | 326 MB | 5.4 s (9.2 images/s) |
 | 4 | 499 MB | 2.9 s (17.5 images/s) |
 
+## Object layer: a selected object with 100,000 relatives (2026-10-29)
+
+Selecting a region all cells are related to (Relate Objects) froze the
+viewer: the family was a `Vec` looked up for every object drawn
+(O(objects × children)), and a line was drawn to every child. Now the
+family as `HashSet`s, objects culled to the view and its margin before
+colouring and sorting (same pixels), and lines only to the family members
+in view - the 1,000 closest to the selected object (the rest show by colour).
+
+`bench_object_layer` (gui, release, ignored): `tests/haut` (9343 × 27143),
+100,000 objects of 12 px over the slide, all related to one 64 px parent;
+1920 × 1080 view; median of 5 redraws of the object layer.
+
+| | before | `HashSet` + culling | + lines in view, at most 1,000 |
+|---|---|---|---|
+| zoomed in (zoom 1), nothing selected | 9.0 ms | 4.7 ms | 5.3 ms |
+| zoomed in, the parent selected | 13,181 ms | 10,411 ms | **82 ms** |
+| fitted, nothing selected | 7.5 ms | 7.8 ms | 8.4 ms |
+| fitted, the parent selected | 6,430 ms | 3,892 ms | **19 ms** |
+
+Without any lines (measured once): 12.9 / 17.3 ms with the parent
+selected - a line costs 0.04 ms (fitted) to 0.1 ms (zoomed in, longer on
+screen).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

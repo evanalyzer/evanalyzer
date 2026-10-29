@@ -2122,6 +2122,73 @@ mod tests {
         assert_eq!(pixel_at(&r, 3, 2).a, 0, "outside the tile");
     }
 
+    /// The selected object's family: its children light blue, its parent
+    /// yellow, the rest dimmed - also an object reaching into the view only
+    /// with its last column; one fully outside it changes no pixel.
+    #[test]
+    fn the_selected_objects_family_is_drawn_in_its_colours() {
+        use crate::editor::object_render::{CHILD_RGB, DIMMED_RGB, PARENT_RGB};
+        use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        // The image from x 3 on: x 0..2 are left of the view.
+        set_view(&r, 1.0, -3.0, 0.0);
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                object_overlay_margin_px: 0,
+                ..Default::default()
+            });
+        let square = |id: u128, x0: u32, x1: u32, parent: Option<u128>| ObjectMetricSettings {
+            id: ObjectId(id),
+            bbox: [x0, 10, x1, 15],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; ((x1 - x0 + 1) * 6) as usize],
+            object_class: [ObjectClass::Global(1)].into(),
+            parents: parent
+                .map(|p| (ObjectClass::Global(2), ObjectId(p)))
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        {
+            let mut project = r.app_state.get_project_write();
+            project.tmp_settings.preview_objects.extend([
+                square(1, 20, 25, None),    // the parent
+                square(2, 30, 35, Some(1)), // its child
+                square(3, 40, 45, None),    // unrelated
+                square(4, 0, 3, Some(1)),   // a child, only x 3 in the view
+                square(5, 0, 2, Some(1)),   // a child left of the view
+            ]);
+        }
+        r.app_state
+            .get_project_runtime_write()
+            .set_selected_object(Some(ObjectId(2)));
+        r.draw(TaskDispatch::Objects, DrawingTask::default());
+        drain_ui_queue();
+        let rgb_at = |r: &Render, x: usize| {
+            let image = r.ui.get_object_image().to_rgba8().expect("rgba");
+            let p = image.as_slice()[12 * image.width() as usize + x];
+            ([p.r, p.g, p.b], p.a)
+        };
+        // Screen x = image x - 3.
+        assert_eq!(rgb_at(&r, 20 - 3).0, PARENT_RGB, "the parent");
+        assert_eq!(rgb_at(&r, 40 - 3).0, DIMMED_RGB, "unrelated: dimmed");
+
+        r.app_state
+            .get_project_runtime_write()
+            .set_selected_object(Some(ObjectId(1)));
+        r.draw(TaskDispatch::Objects, DrawingTask::default());
+        drain_ui_queue();
+        assert_eq!(rgb_at(&r, 30 - 3).0, CHILD_RGB, "a child");
+        assert_eq!(
+            rgb_at(&r, 0).0,
+            CHILD_RGB,
+            "a child with only its last column in view"
+        );
+        assert!(rgb_at(&r, 40 - 3).1 > 0, "unrelated: drawn, dimmed");
+    }
+
     /// An object classifier's prediction: each scored object as strong as
     /// the model is sure of it (a tie: clear), the others as usual; the
     /// training panel gets the legend and the objects least sure first.
@@ -2593,6 +2660,101 @@ mod tests {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
+    }
+
+    /// Benchmark (not run by default): the object layer of `tests/haut`
+    /// (9343 x 27143) with 100,000 objects of 12 px over the slide, all
+    /// linked (Relate) to one large parent region - zoomed in (a few objects
+    /// on screen) without and with the parent selected, and fitted (every
+    /// object on screen). Prints the best and the median of 5 redraws.
+    /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
+    /// -p evanalyzer_gui --lib bench_object_layer -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_object_layer() {
+        use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+        use std::path::PathBuf;
+        let slide = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/haut/Image_045_M5_MEV_Sk3_Zstack_40x_decon.vsi"
+        ));
+        if !slide.exists() {
+            eprintln!("{} missing - skipped", slide.display());
+            return;
+        }
+        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(slide));
+        {
+            let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+            vp.viewport_width = 1920.0;
+            vp.viewport_height = 1080.0;
+        }
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        let (full_w, full_h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
+        let (count, side) = (100_000u32, 12u32);
+        let parent = ObjectId(u128::MAX);
+        let objects: Vec<ObjectMetricSettings> = std::iter::once(ObjectMetricSettings {
+            id: parent.clone(),
+            bbox: [0, 0, 63, 63],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 64 * 64],
+            object_class: [ObjectClass::Global(2)].into(),
+            ..Default::default()
+        })
+        .chain((0..count).map(|i| {
+            let (x, y) = (
+                (i * 7919) % (full_w as u32 - side),
+                (i * 104_729) % (full_h as u32 - side),
+            );
+            ObjectMetricSettings {
+                id: ObjectId(i as u128),
+                bbox: [x, y, x + side - 1, y + side - 1],
+                mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; (side * side) as usize],
+                object_class: [ObjectClass::Global(1)].into(),
+                parents: [(ObjectClass::Global(2), parent.clone())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }
+        }))
+        .collect();
+        r.app_state
+            .get_project_runtime_write()
+            .with_current_series_mut(|series| series.objects = objects);
+        let controller = r.worker.viewport_controller.clone();
+        let run = |name: &str, zoom: f32, selected: Option<ObjectId>| {
+            {
+                let mut vp = controller.viewport_state.write().unwrap();
+                vp.zoom = zoom;
+                vp.offset_x = 0.0;
+                vp.offset_y = 0.0;
+            }
+            r.app_state
+                .get_project_runtime_write()
+                .set_selected_object(selected.clone());
+            let mut times: Vec<f64> = (0..5)
+                .map(|_| {
+                    let start = Instant::now();
+                    controller.sync_objects_to_slint_viewport();
+                    let took = start.elapsed().as_secs_f64() * 1000.0;
+                    drain_ui_queue();
+                    took
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            println!(
+                "object layer, {count} objects, {name}: best {:.1} ms, median {:.1} ms",
+                times[0], times[2]
+            );
+        };
+        run("zoomed in (zoom 1)", 1.0, None);
+        run(
+            "zoomed in, the parent of all selected",
+            1.0,
+            Some(parent.clone()),
+        );
+        let fitted = (1080.0 / full_h as f32).min(1920.0 / full_w as f32);
+        run("fitted (all on screen)", fitted, None);
+        run("fitted, the parent of all selected", fitted, Some(parent));
     }
 
     /// Viewport benchmark on a real or generated whole slide image (see
