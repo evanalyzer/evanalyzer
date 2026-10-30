@@ -1575,6 +1575,93 @@ and loading Parquet and JSON on every connection (the DuckDB change
 above) cost +10-13 MB on every query - Parquet is now loaded only for a
 Parquet export, JSON never. Generated UI code 57.37 → 57.43 MB (+0.11 %).
 
+## Whole-image commands without RAM per pixel of the slide (2026-10-29)
+
+A user's liver slides (`tests/20261029_KC_Liver_MS_TP_.evaproj`: 15 VSI
+slides of 350-990 megapixels, 6 channels) closed the app without a crash
+log: Propagation grew over the whole slide at once - the growth channel
+copied (4 bytes per pixel), labels (4), costs (8), two bit masks and the
+queue: ~15-20 GB for a 1-gigapixel slide, outside the RAM budget (an
+out-of-memory abort, no panic: no crash log). An audit of every
+whole-image command found the same in Voronoi (a label per pixel, 4
+bytes), Measure Image / Object Colocalization (every tile of both channels
+held at once - the cache's spill undone - and, for float images, every
+pixel's value collected for the ranks) and Measure Image Texture (every
+tile held).
+
+- Propagation grows block by block (1024², a window 128 px larger): a
+  pixel is final when its seed's cost is below the least a path from
+  outside the window can cost (a second growth from the window's edge,
+  started at the octile distance from the nearest seed); the pixels left
+  (mostly background without a mask) grow together afterwards, from the
+  final pixels next to them with their exact cost and label - the order
+  the whole image takes them in. Images up to 16 MP grow in one piece as
+  before. The seeds are now in image order (`position_cmp`): before, their
+  order was the object cache's (the tiles' finishing order), so equally
+  cheap pixels could go to a different cell from run to run.
+- Voronoi assigns pixels in bands of 64 rows and keeps rows of pixels per
+  region (`algos/libs/row_runs.rs`); the mask is painted per band instead
+  of asking every mask object per pixel.
+- Image / Object Colocalization read each tile while a pass uses it;
+  float values' ranks are merged tile by tile. Image Texture counts per
+  tile, the neighbours across tile borders from the tiles' border strips.
+
+Same results: Propagation is compared with a frozen copy of the old
+growth on 720 random cases (masks, NaNs, weights 0-0.5, windows of 8-32
+px) - not one pixel differs; `tests/haut` and the small images below give
+the same objects, masks and intensities (hash) old / new. Old and new
+build alternated, 10 s apart, two runs each (`bench_whole_slide`, new
+`--cells propagation`, `--image-coloc 1`, `--image-texture 1`, hashes per
+class); "old" for Propagation is the old code with the same seed order.
+
+| `tests/haut` (9343 × 27143, 5 ch, 212,418 objects) | Old: wall / CPU / peak RSS | New |
+|---|---|---|
+| Propagation, 21 threads, 62 GB | 193-195 s / 309-320 s / 11.1-11.3 GB | 105-107 s / 386-388 s / 7.55-7.65 GB |
+| Propagation, 4 threads, `--max-ram 6000` | 211-214 s / 277-281 s / **7.07 GB (over the limit)** | 150-153 s / 285 s / **3.9 GB** |
+| Voronoi radius 50 | 18.8-19.0 s / 221-228 s / 7.29-7.36 GB | 17.7 s / 222-225 s / 7.24-7.27 GB |
+| Voronoi without radius (cells over the whole slide) | 44.8-45.4 s / 528-535 s / 7.95-8.02 GB | 42.4-43.6 s / 529-534 s / 7.43-7.75 GB |
+| Measure Image Colocalization | 21.9-22.4 s / 261-269 s / 7.38 GB | 21.4-21.8 s / 265-266 s / 7.21-7.22 GB |
+| Measure Image Colocalization, 4 threads, `--max-ram 4000` | 51.7-53.3 s / 169-170 s / 3.42-3.47 GB | 67.8-69.3 s / 221-224 s / 3.51-3.54 GB |
+| Measure Image Texture | 16.0 s / 194-197 s / 7.33-7.42 GB | 15.7-16.0 s / 195-196 s / 7.47-7.50 GB |
+| Measure Image Texture, 4 threads, `--max-ram 4000` | 41.1-42.0 s / 135-137 s / 3.44-3.49 GB | 38.7-42.1 s / 134 s / 3.36-3.43 GB |
+
+| Small images | Old: wall / CPU / peak RSS | New |
+|---|---|---|
+| 50 × 1024² (4 ch LIF), Voronoi radius 50 | 10.2-10.6 s / 67-68 s / 3.82-3.87 GB | 10.0-10.4 s / 66 s / 3.59-3.87 GB |
+| 50 × 1024², Voronoi without radius | 10.1 s / 63-66 s / 3.57-3.63 GB | 10.1 s / 64-65 s / 3.87-3.93 GB |
+| 50 × 1024², Propagation | 10.6-11.1 s / 85-87 s / 3.43-3.92 GB | 10.7-11.1 s / 86-89 s / 3.70-4.04 GB |
+| 50 × 1024², Measure Image Colocalization | 9.4-9.5 s / 49-50 s / 3.93-4.11 GB | 9.6-9.8 s / 48-50 s / 3.91-4.03 GB |
+| 50 × 1024², Measure Image Texture | 9.5 s / 49-50 s / 4.04-4.23 GB | 9.9-10.0 s / 50-51 s / 3.84-3.86 GB |
+| 2424² (3 ch ND2, 57 cells, much background), Propagation | 2.3-2.5 s / 2.3-2.5 s / 252 MB | 2.4-2.5 s / 2.4-2.5 s / 252-253 MB |
+
+The small images' peaks (3.4-4.2 GB) are 21 workers' caches and DuckDB,
+± 0.3 GB from run to run in both builds - no difference from the
+commands. Before the one-piece rule the ND2 took 321 MB and 4.5 s CPU in
+windows (nine windows in parallel over a small image).
+
+- Propagation: on the slide 45 % faster and ~3.6 GB less (old: ~4 GB
+  above the cache, new: ~0.3 GB); CPU +25 % with all cores (the windows
+  overlap, plus the bound growth) - the same with 4 threads. With a 6 GB
+  limit the old build needed 7.07 GB: on a 1-gigapixel slide that is the
+  crash.
+- Image Colocalization, when the cache spills: +30 % time - every pass
+  (5 plus Costes' bisection) reads the tiles from disk again instead of
+  holding both channels. On `tests/haut` both channels (2 GB) still fit
+  next to the 4 GB budget, so the old build's peak isn't higher there; on
+  the liver slides 2 channels are 7.4 GB.
+- With `--max-ram` (the cache spills), Image Colocalization, Image Texture
+  and object intensities differ in the last digits from run to run - in
+  the old build too (the same to 9 decimals): the order of the spilled
+  tiles decides the order of the sums.
+
+Test against regressions: `whole_image_ram` (core) runs every whole-image
+command on a 1024² and a 2048² slide whose tiles spill, and fails if one
+needs more than 1 byte more RAM per pixel of the larger one (a counting
+allocator, in a process of its own). Old code: Propagation 18.8, Image
+and Object Colocalization 7.7, Voronoi 4.4, Image Texture 4.0 bytes per
+pixel; new: at most 0.8 (Colocalize Objects - its objects). A new
+whole-image command fails it until it is added.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -1633,6 +1720,7 @@ graphics driver).
 | A deep-learning model after an analysis | released: +1 MB (was +764 MB for ~400 MB of weights on two devices, until the app ended) | 2026-10-28 | RAM rework step 5a |
 | Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
 | Track Nearest Neighbor, same objects (image by image; was 384 MB all at once) | 199-229 MB | 2026-10-29 | Lineage in the results, Track Nearest Neighbor image by image |
+| Whole slide `tests/haut` with Propagation, 21 threads / 4 threads and `--max-ram 6000` | 7.55-7.65 GB / 3.9 GB (was 11.1-11.3 / 7.07 GB) | 2026-10-29 | Whole-image commands without RAM per pixel |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

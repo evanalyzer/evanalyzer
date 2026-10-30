@@ -168,52 +168,70 @@ impl Texture {
     }
 
     /// The features over the whole image (every pixel, zeros included -
-    /// there is no mask to tell background from a dark pixel). The tiles are counted in parallel; pairs
-    /// across a tile border take the neighbour from the tile it lies in.
+    /// there is no mask to tell background from a dark pixel). The tiles are
+    /// counted in parallel; pairs across a tile border take the neighbour
+    /// from the tile it lies in - from its border strips, read in a first
+    /// pass, so no tile is held while another is counted (a whole slide's
+    /// channel doesn't fit in the RAM).
     pub(super) fn image_features(
         &self,
         cache: &GlobalPipelineCache,
         levels: &Levels,
     ) -> Result<Option<Features>, InternalErrors> {
+        let (counts, max) = self.image_counts(cache, levels)?;
+        Ok(counts.features(max as usize + 1))
+    }
+
+    /// The co-occurrence counts over the whole image, and the highest gray
+    /// level.
+    fn image_counts(
+        &self,
+        cache: &GlobalPipelineCache,
+        levels: &Levels,
+    ) -> Result<(Cooccurrences, u8), InternalErrors> {
         let channel = self.channel.0 as i32;
-        let tiles: Vec<(ImageTile, Arc<ImageContainer>)> = cache
+        let tiles: Vec<ImageTile> = cache
             .channel_keys()
             .filter(|(c, _)| *c == channel)
-            .filter_map(|(_, tile)| {
-                let image = cache
-                    .image_cache
-                    .get(&CacheAddress::Channel((channel, tile)))?;
-                Some((tile, image.clone()))
-            })
+            .map(|(_, tile)| tile)
             .collect();
         if tiles.is_empty() {
             return Err(InternalErrors::InvalidArgument(format!(
                 "Measure texture: the image has no channel {channel}"
             )));
         }
+        let distance = self.scale as isize;
+        // A tile's gray levels, read from the cache (`None`: no longer
+        // there).
+        let grid_of = |t: &ImageTile| -> Option<Vec<u8>> {
+            let image = cache
+                .image_cache
+                .get(&CacheAddress::Channel((channel, *t)))?;
+            let rgb = matches!(*image, ImageContainer::F32Rgb(_));
+            let samples = channel_pixel_slice(&image).unwrap_or_default();
+            Some(
+                (0..t.width * t.height)
+                    .map(|i| levels.of(sample_channel_pixel(rgb, samples, i)))
+                    .collect(),
+            )
+        };
+        let strips: Vec<BorderStrips> = tiles
+            .par_iter()
+            .filter_map(|t| Some(BorderStrips::of(*t, &grid_of(t)?, self.scale as usize)))
+            .collect();
+        // The level at an image pixel outside the tile counted.
         let level_at = |x: usize, y: usize| -> Option<u8> {
-            tiles.iter().find_map(|(t, image)| {
-                let inside = x >= t.offset_x
-                    && y >= t.offset_y
-                    && x < t.offset_x + t.width
-                    && y < t.offset_y + t.height;
-                inside.then(|| {
-                    let rgb = matches!(**image, ImageContainer::F32Rgb(_));
-                    let samples = channel_pixel_slice(image).unwrap_or_default();
-                    let sample = (y - t.offset_y) * t.width + x - t.offset_x;
-                    levels.of(sample_channel_pixel(rgb, samples, sample))
-                })
+            let strips = strips.iter().find(|s| s.covers(x, y))?;
+            strips.level(x, y).or_else(|| {
+                // Not in a strip (only with overlapping tiles): the tile.
+                let t = strips.tile;
+                grid_of(&t).map(|grid| grid[(y - t.offset_y) * t.width + x - t.offset_x])
             })
         };
-        let distance = self.scale as isize;
-        let counted = tiles
+        Ok(tiles
             .par_iter()
-            .map(|(t, image)| {
-                let rgb = matches!(**image, ImageContainer::F32Rgb(_));
-                let samples = channel_pixel_slice(image).unwrap_or_default();
-                let grid: Vec<u8> = (0..t.width * t.height)
-                    .map(|i| levels.of(sample_channel_pixel(rgb, samples, i)))
-                    .collect();
+            .filter_map(|t| Some((t, grid_of(t)?)))
+            .map(|(t, grid)| {
                 let mut counts = Cooccurrences::new();
                 for (d, ((dy, dx), _)) in DIRECTIONS.iter().enumerate() {
                     let (dy, dx) = (dy * distance, dx * distance);
@@ -247,9 +265,7 @@ impl Texture {
                     a.merge(&b);
                     (a, max_a.max(max_b))
                 },
-            );
-        let (counts, max) = counted;
-        Ok(counts.features(max as usize + 1))
+            ))
     }
 
     /// `object`'s features (the pixels of its bounding box, those outside
@@ -336,6 +352,60 @@ thread_local! {
 /// A channel value → its gray level: the normalized (0..1) value the image
 /// reader stores in 8 bits as scikit-image's img_as_ubyte rounds it, then
 /// rescaled to the gray levels as rescale_intensity and a cast to uint8 do.
+/// The gray levels a tile's neighbours read across its border: its top
+/// rows and its left and right columns, `scale` wide (the pairs go right
+/// and down, also down-left).
+struct BorderStrips {
+    tile: ImageTile,
+    /// How many rows / columns the strips hold.
+    rows: usize,
+    columns: usize,
+    top: Vec<u8>,
+    left: Vec<u8>,
+    right: Vec<u8>,
+}
+
+impl BorderStrips {
+    fn of(tile: ImageTile, grid: &[u8], scale: usize) -> Self {
+        let (w, h) = (tile.width, tile.height);
+        let (rows, columns) = (scale.min(h), scale.min(w));
+        Self {
+            tile,
+            rows,
+            columns,
+            top: grid[..rows * w].to_vec(),
+            left: (0..h)
+                .flat_map(|y| &grid[y * w..y * w + columns])
+                .copied()
+                .collect(),
+            right: (0..h)
+                .flat_map(|y| &grid[(y + 1) * w - columns..(y + 1) * w])
+                .copied()
+                .collect(),
+        }
+    }
+
+    fn covers(&self, x: usize, y: usize) -> bool {
+        let t = &self.tile;
+        x >= t.offset_x && y >= t.offset_y && x < t.offset_x + t.width && y < t.offset_y + t.height
+    }
+
+    /// The level at image pixel (`x`, `y`) of the tile, if a strip holds it.
+    fn level(&self, x: usize, y: usize) -> Option<u8> {
+        let t = &self.tile;
+        let (tx, ty) = (x - t.offset_x, y - t.offset_y);
+        if ty < self.rows {
+            Some(self.top[ty * t.width + tx])
+        } else if tx < self.columns {
+            Some(self.left[ty * self.columns + tx])
+        } else if tx >= t.width - self.columns {
+            Some(self.right[ty * self.columns + tx - (t.width - self.columns)])
+        } else {
+            None
+        }
+    }
+}
+
 pub(super) struct Levels {
     rescaled: [u8; 256],
 }
@@ -723,6 +793,83 @@ mod tests {
                             &format!("{what}: object {label} {id}_{angle}"),
                         );
                     }
+                }
+            }
+        }
+    }
+
+    /// The image's co-occurrence counts and highest level, its pixels in
+    /// tiles cut at `xs` and `ys`.
+    fn image_counts_in_tiles(
+        case: &Case,
+        xs: &[usize],
+        ys: &[usize],
+        scale: u32,
+    ) -> ([Vec<u64>; 4], u8) {
+        let mut cache = GlobalPipelineCache::default();
+        let cuts = |cuts: &[usize], end: usize| {
+            let mut edges = vec![0];
+            edges.extend(cuts.iter().copied().filter(|&c| c > 0 && c < end));
+            edges.push(end);
+            edges.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>()
+        };
+        for (y0, y1) in cuts(ys, case.height) {
+            for (x0, x1) in cuts(xs, case.width) {
+                let samples: Vec<f32> = (y0..y1)
+                    .flat_map(|y| (x0..x1).map(move |x| case.image[y * case.width + x] / 65535.0))
+                    .collect();
+                let size = ImageSize {
+                    width: x1 - x0,
+                    height: y1 - y0,
+                };
+                let image = ImageContainer::F32Gray(ManagedImage {
+                    data: Image::<f32, 1>::from_size_slice(size, &samples).unwrap(),
+                    tile_offset: Point2d { x: x0, y: y0 },
+                    plane: None,
+                    dimensionality: ImageDimensionality::Planar,
+                });
+                let tile = ImageTile {
+                    offset_x: x0,
+                    offset_y: y0,
+                    width: x1 - x0,
+                    height: y1 - y0,
+                };
+                cache.add_to_channel_cache(Arc::new(image), 0, tile);
+            }
+        }
+        let texture = Texture {
+            channel: ImageChannelIdx(0),
+            scale,
+            gray_levels: case.gray_levels,
+            directions: TextureDirections::Each,
+        };
+        let levels = texture.levels().unwrap();
+        let (counts, max) = texture.image_counts(&cache, &levels).unwrap();
+        (counts.counts, max)
+    }
+
+    /// Tiles of any size, also narrower than the scale, count the same
+    /// pairs as one tile: the neighbours across the borders come from the
+    /// border strips. (The features can differ in the last bit: they sum
+    /// the counts in the order the pairs were first seen.)
+    #[test]
+    fn tiles_count_the_same_pairs_as_one_tile() {
+        let case = &cases()[0];
+        let (w, h) = (case.width, case.height);
+        for scale in [1, 2, 3, 5] {
+            let whole = image_counts_in_tiles(case, &[], &[], scale);
+            for (xs, ys) in [
+                (vec![w / 2], vec![h / 2]),
+                (vec![1, w / 3, w / 3 + 2, w - 1], vec![2, h / 2, h - 3]),
+                ((1..w).collect(), (1..h).step_by(2).collect()),
+            ] {
+                let tiled = image_counts_in_tiles(case, &xs, &ys, scale);
+                assert_eq!(tiled.1, whole.1, "scale {scale}: highest level");
+                for d in 0..4 {
+                    assert!(
+                        tiled.0[d] == whole.0[d],
+                        "scale {scale}, cuts {xs:?} {ys:?}: direction {d}"
+                    );
                 }
             }
         }

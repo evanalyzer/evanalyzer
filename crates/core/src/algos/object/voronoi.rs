@@ -17,6 +17,7 @@
 //! originating center object.
 //!
 use crate::ImageDimensionality;
+use crate::algos::libs::row_runs::{Run, push_row_runs, regions_from_runs};
 use crate::{
     ImagePlane,
     algos::{ExecutionScope, ImageAlgorithm},
@@ -80,6 +81,9 @@ pub struct Voronoi {
     #[cmdsmeta(visibility = Advanced)]
     pub exclude_areas_with_no_center: bool,
 }
+
+/// Rows per band of the pixel assignment.
+const BAND_ROWS: usize = 64;
 
 /// 2D KD-tree over center seed points, for exact nearest-center queries.
 ///
@@ -321,81 +325,85 @@ impl ImageAlgorithm for Voronoi {
         };
 
         // --- Phase 3: Assign each pixel to its nearest center (distance-transform Voronoi) ---
-        // Simultaneously apply the mask constraint to avoid a second full-image scan.
         // A KD-tree over the centers turns the per-pixel nearest-center query into a
         // small number of comparisons instead of scanning every center - and unlike a
         // uniform grid, its cost doesn't depend on centers being evenly distributed
         // (see `CenterKdTree`'s doc comment).
         //
-        // Runs in parallel over row-chunks of a flat `labels` buffer (nearest-center
-        // index per pixel, `UNASSIGNED` for excluded pixels) rather than building a
-        // `Vec<(u32, u32)>` of assigned pixel coordinates per center: for a
-        // whole-slide-sized image that per-center-Vec approach costs several times
-        // more memory (every pixel's coordinates stored explicitly, plus per-Vec
-        // growth overhead) than one `u32` index per pixel. Each row is independent -
-        // no pixel's assignment depends on any other's - so this is safe to split
-        // across threads with no shared mutable state beyond each row's own slice.
+        // In bands of rows, in parallel: no pixel's assignment depends on any other's.
+        // Each band keeps only the rows of pixels per region (`Run`s), not a label per
+        // pixel of the image (4 bytes per pixel: 4 GB for a 1-gigapixel slide). The
+        // mask is painted per band too, instead of asking every mask object for every
+        // pixel.
         let n = centers.len();
-        const UNASSIGNED: u32 = u32::MAX;
-        let mut labels: Vec<u32> = vec![UNASSIGNED; tile_w as usize * tile_h as usize];
         let kdtree = CenterKdTree::build(&centers);
-
-        labels
-            .par_chunks_mut(tile_w as usize)
-            .enumerate()
-            .for_each(|(row, labels_row)| {
-                let y = off_y + row as u32;
-                for (col, label) in labels_row.iter_mut().enumerate() {
-                    let x = off_x + col as u32;
-
-                    // Skip pixels outside the mask when a mask is configured.
-                    if has_mask && !mask_objects.iter().any(|mr| mr.is_part_of(x, y)) {
-                        continue;
-                    }
-
-                    // Apply max_radius separately with <= so boundary pixels are included
-                    // (a filled disc).
-                    if let Some((nearest, dist_sq)) =
-                        kdtree.nearest(&centers, x as f64, y as f64, max_dist_sq)
-                        && dist_sq <= max_dist_sq
-                    {
-                        *label = nearest as u32;
-                    }
-                }
-            });
-
-        // --- Phase 4: Accumulate each center's extent/moments in one pass over `labels` ---
-        let mut area = vec![0usize; n];
-        let mut bbox = vec![[u32::MAX, u32::MAX, 0u32, 0u32]; n];
-        let mut sum_x = vec![0u64; n];
-        let mut sum_y = vec![0u64; n];
-        let mut sum_x2 = vec![0u64; n];
-        let mut sum_y2 = vec![0u64; n];
-        let mut sum_xy = vec![0u64; n];
-
-        for row in 0..tile_h {
-            let y = off_y + row;
-            let row_start = row as usize * tile_w as usize;
-            for col in 0..tile_w {
-                let label = labels[row_start + col as usize];
-                if label == UNASSIGNED {
-                    continue;
-                }
-                let i = label as usize;
-                let x = off_x + col;
-                area[i] += 1;
-                sum_x[i] += x as u64;
-                sum_y[i] += y as u64;
-                sum_x2[i] += (x as u64) * (x as u64);
-                sum_y2[i] += (y as u64) * (y as u64);
-                sum_xy[i] += (x as u64) * (y as u64);
-                let b = &mut bbox[i];
-                b[0] = b[0].min(x);
-                b[1] = b[1].min(y);
-                b[2] = b[2].max(x);
-                b[3] = b[3].max(y);
+        let (width, height) = (tile_w as usize, tile_h as usize);
+        let bands = height.div_ceil(BAND_ROWS);
+        let mut masks_in_band: Vec<Vec<u32>> = vec![Vec::new(); if has_mask { bands } else { 0 }];
+        for (i, object) in mask_objects.iter().enumerate() {
+            let [_, y_min, _, y_max] = object.bbox;
+            if y_max < y_min || y_max < off_y || y_min >= off_y + tile_h {
+                continue;
+            }
+            let first = (y_min.max(off_y) - off_y) as usize / BAND_ROWS;
+            let last = (y_max.min(off_y + tile_h - 1) - off_y) as usize / BAND_ROWS;
+            for band in &mut masks_in_band[first..=last] {
+                band.push(i as u32);
             }
         }
+        let runs: Vec<Run> = (0..bands)
+            .into_par_iter()
+            .flat_map_iter(|band| {
+                let (row0, row1) = (band * BAND_ROWS, ((band + 1) * BAND_ROWS).min(height));
+                // Skip pixels outside the mask when a mask is configured.
+                let covered = has_mask.then(|| {
+                    let mut covered = BitVec::<u64, Lsb0>::repeat(false, (row1 - row0) * width);
+                    for &i in &masks_in_band[band] {
+                        let object = mask_objects[i as usize];
+                        let [x_min, y_min, x_max, y_max] = object.bbox;
+                        let mask_width = (x_max - x_min + 1) as usize;
+                        let rows =
+                            y_min.max(off_y + row0 as u32)..=y_max.min(off_y + row1 as u32 - 1);
+                        for y in rows {
+                            let columns = x_min.max(off_x)..=x_max.min(off_x + tile_w - 1);
+                            for x in columns {
+                                let bit = (y - y_min) as usize * mask_width + (x - x_min) as usize;
+                                if object.mask_data.get(bit).is_some_and(|b| *b) {
+                                    let row = (y - off_y) as usize - row0;
+                                    covered.set(row * width + (x - off_x) as usize, true);
+                                }
+                            }
+                        }
+                    }
+                    covered
+                });
+                let mut runs = Vec::new();
+                for row in row0..row1 {
+                    let y = off_y + row as u32;
+                    let labels = (0..width).map(|col| {
+                        if covered
+                            .as_ref()
+                            .is_some_and(|c| !c[(row - row0) * width + col])
+                        {
+                            return 0;
+                        }
+                        let x = off_x + col as u32;
+                        // Apply max_radius separately with <= so boundary pixels are
+                        // included (a filled disc).
+                        match kdtree.nearest(&centers, x as f64, y as f64, max_dist_sq) {
+                            Some((nearest, dist_sq)) if dist_sq <= max_dist_sq => {
+                                nearest as u32 + 1
+                            }
+                            _ => 0,
+                        }
+                    });
+                    push_row_runs(&mut runs, y, off_x, labels);
+                }
+                runs
+            })
+            .collect();
+        // --- Phase 4: Each center's region: extent, moments and mask from its rows ---
+        let regions = regions_from_runs(runs, n);
 
         // --- Phase 5: Build one object per center from its assigned pixels ---
         // Each region's plane comes from its own seeding center, not from
@@ -414,31 +422,16 @@ impl ImageAlgorithm for Voronoi {
         // Collect new ROIs before mutating the cache.
         let mut new_objects: Vec<Object> = Vec::new();
 
-        for i in 0..n {
-            if area[i] == 0 {
+        for (i, region) in regions.into_iter().enumerate() {
+            let Some(region) = region else {
                 continue;
-            }
-
-            let [x_min, y_min, x_max, y_max] = bbox[i];
+            };
             // bbox convention: bbox[2]/[3] are INCLUSIVE maximum pixel coordinates,
             // matching the convention used by extract_objects and the renderer.
             // The mask stride is therefore (bbox[2] - bbox[0] + 1).
+            let [x_min, y_min, x_max, y_max] = region.bbox;
             let w = (x_max - x_min + 1) as usize;
-            let h = (y_max - y_min + 1) as usize;
-
-            // Re-scan only this region's own bbox window (against the shared `labels`
-            // buffer, not a per-center pixel list) to build its bbox-relative mask.
-            let mut mask_data = BitVec::<u64, Lsb0>::repeat(false, w * h);
-            for ry in 0..h {
-                let y = y_min + ry as u32;
-                let row_start = (y - off_y) as usize * tile_w as usize;
-                for rx in 0..w {
-                    let x = x_min + rx as u32;
-                    if labels[row_start + (x - off_x) as usize] == i as u32 {
-                        mask_data.set(ry * w + rx, true);
-                    }
-                }
-            }
+            let mask_data = region.mask;
 
             // With inclusive bbox: touching the right/bottom edge means the max pixel
             // is the last column/row of the *full* image (index full_w-1 / full_h-1) -
@@ -481,14 +474,14 @@ impl ImageAlgorithm for Voronoi {
                 segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
                 bbox: [x_min, y_min, x_max, y_max],
                 mask_data,
-                area: area[i],
+                area: region.area,
                 plane,
                 touches_edge,
-                sum_x: sum_x[i],
-                sum_y: sum_y[i],
-                sum_x2: sum_x2[i],
-                sum_y2: sum_y2[i],
-                sum_xy: sum_xy[i],
+                sum_x: region.sum_x,
+                sum_y: region.sum_y,
+                sum_x2: region.sum_x2,
+                sum_y2: region.sum_y2,
+                sum_xy: region.sum_xy,
                 ..Default::default()
             });
             object.add_object_class(self.output_class, ctx.scope)?;
@@ -685,6 +678,150 @@ mod tests {
     }
 
     // --- Tests ---
+
+    /// Pixel for pixel the regions of a brute-force nearest-center scan
+    /// (every pixel, every center, every mask object), over several bands of
+    /// rows - with and without a mask and a radius.
+    #[test]
+    fn bands_give_the_regions_of_a_pixel_by_pixel_scan() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move |n: u32| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as u32
+        };
+        for case in 0..12 {
+            let (width, height) = (60 + next(90), 3 * BAND_ROWS as u32 + next(70));
+            let mut cache = GlobalPipelineCache::default();
+            for i in 0..2 + next(20) {
+                let (x, y) = (1 + next(width - 2), 1 + next(height - 2));
+                let center = make_filled_object(1000 + i as u128, center_bbox(x, y), CENTER_CLASS);
+                cache.object_cache.insert(center.id.clone(), center);
+            }
+            let masked = case % 2 == 1;
+            if masked {
+                for i in 0..5 {
+                    let (x, y) = (next(width), next(height));
+                    let bbox = [
+                        x,
+                        y,
+                        (x + next(80)).min(width - 1),
+                        (y + next(150)).min(height - 1),
+                    ];
+                    let w = (bbox[2] - bbox[0] + 1) as usize;
+                    let h = (bbox[3] - bbox[1] + 1) as usize;
+                    let mask_data: BitVec<u64, Lsb0> = (0..w * h).map(|_| next(10) < 8).collect();
+                    let mut mask = Object::new(ObjectInit {
+                        id: ObjectId(5000 + i),
+                        bbox,
+                        area: mask_data.count_ones(),
+                        mask_data,
+                        ..Default::default()
+                    });
+                    mask.add_object_class(MASK_CLASS, Scope::Global).unwrap();
+                    cache.object_cache.insert(mask.id.clone(), mask);
+                }
+            }
+            let radius = if case % 3 == 0 {
+                0.0
+            } else {
+                15.0 + next(30) as f32
+            };
+            let voronoi = Voronoi {
+                mask: if masked {
+                    MASK_CLASS
+                } else {
+                    ObjectClass::Unset
+                },
+                max_radius: radius,
+                ..default_voronoi()
+            };
+
+            // Every pixel against every center, in reading order of the
+            // centers (ties to the first).
+            let mut centers: Vec<&Object> = cache
+                .object_cache
+                .values()
+                .filter(|o| o.is_of(&CENTER_CLASS, Scope::Global))
+                .collect();
+            centers.sort_by(|a, b| a.position_cmp(b));
+            let masks: Vec<&Object> = cache
+                .object_cache
+                .values()
+                .filter(|o| o.is_of(&MASK_CLASS, Scope::Global))
+                .collect();
+            let mut expected: std::collections::BTreeMap<usize, Vec<(u32, u32)>> =
+                Default::default();
+            for y in 0..height {
+                for x in 0..width {
+                    if masked && !masks.iter().any(|m| m.is_part_of(x, y)) {
+                        continue;
+                    }
+                    let mut best: Option<(usize, f64)> = None;
+                    for (i, c) in centers.iter().enumerate() {
+                        let cx = (c.bbox[0] + c.bbox[2]) as f64 / 2.0;
+                        let cy = (c.bbox[1] + c.bbox[3]) as f64 / 2.0;
+                        let d = (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2);
+                        if best.is_none_or(|(_, b)| d < b) {
+                            best = Some((i, d));
+                        }
+                    }
+                    let (i, d) = best.unwrap();
+                    if radius > 0.0 && d > (radius as f64) * (radius as f64) {
+                        continue;
+                    }
+                    expected.entry(i).or_default().push((x, y));
+                }
+            }
+            let mut expected: Vec<([u32; 4], usize, Vec<(u32, u32)>)> = expected
+                .into_values()
+                .map(|pixels| {
+                    let bbox = [
+                        pixels.iter().map(|p| p.0).min().unwrap(),
+                        pixels.iter().map(|p| p.1).min().unwrap(),
+                        pixels.iter().map(|p| p.0).max().unwrap(),
+                        pixels.iter().map(|p| p.1).max().unwrap(),
+                    ];
+                    (bbox, pixels.len(), pixels)
+                })
+                .collect();
+            expected.sort();
+
+            let mut ctx = make_ctx(width as usize, height as usize);
+            run(&voronoi, &mut ctx, &mut cache);
+            let mut got: Vec<([u32; 4], usize, Vec<(u32, u32)>)> = voronoi_objects(&cache)
+                .into_iter()
+                .map(|o| {
+                    let w = (o.bbox[2] - o.bbox[0] + 1) as usize;
+                    let mut pixels: Vec<(u32, u32)> = o
+                        .mask_data
+                        .iter_ones()
+                        .map(|bit| (o.bbox[0] + (bit % w) as u32, o.bbox[1] + (bit / w) as u32))
+                        .collect();
+                    pixels.sort_by_key(|&(x, y)| (y, x));
+                    let (n, sx, sy) = (o.area as u64, o.sum_x, o.sum_y);
+                    assert_eq!(n as usize, pixels.len(), "case {case}: area");
+                    assert_eq!(
+                        sx,
+                        pixels.iter().map(|p| p.0 as u64).sum::<u64>(),
+                        "case {case}"
+                    );
+                    assert_eq!(
+                        sy,
+                        pixels.iter().map(|p| p.1 as u64).sum::<u64>(),
+                        "case {case}"
+                    );
+                    (o.bbox, o.area, pixels)
+                })
+                .collect();
+            got.sort();
+            assert!(
+                got == expected,
+                "case {case} ({width}x{height}): regions differ"
+            );
+        }
+    }
 
     #[test]
     fn voronoi_regions_have_measured_intensities() {

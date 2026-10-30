@@ -184,11 +184,14 @@ impl Coloc {
             .collect()
     }
 
-    /// The pixels of channels A and B of every tile of the image.
-    pub(super) fn image_tiles(
+    /// The tiles of channels A and B of the image - only their places:
+    /// each pass reads a tile's pixels from the cache while it uses them,
+    /// so the cache can spill the rest (a whole slide's channels don't fit
+    /// in the RAM).
+    pub(super) fn image_tiles<'a>(
         &self,
-        cache: &GlobalPipelineCache,
-    ) -> Result<Vec<TilePair>, InternalErrors> {
+        cache: &'a GlobalPipelineCache,
+    ) -> Result<Vec<TilePair<'a>>, InternalErrors> {
         let (a, b) = (self.channel_a.0 as i32, self.channel_b.0 as i32);
         let tiles: Vec<ImageTile> = cache
             .channel_keys()
@@ -203,19 +206,18 @@ impl Coloc {
         tiles
             .into_iter()
             .map(|tile| {
-                let channel = |channel: i32| {
-                    cache
-                        .image_cache
-                        .get(&CacheAddress::Channel((channel, tile.clone())))
-                        .ok_or_else(|| {
-                            InternalErrors::InvalidArgument(format!(
-                                "Colocalization: the image has no channel {channel}"
-                            ))
-                        })
-                };
+                if !cache
+                    .image_cache
+                    .contains_key(&CacheAddress::Channel((b, tile)))
+                {
+                    return Err(InternalErrors::InvalidArgument(format!(
+                        "Colocalization: the image has no channel {b}"
+                    )));
+                }
                 Ok(TilePair {
-                    a: channel(a)?,
-                    b: channel(b)?,
+                    cache,
+                    channels: (a, b),
+                    tile,
                 })
             })
             .collect()
@@ -307,13 +309,15 @@ impl Coloc {
     }
 }
 
-/// The same tile of channels A and B.
-pub(super) struct TilePair {
-    a: Arc<ImageContainer>,
-    b: Arc<ImageContainer>,
+/// The same tile of channels A and B, read from the cache when a pass
+/// needs its pixels.
+pub(super) struct TilePair<'a> {
+    cache: &'a GlobalPipelineCache,
+    channels: (i32, i32),
+    tile: ImageTile,
 }
 
-impl TilePair {
+impl TilePair<'_> {
     /// Calls `f` with every pixel's (A, B) value.
     fn for_each(&self, mut f: impl FnMut(f64, f64)) {
         fn pixels(c: &ImageContainer) -> (bool, &[f32], usize) {
@@ -322,7 +326,16 @@ impl TilePair {
             let len = if rgb { slice.len() / 3 } else { slice.len() };
             (rgb, slice, len)
         }
-        let ((rgb_a, xs, len_a), (rgb_b, ys, len_b)) = (pixels(&self.a), pixels(&self.b));
+        let get = |channel: i32| {
+            self.cache
+                .image_cache
+                .get(&CacheAddress::Channel((channel, self.tile)))
+        };
+        // Both are there (`image_tiles` checked).
+        let (Some(a), Some(b)) = (get(self.channels.0), get(self.channels.1)) else {
+            return;
+        };
+        let ((rgb_a, xs, len_a), (rgb_b, ys, len_b)) = (pixels(&a), pixels(&b));
         for i in 0..len_a.min(len_b) {
             f(
                 sample_channel_pixel(rgb_a, xs, i) as f64,
@@ -609,20 +622,53 @@ impl DenseRanks {
                 }
                 Self::Levels(ranks, next)
             }
-            None => {
-                let mut all: Vec<f32> = Vec::new();
-                for tile in tiles {
-                    tile.for_each(|x, y| all.push(pick(x, y) as f32));
-                }
-                Self::from_values(all)
-            }
+            // The different values tile by tile, merged: not one value
+            // per pixel of the image at once.
+            None => Self::Sorted(
+                tiles
+                    .par_iter()
+                    .map(|tile| {
+                        let mut values = Vec::new();
+                        tile.for_each(|x, y| values.push(pick(x, y) as f32));
+                        Self::sorted_different(values)
+                    })
+                    .reduce(Vec::new, |a, b| {
+                        let mut both = Vec::with_capacity(a.len() + b.len());
+                        let (mut i, mut j) = (0, 0);
+                        while i < a.len() || j < b.len() {
+                            let next = match (a.get(i), b.get(j)) {
+                                (Some(x), Some(y)) if x.total_cmp(y).is_le() => {
+                                    i += 1;
+                                    *x
+                                }
+                                (_, Some(y)) => {
+                                    j += 1;
+                                    *y
+                                }
+                                (Some(x), None) => {
+                                    i += 1;
+                                    *x
+                                }
+                                (None, None) => unreachable!(),
+                            };
+                            if both.last() != Some(&next) {
+                                both.push(next);
+                            }
+                        }
+                        both
+                    }),
+            ),
         }
     }
 
-    fn from_values(mut values: Vec<f32>) -> Self {
+    fn from_values(values: Vec<f32>) -> Self {
+        Self::Sorted(Self::sorted_different(values))
+    }
+
+    fn sorted_different(mut values: Vec<f32>) -> Vec<f32> {
         values.sort_unstable_by(f32::total_cmp);
         values.dedup();
-        Self::Sorted(values)
+        values
     }
 
     fn rank(&self, v: f64) -> u32 {
@@ -1372,6 +1418,72 @@ mod tests {
         b: Vec<f32>,
         image: Vec<Option<f64>>,
         objects: Vec<Vec<Option<f64>>>,
+    }
+
+    /// Values not on 16-bit levels (32-bit float images) are ranked by
+    /// their different values: merged tile by tile, the same as sorting
+    /// every pixel's value at once - also for 0 and -0 and repeats across
+    /// tiles.
+    #[test]
+    fn float_ranks_tile_by_tile_match_all_pixels_at_once() {
+        let mut cache = GlobalPipelineCache::default();
+        let (width, height, side) = (30, 20, 7);
+        let value = |i: usize| match i % 11 {
+            0 => 0.0,
+            1 => -0.0,
+            2 => 0.123_456_7,
+            // Closer than 1/65535: not on 16-bit levels.
+            _ => 0.3 + ((i * 7919) % 500) as f32 * 1e-6,
+        };
+        let mut all = Vec::new();
+        for ty in (0..height).step_by(side) {
+            for tx in (0..width).step_by(side) {
+                let (w, h) = (side.min(width - tx), side.min(height - ty));
+                let samples: Vec<f32> = (0..w * h)
+                    .map(|i| value((ty + i / w) * width + tx + i % w))
+                    .collect();
+                all.extend(&samples);
+                let tile = ImageTile {
+                    offset_x: tx,
+                    offset_y: ty,
+                    width: w,
+                    height: h,
+                };
+                for channel in [0, 1] {
+                    let image = ImageContainer::F32Gray(ManagedImage {
+                        data: Image::<f32, 1>::from_size_slice(
+                            ImageSize {
+                                width: w,
+                                height: h,
+                            },
+                            &samples,
+                        )
+                        .unwrap(),
+                        tile_offset: Point2d { x: tx, y: ty },
+                        plane: None,
+                        dimensionality: ImageDimensionality::Planar,
+                    });
+                    cache.add_to_channel_cache(Arc::new(image), channel, tile);
+                }
+            }
+        }
+        let coloc = Coloc {
+            channel_a: ImageChannelIdx(0),
+            channel_b: ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes: CostesMethod::Off,
+        };
+        let tiles = coloc.image_tiles(&cache).unwrap();
+        let (DenseRanks::Sorted(merged), DenseRanks::Sorted(at_once)) = (
+            DenseRanks::of(&tiles, |x, _| x),
+            DenseRanks::from_values(all),
+        ) else {
+            panic!("float values are ranked by their sorted values");
+        };
+        assert_eq!(
+            merged.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            at_once.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
     }
 
     /// The image split into a left and a right tile.

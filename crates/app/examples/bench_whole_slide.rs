@@ -23,6 +23,11 @@
 //
 // `--max-threads` / `--max-ram`: the app's resource limits (as its options).
 //
+// `--cells propagation` grows the cells with Propagation (growth channel
+// `--channel`, regularization 0.05, no mask) instead of Voronoi.
+// `--image-coloc 1` / `--image-texture 1` add Measure Image Colocalization
+// (channels 0 and 1) / Measure Image Texture (channel `--channel`).
+//
 // `--coloc 1` adds Measure Object Colocalization of the Voronoi cells
 // (channels 0 and 1, threshold 15 %, Costes "Faster"). `--voronoi-radius R`
 // (default 50 px; 0: no limit - the cells cover the whole slide).
@@ -39,8 +44,10 @@ use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
     ExtractObjectsSettings, GaussianBlurSettings, LoadChannelSettings,
     MathLoadChannelChannelZProjectionSettings, MeasureColocalizationCostesMethodSettings,
-    MeasureObjectColocalizationSettings, SegmentationThresholdThresholdMethodSettings,
-    ThresholdEntrySettings, ThresholdSettings, VoronoiSettings,
+    MeasureImageColocalizationSettings, MeasureImageTextureSettings,
+    MeasureObjectColocalizationSettings, PropagationSettings,
+    SegmentationThresholdThresholdMethodSettings, ThresholdEntrySettings, ThresholdSettings,
+    VoronoiSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{
     PipelineSettings, PipelineStepSettings, StepContent,
@@ -69,6 +76,29 @@ fn proc_status_mb(key: &str) -> u64 {
         })
         .unwrap_or(0)
         / 1024
+}
+
+fn arg_str(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+/// User + system CPU seconds of this process so far (Linux, 100 ticks/s).
+fn cpu_seconds() -> f64 {
+    std::fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|s| {
+            // The fields after the command name (which may hold spaces).
+            let rest = s.rsplit_once(')')?.1;
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            let ticks =
+                fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
+            Some(ticks / 100.0)
+        })
+        .unwrap_or(0.0)
 }
 
 fn dir_bytes(dir: &Path) -> u64 {
@@ -115,6 +145,9 @@ fn main() {
     let channel = arg("--channel", 0) as u32;
     let coloc = arg("--coloc", 0) == 1;
     let voronoi_radius = arg("--voronoi-radius", 50) as f32;
+    let propagation = arg_str("--cells").as_deref() == Some("propagation");
+    let image_coloc = arg("--image-coloc", 0) == 1;
+    let image_texture = arg("--image-texture", 0) == 1;
     std::fs::create_dir_all(&workdir).unwrap();
     let backend = LocalBackend::default();
 
@@ -177,16 +210,47 @@ fn main() {
                 max_objects_before_fail: 10_000_000,
                 ..Default::default()
             })),
-            step(PipelineCommand::Voronoi(VoronoiSettings {
-                centers: ObjectClass::Global(1),
-                mask: ObjectClass::Unset,
-                output_class: ObjectClass::Global(2),
-                unit: SizeUnits::Pixels,
-                max_radius: voronoi_radius,
-                ..Default::default()
-            })),
+            if propagation {
+                step(PipelineCommand::Propagation(PropagationSettings {
+                    seeds: ObjectClass::Global(1),
+                    growth_channel: ImageChannelIdx(channel),
+                    mask: ObjectClass::Unset,
+                    regularization: 0.05,
+                    output_class: ObjectClass::Global(2),
+                    exclude_at_edges: false,
+                }))
+            } else {
+                step(PipelineCommand::Voronoi(VoronoiSettings {
+                    centers: ObjectClass::Global(1),
+                    mask: ObjectClass::Unset,
+                    output_class: ObjectClass::Global(2),
+                    unit: SizeUnits::Pixels,
+                    max_radius: voronoi_radius,
+                    ..Default::default()
+                }))
+            },
         ]
         .into_iter()
+        .chain(image_coloc.then(|| {
+            step(PipelineCommand::MeasureImageColocalization(
+                MeasureImageColocalizationSettings {
+                    id: "image_coloc_01".into(),
+                    channel_a: ImageChannelIdx(0),
+                    channel_b: ImageChannelIdx(1),
+                    threshold_percent: 15.0,
+                    costes: MeasureColocalizationCostesMethodSettings::Faster,
+                },
+            ))
+        }))
+        .chain(image_texture.then(|| {
+            step(PipelineCommand::MeasureImageTexture(
+                MeasureImageTextureSettings {
+                    id: "image_texture_01".into(),
+                    channel: ImageChannelIdx(channel),
+                    ..Default::default()
+                },
+            ))
+        }))
         .chain(coloc.then(|| {
             step(PipelineCommand::MeasureObjectColocalization(
                 MeasureObjectColocalizationSettings {
@@ -304,15 +368,44 @@ fn main() {
     // Exact and independent of the row order (the sum above isn't).
     let value_hash: u64 = conn
         .query_row(
-            "SELECT coalesce(bit_xor(hash(key, value::VARCHAR)), 0) FROM measurements",
+            "SELECT coalesce(bit_xor(hash(image_rel_path, key, value::VARCHAR)), 0) FROM measurements",
             [],
             |r| r.get(0),
         )
         .unwrap_or(0);
     println!("measurements={values} sum={value_sum:.9} hash={value_hash:016x}");
+    // The objects' geometry and intensities, without their (random) ids,
+    // per class.
+    let mut stmt = conn
+        .prepare(
+            "SELECT object_class_id::VARCHAR, count(*), \
+             coalesce(bit_xor(hash(image_rel_path, seg_class_id, bbox_xmin_px, bbox_ymin_px, \
+             bbox_xmax_px, bbox_ymax_px, area_px, mask)), 0), \
+             coalesce(bit_xor(hash(image_rel_path, bbox_xmin_px, bbox_ymin_px, intensity_sum_gray::VARCHAR, \
+             intensity_median_gray::VARCHAR, intensity_std_gray::VARCHAR)), 0) \
+             FROM objects GROUP BY ALL ORDER BY 1",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, u64>(2)?,
+                r.get::<_, u64>(3)?,
+            ))
+        })
+        .unwrap();
+    for row in rows {
+        let (class, count, geometry, intensities) = row.unwrap();
+        println!(
+            "object_hash class={class} count={count} geometry={geometry:016x} intensities={intensities:016x}"
+        );
+    }
     println!(
-        "result={:?} time={elapsed:.1}s peak_rss={} MB spill_peak={} MB objects={objects} sum_area_px={area}",
+        "result={:?} time={elapsed:.1}s cpu={:.1}s peak_rss={} MB spill_peak={} MB objects={objects} sum_area_px={area}",
         result.err(),
+        cpu_seconds(),
         proc_status_mb("VmHWM:"),
         spill_peak.load(Ordering::Relaxed) / 1_000_000,
     );

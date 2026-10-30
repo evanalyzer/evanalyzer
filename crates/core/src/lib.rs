@@ -21,6 +21,15 @@ mod pipeline;
 mod storage;
 mod utils;
 
+#[cfg(test)]
+mod tests;
+
+/// The library's tests count the RAM in use (see `tests::whole_image_ram`).
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: tests::counting_allocator::CountingAllocator =
+    tests::counting_allocator::CountingAllocator;
+
 // System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::job::job_generator::{check_image_paths, random_job_name};
 pub use crate::memory::analysis::{MAX_TILE_SIZE, estimate_ram_budget, recommended_parallelism};
