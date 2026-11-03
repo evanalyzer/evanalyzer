@@ -50,6 +50,16 @@ struct Scratch {
     hull: Vec<(f64, f64)>,
 }
 
+/// From this many pixels of its padded box on, an object's Euler number and
+/// radii are worked out row by row ([`streamed_euler_and_radii`]): the
+/// padded mask, its distances and the inside ones took 17 bytes per pixel -
+/// 17 GB for a tissue-sized object on a 1-gigapixel slide, kept by the
+/// thread afterwards. (Tests: small, so they take this way too.)
+#[cfg(not(test))]
+const STREAMED_FROM: usize = 1 << 22;
+#[cfg(test)]
+const STREAMED_FROM: usize = 1 << 12;
+
 thread_local! {
     static SCRATCH: std::cell::RefCell<Scratch> = std::cell::RefCell::new(Scratch::default());
 }
@@ -68,9 +78,16 @@ impl Object {
             );
             let convex_area =
                 convex_area_from_rows(&rows, self.bbox, self.area, &mut scratch.points);
-            let (pw, ph) = self.pad_into(&mut scratch.padded);
-            let euler_number = euler_of_padded(&scratch.padded, pw, ph);
-            let radii = radii_of_padded(pw, ph, scratch);
+            let [x0, y0, x1, y1] = self.bbox.map(|v| v as usize);
+            let (euler_number, radii) = if (x1 - x0 + 3) * (y1 - y0 + 3) > STREAMED_FROM {
+                streamed_euler_and_radii(self, scratch)
+            } else {
+                let (pw, ph) = self.pad_into(&mut scratch.padded);
+                (
+                    euler_of_padded(&scratch.padded, pw, ph),
+                    radii_of_padded(pw, ph, scratch),
+                )
+            };
             Shape {
                 min_feret,
                 max_feret,
@@ -365,47 +382,224 @@ fn squared_distances(width: usize, height: usize, scratch: &mut Scratch) {
         }
     }
     // Along each row: the lower envelope of the parabolas (x - q)² + f(q).
-    v.clear();
-    v.resize(width, 0);
-    z.clear();
-    z.resize(width + 1, (0, 0));
-    f.clear();
-    f.resize(width, 0);
     for y in 0..height {
-        let row = &mut d[y * width..(y + 1) * width];
-        f.copy_from_slice(row);
-        let mut k = 0usize;
-        v[0] = 0;
-        z[0] = (-1, 0);
-        z[1] = (1, 0);
-        for q in 1..width {
-            let qi = q as i64;
-            let mut s;
-            loop {
-                let p = v[k] as i64;
-                s = ((f[q] + qi * qi) - (f[v[k]] + p * p), 2 * (qi - p));
-                if k > 0 && frac_le(s, z[k]) {
-                    k -= 1;
-                } else {
-                    break;
+        envelope_row(&mut d[y * width..(y + 1) * width], v, z, f);
+    }
+}
+
+/// The squared distances along one row (in `row`: each cell's squared
+/// distance to the nearest 0 in its column; out: to the nearest 0 at all) -
+/// the lower envelope of the parabolas (x - q)² + f(q). `v`, `z`, `f`:
+/// scratch space.
+fn envelope_row(row: &mut [i64], v: &mut Vec<usize>, z: &mut Vec<(i64, i64)>, f: &mut Vec<i64>) {
+    let width = row.len();
+    // Only indices below `width` (`z`: up to it) are read, each written first.
+    if v.len() < width {
+        v.resize(width, 0);
+    }
+    if z.len() < width + 1 {
+        z.resize(width + 1, (0, 0));
+    }
+    f.clear();
+    f.extend_from_slice(row);
+    let mut k = 0usize;
+    v[0] = 0;
+    z[0] = (-1, 0);
+    z[1] = (1, 0);
+    for q in 1..width {
+        let qi = q as i64;
+        let mut s;
+        loop {
+            let p = v[k] as i64;
+            s = ((f[q] + qi * qi) - (f[v[k]] + p * p), 2 * (qi - p));
+            if k > 0 && frac_le(s, z[k]) {
+                k -= 1;
+            } else {
+                break;
+            }
+        }
+        k += 1;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = (1, 0);
+    }
+    let mut k = 0usize;
+    for (q, out) in row.iter_mut().enumerate() {
+        let qi = q as i64;
+        // z[k + 1] < q
+        while !frac_le((qi, 1), z[k + 1]) {
+            k += 1;
+        }
+        let p = v[k] as i64;
+        *out = (qi - p) * (qi - p) + f[v[k]];
+    }
+}
+
+/// The Euler number and the radii of `object` as [`euler_of_padded`] and
+/// [`radii_of_padded`] give them on its padded mask - the same numbers, row
+/// by row without the padded mask or its distances: each column's distance
+/// to its nearest 0 above and below kept as the rows go down, the rows'
+/// envelopes one at a time. The median radius in a second sweep: the first
+/// counts the radii per whole pixel r = ⌊√d²⌋, the second the squares d² in
+/// [r², (r+1)²) of the r holding it. RAM: a few rows.
+fn streamed_euler_and_radii(object: &Object, scratch: &mut Scratch) -> (i64, Option<Radii>) {
+    let [x0, y0, x1, y1] = object.bbox.map(|v| v as usize);
+    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+    let (pw, ph) = (w + 2, h + 2);
+    // The padded mask's row `y` into `out` (0/1).
+    let padded_row = |y: usize, out: &mut Vec<u8>| {
+        out.clear();
+        out.resize(pw, 0);
+        if (1..=h).contains(&y)
+            && let Some(bits) = object.mask_data.get((y - 1) * w..y * w)
+        {
+            for (o, bit) in out[1..=w].iter_mut().zip(bits.iter().by_vals()) {
+                *o = bit as u8;
+            }
+        }
+    };
+    let inside = |x: usize, y: usize| {
+        (1..=w).contains(&x)
+            && (1..=h).contains(&y)
+            && object
+                .mask_data
+                .get((y - 1) * w + x - 1)
+                .is_some_and(|b| *b)
+    };
+
+    // Euler number: the bit quads of each two rows.
+    let (mut top, mut bottom) = (Vec::new(), Vec::new());
+    let (mut q1, mut q3, mut qd) = (0i64, 0i64, 0i64);
+    padded_row(0, &mut top);
+    for y in 0..ph - 1 {
+        padded_row(y + 1, &mut bottom);
+        for x in 0..pw - 1 {
+            let (a, b, c, d) = (top[x], top[x + 1], bottom[x], bottom[x + 1]);
+            match a + b + c + d {
+                1 => q1 += 1,
+                3 => q3 += 1,
+                2 if a == d => qd += 1,
+                _ => {}
+            }
+        }
+        std::mem::swap(&mut top, &mut bottom);
+    }
+    let euler = (q1 - q3 - 2 * qd) / 4;
+
+    // Every inside cell's squared distance, row by row, to `visit`.
+    let Scratch { v, z, f, .. } = scratch;
+    let mut sweep = |visit: &mut dyn FnMut(i64)| {
+        // Per column: the last 0 at or above the row, the next 0 at or below.
+        let mut above = vec![0usize; pw];
+        let mut below = vec![0usize; pw];
+        let mut row = vec![0i64; pw];
+        let mut cells = Vec::new();
+        for y in 0..ph {
+            padded_row(y, &mut cells);
+            for x in 0..pw {
+                if cells[x] == 0 {
+                    above[x] = y;
+                    row[x] = 0;
+                    continue;
+                }
+                if below[x] < y {
+                    let mut k = y + 1;
+                    while inside(x, k) {
+                        k += 1;
+                    }
+                    below[x] = k;
+                }
+                let g = ((y - above[x]).min(below[x] - y)) as i64;
+                row[x] = g * g;
+            }
+            envelope_row(&mut row, v, z, f);
+            for (cell, d2) in cells.iter().zip(&row) {
+                if *cell == 1 {
+                    visit(*d2);
                 }
             }
-            k += 1;
-            v[k] = q;
-            z[k] = s;
-            z[k + 1] = (1, 0);
         }
-        let mut k = 0usize;
-        for (q, out) in row.iter_mut().enumerate() {
-            let qi = q as i64;
-            // z[k + 1] < q
-            while !frac_le((qi, 1), z[k + 1]) {
-                k += 1;
-            }
-            let p = v[k] as i64;
-            *out = (qi - p) * (qi - p) + f[v[k]];
+    };
+    let whole_root = |d2: i64| {
+        let mut r = (d2 as f64).sqrt() as i64;
+        while r * r > d2 {
+            r -= 1;
         }
+        while (r + 1) * (r + 1) <= d2 {
+            r += 1;
+        }
+        r as usize
+    };
+    let (mut n, mut sum, mut max) = (0usize, 0.0f64, 0i64);
+    let mut per_root: Vec<usize> = Vec::new();
+    sweep(&mut |d2| {
+        n += 1;
+        sum += (d2 as f64).sqrt();
+        max = max.max(d2);
+        let r = whole_root(d2);
+        if per_root.len() <= r {
+            per_root.resize(r + 1, 0);
+        }
+        per_root[r] += 1;
+    });
+    if n == 0 {
+        return (euler, None);
     }
+    // The ranks the median takes: (n-1)/2, and the next for an even n.
+    let low = (n - 1) / 2;
+    let wanted: Vec<usize> = if n % 2 == 1 {
+        vec![low]
+    } else {
+        vec![low, low + 1]
+    };
+    // Each wanted rank's r and its rank among those of that r.
+    let at: Vec<(usize, usize)> = wanted
+        .iter()
+        .map(|&rank| {
+            let mut before = 0;
+            for (r, c) in per_root.iter().enumerate() {
+                if before + c > rank {
+                    return (r, rank - before);
+                }
+                before += c;
+            }
+            unreachable!("rank below n")
+        })
+        .collect();
+    let mut roots: Vec<usize> = at.iter().map(|a| a.0).collect();
+    roots.dedup();
+    // Per wanted r: how many of each d² = r² + j, j in 0..=2r.
+    let mut counts: Vec<Vec<usize>> = roots.iter().map(|r| vec![0; 2 * r + 1]).collect();
+    sweep(&mut |d2| {
+        let r = whole_root(d2);
+        if let Some(i) = roots.iter().position(|x| *x == r) {
+            counts[i][(d2 - (r * r) as i64) as usize] += 1;
+        }
+    });
+    let value = |(r, rank): (usize, usize)| {
+        let i = roots.iter().position(|x| *x == r).unwrap();
+        let mut seen = 0;
+        for (j, c) in counts[i].iter().enumerate() {
+            seen += c;
+            if seen > rank {
+                return (r * r + j) as i64;
+            }
+        }
+        unreachable!("rank below the count")
+    };
+    let at_low = (value(at[0]) as f64).sqrt();
+    let median = match at.get(1) {
+        None => at_low,
+        Some(next) => (at_low + (value(*next) as f64).sqrt()) / 2.0,
+    };
+    (
+        euler,
+        Some(Radii {
+            max: (max as f64).sqrt(),
+            mean: sum / n as f64,
+            median,
+        }),
+    )
 }
 
 /// The convex hull of `points` (reordered), counter-clockwise in the
@@ -936,6 +1130,56 @@ mod tests {
             assert!(
                 (min - brute_min).abs() < 1e-9,
                 "{hull:?}: {min} vs {brute_min}"
+            );
+        }
+    }
+
+    /// Row by row: the Euler number and radii of the padded mask, bit for
+    /// bit - random masks with holes and several parts, lines, full boxes,
+    /// even and odd counts.
+    #[test]
+    fn streamed_euler_and_radii_are_the_padded_ones() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for case in 0..1500 {
+            let (w, h) = (1 + next(60), 1 + next(60));
+            let fill = next(11);
+            let mut mask = BitVec::<u64, Lsb0>::repeat(false, w * h);
+            for i in 0..w * h {
+                let (x, y) = (i % w, i / w);
+                let on = match case % 4 {
+                    0 => next(10) < fill,
+                    1 => true,
+                    2 => x == y % w || y == h / 2,
+                    _ => (x / 7 + y / 5) % 3 != 0 || next(20) == 0,
+                };
+                mask.set(i, on);
+            }
+            let area = mask.count_ones();
+            let object = Object::new(ObjectInit {
+                bbox: [11, 7, 11 + w as u32 - 1, 7 + h as u32 - 1],
+                area,
+                mask_data: mask,
+                ..Default::default()
+            });
+            let mut scratch = Scratch::default();
+            let (pw, ph) = object.pad_into(&mut scratch.padded);
+            let padded = (
+                euler_of_padded(&scratch.padded, pw, ph),
+                radii_of_padded(pw, ph, &mut scratch),
+            );
+            let streamed = streamed_euler_and_radii(&object, &mut Scratch::default());
+            let bits = |r: Option<Radii>| r.map(|r| [r.max, r.mean, r.median].map(f64::to_bits));
+            assert_eq!(streamed.0, padded.0, "case {case}: Euler number");
+            assert_eq!(
+                bits(streamed.1),
+                bits(padded.1),
+                "case {case}: {w} x {h} radii"
             );
         }
     }

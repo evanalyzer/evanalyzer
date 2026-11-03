@@ -344,8 +344,21 @@ impl GlobalPipelineCache {
         &self,
         bbox: [u32; 4],
     ) -> Vec<((i32, ImageTile), bool, Arc<ImageContainer>)> {
+        self.resolve_channels_for_bbox(bbox, |_| true)
+    }
+
+    /// [`resolve_channel_views_for_bbox`](Self::resolve_channel_views_for_bbox)
+    /// of the channels `wanted` picks only - the others' tiles aren't loaded
+    /// at all (a command reading one channel of a 6-channel slide loaded
+    /// all six under the box).
+    pub fn resolve_channels_for_bbox(
+        &self,
+        bbox: [u32; 4],
+        wanted: impl Fn(i32) -> bool,
+    ) -> Vec<((i32, ImageTile), bool, Arc<ImageContainer>)> {
         let [x_min, y_min, x_max, y_max] = bbox;
         self.channel_keys()
+            .filter(|(channel, _)| wanted(*channel))
             .filter(|(_, tile)| tile_intersects_bbox(tile, x_min, y_min, x_max, y_max))
             .filter_map(|index| {
                 let container = self.image_cache.get(&CacheAddress::Channel(index))?;

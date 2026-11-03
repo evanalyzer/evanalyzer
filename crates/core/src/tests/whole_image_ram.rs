@@ -11,7 +11,8 @@
 //! Every whole-image command runs on a small and a four times larger
 //! synthetic slide; what it needs more on the large one, per extra pixel,
 //! must stay below [`MAX_BYTES_PER_PIXEL`]. Objects grow with the slide too
-//! (one cell per 64 × 64 pixels), their own RAM is part of it. A new
+//! (one cell per 64 × 64 pixels, and one cell over almost all of it - a
+//! tissue-sized object), their own RAM is part of it. A new
 //! whole-image command fails the test until it is added to [`configured`].
 //!
 //! **Author:** Joachim Danmayr
@@ -198,8 +199,14 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
 /// brighter than the background, with a ramp so values differ), capped
 /// so the tiles spill; nuclei, cells and spots.
 fn slide(side: usize) -> GlobalPipelineCache {
+    slide_in(side, TILE, CACHE_BYTES)
+}
+
+/// [`slide`] in tiles of `tile`² pixels, the tile cache capped at
+/// `cache_bytes`.
+fn slide_in(side: usize, tile: usize, cache_bytes: u64) -> GlobalPipelineCache {
     let mut cache = GlobalPipelineCache::default();
-    cache.image_cache.set_capacity_bytes(CACHE_BYTES);
+    cache.image_cache.set_capacity_bytes(cache_bytes);
     cache.image_meta.nr_of_bits = 16;
     cache.image_meta.full_image_width = ImageSize {
         width: side,
@@ -211,17 +218,17 @@ fn slide(side: usize) -> GlobalPipelineCache {
         let base = if in_cell { 0.4 } else { 0.05 };
         base + ((x * 7 + y * 13 + channel * 5) % 97) as f32 / 1000.0
     };
-    for ty in (0..side).step_by(TILE) {
-        for tx in (0..side).step_by(TILE) {
+    for ty in (0..side).step_by(tile) {
+        for tx in (0..side).step_by(tile) {
             for channel in 0..2 {
-                let data: Vec<f32> = (0..TILE * TILE)
-                    .map(|i| value(channel, tx + i % TILE, ty + i / TILE))
+                let data: Vec<f32> = (0..tile * tile)
+                    .map(|i| value(channel, tx + i % tile, ty + i / tile))
                     .collect();
                 let image = ImageContainer::F32Gray(ManagedImage {
                     data: Image::new(
                         ImageSize {
-                            width: TILE,
-                            height: TILE,
+                            width: tile,
+                            height: tile,
                         },
                         data,
                     )
@@ -233,8 +240,8 @@ fn slide(side: usize) -> GlobalPipelineCache {
                 let tile = ImageTile {
                     offset_x: tx,
                     offset_y: ty,
-                    width: TILE,
-                    height: TILE,
+                    width: tile,
+                    height: tile,
                 };
                 cache.add_to_channel_cache(Arc::new(image), channel as i32, tile);
             }
@@ -258,6 +265,11 @@ fn slide(side: usize) -> GlobalPipelineCache {
         object.add_object_class(class, Scope::Global).unwrap();
         cache.object_cache.insert(object.id.clone(), object);
     };
+    // One tissue-sized cell (a thresholded organ): a command measuring a
+    // cell's pixels must not hold its whole bounding box's tiles or a byte
+    // per pixel of it.
+    let edge = side as u32 - 5;
+    add(&mut cache, [4, 4, edge, edge], CELL);
     for y in (0..side).step_by(SPACING) {
         for x in (0..side).step_by(SPACING) {
             let (x, y) = (x as u32, y as u32);
@@ -362,4 +374,113 @@ fn whole_image_commands_need_no_ram_per_pixel() {
         output.status.success() && stdout.contains("1 passed"),
         "{stdout}\n{stderr}"
     );
+}
+
+/// Speed and RAM of the commands measuring a tissue-sized object (and the
+/// cells around it): an 8192² slide in 2048² tiles, the tile cache at 256
+/// MB, one thread. Per command: wall and CPU time, the peak of RAM in use
+/// more than before, and a hash of the tissue cell's values and of the
+/// big output objects' intensities (the same hash: the same results).
+/// `cargo test --release -p evanalyzer_core --lib bench_huge_object_shape -- --ignored --nocapture`
+/// (one command per test: the old Object Math took hours here).
+#[test]
+#[ignore]
+fn bench_huge_object_transform() {
+    bench_huge_object(|c| matches!(c, PipelineCommand::TransformObjects(_)));
+}
+
+#[test]
+#[ignore]
+fn bench_huge_object_math() {
+    bench_huge_object(|c| matches!(c, PipelineCommand::ObjectMath(_)));
+}
+
+#[test]
+#[ignore]
+fn bench_huge_object_shape() {
+    bench_huge_object(|c| matches!(c, PipelineCommand::MeasureObjectShape(_)));
+}
+
+#[test]
+#[ignore]
+fn bench_huge_object_texture() {
+    bench_huge_object(|c| matches!(c, PipelineCommand::MeasureObjectTexture(_)));
+}
+
+#[test]
+#[ignore]
+fn bench_huge_object_coloc() {
+    bench_huge_object(|c| matches!(c, PipelineCommand::MeasureObjectColocalization(_)));
+}
+
+fn bench_huge_object(wanted: fn(&PipelineCommand) -> bool) {
+    use std::hash::{Hash, Hasher};
+    let side = 8192;
+    let slide = slide_in(side, 2048, 256 << 20);
+    let cpu = || {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let fields: Vec<&str> = stat
+            .rsplit(')')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        (fields[11].parse::<f64>().unwrap() + fields[12].parse::<f64>().unwrap()) / 100.0
+    };
+    for command in (0..).map_while(default_command) {
+        let keep = wanted(&command);
+        let Some(command) = keep.then(|| configured(&command)).flatten() else {
+            continue;
+        };
+        let algorithm = into_algorithm(command.clone()).unwrap();
+        let mut cache = slide.clone();
+        let mut meta = PipelineImageMeta::default();
+        meta.full_image_width = ImageSize {
+            width: side,
+            height: side,
+        };
+        meta.nr_of_bits = 16;
+        let mut ctx = PipelineContext::without_image(std::path::PathBuf::new(), meta).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let before = counting_allocator::in_use();
+        counting_allocator::reset_peak();
+        let (start, cpu_start) = (std::time::Instant::now(), cpu());
+        pool.install(|| algorithm.execute(&mut ctx, &mut cache))
+            .unwrap();
+        let (wall, cpu_time) = (start.elapsed().as_secs_f64(), cpu() - cpu_start);
+        let peak = counting_allocator::peak() - before;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for m in &cache.measurements.measurements {
+            if let crate::pipeline::pipeline_measure::MeasurementValues::Objects(values) = &m.values
+            {
+                for v in values.iter().filter(|v| v.object == ObjectId(1)) {
+                    m.info.key.hash(&mut hasher);
+                    v.value.to_bits().hash(&mut hasher);
+                }
+            }
+        }
+        let mut big: Vec<String> = cache
+            .object_cache
+            .iter()
+            .filter(|(_, o)| o.area > 1 << 20)
+            .map(|(_, o)| {
+                // By channel: the map's order follows the cache's keys.
+                let mut channels: Vec<String> =
+                    o.intensities.iter().map(|c| format!("{c:?}")).collect();
+                channels.sort();
+                format!("{:?} {channels:?}", o.bbox)
+            })
+            .collect();
+        big.sort();
+        big.hash(&mut hasher);
+        println!(
+            "BENCH {}: wall {wall:.2} s, cpu {cpu_time:.2} s, peak {:.0} MB, values {:016x}",
+            algorithm.name(),
+            peak as f64 / 1e6,
+            hasher.finish()
+        );
+    }
 }

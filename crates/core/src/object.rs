@@ -570,27 +570,19 @@ impl Object {
             return 0.0;
         }
 
-        // Materialize the mask into a bool grid padded with a 1-pixel false border,
-        // so the boundary trace below never needs a bounds check: any vertex
-        // coordinate the trace can reach maps to a real (possibly-border) grid cell.
-        let pw = width + 2;
-        let ph = height + 2;
-        let mut grid = vec![false; pw * ph];
-        for y in 0..height {
-            let src = y * width;
-            let dst = (y + 1) * pw + 1;
-            for x in 0..width {
-                if self.mask_data.get(src + x).map(|b| *b).unwrap_or(false) {
-                    grid[dst + x] = true;
-                }
-            }
-        }
-
+        // The mask as if padded with a 1-pixel false border (grid
+        // coordinates: the mask's pixel (x, y) is at (x + 1, y + 1)), so the
+        // trace below never leaves it. Read from the mask's bits - the trace
+        // only visits the boundary, a copy of the whole box (a byte per
+        // pixel: 1 GB for a tissue-sized object) isn't needed.
+        let pixels = (width * height).min(self.mask_data.len());
         let inside = |x: i64, y: i64| -> bool {
-            if x < 0 || y < 0 || x as usize >= pw || y as usize >= ph {
+            if x < 1 || y < 1 || x as usize > width || y as usize > height {
                 false
             } else {
-                grid[y as usize * pw + x as usize]
+                self.mask_data
+                    .get((y as usize - 1) * width + (x as usize - 1))
+                    .is_some_and(|b| *b)
             }
         };
         // Pixel at vertex (x, y) in a given walking `direction`, matching
@@ -607,11 +599,11 @@ impl Object {
 
         // Start at the first foreground pixel in row-major grid order - always
         // exists since `self.area > 0` was already checked above.
-        let Some(start_idx) = grid.iter().position(|&b| b) else {
+        let Some(start_idx) = self.mask_data[..pixels].first_one() else {
             return 0.0;
         };
-        let start_x = (start_idx % pw) as i64;
-        let start_y = (start_idx / pw) as i64;
+        let start_x = (start_idx % width) as i64 + 1;
+        let start_y = (start_idx / width) as i64 + 1;
 
         // `inside(start_x, start_y)` is always true (it's the foreground pixel
         // we just found), so this always takes the `1` branch - ImageJ's other
@@ -1127,24 +1119,66 @@ impl Object {
         if self.mask_data.is_empty() {
             return IndexMap::new();
         }
-        // Only resolves (and, if needed, disk-loads - see `ImageCache`'s own doc
-        // comments) the tiles whose bounds actually overlap this object's bbox,
-        // not every channel entry the cache happens to be holding: once the
-        // whole-image phase merges every tile's channel views together, this
-        // object's mask - all `measure_intensities` ever samples - typically
-        // only touches a handful of those tiles.
-        let channel_views = cache.resolve_channel_views_for_bbox(self.bbox);
-        // In `resolve_channel_views_for_bbox`'s order: the result's channel
-        // order follows it (existing callers/tests rely on `IndexMap` order).
-        let tiles: Vec<intensities::ChannelTile<'_>> = channel_views
-            .iter()
-            .filter_map(|((channel, tile), _, container)| {
-                intensities::ChannelTile::from_container(*channel, *tile, container)
+        // The channel tiles under the object's box, one at a time: a
+        // tissue-sized object spans most of a slide - all its tiles of every
+        // channel at once didn't fit in the RAM (only the tiles overlapping
+        // the box are loaded at all, possibly from disk). The channel order
+        // follows the tiles (callers and tests rely on `IndexMap` order).
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        let mut keys: Vec<(i32, ImageTile)> = cache
+            .channel_keys()
+            .filter(|(_, tile)| {
+                tile.offset_x as u32 <= x_max
+                    && x_min < (tile.offset_x + tile.width) as u32
+                    && tile.offset_y as u32 <= y_max
+                    && y_min < (tile.offset_y + tile.height) as u32
             })
             .collect();
-        let mut acc = intensities::IntensityAccumulator::default();
-        intensities::MaskIntensities::add_intensities(self, &tiles, &mut acc);
-        acc.finish()
+        // In reading order, as `measure_intensities_of`: the cache's own
+        // order is a hash map's, different in every run - an object over
+        // several tiles summed them in another order, its channels came in
+        // another order.
+        keys.sort_by_key(|(channel, t)| (t.offset_y, t.offset_x, *channel));
+        // Capped: a tissue-sized object's values aren't all listed - the
+        // spread reads its pixels again, channel by channel (`finish_with`).
+        let mut acc = intensities::IntensityAccumulator::capped();
+        // The tiles measured so far (a pixel two of a channel's tiles cover
+        // is taken from the first).
+        let mut done: Vec<(i32, ImageTile)> = Vec::new();
+        for key in &keys {
+            let address = crate::pipeline::pipeline_cache::CacheAddress::Channel(*key);
+            let Some(container) = cache.image_cache.get(&address) else {
+                continue;
+            };
+            let Some(tile) = intensities::ChannelTile::from_container(key.0, key.1, &container)
+            else {
+                continue;
+            };
+            let earlier = done.iter().filter(|(c, _)| *c == key.0).map(|(_, t)| *t);
+            acc.add_tile(&self.mask_data, self.bbox, &tile, earlier);
+            done.push(*key);
+        }
+        acc.finish_with(|channel, f| {
+            let mut earlier: Vec<ImageTile> = Vec::new();
+            for &(_, tile) in done.iter().filter(|(c, _)| *c == channel) {
+                let address =
+                    crate::pipeline::pipeline_cache::CacheAddress::Channel((channel, tile));
+                let Some(container) = cache.image_cache.get(&address) else {
+                    continue;
+                };
+                if let Some(t) = intensities::ChannelTile::from_container(channel, tile, &container)
+                {
+                    intensities::tile_values(
+                        &self.mask_data,
+                        self.bbox,
+                        &t,
+                        earlier.iter().copied(),
+                        &mut *f,
+                    );
+                }
+                earlier.push(tile);
+            }
+        })
     }
 
     /// Measures every object of `objects` (into its `intensities`) as
@@ -1214,7 +1248,7 @@ impl Object {
             .flat_map(|(i, _)| {
                 channels
                     .iter()
-                    .map(move |&c| (i, c, intensities::IntensityAccumulator::default()))
+                    .map(move |&c| (i, c, intensities::IntensityAccumulator::capped()))
             })
             .collect();
         let objects_ref: &[Object] = objects;
@@ -1240,13 +1274,29 @@ impl Object {
                 .par_iter()
                 .filter(|&&i| object_tiles[i].len() == 1)
                 .map(|&i| {
-                    let mut acc = intensities::IntensityAccumulator::default();
-                    intensities::MaskIntensities::add_intensities(
-                        &objects_ref[i],
-                        &channel_tiles,
-                        &mut acc,
-                    );
-                    (i, acc.finish())
+                    let object = &objects_ref[i];
+                    let mut acc = intensities::IntensityAccumulator::capped();
+                    intensities::MaskIntensities::add_intensities(object, &channel_tiles, &mut acc);
+                    // Read again from this tile (as `add` read it).
+                    let finished = acc.finish_with(|channel, f| {
+                        for (k, t) in channel_tiles.iter().enumerate() {
+                            if t.channel != channel {
+                                continue;
+                            }
+                            let earlier = channel_tiles[..k]
+                                .iter()
+                                .filter(|e| e.channel == channel)
+                                .map(|e| e.tile);
+                            intensities::tile_values(
+                                &object.mask_data,
+                                object.bbox,
+                                t,
+                                earlier,
+                                &mut *f,
+                            );
+                        }
+                    });
+                    (i, finished)
                 })
                 .collect();
             for (i, intensities) in measured {
@@ -1270,7 +1320,32 @@ impl Object {
             spanning = rest;
             let finished: Vec<(usize, IndexMap<i32, Intensity>)> = done
                 .into_par_iter()
-                .map(|(i, _, acc)| (i, acc.finish()))
+                .map(|(i, _, acc)| {
+                    let object = &objects_ref[i];
+                    // Read again tile by tile, in the order they were added.
+                    let finished = acc.finish_with(|channel, f| {
+                        for &t in &object_tiles[i] {
+                            let address = crate::pipeline::pipeline_cache::CacheAddress::Channel((
+                                channel, tiles[t],
+                            ));
+                            let Some(image) = cache.image_cache.get(&address) else {
+                                continue;
+                            };
+                            if let Some(tile) =
+                                intensities::ChannelTile::from_container(channel, tiles[t], &image)
+                            {
+                                intensities::tile_values(
+                                    &object.mask_data,
+                                    object.bbox,
+                                    &tile,
+                                    std::iter::empty(),
+                                    &mut *f,
+                                );
+                            }
+                        }
+                    });
+                    (i, finished)
+                })
                 .collect();
             // In channel order (as `done` is): the same order as an object's
             // inside one tile.
@@ -1395,10 +1470,43 @@ impl Object {
         let base_touches_edge =
             self.touches_edge || (grows_beyond_self && others.iter().any(|o| o.touches_edge));
 
+        // Many partners (a tissue-sized object and the cells in it): their
+        // pixels painted once into one mask over the box - asking each of
+        // them for every pixel was pixels × partners (10¹² for a slide's
+        // tissue and its 16,000 nuclei).
+        let union = (others.len() > UNION_FROM).then(|| {
+            let [x0, y0, x1, y1] = [x_min, y_min, x_max, y_max].map(|v| v as usize);
+            let width = x1 - x0 + 1;
+            let mut union = BitVec::<u64, Lsb0>::repeat(false, width * (y1 - y0 + 1));
+            for o in others {
+                let [ox0, oy0, ox1, oy1] = o.bbox.map(|v| v as usize);
+                let ow = ox1 - ox0 + 1;
+                for y in oy0.max(y0)..=oy1.min(y1) {
+                    for x in ox0.max(x0)..=ox1.min(x1) {
+                        if o.mask_data
+                            .get((y - oy0) * ow + (x - ox0))
+                            .is_some_and(|b| *b)
+                        {
+                            union.set((y - y0) * width + (x - x0), true);
+                        }
+                    }
+                }
+            }
+            (union, width)
+        });
         rasterize_geometry(bbox_f, image_size, base_touches_edge, |gx, gy| {
             let (px, py) = (gx as u32, gy as u32);
             let in_a = self.is_part_of(px, py);
-            let in_b = others.iter().any(|o| o.is_part_of(px, py));
+            let in_b = match &union {
+                Some((union, width)) => {
+                    px >= x_min
+                        && py >= y_min
+                        && px <= x_max
+                        && py <= y_max
+                        && union[(py - y_min) as usize * width + (px - x_min) as usize]
+                }
+                None => others.iter().any(|o| o.is_part_of(px, py)),
+            };
             match op {
                 BooleanOp::And => in_a && in_b,
                 BooleanOp::Or => in_a || in_b,
@@ -1443,6 +1551,13 @@ impl Object {
         })
     }
 }
+
+/// From this many partners on, [`Object::combine_geometry`] paints them
+/// into one mask first (tests: 0, so every case takes it).
+#[cfg(not(test))]
+const UNION_FROM: usize = 8;
+#[cfg(test)]
+const UNION_FROM: usize = 0;
 
 /// Tests the disk of radius `margin` centered at pixel `(px, py)` against `object`'s mask.
 ///
@@ -2280,6 +2395,180 @@ mod tests {
             object.get_perimeter(),
             expected
         );
+    }
+
+    /// The perimeter before (2026-11-03): traced on a byte grid copied from
+    /// the mask.
+    fn perimeter_before(o: &Object) -> f32 {
+        let [x_min, y_min, x_max, y_max] = o.bbox;
+        if o.area == 0 || x_max < x_min || y_max < y_min {
+            return 0.0;
+        }
+
+        // Mask stride uses the INCLUSIVE bbox convention (width = x_max - x_min + 1),
+        // matching how the mask is built everywhere else.
+        let width = (x_max - x_min + 1) as usize;
+        let height = (y_max - y_min + 1) as usize;
+        if width == 0 || height == 0 {
+            return 0.0;
+        }
+
+        // Materialize the mask into a bool grid padded with a 1-pixel false border,
+        // so the boundary trace below never needs a bounds check: any vertex
+        // coordinate the trace can reach maps to a real (possibly-border) grid cell.
+        let pw = width + 2;
+        let ph = height + 2;
+        let mut grid = vec![false; pw * ph];
+        for y in 0..height {
+            let src = y * width;
+            let dst = (y + 1) * pw + 1;
+            for x in 0..width {
+                if o.mask_data.get(src + x).map(|b| *b).unwrap_or(false) {
+                    grid[dst + x] = true;
+                }
+            }
+        }
+
+        let inside = |x: i64, y: i64| -> bool {
+            if x < 0 || y < 0 || x as usize >= pw || y as usize >= ph {
+                false
+            } else {
+                grid[y as usize * pw + x as usize]
+            }
+        };
+        // Pixel at vertex (x, y) in a given walking `direction`, matching
+        // `ij.gui.Wand`'s vertex/direction convention exactly: 0 -> pixel
+        // (x, y); 1 -> pixel (x, y-1); 2 -> pixel (x-1, y-1); 3 -> pixel (x-1, y).
+        let inside_dir = |x: i64, y: i64, direction: i64| -> bool {
+            match direction.rem_euclid(4) {
+                0 => inside(x, y),
+                1 => inside(x, y - 1),
+                2 => inside(x - 1, y - 1),
+                _ => inside(x - 1, y),
+            }
+        };
+
+        // Start at the first foreground pixel in row-major grid order - always
+        // exists since `o.area > 0` was already checked above.
+        let Some(start_idx) = grid.iter().position(|&b| b) else {
+            return 0.0;
+        };
+        let start_x = (start_idx % pw) as i64;
+        let start_y = (start_idx / pw) as i64;
+
+        // `inside(start_x, start_y)` is always true (it's the foreground pixel
+        // we just found), so this always takes the `1` branch - ImageJ's other
+        // branch only matters when starting from a caller-supplied point that
+        // might be outside, which never happens here.
+        let start_direction: i64 = 1;
+        let mut x = start_x;
+        let mut y = start_y;
+        let mut direction = start_direction;
+
+        let mut xp: Vec<i64> = Vec::new();
+        let mut yp: Vec<i64> = Vec::new();
+        loop {
+            // Try turning left first (direction + 1), then straight, then
+            // right - the first of those with an inside pixel wins. Mirrors
+            // `Wand.traceEdge`'s 8-connected search exactly, including that
+            // the last candidate is taken on faith without being re-tested:
+            // if neither "left" nor "straight" has an inside pixel, "right"
+            // is topologically guaranteed to (we're standing on a real
+            // boundary edge), so ImageJ doesn't bother checking it either.
+            let mut new_direction = direction + 1;
+            loop {
+                if inside_dir(x, y, new_direction) {
+                    break;
+                }
+                new_direction -= 1;
+                if new_direction < direction {
+                    break;
+                }
+            }
+            if new_direction != direction {
+                xp.push(x);
+                yp.push(y);
+            }
+            match new_direction.rem_euclid(4) {
+                0 => x += 1,
+                1 => y -= 1,
+                2 => x -= 1,
+                _ => y += 1,
+            }
+            direction = new_direction;
+            if x == start_x && y == start_y && direction.rem_euclid(4) == start_direction {
+                break;
+            }
+        }
+
+        let n = xp.len();
+        if n < 4 {
+            return 0.0;
+        }
+
+        // `ij.gui.PolygonRoi.getTracedPerimeter`: walk the traced polygon,
+        // summing the horizontal/vertical run lengths and counting corners,
+        // then apply the correction that turns a naive (overestimated) crack-
+        // boundary length into ImageJ's actual reported perimeter.
+        let mut sumdx = 0i64;
+        let mut sumdy = 0i64;
+        let mut n_corners = 0i64;
+        let mut dx1 = xp[0] - xp[n - 1];
+        let mut dy1 = yp[0] - yp[n - 1];
+        let mut side1 = dx1.abs() + dy1.abs();
+        let mut corner = false;
+        for i in 0..n {
+            let next_i = (i + 1) % n;
+            let dx2 = xp[next_i] - xp[i];
+            let dy2 = yp[next_i] - yp[i];
+            sumdx += dx1.abs();
+            sumdy += dy1.abs();
+            let side2 = dx2.abs() + dy2.abs();
+            if side1 > 1 || !corner {
+                corner = true;
+                n_corners += 1;
+            } else {
+                corner = false;
+            }
+            dx1 = dx2;
+            dy1 = dy2;
+            side1 = side2;
+        }
+
+        (sumdx + sumdy) as f32 - n_corners as f32 * (2.0 - std::f32::consts::SQRT_2)
+    }
+
+    /// Traced on the mask's bits: the perimeter of before - random masks
+    /// with holes, several parts, one-pixel lines.
+    #[test]
+    fn perimeter_is_the_one_of_before() {
+        let mut seed = 0x853c_49e6_748f_ea9bu64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for case in 0..2000 {
+            let (w, h) = (1 + next(30), 1 + next(30));
+            let fill = 1 + next(9);
+            let mut mask = BitVec::<u64, Lsb0>::repeat(false, w * h);
+            for i in 0..w * h {
+                mask.set(i, next(10) < fill);
+            }
+            let area = mask.count_ones();
+            let object = Object::new(ObjectInit {
+                bbox: [3, 5, 3 + w as u32 - 1, 5 + h as u32 - 1],
+                area,
+                mask_data: mask,
+                ..Default::default()
+            });
+            assert_eq!(
+                object.compute_perimeter().to_bits(),
+                perimeter_before(&object).to_bits(),
+                "case {case}: {w} x {h}"
+            );
+        }
     }
 
     #[test]

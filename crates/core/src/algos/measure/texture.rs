@@ -270,78 +270,140 @@ impl Texture {
 
     /// `object`'s features (the pixels of its bounding box, those outside
     /// it set to 0, the zeros left out so only the object's own pixels
-    /// form pairs).
+    /// form pairs). A box of more than [`BANDED_FROM`] pixels is counted in
+    /// bands of rows: the same counts (whole numbers - the order doesn't
+    /// matter), a band's gray levels at a time.
     pub(super) fn object_features(
         &self,
         object: &Object,
         cache: &GlobalPipelineCache,
         levels: &Levels,
     ) -> Option<Features> {
-        let channel = self.channel.0 as i32;
-        let views = cache.resolve_channel_views_for_bbox(object.bbox);
-        let tiles: Vec<(ImageTile, bool, &[f32])> = views
-            .iter()
-            .filter(|((c, _), _, _)| *c == channel)
-            .filter_map(|((_, tile), rgb, container)| {
-                Some((*tile, *rgb, channel_pixel_slice(container)?))
-            })
-            .collect();
         let [x0, y0, x1, y1] = object.bbox.map(|v| v as usize);
         let (width, height) = (x1 - x0 + 1, y1 - y0 + 1);
-        let mut grid = vec![0u8; width * height];
-        for y in 0..height {
-            for x in 0..width {
-                if !object.mask_data.get(y * width + x).is_some_and(|b| *b) {
-                    continue;
-                }
-                let (gx, gy) = (x0 + x, y0 + y);
-                grid[y * width + x] = tiles
-                    .iter()
-                    .find_map(|(t, rgb, samples)| {
-                        let inside = gx >= t.offset_x
-                            && gy >= t.offset_y
-                            && gx < t.offset_x + t.width
-                            && gy < t.offset_y + t.height;
-                        inside.then(|| {
-                            levels.of(sample_channel_pixel(
-                                *rgb,
-                                samples,
-                                (gy - t.offset_y) * t.width + gx - t.offset_x,
-                            ))
-                        })
-                    })
-                    .unwrap_or(0);
-            }
-        }
-        let max = grid.iter().copied().max().unwrap_or(0) as usize;
-        let distance = self.scale as isize;
+        let distance = self.scale as usize;
+        let rows_per_band = match width * height > BANDED_FROM {
+            true => (BAND_BYTES / width).max(1),
+            false => height,
+        };
+        let mut max = 0u8;
         SCRATCH.with_borrow_mut(|counts| {
-            for (d, ((dy, dx), _)) in DIRECTIONS.iter().enumerate() {
-                let (dy, dx) = (dy * distance, dx * distance);
-                for y in 0..height as isize {
-                    let y2 = y + dy;
-                    if y2 < 0 || y2 >= height as isize {
-                        continue;
-                    }
-                    for x in 0..width as isize {
-                        let x2 = x + dx;
-                        if x2 < 0 || x2 >= width as isize {
+            for first in (0..height).step_by(rows_per_band) {
+                let last = (first + rows_per_band).min(height);
+                // The band's rows and those its pairs reach below it.
+                let rows = first..(last + distance).min(height);
+                let grid = self.object_levels(object, cache, levels, rows.clone());
+                max = max.max(grid.iter().copied().max().unwrap_or(0));
+                let at = |y: usize, x: usize| grid[(y - rows.start) * width + x];
+                for (d, ((dy, dx), _)) in DIRECTIONS.iter().enumerate() {
+                    let (dy, dx) = (dy * distance as isize, dx * distance as isize);
+                    for y in first..last {
+                        let y2 = y as isize + dy;
+                        if y2 < 0 || y2 >= rows.end as isize {
                             continue;
                         }
-                        let a = grid[(y * width as isize + x) as usize];
-                        let b = grid[(y2 * width as isize + x2) as usize];
-                        if a != 0 && b != 0 {
-                            counts.add(d, a, b);
+                        for x in 0..width as isize {
+                            let x2 = x + dx;
+                            if x2 < 0 || x2 >= width as isize {
+                                continue;
+                            }
+                            let a = at(y, x as usize);
+                            let b = at(y2 as usize, x2 as usize);
+                            if a != 0 && b != 0 {
+                                counts.add(d, a, b);
+                            }
                         }
                     }
                 }
             }
-            let features = counts.features(max + 1);
+            let features = counts.features(max as usize + 1);
             counts.clear();
             features
         })
     }
+
+    /// The gray levels of `object`'s pixels in `rows` of its bounding box
+    /// (0 outside it), row-major: the channel's tiles one at a time (a
+    /// tissue-sized object spans most of a slide); a pixel two tiles cover
+    /// is read from the first, in the cache's key order.
+    fn object_levels(
+        &self,
+        object: &Object,
+        cache: &GlobalPipelineCache,
+        levels: &Levels,
+        rows: std::ops::Range<usize>,
+    ) -> Vec<u8> {
+        let channel = self.channel.0 as i32;
+        let [x0, y0, x1, _] = object.bbox.map(|v| v as usize);
+        let width = x1 - x0 + 1;
+        let (gy0, gy1) = (y0 + rows.start, y0 + rows.end - 1);
+        let mut grid = vec![0u8; width * rows.len()];
+        let mut keys: Vec<(i32, ImageTile)> = cache
+            .channel_keys()
+            .filter(|(c, t)| {
+                *c == channel
+                    && t.offset_x <= x1
+                    && x0 < t.offset_x + t.width
+                    && t.offset_y <= gy1
+                    && gy0 < t.offset_y + t.height
+            })
+            .collect();
+        // In reading order (the cache's is a hash map's, new every run).
+        keys.sort_by_key(|(_, t)| (t.offset_y, t.offset_x));
+        let mut earlier: Vec<ImageTile> = Vec::new();
+        for key in keys {
+            let Some(container) = cache.image_cache.get(&CacheAddress::Channel(key)) else {
+                continue;
+            };
+            let rgb = matches!(&*container, ImageContainer::F32Rgb(_));
+            let Some(samples) = channel_pixel_slice(&container) else {
+                continue;
+            };
+            let t = key.1;
+            let covered_before = |gx: usize, gy: usize| {
+                earlier.iter().any(|e| {
+                    gx >= e.offset_x
+                        && gy >= e.offset_y
+                        && gx < e.offset_x + e.width
+                        && gy < e.offset_y + e.height
+                })
+            };
+            for gy in gy0.max(t.offset_y)..=gy1.min(t.offset_y + t.height - 1) {
+                for gx in x0.max(t.offset_x)..=x1.min(t.offset_x + t.width - 1) {
+                    let (x, y) = (gx - x0, gy - y0);
+                    if !object.mask_data.get(y * width + x).is_some_and(|b| *b) {
+                        continue;
+                    }
+                    if !earlier.is_empty() && covered_before(gx, gy) {
+                        continue;
+                    }
+                    grid[(y - rows.start) * width + x] = levels.of(sample_channel_pixel(
+                        rgb,
+                        samples,
+                        (gy - t.offset_y) * t.width + gx - t.offset_x,
+                    ));
+                }
+            }
+            earlier.push(t);
+        }
+        grid
+    }
 }
+
+/// From this many pixels of its bounding box on, an object's texture is
+/// counted in bands of rows (the box's gray levels were a byte per pixel:
+/// 1 GB for a tissue-sized object on a 1-gigapixel slide; tests: small, to
+/// cross bands).
+#[cfg(not(test))]
+const BANDED_FROM: usize = 1 << 24;
+#[cfg(test)]
+const BANDED_FROM: usize = 1 << 10;
+
+/// Gray levels a band holds (16 MB; tests: a few rows).
+#[cfg(not(test))]
+const BAND_BYTES: usize = 1 << 24;
+#[cfg(test)]
+const BAND_BYTES: usize = 1 << 9;
 
 thread_local! {
     /// Each thread's co-occurrence counts for objects: allocated once, only
@@ -1047,5 +1109,150 @@ mod tests {
             "{}",
             status.lines().find(|l| l.starts_with("VmHWM")).unwrap()
         );
+    }
+
+    /// The object texture before (2026-11-03): the whole box's gray levels
+    /// at once.
+    fn object_features_before(
+        texture: &Texture,
+        object: &Object,
+        cache: &GlobalPipelineCache,
+        levels: &Levels,
+    ) -> Option<Features> {
+        let channel = texture.channel.0 as i32;
+        let views = cache.resolve_channel_views_for_bbox(object.bbox);
+        let tiles: Vec<(ImageTile, bool, &[f32])> = views
+            .iter()
+            .filter(|((c, _), _, _)| *c == channel)
+            .filter_map(|((_, tile), rgb, container)| {
+                Some((*tile, *rgb, channel_pixel_slice(container)?))
+            })
+            .collect();
+        let [x0, y0, x1, y1] = object.bbox.map(|v| v as usize);
+        let (width, height) = (x1 - x0 + 1, y1 - y0 + 1);
+        let mut grid = vec![0u8; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                if !object.mask_data.get(y * width + x).is_some_and(|b| *b) {
+                    continue;
+                }
+                let (gx, gy) = (x0 + x, y0 + y);
+                grid[y * width + x] = tiles
+                    .iter()
+                    .find_map(|(t, rgb, samples)| {
+                        let inside = gx >= t.offset_x
+                            && gy >= t.offset_y
+                            && gx < t.offset_x + t.width
+                            && gy < t.offset_y + t.height;
+                        inside.then(|| {
+                            levels.of(sample_channel_pixel(
+                                *rgb,
+                                samples,
+                                (gy - t.offset_y) * t.width + gx - t.offset_x,
+                            ))
+                        })
+                    })
+                    .unwrap_or(0);
+            }
+        }
+        let max = grid.iter().copied().max().unwrap_or(0) as usize;
+        let distance = texture.scale as isize;
+        SCRATCH.with_borrow_mut(|counts| {
+            for (d, ((dy, dx), _)) in DIRECTIONS.iter().enumerate() {
+                let (dy, dx) = (dy * distance, dx * distance);
+                for y in 0..height as isize {
+                    let y2 = y + dy;
+                    if y2 < 0 || y2 >= height as isize {
+                        continue;
+                    }
+                    for x in 0..width as isize {
+                        let x2 = x + dx;
+                        if x2 < 0 || x2 >= width as isize {
+                            continue;
+                        }
+                        let a = grid[(y * width as isize + x) as usize];
+                        let b = grid[(y2 * width as isize + x2) as usize];
+                        if a != 0 && b != 0 {
+                            counts.add(d, a, b);
+                        }
+                    }
+                }
+            }
+            let features = counts.features(max + 1);
+            counts.clear();
+            features
+        })
+    }
+
+    /// Counted in bands of rows (a few rows each here): the features of the
+    /// whole box, bit for bit - random objects over several tiles, scales
+    /// 1 to 4.
+    #[test]
+    fn object_texture_in_bands_is_the_one_of_before() {
+        let mut seed = 0x853c_49e6_748f_ea9bu64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let (side, tile) = (120, 40);
+        let mut cache = GlobalPipelineCache::default();
+        for ty in (0..side).step_by(tile) {
+            for tx in (0..side).step_by(tile) {
+                let samples: Vec<f32> = (0..tile * tile)
+                    .map(|_| next(1000) as f32 / 999.0)
+                    .collect();
+                let size = ImageSize {
+                    width: tile,
+                    height: tile,
+                };
+                let image = ImageContainer::F32Gray(ManagedImage {
+                    data: Image::<f32, 1>::from_size_slice(size, &samples).unwrap(),
+                    tile_offset: Point2d { x: tx, y: ty },
+                    plane: None,
+                    dimensionality: ImageDimensionality::Planar,
+                });
+                let at = ImageTile {
+                    offset_x: tx,
+                    offset_y: ty,
+                    width: tile,
+                    height: tile,
+                };
+                cache.add_to_channel_cache(Arc::new(image), 0, at);
+            }
+        }
+        for case in 0..200 {
+            let (w, h) = (1 + next(100), 1 + next(100));
+            let (x0, y0) = (next(side - w + 1), next(side - h + 1));
+            let mut mask = BitVec::<u64, Lsb0>::repeat(false, w * h);
+            for i in 0..w * h {
+                mask.set(i, next(10) < 8);
+            }
+            let object = Object::new(ObjectInit {
+                bbox: [
+                    x0 as u32,
+                    y0 as u32,
+                    (x0 + w - 1) as u32,
+                    (y0 + h - 1) as u32,
+                ],
+                area: mask.count_ones(),
+                mask_data: mask,
+                ..Default::default()
+            });
+            let texture = Texture {
+                channel: ImageChannelIdx(0),
+                scale: 1 + next(4) as u32,
+                gray_levels: [8, 64, 256][next(3)],
+                directions: TextureDirections::Each,
+            };
+            let levels = texture.levels().unwrap();
+            let bits = |f: Option<Features>| f.map(|f| f.map(|d| d.map(f64::to_bits)));
+            assert_eq!(
+                bits(texture.object_features(&object, &cache, &levels)),
+                bits(object_features_before(&texture, &object, &cache, &levels)),
+                "case {case}: {w} x {h}"
+            );
+        }
     }
 }

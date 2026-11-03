@@ -225,13 +225,31 @@ impl Coloc {
 
     /// The (A, B) values of `object`'s pixels the loaded tiles cover - each
     /// from the first tile of its channel covering it.
-    pub(super) fn object_pixels(
+    ///
+    /// An object of more than [`LISTED_UP_TO`] pixels isn't listed: its
+    /// pixels are read again for each pass, tile by tile of channel A
+    /// ([`ObjectPixels::Read`]) - the same pixels, in tile order.
+    pub(super) fn object_pixels<'a>(
+        &'a self,
+        object: &'a Object,
+        cache: &'a GlobalPipelineCache,
+    ) -> ObjectPixels<'a> {
+        if object.area > LISTED_UP_TO {
+            return ObjectPixels::Read(Box::new(move |f| {
+                self.read_object_pixels(object, cache, f)
+            }));
+        }
+        ObjectPixels::Listed(self.listed_object_pixels(object, cache))
+    }
+
+    /// The (A, B) values of `object`'s pixels, row by row over its box.
+    fn listed_object_pixels(
         &self,
         object: &Object,
         cache: &GlobalPipelineCache,
     ) -> Vec<(f32, f32)> {
         let (a, b) = (self.channel_a.0 as i32, self.channel_b.0 as i32);
-        let views = cache.resolve_channel_views_for_bbox(object.bbox);
+        let views = cache.resolve_channels_for_bbox(object.bbox, |c| c == a || c == b);
         let tiles = |channel: i32| -> Vec<(ImageTile, bool, &[f32])> {
             views
                 .iter()
@@ -271,6 +289,135 @@ impl Coloc {
             }
         }
         pixels
+    }
+
+    /// `object`'s (A, B) values to `f`: channel A's tiles under its box one
+    /// at a time (a pixel two cover from the first, in key order), each
+    /// pixel's B from the first of channel B's tiles covering it.
+    fn read_object_pixels(
+        &self,
+        object: &Object,
+        cache: &GlobalPipelineCache,
+        f: &mut dyn FnMut(f32, f32),
+    ) {
+        let (a, b) = (self.channel_a.0 as i32, self.channel_b.0 as i32);
+        let [x0, y0, x1, y1] = object.bbox.map(|v| v as usize);
+        let width = x1 - x0 + 1;
+        let overlaps = |t: &ImageTile, [bx0, by0, bx1, by1]: [usize; 4]| {
+            t.offset_x <= bx1
+                && bx0 < t.offset_x + t.width
+                && t.offset_y <= by1
+                && by0 < t.offset_y + t.height
+        };
+        let inside = |t: &ImageTile, x: usize, y: usize| {
+            x >= t.offset_x
+                && y >= t.offset_y
+                && x < t.offset_x + t.width
+                && y < t.offset_y + t.height
+        };
+        let mut keys_a: Vec<ImageTile> = cache
+            .channel_keys()
+            .filter(|(c, t)| *c == a && overlaps(t, [x0, y0, x1, y1]))
+            .map(|(_, t)| t)
+            .collect();
+        // In reading order (the cache's is a hash map's, new every run).
+        keys_a.sort_by_key(|t| (t.offset_y, t.offset_x));
+        let mut keys_b: Vec<ImageTile> = cache
+            .channel_keys()
+            .filter(|(c, t)| *c == b && overlaps(t, [x0, y0, x1, y1]))
+            .map(|(_, t)| t)
+            .collect();
+        // In reading order (the cache's is a hash map's, new every run).
+        keys_b.sort_by_key(|t| (t.offset_y, t.offset_x));
+        let load = |channel: i32, tile: ImageTile| {
+            let image = cache
+                .image_cache
+                .get(&CacheAddress::Channel((channel, tile)))?;
+            matches!(
+                &*image,
+                ImageContainer::F32Gray(_) | ImageContainer::F32Rgb(_)
+            )
+            .then_some((tile, image))
+        };
+        let mut earlier: Vec<ImageTile> = Vec::new();
+        for ta in keys_a {
+            let Some((_, image_a)) = load(a, ta) else {
+                continue;
+            };
+            let rgb_a = matches!(&*image_a, ImageContainer::F32Rgb(_));
+            let samples_a = channel_pixel_slice(&image_a).unwrap_or_default();
+            let rows = y0.max(ta.offset_y)..=y1.min(ta.offset_y + ta.height - 1);
+            let columns = x0.max(ta.offset_x)..=x1.min(ta.offset_x + ta.width - 1);
+            // Channel B's tiles over this part, in key order.
+            let part = [*columns.start(), *rows.start(), *columns.end(), *rows.end()];
+            let tiles_b: Vec<(ImageTile, Arc<ImageContainer>)> = keys_b
+                .iter()
+                .filter(|t| overlaps(t, part))
+                .filter_map(|t| load(b, *t))
+                .collect();
+            for y in rows {
+                for x in columns.clone() {
+                    if !object
+                        .mask_data
+                        .get((y - y0) * width + (x - x0))
+                        .is_some_and(|bit| *bit)
+                    {
+                        continue;
+                    }
+                    if earlier.iter().any(|e| inside(e, x, y)) {
+                        continue;
+                    }
+                    let va = sample_channel_pixel(
+                        rgb_a,
+                        samples_a,
+                        (y - ta.offset_y) * ta.width + x - ta.offset_x,
+                    );
+                    let vb = tiles_b
+                        .iter()
+                        .find(|(t, _)| inside(t, x, y))
+                        .map(|(t, image)| {
+                            sample_channel_pixel(
+                                matches!(&**image, ImageContainer::F32Rgb(_)),
+                                channel_pixel_slice(image).unwrap_or_default(),
+                                (y - t.offset_y) * t.width + x - t.offset_x,
+                            )
+                        });
+                    if let Some(vb) = vb {
+                        f(va, vb);
+                    }
+                }
+            }
+            earlier.push(ta);
+        }
+    }
+}
+
+/// From this many pixels on, an object's (A, B) values aren't listed (8
+/// bytes per pixel: 8 GB for a tissue-sized object on a 1-gigapixel slide)
+/// but read again for each pass (tests: a few).
+#[cfg(not(test))]
+const LISTED_UP_TO: usize = 1 << 22;
+#[cfg(test)]
+const LISTED_UP_TO: usize = 64;
+
+/// An object's (A, B) values, as often as needed.
+pub(super) enum ObjectPixels<'a> {
+    /// Held: the pixels row by row over the object's box.
+    Listed(Vec<(f32, f32)>),
+    /// Read from the tiles each time (a tissue-sized object).
+    Read(Box<dyn Fn(&mut dyn FnMut(f32, f32)) + Send + Sync + 'a>),
+}
+
+impl ObjectPixels<'_> {
+    fn each(&self, f: &mut dyn FnMut(f32, f32)) {
+        match self {
+            Self::Listed(pixels) => {
+                for p in pixels {
+                    f(p.0, p.1);
+                }
+            }
+            Self::Read(read) => read(f),
+        }
     }
 }
 
@@ -914,19 +1061,38 @@ struct ObjectSums {
 }
 
 impl ObjectSums {
-    fn of(pixels: &[(f32, f32)], threshold_percent: f64, (cx, cy): (f64, f64)) -> Self {
-        let max =
-            |pick: fn(&(f32, f32)) -> f32| pixels.iter().map(pick).fold(f32::MIN, f32::max) as f64;
+    /// From `pixels`, in three passes over them (counts, maxima and means;
+    /// the deviations and the sums above the thresholds; Pearson) - each sum
+    /// over the pixels in their order, as one at a time. `distinct` gets
+    /// every value.
+    fn of(
+        pixels: &ObjectPixels,
+        threshold_percent: f64,
+        (cx, cy): (f64, f64),
+        distinct: &mut (DistinctValues, DistinctValues),
+    ) -> Self {
+        // What `Iterator::sum` starts from (sums as it adds them).
+        let zero: f64 = std::iter::empty::<f64>().sum();
+        let (mut n, mut sum_x, mut sum_y) = (0usize, zero, zero);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        let mut costes_any = (false, false, false);
+        pixels.each(&mut |a, b| {
+            distinct.0.insert(a);
+            distinct.1.insert(b);
+            n += 1;
+            sum_x += a as f64;
+            sum_y += b as f64;
+            max_x = max_x.max(a);
+            max_y = max_y.max(b);
+            costes_any.0 |= a as f64 > cx;
+            costes_any.1 |= b as f64 > cy;
+            costes_any.2 |= a as f64 > cx && b as f64 > cy;
+        });
         let thresholds = (
-            (threshold_percent / 100.0) * max(|p| p.0),
-            (threshold_percent / 100.0) * max(|p| p.1),
+            (threshold_percent / 100.0) * max_x as f64,
+            (threshold_percent / 100.0) * max_y as f64,
         );
-        let costes_any = (
-            pixels.iter().any(|v| v.0 as f64 > cx),
-            pixels.iter().any(|v| v.1 as f64 > cy),
-            pixels.iter().any(|v| v.0 as f64 > cx && v.1 as f64 > cy),
-        );
-        if pixels.is_empty() {
+        if n == 0 {
             return Self {
                 empty: true,
                 thresholds,
@@ -936,29 +1102,18 @@ impl ObjectSums {
         }
         // Pearson: sum of the products of the deviations over the
         // product of the square roots of their sums of squares.
-        let n = pixels.len() as f64;
-        let mean_x = pixels.iter().map(|p| p.0 as f64).sum::<f64>() / n;
-        let mean_y = pixels.iter().map(|p| p.1 as f64).sum::<f64>() / n;
-        let std_x = pixels
-            .iter()
-            .map(|p| (p.0 as f64 - mean_x).powi(2))
-            .sum::<f64>()
-            .sqrt();
-        let std_y = pixels
-            .iter()
-            .map(|p| (p.1 as f64 - mean_y).powi(2))
-            .sum::<f64>()
-            .sqrt();
-        let pearson = pixels
-            .iter()
-            .map(|p| (p.0 as f64 - mean_x) * (p.1 as f64 - mean_y) / (std_x * std_y))
-            .sum();
-
+        let (mean_x, mean_y) = (sum_x / n as f64, sum_y / n as f64);
+        let (mut squares_x, mut squares_y) = (zero, zero);
         let (tx, ty) = thresholds;
         let (mut tot_x, mut tot_y) = (0.0, 0.0);
         let mut comb = Sums::default();
-        for p in pixels {
-            let (x, y) = (p.0 as f64, p.1 as f64);
+        let (mut costes_tot_x, mut costes_tot_y) = (0.0, 0.0);
+        let mut costes_comb = Sums::default();
+        let costes = !cx.is_nan();
+        pixels.each(&mut |a, b| {
+            let (x, y) = (a as f64, b as f64);
+            squares_x += (x - mean_x).powi(2);
+            squares_y += (y - mean_y).powi(2);
             if x >= tx {
                 tot_x += x;
             }
@@ -968,13 +1123,7 @@ impl ObjectSums {
             if x >= tx && y >= ty {
                 comb.add(x, y);
             }
-        }
-
-        let (mut costes_tot_x, mut costes_tot_y) = (0.0, 0.0);
-        let mut costes_comb = Sums::default();
-        if !cx.is_nan() {
-            for p in pixels {
-                let (x, y) = (p.0 as f64, p.1 as f64);
+            if costes {
                 if x >= cx {
                     costes_tot_x += x;
                 }
@@ -985,7 +1134,12 @@ impl ObjectSums {
                     costes_comb.add(x, y);
                 }
             }
-        }
+        });
+        let (std_x, std_y) = (squares_x.sqrt(), squares_y.sqrt());
+        let mut pearson = zero;
+        pixels.each(&mut |a, b| {
+            pearson += (a as f64 - mean_x) * (b as f64 - mean_y) / (std_x * std_y);
+        });
         Self {
             empty: false,
             thresholds,
@@ -1078,9 +1232,9 @@ impl DistinctValues {
 /// threads read the same tiles - with the channel tiles spilled to disk,
 /// threads in different places of the slide made the cache load tiles
 /// again and again.
-pub(super) fn object_values(
+pub(super) fn object_values<'p>(
     groups: &[Vec<usize>],
-    pixels_of: impl Fn(usize) -> Vec<(f32, f32)> + Sync,
+    pixels_of: impl Fn(usize) -> ObjectPixels<'p> + Sync,
     threshold_percent: f64,
     costes: (f64, f64),
 ) -> Vec<Values> {
@@ -1097,14 +1251,11 @@ pub(super) fn object_values(
                         (DistinctValues::default(), DistinctValues::default()),
                     )
                 },
-                |(mut sums, (mut xs, mut ys)), &i| {
+                |(mut sums, mut distinct), &i| {
                     let pixels = pixels_of(i);
-                    for p in &pixels {
-                        xs.insert(p.0);
-                        ys.insert(p.1);
-                    }
-                    sums.push((i, ObjectSums::of(&pixels, threshold_percent, costes)));
-                    (sums, (xs, ys))
+                    let object = ObjectSums::of(&pixels, threshold_percent, costes, &mut distinct);
+                    sums.push((i, object));
+                    (sums, distinct)
                 },
             )
             .reduce(
@@ -1147,15 +1298,15 @@ pub(super) fn object_values(
                     }
                     let (tx, ty) = s.thresholds;
                     let (mut wx, mut wy) = (0.0, 0.0);
-                    for p in pixels_of(i) {
-                        let (x, y) = (p.0 as f64, p.1 as f64);
+                    pixels_of(i).each(&mut |a, b| {
+                        let (x, y) = (a as f64, b as f64);
                         if x >= tx && y >= ty {
                             let d = (ranks.0.rank(x) as f64 - ranks.1.rank(y) as f64).abs();
                             let weight = (r - d) / r;
                             wx += x * weight;
                             wy += y * weight;
                         }
-                    }
+                    });
                     (wx, wy)
                 })
                 .collect();
@@ -1670,7 +1821,12 @@ mod tests {
                         .collect();
                     by_seven.reverse();
                     for groups in [all_in_one, by_seven] {
-                        let got = object_values(&groups, |i| objects[i].clone(), threshold, costes);
+                        let got = object_values(
+                            &groups,
+                            |i| ObjectPixels::Listed(objects[i].clone()),
+                            threshold,
+                            costes,
+                        );
                         for (o, (g, e)) in got.iter().zip(&expected).enumerate() {
                             for (i, (g, e)) in g.iter().zip(e).enumerate() {
                                 assert!(
@@ -1907,5 +2063,64 @@ mod tests {
             "BENCH measure colocalization {size}², {} objects, costes {costes:?}: image {image_elapsed:?}, objects {objects_elapsed:?}, {hwm}",
             id - 1
         );
+    }
+
+    /// A big object read tile by tile ([`ObjectPixels::Read`], here from
+    /// 64 pixels on): the same pixels as listed row by row, and the same
+    /// values up to the order the sums add them in.
+    #[test]
+    fn big_objects_read_tile_by_tile_give_the_listed_values() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/colocalization.json");
+        let cases: Vec<Case> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut read_objects = 0;
+        for case in &cases {
+            let cache = cache_of(case);
+            let coloc = Coloc {
+                channel_a: ImageChannelIdx(0),
+                channel_b: ImageChannelIdx(1),
+                threshold_percent: case.threshold_percent,
+                costes: CostesMethod::Off,
+            };
+            let objects: Vec<&Object> = cache.object_cache.values().collect();
+            for object in &objects {
+                let ObjectPixels::Read(read) = coloc.object_pixels(object, &cache) else {
+                    continue;
+                };
+                read_objects += 1;
+                let mut got = Vec::new();
+                read(&mut |a, b| got.push((a, b)));
+                let mut listed = coloc.listed_object_pixels(object, &cache);
+                let key = |p: &(f32, f32)| (p.0.to_bits(), p.1.to_bits());
+                got.sort_by_key(key);
+                listed.sort_by_key(key);
+                assert_eq!(got, listed, "{}: the same pixels", case.name);
+            }
+            let groups = vec![(0..objects.len()).collect::<Vec<_>>()];
+            let threshold = case.threshold_percent as f64;
+            let costes = (0.3, 0.2);
+            let read = object_values(
+                &groups,
+                |i| coloc.object_pixels(objects[i], &cache),
+                threshold,
+                costes,
+            );
+            let listed = object_values(
+                &groups,
+                |i| ObjectPixels::Listed(coloc.listed_object_pixels(objects[i], &cache)),
+                threshold,
+                costes,
+            );
+            for (r, l) in read.iter().zip(&listed) {
+                for (r, l) in r.iter().zip(l) {
+                    assert!(
+                        (r.is_nan() && l.is_nan()) || (r - l).abs() <= 1e-12 * l.abs().max(1.0),
+                        "{}: {r} vs {l}",
+                        case.name
+                    );
+                }
+            }
+        }
+        assert!(read_objects > 0, "some objects read tile by tile");
     }
 }

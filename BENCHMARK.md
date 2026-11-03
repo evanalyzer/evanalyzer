@@ -1868,6 +1868,68 @@ runs (medians); peak = RSS added by the step:
 | 4096² | 828.9 ms / +644 MB | 526.1 ms / +262 MB |
 | 16384² slide, 4096² tiles | 1,180.7 ms / +2,050 MB | 621.1 ms / +198-259 MB |
 
+## Tissue-sized objects (2026-11-03)
+
+One object over most of a slide (a thresholded organ, a Voronoi region
+over glass) took RAM per pixel of its box: every channel's tiles under it
+at once (Transform/Object Math/Colocalize/Load Annotated/Propagation via
+`measure_intensities`, object texture and colocalization), its fractional
+values for the median (4 bytes per pixel per channel), the shape's padded
+mask and distances (17 bytes per pixel, kept by the thread), a byte grid for
+the perimeter and the texture, the coloc's value pairs (8 bytes per pixel).
+Now:
+
+- intensities: one channel tile at a time; above 4M values per channel the
+  list is dropped and the spread worked out exactly from the pixels read
+  again (variance in the list's order, order statistics by 16-bit radix
+  passes) - the same numbers;
+- shape: Euler number and radii row by row (column runs + the row
+  envelope; the median radius by counting per whole radius, then the d²
+  of its bucket) - the same numbers; perimeter from the mask's bits;
+- texture: only its channel, gray levels in bands of rows - the same counts
+  and features;
+- object coloc: only its two channels; above 4M pixels three passes over
+  the pixels read tile by tile instead of a list - the sums in tile order,
+  last bits can differ for these objects;
+- Object Math: many partners painted into one mask first (each pixel asked
+  every partner: 10¹² checks for a tissue cell and 16,000 nuclei).
+- an object's tiles in reading order: the cache's order is a hash map's,
+  new every run (sums and channel order of objects over several tiles
+  changed from run to run).
+
+`whole_image_ram` now has a tissue-sized cell: before Shape 17.1, Transform
+16.6, Object Coloc 16.0, Texture 9.4, Object Math 8.6 bytes per slide pixel;
+now all ≤ 0.82.
+
+`bench_huge_object_*` (core, ignored: an 8192² slide in 2048² tiles, cache
+256 MB, one tissue cell + 16,384 cells, one thread), old / new alternated,
+2 runs; values hash identical (Transform, Shape, Texture):
+
+| Command | Old: time / peak | New |
+|---|---|---|
+| Transform Objects | 3.6 s / 1,024 MB | 3.8 s / 302 MB |
+| Object Math | > 10 min (stopped) | 17.4 s / 299 MB |
+| Measure Object Shape | 2.0 s / 1,149 MB | 2.5 s / 9 MB |
+| Measure Object Texture | 1.85 s / 540 MB | 2.5 s / 240 MB |
+| Measure Object Colocalization | 17.9 s / 1,076 MB | 19.4 s / 272 MB |
+
+Huge objects take 8-35 % longer (their pixels read several times instead
+of held). Small objects take the old way: shape 15.1 → 13.5 µs, perimeter
+1.18 → 1.10 µs per small object. Pipelines (old / new alternated, medians,
+identical rows hashes):
+
+| Case | Old: wall / CPU / peak | New |
+|---|---|---|
+| 400 × 1024² (4 + 6 runs) | 3.96 s / 14.9 s / 949-1,004 MB | 4.01 s / 14.9 s / 970-1,005 MB |
+| 200 × 2048² (4) | 4.07 s / 32.7 s / 2,016 MB | 4.14 s / 32.2 s / 1,988 MB |
+| + 5 Classify Objects (10) | 4.51 s / 34.2 s / 2,025 MB | 4.35 s / 34.2 s / 2,039 MB |
+| 2 threads (4) | 12.25 s / 23.0 s / 541 MB | 11.86 s / 22.4 s / 555 MB |
+| `tests/haut` (4) | 16.6 s / 214 s / 7,240 MB | 16.75 s / 216 s / 7,244 MB |
+
+No difference beyond the noise. Also found: a list past 65,536 values
+checked "all whole gray values?" over the whole list for every value -
+quadratic when it started with whole values (a test: 18.5 → 0.1 s).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

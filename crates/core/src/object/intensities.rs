@@ -401,7 +401,26 @@ struct ChannelSums {
     /// images) are counted per value here instead of listed (256 KB however
     /// big the object); `values` then holds none.
     counts: Option<Box<[u32]>>,
+    /// The list reached the accumulator's cap ([`CAPPED_LIST`]): no values
+    /// kept from then on, only how many there are - the spread is worked
+    /// out from the pixels read again ([`IntensityAccumulator::finish_with`]).
+    capped: Option<usize>,
+    /// Some value of the list isn't a whole gray value (then it never
+    /// becomes counts) - kept as values come, not checked over the whole
+    /// list on every value past [`LIST_UP_TO`] (quadratic when the list
+    /// started with whole values).
+    not_all_whole: bool,
 }
+
+/// Values a capped accumulator ([`IntensityAccumulator::capped`]) lists per
+/// channel at most (16 MB): a tissue-sized object's fractional values (a
+/// blurred or background-subtracted channel) were 4 bytes per pixel per
+/// channel - 24 GB for 6 channels of a 1-gigapixel slide. (Tests: the
+/// least, [`LIST_UP_TO`], so they take this way too.)
+#[cfg(not(test))]
+pub const CAPPED_LIST: usize = 1 << 22;
+#[cfg(test)]
+pub const CAPPED_LIST: usize = LIST_UP_TO;
 
 /// Values listed per channel before whole gray values are counted instead.
 const LIST_UP_TO: usize = 1 << 16;
@@ -417,13 +436,20 @@ impl ChannelSums {
             max: f32::MIN,
             values: Vec::new(),
             counts: None,
+            capped: None,
+            not_all_whole: false,
         }
     }
 
-    fn push(&mut self, value: f32) {
+    /// Adds `value`; `cap`: list at most this many values (see `capped`).
+    fn push(&mut self, value: f32, cap: Option<usize>) {
         self.sum += value as f64;
         self.min = self.min.min(value);
         self.max = self.max.max(value);
+        if let Some(n) = &mut self.capped {
+            *n += 1;
+            return;
+        }
         let level = value as usize;
         let whole = level as f32 == value && level < GRAY_LEVELS;
         match &mut self.counts {
@@ -434,21 +460,23 @@ impl ChannelSums {
                 self.values = self.listed();
                 self.counts = None;
                 self.values.push(value);
+                self.not_all_whole = true;
             }
             None => {
                 self.values.push(value);
-                if self.values.len() >= LIST_UP_TO
-                    && self.values.iter().all(|v| {
-                        let level = *v as usize;
-                        level as f32 == *v && level < GRAY_LEVELS
-                    })
-                {
+                self.not_all_whole |= !whole;
+                if self.values.len() >= LIST_UP_TO && !self.not_all_whole {
                     let mut counts = vec![0u32; GRAY_LEVELS].into_boxed_slice();
                     for v in self.values.drain(..) {
                         counts[v as usize] += 1;
                     }
                     self.values = Vec::new();
                     self.counts = Some(counts);
+                } else if cap.is_some_and(|cap| self.values.len() >= cap) {
+                    // A list past `LIST_UP_TO` holds a value that isn't a
+                    // whole gray value: it stays a list to the end.
+                    self.capped = Some(self.values.len());
+                    self.values = Vec::new();
                 }
             }
         }
@@ -467,6 +495,9 @@ impl ChannelSums {
     }
 
     fn len(&self) -> usize {
+        if let Some(n) = self.capped {
+            return n;
+        }
         match &self.counts {
             Some(counts) => counts.iter().map(|c| *c as usize).sum(),
             None => self.values.len(),
@@ -480,65 +511,80 @@ impl ChannelSums {
 pub struct IntensityAccumulator {
     /// In the order channels were first seen.
     channels: IndexMap<i32, ChannelSums>,
+    /// Values listed per channel at most (`None`: all).
+    cap: Option<usize>,
 }
 
 impl IntensityAccumulator {
+    /// Lists at most [`CAPPED_LIST`] values per channel - for callers that
+    /// can read the pixels again ([`Self::finish_with`]).
+    pub fn capped() -> Self {
+        Self::capped_at(CAPPED_LIST)
+    }
+
+    /// [`Self::capped`] at `cap` values (at least [`LIST_UP_TO`]).
+    fn capped_at(cap: usize) -> Self {
+        Self {
+            channels: IndexMap::new(),
+            cap: Some(cap.max(LIST_UP_TO)),
+        }
+    }
+
     /// Adds the set pixels of `mask` (relative to `bbox` = `[x1, y1, x2, y2]`,
     /// inclusive) that `tiles` cover. A channel of `tiles` that covers none
     /// of them still appears in the result (empty).
     pub fn add(&mut self, mask: &BitVec<u64, Lsb0>, bbox: [u32; 4], tiles: &[ChannelTile<'_>]) {
-        let [x_min, y_min, x_max, y_max] = bbox.map(|v| v as usize);
-        let width = x_max - x_min + 1;
-        // At most this many values per channel: room for them at once, not
-        // grown step by step (one allocation instead of ~log2(n)).
-        let pixels = mask.count_ones().min(LIST_UP_TO);
         for (k, tile) in tiles.iter().enumerate() {
-            let entry = self
-                .channels
-                .entry(tile.channel)
-                .or_insert_with(ChannelSums::new);
-            if entry.counts.is_none() {
-                entry
-                    .values
-                    .reserve(pixels.saturating_sub(entry.values.len()));
-            }
-            // The part of the mask's box this region covers.
-            let t = tile.tile;
-            let (x0, x1) = (x_min.max(t.offset_x), (x_max + 1).min(t.offset_x + t.width));
-            let (y0, y1) = (
-                y_min.max(t.offset_y),
-                (y_max + 1).min(t.offset_y + t.height),
-            );
-            if x0 >= x1 || y0 >= y1 {
-                continue;
-            }
-            // A pixel an earlier region of the channel covers was taken
-            // from that one.
-            let earlier: Vec<&ChannelTile<'_>> = tiles[..k]
+            let earlier = tiles[..k]
                 .iter()
                 .filter(|e| e.channel == tile.channel)
-                .collect();
-            for y in y0..y1 {
-                let mask_row = (y - y_min) * width;
-                let tile_row = (y - t.offset_y) * t.width;
-                for x in x0..x1 {
-                    if !mask[mask_row + x - x_min] {
-                        continue;
-                    }
-                    if !earlier.is_empty() && earlier.iter().any(|e| e.covers(x, y)) {
-                        continue;
-                    }
-                    let value =
-                        sample_channel_pixel(tile.is_rgb, tile.samples, tile_row + x - t.offset_x);
-                    entry.push(value);
-                }
-            }
+                .map(|e| e.tile);
+            self.add_tile(mask, bbox, tile, earlier);
         }
     }
 
+    /// [`Self::add`] for one tile of `tiles` at a time: `tile`, with the
+    /// regions of its channel added before it (`earlier`: a pixel one of
+    /// them covers was taken from it). The same sums as [`Self::add`] when
+    /// called for each tile in order - with only one tile's pixels loaded.
+    pub fn add_tile(
+        &mut self,
+        mask: &BitVec<u64, Lsb0>,
+        bbox: [u32; 4],
+        tile: &ChannelTile<'_>,
+        earlier: impl Iterator<Item = ImageTile>,
+    ) {
+        // At most this many values per channel: room for them at once, not
+        // grown step by step (one allocation instead of ~log2(n)).
+        let pixels = mask.count_ones().min(LIST_UP_TO);
+        let cap = self.cap;
+        let entry = self
+            .channels
+            .entry(tile.channel)
+            .or_insert_with(ChannelSums::new);
+        if entry.counts.is_none() && entry.capped.is_none() {
+            entry
+                .values
+                .reserve(pixels.saturating_sub(entry.values.len()));
+        }
+        tile_values(mask, bbox, tile, earlier, |value| entry.push(value, cap));
+    }
+
     /// The intensities per channel; a channel without covered pixels is 0
-    /// (and no spread).
+    /// (and no spread). A capped channel ([`Self::capped`]) gets no spread
+    /// here - see [`Self::finish_with`].
     pub fn finish(self) -> IndexMap<i32, Intensity> {
+        self.finish_with(|_, _| {})
+    }
+
+    /// [`Self::finish`], the spread of a capped channel worked out from its
+    /// values read again: `read(channel, f)` gives `f` the channel's pixel
+    /// values in the order they were added (as [`Self::add_tile`] did) -
+    /// several times, the same numbers as from the list.
+    pub fn finish_with(
+        self,
+        mut read: impl FnMut(i32, &mut dyn FnMut(f32)),
+    ) -> IndexMap<i32, Intensity> {
         self.channels
             .into_iter()
             .map(|(channel, mut c)| {
@@ -552,14 +598,24 @@ impl IntensityAccumulator {
                     avg_intensity: avg,
                     ..Default::default()
                 };
-                match &c.counts {
-                    Some(counts) => intensity.set_spread_to(Some(Spread::from_counts(
+                match (&c.counts, c.capped) {
+                    (Some(counts), _) => intensity.set_spread_to(Some(Spread::from_counts(
                         counts,
                         |level| level as f64,
                         n,
                         avg,
                     ))),
-                    None => intensity.set_spread(&mut c.values),
+                    (None, Some(_)) => {
+                        // The list in its order: the pixels as added, through
+                        // what the list did with them (see `ListOrder`).
+                        let mut values = |emit: &mut dyn FnMut(f32)| {
+                            let mut order = ListOrder::new(emit);
+                            read(channel, &mut |value| order.push(value));
+                            order.finish();
+                        };
+                        intensity.set_spread_to(spread_of_stream(n, avg, c.min, c.max, &mut values))
+                    }
+                    (None, None) => intensity.set_spread(&mut c.values),
                 }
                 (channel, intensity)
             })
@@ -573,6 +629,352 @@ impl IntensityAccumulator {
             .map(|(channel, i)| (channel, i.to_settings()))
             .collect()
     }
+}
+
+/// The values of `mask` (relative to `bbox`, inclusive) that `tile` covers,
+/// to `f`, row by row - but those an `earlier` region of the channel covers
+/// (taken from that one).
+pub fn tile_values(
+    mask: &BitVec<u64, Lsb0>,
+    bbox: [u32; 4],
+    tile: &ChannelTile<'_>,
+    earlier: impl Iterator<Item = ImageTile>,
+    mut f: impl FnMut(f32),
+) {
+    let [x_min, y_min, x_max, y_max] = bbox.map(|v| v as usize);
+    let width = x_max - x_min + 1;
+    // The part of the mask's box this region covers.
+    let t = tile.tile;
+    let (x0, x1) = (x_min.max(t.offset_x), (x_max + 1).min(t.offset_x + t.width));
+    let (y0, y1) = (
+        y_min.max(t.offset_y),
+        (y_max + 1).min(t.offset_y + t.height),
+    );
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let earlier: Vec<ImageTile> = earlier.collect();
+    let covered = |x: usize, y: usize| {
+        earlier.iter().any(|e| {
+            x >= e.offset_x
+                && y >= e.offset_y
+                && x < e.offset_x + e.width
+                && y < e.offset_y + e.height
+        })
+    };
+    for y in y0..y1 {
+        let mask_row = (y - y_min) * width;
+        let tile_row = (y - t.offset_y) * t.width;
+        for x in x0..x1 {
+            if !mask[mask_row + x - x_min] {
+                continue;
+            }
+            if !earlier.is_empty() && covered(x, y) {
+                continue;
+            }
+            f(sample_channel_pixel(
+                tile.is_rgb,
+                tile.samples,
+                tile_row + x - t.offset_x,
+            ));
+        }
+    }
+}
+
+/// Puts pixel values, as added, into the order [`ChannelSums`]' list holds
+/// them in the end, passing them on to `out`: the first [`LIST_UP_TO`] whole
+/// gray values are counted, and a later other value lists the counted ones
+/// by level before it - the same order as the list, so the same sums. Holds
+/// at most `LIST_UP_TO` values or the counts.
+struct ListOrder<'a> {
+    out: &'a mut dyn FnMut(f32),
+    buffer: Vec<f32>,
+    counts: Option<Box<[u32]>>,
+    /// The order is settled: values are passed on as they come.
+    passing: bool,
+}
+
+impl<'a> ListOrder<'a> {
+    fn new(out: &'a mut dyn FnMut(f32)) -> Self {
+        Self {
+            out,
+            buffer: Vec::new(),
+            counts: None,
+            passing: false,
+        }
+    }
+
+    fn push(&mut self, value: f32) {
+        if self.passing {
+            (self.out)(value);
+            return;
+        }
+        let whole = |v: f32| {
+            let level = v as usize;
+            level as f32 == v && level < GRAY_LEVELS
+        };
+        match &mut self.counts {
+            Some(counts) if whole(value) => counts[value as usize] += 1,
+            Some(_) => {
+                self.flush_counts();
+                (self.out)(value);
+                self.passing = true;
+            }
+            None => {
+                self.buffer.push(value);
+                if self.buffer.len() >= LIST_UP_TO {
+                    if self.buffer.iter().all(|v| whole(*v)) {
+                        let mut counts = vec![0u32; GRAY_LEVELS].into_boxed_slice();
+                        for v in self.buffer.drain(..) {
+                            counts[v as usize] += 1;
+                        }
+                        self.buffer = Vec::new();
+                        self.counts = Some(counts);
+                    } else {
+                        for v in std::mem::take(&mut self.buffer) {
+                            (self.out)(v);
+                        }
+                        self.passing = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn flush_counts(&mut self) {
+        if let Some(counts) = self.counts.take() {
+            for (level, c) in counts.iter().enumerate() {
+                for _ in 0..*c {
+                    (self.out)(level as f32);
+                }
+            }
+        }
+    }
+
+    fn finish(mut self) {
+        self.flush_counts();
+        for v in std::mem::take(&mut self.buffer) {
+            (self.out)(v);
+        }
+    }
+}
+
+/// Keys of `f32` in [`f32::total_cmp`]'s order.
+fn f32_key(v: f32) -> u64 {
+    let bits = v.to_bits();
+    (if bits >> 31 == 1 {
+        !bits
+    } else {
+        bits | 1 << 31
+    }) as u64
+}
+
+fn f32_of_key(key: u64) -> f64 {
+    let key = key as u32;
+    f32::from_bits(if key >> 31 == 1 {
+        key & !(1 << 31)
+    } else {
+        !key
+    }) as f64
+}
+
+/// Keys of `f64` in [`f64::total_cmp`]'s order.
+fn f64_key(v: f64) -> u64 {
+    let bits = v.to_bits();
+    if bits >> 63 == 1 {
+        !bits
+    } else {
+        bits | 1 << 63
+    }
+}
+
+fn f64_of_key(key: u64) -> f64 {
+    f64::from_bits(if key >> 63 == 1 {
+        key & !(1 << 63)
+    } else {
+        !key
+    })
+}
+
+/// Keys collected at most at once to pick from (8 MB; tests: a few, to
+/// take several steps).
+#[cfg(not(test))]
+const COLLECT_UP_TO: usize = 1 << 20;
+#[cfg(test)]
+const COLLECT_UP_TO: usize = 700;
+
+/// The keys at `ranks` (0-based, in order of the keys) among the `n` keys
+/// of `bits` (32 or 64) bits `stream` gives - by their leading 16 bits, then
+/// the next among those with the same leading ones, until few enough are
+/// left to collect: a pass over `stream` per step, RAM bounded.
+fn keys_at(
+    ranks: &[usize],
+    n: usize,
+    bits: u32,
+    stream: &mut dyn FnMut(&mut dyn FnMut(u64)),
+) -> Vec<u64> {
+    // Per rank: the leading bits known (`prefix` of `known` bits), the rank
+    // among the keys with them, how many keys have them.
+    struct Wanted {
+        prefix: u64,
+        known: u32,
+        rank: usize,
+        count: usize,
+        key: Option<u64>,
+    }
+    let mut wanted: Vec<Wanted> = ranks
+        .iter()
+        .map(|&rank| Wanted {
+            prefix: 0,
+            known: 0,
+            rank,
+            count: n,
+            key: None,
+        })
+        .collect();
+    loop {
+        for w in wanted
+            .iter_mut()
+            .filter(|w| w.key.is_none() && w.known == bits)
+        {
+            w.key = Some(w.prefix);
+        }
+        // The groups (same leading bits) still open, and whether to collect
+        // their keys or count their next 16 bits.
+        let mut groups: Vec<(u64, u32, bool)> = Vec::new();
+        for w in wanted.iter().filter(|w| w.key.is_none()) {
+            let group = (w.prefix, w.known, w.count <= COLLECT_UP_TO);
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
+        if groups.is_empty() {
+            break;
+        }
+        let mut histograms: Vec<Vec<u64>> = groups
+            .iter()
+            .map(|g| if g.2 { Vec::new() } else { vec![0u64; 1 << 16] })
+            .collect();
+        let mut collected: Vec<Vec<u64>> = vec![Vec::new(); groups.len()];
+        stream(&mut |key| {
+            for (g, &(prefix, known, collect)) in groups.iter().enumerate() {
+                if known > 0 && key >> (bits - known) != prefix {
+                    continue;
+                }
+                if collect {
+                    collected[g].push(key);
+                } else {
+                    histograms[g][((key >> (bits - known - 16)) & 0xffff) as usize] += 1;
+                }
+            }
+        });
+        for w in wanted.iter_mut().filter(|w| w.key.is_none()) {
+            let g = groups
+                .iter()
+                .position(|&(p, k, _)| p == w.prefix && k == w.known)
+                .expect("its group");
+            if groups[g].2 {
+                let keys = &mut collected[g];
+                keys.sort_unstable();
+                w.key = Some(keys[w.rank]);
+            } else {
+                let mut before = 0usize;
+                for (bucket, &c) in histograms[g].iter().enumerate() {
+                    if before + c as usize > w.rank {
+                        w.prefix = w.prefix << 16 | bucket as u64;
+                        w.known += 16;
+                        w.rank -= before;
+                        w.count = c as usize;
+                        break;
+                    }
+                    before += c as usize;
+                }
+            }
+        }
+    }
+    wanted.iter().map(|w| w.key.expect("found")).collect()
+}
+
+/// [`Spread::of`] of the `n` values `values` gives (in the list's order,
+/// as often as asked) without holding them: the same numbers - the
+/// histogram when [`Spread::of`] would take it, else the variance in their
+/// order and the order statistics picked by [`keys_at`]. `min` / `max`: as
+/// [`ChannelSums`] keeps them.
+fn spread_of_stream(
+    n: usize,
+    mean: f64,
+    min: f32,
+    max: f32,
+    values: &mut dyn FnMut(&mut dyn FnMut(f32)),
+) -> Option<Spread> {
+    if n == 0 {
+        return None;
+    }
+    // The histogram, where `Spread::from_histogram` would take it.
+    if n > SORT_UP_TO && min.is_finite() && max.is_finite() && min >= 0.0 {
+        let levels: f32 = if max <= 1.0 { 65535.0 } else { 1.0 };
+        let level = |v: f32| (v * levels + 0.5) as usize;
+        let first = level(min);
+        let bins = level(max) - first + 1;
+        if bins <= n * 4 {
+            let mut count = vec![0u32; bins];
+            let mut value = vec![0f32; bins];
+            let mut fits = true;
+            values(&mut |v| {
+                if !fits {
+                    return;
+                }
+                let Some(b) = level(v).checked_sub(first).filter(|b| *b < bins) else {
+                    fits = false;
+                    return;
+                };
+                if count[b] == 0 {
+                    value[b] = v;
+                } else if value[b] != v {
+                    fits = false;
+                    return;
+                }
+                count[b] += 1;
+            });
+            if fits {
+                return Some(Spread::from_counts(&count, |b| value[b] as f64, n, mean));
+            }
+        }
+    }
+    let mut squares = -0.0f64;
+    values(&mut |v| squares += (v as f64 - mean).powi(2));
+    let variance = squares / n as f64;
+    // The ranks `quantile` reads: ⌊n·f⌋ and the one after.
+    let ranks_of = |fraction: f64| {
+        let i = ((n as f64 * fraction).floor() as usize).min(n - 1);
+        [i, (i + 1).min(n - 1)]
+    };
+    let ranks: Vec<usize> = [0.5, 0.25, 0.75]
+        .iter()
+        .flat_map(|f| ranks_of(*f))
+        .collect();
+    let keys = keys_at(&ranks, n, 32, &mut |f| values(&mut |v| f(f32_key(v))));
+    let value_at = |fraction: f64| {
+        let [i, _] = ranks_of(fraction);
+        let at = |rank: usize| f32_of_key(keys[ranks.iter().position(|r| *r == rank).unwrap()]);
+        quantile(n, fraction, |k| if k == i { at(i) } else { at(i + 1) })
+    };
+    let median = value_at(0.5);
+    let distance_ranks = ranks_of(0.5).to_vec();
+    let distance_keys = keys_at(&distance_ranks, n, 64, &mut |f| {
+        values(&mut |v| f(f64_key((v as f64 - median).abs())))
+    });
+    let [i, _] = ranks_of(0.5);
+    let mad = quantile(n, 0.5, |k| {
+        f64_of_key(distance_keys[if k == i { 0 } else { 1 }])
+    });
+    Some(Spread {
+        std: variance.sqrt(),
+        median,
+        lower_quartile: value_at(0.25),
+        upper_quartile: value_at(0.75),
+        mad,
+    })
 }
 
 /// Something with a mask whose pixels can be measured: pipeline objects
@@ -977,5 +1379,105 @@ pub(crate) mod tests {
             quantile(n, 0.25, |i| values[i] as f64)
         );
         assert_eq!(histogram.mad, median_distance(&values, median));
+    }
+
+    /// Capped and read again: the same intensities, bit for bit, as from
+    /// the whole list - fractional values, gray values turning fractional
+    /// late (the list's order changes), 16-bit levels (the histogram), whole
+    /// values above 1, negative ones, many equal ones.
+    #[test]
+    fn capped_values_read_again_give_the_same_intensities() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let n = LIST_UP_TO * 3 + 123;
+        let cases: Vec<(&str, Vec<f32>)> = vec![
+            (
+                "fractional",
+                (0..n).map(|_| (next() % 100_000) as f32 / 7919.0).collect(),
+            ),
+            (
+                "gray then fractional",
+                (0..n)
+                    .map(|i| match i < LIST_UP_TO + 500 {
+                        true => (next() % 4096) as f32,
+                        false => (next() % 4096) as f32 + 0.25,
+                    })
+                    .collect(),
+            ),
+            (
+                "16-bit levels",
+                (0..n).map(|_| (next() % 65536) as f32 / 65535.0).collect(),
+            ),
+            (
+                "whole above 1",
+                (0..n).map(|_| (next() % 9000) as f32 * 3.5 + 0.5).collect(),
+            ),
+            (
+                "negative",
+                (0..n)
+                    .map(|_| (next() % 2001) as f32 / 10.0 - 100.0)
+                    .collect(),
+            ),
+            (
+                "few values",
+                (0..n)
+                    .map(|_| [0.3f32, 0.7, 0.5][(next() % 3) as usize])
+                    .collect(),
+            ),
+            ("one value", vec![0.42; n]),
+        ];
+        for (name, values) in cases {
+            let tile = ChannelTile {
+                channel: 2,
+                tile: ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: values.len(),
+                    height: 1,
+                },
+                is_rgb: false,
+                samples: &values,
+            };
+            let mask = BitVec::<u64, Lsb0>::repeat(true, values.len());
+            let bbox = [0, 0, values.len() as u32 - 1, 0];
+            let mut whole = IntensityAccumulator::default();
+            whole.add(&mask, bbox, &[tile]);
+            let mut capped = IntensityAccumulator::capped_at(LIST_UP_TO);
+            capped.add(&mask, bbox, &[tile]);
+            let mut reads = 0;
+            let got = capped.finish_with(|channel, f| {
+                assert_eq!(channel, 2);
+                reads += 1;
+                tile_values(&mask, bbox, &tile, std::iter::empty(), &mut *f);
+            });
+            let expected = whole.finish();
+            let bits = |i: &Intensity| {
+                [
+                    i.sum_intensity,
+                    i.min_intensity,
+                    i.max_intensity,
+                    i.avg_intensity,
+                    i.std_intensity,
+                    i.median_intensity,
+                    i.lower_quartile_intensity,
+                    i.upper_quartile_intensity,
+                    i.mad_intensity,
+                ]
+                .map(f64::to_bits)
+            };
+            assert_eq!(
+                bits(&got[&2]),
+                bits(&expected[&2]),
+                "{name}: {:?} vs {:?}",
+                got[&2],
+                expected[&2]
+            );
+            assert!(reads > 0, "{name}: read again");
+        }
     }
 }
