@@ -88,6 +88,7 @@ pub mod global {
     pub use crate::workspace::settings::UserInformation;
     pub use crate::workspace::settings::ViewportMemorySettings;
     pub use crate::workspace::settings::{ResultsSplitSettings, SpeedUnit, TrailMode};
+    pub use evanalyzer_core::memory::accounting::AccountingAllocator;
 }
 
 pub mod results {

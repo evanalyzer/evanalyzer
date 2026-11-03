@@ -25,6 +25,12 @@ use evanalyzer_server::{ServerConfig, serve};
 use log::{LevelFilter, info, warn};
 use std::{path::PathBuf, sync::Arc};
 
+/// The system allocator, counting the large allocations: how much RAM the
+/// steps take, and a crash log line when it runs out.
+#[global_allocator]
+static ALLOCATOR: evanalyzer_app::global::AccountingAllocator =
+    evanalyzer_app::global::AccountingAllocator;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Startup times (log level debug) are measured from here.
     evanalyzer_gui::mark_process_start();
@@ -318,6 +324,7 @@ fn start_server(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> 
 /// `--log-level`) on top of the noisy-crate defaults.
 fn init_logger(log_level: &str) {
     evanalyzer_app::global::crash_log::install_panic_hook();
+    evanalyzer_app::global::crash_log::install_out_of_memory_log();
     let mut builder = Builder::new();
     builder.filter_level(LevelFilter::Debug);
     builder

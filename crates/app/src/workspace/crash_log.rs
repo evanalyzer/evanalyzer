@@ -8,7 +8,9 @@
 //! just makes the window disappear, with nothing a user could attach to a
 //! bug report. [`install_panic_hook`] appends every panic's message,
 //! location, and backtrace to a log file in the user's per-app data
-//! directory instead.
+//! directory instead. [`install_out_of_memory_log`] does the same for an
+//! allocation that fails (out of memory), which ends the process without a
+//! panic.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-08-08
@@ -43,6 +45,20 @@ pub fn install_panic_hook() {
         write_crash_log_entry_to(&crash_log_path(), info);
         previous_hook(info);
     }));
+}
+
+/// Opens the crash log for a failed allocation (out of memory - no panic,
+/// the process ends at once): the allocator notes its size and the command
+/// running there before (see `evanalyzer_core::memory::accounting`). Opened
+/// now, as there is no RAM to open it then. Call once, early in `main()`.
+pub fn install_out_of_memory_log() {
+    if let Ok(file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crash_log_path())
+    {
+        evanalyzer_core::memory::accounting::log_out_of_memory_to(file);
+    }
 }
 
 /// Formats and appends one crash log entry to `path`, creating the file if

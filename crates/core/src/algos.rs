@@ -132,6 +132,11 @@ pub enum ExecutionScope {
     WholeImage,
 }
 
+/// From this much RAM a whole-image step takes at its peak, it's logged
+/// (with the global allocator of the application, see
+/// [`memory::accounting`](crate::memory::accounting)).
+const REPORTED_STEP_BYTES: usize = 256 << 20;
+
 pub trait ImageAlgorithm: Send + Sync {
     /// Execute image processing algorithm
     fn execute(
@@ -202,6 +207,11 @@ pub trait ImageAlgorithm: Send + Sync {
         if self.scratch_is_workspace() {
             ctx.prepare_scratch_matching_image()?;
         }
+        use crate::memory::accounting;
+        let _running = accounting::running(self.name());
+        // A whole-image step's RAM: what it takes per slide, not per tile.
+        let whole_image = self.execution_scope() == ExecutionScope::WholeImage;
+        let before = whole_image.then(accounting::start_phase);
         let start = std::time::Instant::now();
         let result = self.execute(ctx, cache);
         log::debug!(
@@ -209,6 +219,17 @@ pub trait ImageAlgorithm: Send + Sync {
             self.name(),
             start.elapsed().as_secs_f64() * 1e3
         );
+        if let Some(before) = before {
+            let extra = accounting::phase_peak().saturating_sub(before);
+            if extra >= REPORTED_STEP_BYTES {
+                log::info!(
+                    "step {}: {} more RAM in large blocks at its peak ({} in use)",
+                    self.name(),
+                    crate::memory::format_binary_bytes(extra as u64),
+                    crate::memory::format_binary_bytes(accounting::large_peak() as u64)
+                );
+            }
+        }
         result
     }
 }

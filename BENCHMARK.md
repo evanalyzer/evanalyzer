@@ -1662,6 +1662,96 @@ and Object Colocalization 7.7, Voronoi 4.4, Image Texture 4.0 bytes per
 pixel; new: at most 0.8 (Colocalize Objects - its objects). A new
 whole-image command fails it until it is added.
 
+## Counting the large allocations: what it costs (2026-10-30)
+
+The application now runs on `memory::accounting::AccountingAllocator`: the
+system allocator, counting allocations of 1 MiB and more (in use, peak,
+peak per whole-image step) - for a log line when a whole-image step takes
+256 MiB or more at its peak, and a crash log line when an allocation fails.
+Measured before it went in: the default allocator (A), counting the large
+allocations (B, the one taken) and counting every allocation (C), in
+`bench_pipeline` and `bench_whole_slide`, alternated, three runs each.
+
+| Case | A: wall / CPU / peak | B (taken) | C (count all) |
+|---|---|---|---|
+| 400 × 1024², all threads | 3.90-4.07 s / 14.5-15.7 s / 972-989 MB | 3.97-4.27 s / 15.1-15.7 s / 980-1,008 MB | 3.99-4.11 s / 15.5-16.0 s / 976-1,007 MB |
+| 200 × 2048², all threads | 4.09-4.57 s / 30.7-33.8 s / 1.89-2.02 GB | 4.11-4.20 s / 32.9-33.8 s / 1.93-2.05 GB | 4.13-4.31 s / 33.9-35.7 s / 1.96-2.03 GB |
+| 200 × 2048², 2 threads | 12.5-13.6 s / 23.2-24.5 s / 541-565 MB | 12.2-13.5 s / 23.3-24.6 s / 533-566 MB | 13.1-13.6 s / 24.0-25.3 s / 552-577 MB |
+| `tests/haut`, Voronoi | 19.4-20.4 s / 230-233 s / 7.23-7.45 GB | 18.9-20.4 s / 226-239 s / 7.19-7.30 GB | 19.4-21.4 s / 238-243 s / 7.21-7.26 GB |
+
+B: within the run-to-run noise everywhere. C: +3-5 % CPU - not taken.
+
+The step hook (each step marks its command on the thread; a whole-image
+step measures its peak), old / new `algos.rs`, three runs each:
+
+| Case | Old: wall / CPU / peak | New |
+|---|---|---|
+| 400 × 1024² | 4.08-4.60 s / 15.2-16.4 s / 949-997 MB | 4.03-4.18 s / 15.5-16.0 s / 978-1,004 MB |
+| 200 × 2048² | 4.10-4.22 s / 32.7-34.8 s / 2.00-2.07 GB | 4.10-4.45 s / 32.8-33.3 s / 1.91-2.02 GB |
+| 200 × 2048², 2 threads | 13.3-14.1 s / 24.0-25.6 s / 544-561 MB | 12.9-13.7 s / 23.6-24.6 s / 553-593 MB |
+| 200 × 2048² + 5 Classify Objects (whole-image steps) | 4.44-4.77 s / 41.2-42.7 s / 1.90-2.05 GB | 4.49-4.60 s / 42.0-43.1 s / 1.93-2.11 GB |
+
+### What the memory counter costs, in numbers (2026-11-02)
+
+**Per allocation** (micro-benchmark: allocate + free in a loop, default
+allocator vs the counting one, medians of 3-5 rounds alternated):
+
+| Allocation + free | Default | Counting, first version | Counting, now |
+|---|---|---|---|
+| 16 B - 64 KB, 1 thread | 7.4-31.6 ns | +0.4 to +2.1 ns | -0.5 to +0.4 ns |
+| 16 B - 64 KB, 22 threads | 15.9-72.8 ns | +0.8 to +6.9 ns | -3.1 to +0.5 ns |
+| 1-16 MB, 1 thread | 33.8-41.2 ns | +10 to +23 ns | +7 to +13 ns |
+| 1-16 MB, 22 threads at once | 85-101 ns | **+3,330 to +3,430 ns** | +1,800 to +1,970 ns |
+| a vector grown to 100 / 1M values (reallocations), 1 thread | 169 ns / 0.60 ms | +17 ns / +5 µs | +1 ns / noise |
+
+The first version raised both peaks with `fetch_max` on every large
+allocation - with many threads a contended write loop on counters sharing
+one cache line. Now: a peak is only written when it really rises (a read
+otherwise), and each counter has a cache line of its own; one contended
+operation per large allocation is left. The 22-thread row is the worst case
+(threads doing nothing but allocating large blocks).
+
+**How often a pipeline allocates** (a counting build of the benchmarks):
+
+| Run | Small allocations + reallocations | Large (≥ 1 MiB) | CPU time |
+|---|---|---|---|
+| 400 × 1024² | 8.35 M | 2,000 | 14.9 s |
+| 200 × 2048² | 16.1 M | 1,000 | 31.9 s |
+| 200 × 2048² + 5 Classify Objects | 41.4 M | 1,000 | 40.7 s |
+| `tests/haut`, Voronoi | 16.4 M | 31,305 | 227 s |
+| `tests/haut`, Propagation | 15.8 M | 35,819 | 419 s |
+
+**The overhead from it**, as an upper bound (+0.5 ns per small allocation,
++1.9 µs per large one - the 22-thread worst case): 400 × 1024² ≤ 8 ms of
+14.9 s CPU (≤ 0.05 %), 200 × 2048² ≤ 10 ms (≤ 0.03 %), + 5 whole-image steps
+≤ 23 ms (≤ 0.06 %), the slide with Voronoi ≤ 67 ms of 227 s (≤ 0.03 %), with
+Propagation ≤ 76 ms of 419 s (≤ 0.02 %). Measured directly (5 runs
+alternated, CPU median and range): 400 × 1024² 14.9 s (14.6-15.1) / 15.1 s
+(14.9-15.2), 200 × 2048² 31.9 (31.1-33.0) / 32.6 (30.7-33.5), + 5
+whole-image steps 40.7 (39.5-41.3) / 40.5 (39.1-41.4), 2 threads 22.7
+(22.6-23.5) / 22.7 (22.6-23.5) - no difference beyond the noise.
+
+**RAM**: the counter's data is under 1 KB (three counters on 128-byte cache
+lines, the crash log's file handle, 16 bytes per thread). The real
+application, started and printing its version: 20-21 MB either way; opening
+a results file (`cli view`): 72-73 / 73-75 MB - the program is 3.3 MB (2 %)
+larger with the counter (the allocator calls are inlined), which accounts
+for the up to +2 MB. Pipeline peaks: the same within the noise (see above).
+
+Seen on the way: the default Linux allocator (glibc) scales badly with
+many threads - a small vector grown to 100 values takes ~0.17 µs on one
+thread and ~70 µs per thread with 22 threads doing the same, with or without
+the counter. The pipelines make 7-17 M such reallocations per run; a faster
+allocator (e.g. mimalloc, MIT) could speed them up - not measured yet.
+
+What the log shows - `tests/haut`, Propagation without a mask, the real
+CLI: `step Propagation: 1.13 GiB more RAM in large blocks at its peak
+(6.82 GiB in use)` (its windows in parallel and the background pass; the
+6.8 GB are mostly the channel tiles in the cache). A failed allocation
+(scratch program, `try_reserve` of 64 TB): `An allocation of 67108864 MB
+failed, 64 MB in large blocks in use (peak 64 MB), command: Propagation`
+in the crash log.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

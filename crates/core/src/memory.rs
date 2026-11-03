@@ -12,6 +12,9 @@
 //!   preview and breakpoint tiles, undo history) - from the total RAM; the
 //!   user can set each by hand (Settings › Viewport).
 //!
+//! - [`accounting`]: what the process really has allocated in large blocks
+//!   (the application's global allocator counts them).
+//!
 //! Also here: what the computer has ([`SystemRam`], [`SystemDiagnostics`]) -
 //! within a container's memory limit and the user's [`ResourceLimits`]
 //! (`--max-threads`, `--max-ram`, Settings › Performance).
@@ -26,6 +29,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+pub mod accounting;
 pub mod analysis;
 pub mod storage;
 pub mod viewer;
