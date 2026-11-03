@@ -1847,6 +1847,27 @@ process (objects included):
 | 8192², 42,025 objects | 3.40 s / 929 MB | 1.16 s / 99 MB |
 | 16384², 168,100 objects | refused (> 128 MP) | 4.9 s / 345 MB |
 
+## Measure Image Quality without copies (2026-11-03)
+
+The power spectrum held its window three times (f64 values, complex
+numbers, a transposed complex copy: 40 bytes per pixel, ~670 MB at the
+4096² cap) and the tile statistics copied every tile to f64 - on every
+thread at once (a slide's 4096² tiles: 134 MB each). Now one complex copy
+filled straight from the tiles, the columns transformed 16 at a time and
+summed into the radial spectrum at once (16 bytes per pixel, 268 MB at the
+cap), the statistics read the tiles' pixels in place. Same values, bit for
+bit (test against the old slope code; the step's values below identical).
+
+The step on a gray image (release, 22 threads), old / new alternated, 3
+runs (medians); peak = RSS added by the step:
+
+| Image | Old: time / peak | New |
+|---|---|---|
+| 1024² | 44.0 ms / +52 MB | 27.9 ms / +21 MB |
+| 2048² | 202.9 ms / +164 MB | 125.0 ms / +68 MB |
+| 4096² | 828.9 ms / +644 MB | 526.1 ms / +262 MB |
+| 16384² slide, 4096² tiles | 1,180.7 ms / +2,050 MB | 621.1 ms / +198-259 MB |
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

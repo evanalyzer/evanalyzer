@@ -30,6 +30,7 @@ use evanalyzer_cfg::core_types::{
 use macros::CommandsMeta;
 use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
+use std::borrow::Cow;
 
 /// Measures how usable a channel of the image is: sharp, not noisy, not
 /// overexposed.
@@ -54,8 +55,11 @@ pub struct MeasureImageQuality {
 }
 
 /// The power spectrum uses at most this many pixels per side, from the
-/// image's middle (the whole image held as complex numbers, 16 bytes each).
+/// image's middle (held as complex numbers, 16 bytes each: 268 MB here).
 const MAX_SPECTRUM_SIDE: usize = 4096;
+
+/// Columns transformed at a time (the spectrum's second pass).
+const COLUMNS_AT_A_TIME: usize = 16;
 
 impl ImageAlgorithm for MeasureImageQuality {
     fn execute(
@@ -95,7 +99,7 @@ impl ImageAlgorithm for MeasureImageQuality {
                 Ok::<_, InternalErrors>(TileStats::of(&Plane::of(&*pixels_of(tile)?, tile)))
             })
             .try_reduce(TileStats::default, |a, b| Ok(a.merge(b)))?;
-        let slope = power_log_log_slope(&spectrum_window(&tiles, |t| pixels_of(t))?);
+        let slope = power_log_log_slope(spectrum_window(&tiles, |t| pixels_of(t))?);
 
         let values = [
             ("focus_score", stats.focus_score()),
@@ -187,27 +191,42 @@ const IMMERKAER_1996: CitationMetadata = CitationMetadata {
     pages: Some("300-302"),
 };
 
-/// One tile's pixels (normalized 0..1, RGB as luminance), row-major.
-struct Plane {
+/// One tile's pixels (normalized 0..1, RGB as luminance), row-major - a
+/// gray tile's own pixels, not a copy.
+struct Plane<'a> {
     width: usize,
     height: usize,
-    values: Vec<f64>,
+    values: Cow<'a, [f32]>,
 }
 
-impl Plane {
-    fn of(container: &ImageContainer, tile: &ImageTile) -> Self {
+impl<'a> Plane<'a> {
+    fn of(container: &'a ImageContainer, tile: &ImageTile) -> Self {
         let rgb = matches!(container, ImageContainer::F32Rgb(_));
         let slice = channel_pixel_slice(container).unwrap_or_default();
         let len = if rgb { slice.len() / 3 } else { slice.len() };
         let (width, height) = (tile.width, tile.height.min(len / tile.width.max(1)));
-        let values = (0..width * height)
-            .map(|i| sample_channel_pixel(rgb, slice, i) as f64)
-            .collect();
+        let values = match rgb {
+            true => Cow::Owned(
+                (0..width * height)
+                    .map(|i| sample_channel_pixel(rgb, slice, i))
+                    .collect(),
+            ),
+            false => Cow::Borrowed(&slice[..width * height]),
+        };
         Self {
             width,
             height,
             values,
         }
+    }
+
+    /// Pixel `i`.
+    fn at(&self, i: usize) -> f64 {
+        self.values[i] as f64
+    }
+
+    fn iter(&self) -> impl Iterator<Item = f64> + '_ {
+        self.values.iter().map(|&v| v as f64)
     }
 }
 
@@ -229,22 +248,21 @@ struct TileStats {
 
 impl TileStats {
     fn of(plane: &Plane) -> Self {
-        let values = &plane.values;
-        if values.is_empty() {
+        if plane.values.is_empty() {
             return Self::default();
         }
-        let n = values.len() as f64;
-        let mean = values.iter().sum::<f64>() / n;
-        let m2 = values.iter().map(|v| (v - mean).powi(2)).sum();
-        let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let n = plane.values.len() as f64;
+        let mean = plane.iter().sum::<f64>() / n;
+        let m2 = plane.iter().map(|v| (v - mean).powi(2)).sum();
+        let max = plane.iter().fold(f64::NEG_INFINITY, f64::max);
+        let min = plane.iter().fold(f64::INFINITY, f64::min);
         // Immerkær's mask, on every pixel with all 8 neighbours in the tile.
         let (w, h) = (plane.width, plane.height);
         let mut noise_sum = 0.0;
         for y in 1..h.saturating_sub(1) {
             for x in 1..w - 1 {
                 let at = |dx: isize, dy: isize| {
-                    values[(y as isize + dy) as usize * w + (x as isize + dx) as usize]
+                    plane.at((y as isize + dy) as usize * w + (x as isize + dx) as usize)
                 };
                 let response = at(-1, -1) - 2.0 * at(0, -1) + at(1, -1) - 2.0 * at(-1, 0)
                     + 4.0 * at(0, 0)
@@ -260,9 +278,9 @@ impl TileStats {
             mean,
             m2,
             max,
-            n_max: values.iter().filter(|v| **v == max).count() as f64,
+            n_max: plane.iter().filter(|v| *v == max).count() as f64,
             min,
-            n_min: values.iter().filter(|v| **v == min).count() as f64,
+            n_min: plane.iter().filter(|v| *v == min).count() as f64,
             noise_sum,
             noise_pixels: (w.saturating_sub(2) * h.saturating_sub(2)) as f64,
         }
@@ -325,12 +343,20 @@ impl TileStats {
     }
 }
 
+/// The pixels the power spectrum is taken of, as complex numbers (the
+/// imaginary parts 0), row-major.
+struct Spectrum {
+    width: usize,
+    height: usize,
+    data: Vec<Complex<f64>>,
+}
+
 /// The part of the image the power spectrum uses: what the tiles cover, at
 /// most `MAX_SPECTRUM_SIDE` per side from its middle.
 fn spectrum_window<P: AsRef<ImageContainer>>(
     tiles: &[ImageTile],
     pixels_of: impl Fn(&ImageTile) -> Result<P, InternalErrors>,
-) -> Result<Plane, InternalErrors> {
+) -> Result<Spectrum, InternalErrors> {
     let x0 = tiles.iter().map(|t| t.offset_x).min().unwrap_or(0);
     let y0 = tiles.iter().map(|t| t.offset_y).min().unwrap_or(0);
     let x1 = tiles
@@ -348,31 +374,36 @@ fn spectrum_window<P: AsRef<ImageContainer>>(
         (y1 - y0).min(MAX_SPECTRUM_SIDE),
     );
     let (wx0, wy0) = (x0 + (x1 - x0 - width) / 2, y0 + (y1 - y0 - height) / 2);
-    let mut values = vec![0.0; width * height];
+    let mut data = vec![Complex::new(0.0, 0.0); width * height];
     for tile in tiles {
         let (tx1, ty1) = (tile.offset_x + tile.width, tile.offset_y + tile.height);
         if tx1 <= wx0 || ty1 <= wy0 || tile.offset_x >= wx0 + width || tile.offset_y >= wy0 + height
         {
             continue;
         }
-        let plane = Plane::of(pixels_of(tile)?.as_ref(), tile);
-        for ty in 0..plane.height {
-            let y = tile.offset_y + ty;
-            if y < wy0 || y >= wy0 + height {
-                continue;
-            }
-            for tx in 0..plane.width {
-                let x = tile.offset_x + tx;
-                if x >= wx0 && x < wx0 + width {
-                    values[(y - wy0) * width + (x - wx0)] = plane.values[ty * plane.width + tx];
-                }
+        let pixels = pixels_of(tile)?;
+        let plane = Plane::of(pixels.as_ref(), tile);
+        // The tile's columns and rows inside the window.
+        let (cx0, cx1) = (
+            wx0.max(tile.offset_x) - tile.offset_x,
+            (wx0 + width).min(tile.offset_x + plane.width) - tile.offset_x,
+        );
+        let rows = wy0.max(tile.offset_y)..(wy0 + height).min(tile.offset_y + plane.height);
+        for y in rows {
+            let ty = y - tile.offset_y;
+            let at = (y - wy0) * width + (tile.offset_x + cx0 - wx0);
+            for (out, tx) in data[at..at + cx1.saturating_sub(cx0)]
+                .iter_mut()
+                .zip(cx0..cx1)
+            {
+                out.re = plane.at(ty * plane.width + tx);
             }
         }
     }
-    Ok(Plane {
+    Ok(Spectrum {
         width,
         height,
-        values,
+        data,
     })
 }
 
@@ -384,28 +415,21 @@ fn spectrum_window<P: AsRef<ImageContainer>>(
 /// No normalization of the image (e.g. dividing by its median absolute
 /// deviation) is done: that scales every power alike and leaves the slope
 /// as it is.
-fn power_log_log_slope(plane: &Plane) -> Option<f64> {
-    let (w, h) = (plane.width, plane.height);
-    let values = &plane.values;
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if values.is_empty() || min == max {
+///
+/// The 2D FFT in place: the rows, then the columns a few at a time - each
+/// column's powers summed as soon as it is transformed, so the image is
+/// held once (16 bytes per pixel), not transposed into a second copy.
+fn power_log_log_slope(spectrum: Spectrum) -> Option<f64> {
+    let Spectrum {
+        width: w,
+        height: h,
+        mut data,
+    } = spectrum;
+    let min = data.iter().map(|c| c.re).fold(f64::INFINITY, f64::min);
+    let max = data.iter().map(|c| c.re).fold(f64::NEG_INFINITY, f64::max);
+    if data.is_empty() || min == max {
         return None;
     }
-    let mean = values.iter().sum::<f64>() / values.len() as f64;
-    let mut data: Vec<Complex<f64>> = values.iter().map(|v| Complex::new(v - mean, 0.0)).collect();
-    // 2D FFT: the rows, then the columns (as the rows of the transpose).
-    let mut planner = FftPlanner::<f64>::new();
-    planner.plan_fft_forward(w).process(&mut data);
-    let mut columns = vec![Complex::new(0.0, 0.0); w * h];
-    for y in 0..h {
-        for x in 0..w {
-            columns[x * h + y] = data[y * w + x];
-        }
-    }
-    drop(data);
-    planner.plan_fft_forward(h).process(&mut columns);
-
     // The radius of frequency (row i, column j), with the frequencies
     // mirrored about the centre so negative ones fold onto positive ones:
     // min(i, h-1-i), min(j, w-1-j); labels floor(r) + 1 in 2 .. max_width.
@@ -413,17 +437,41 @@ fn power_log_log_slope(plane: &Plane) -> Option<f64> {
     if max_width <= 2 {
         return None;
     }
+    let mean = data.iter().map(|c| c.re).sum::<f64>() / data.len() as f64;
+    for c in &mut data {
+        c.re -= mean;
+    }
+    let mut planner = FftPlanner::<f64>::new();
+    planner.plan_fft_forward(w).process(&mut data);
+    let column_fft = planner.plan_fft_forward(h);
+    let mut scratch = vec![Complex::new(0.0, 0.0); column_fft.get_inplace_scratch_len()];
+    let mut columns = vec![Complex::new(0.0, 0.0); COLUMNS_AT_A_TIME.min(w) * h];
+
     let mut magnitude = vec![0.0; max_width];
     let mut power = vec![0.0; max_width];
-    for x in 0..w {
-        let cj = x.min(w - 1 - x) as f64;
+    for first in (0..w).step_by(COLUMNS_AT_A_TIME) {
+        let count = COLUMNS_AT_A_TIME.min(w - first);
+        let columns = &mut columns[..count * h];
         for y in 0..h {
-            let ri = y.min(h - 1 - y) as f64;
-            let label = (ri * ri + cj * cj).sqrt().floor() as usize + 1;
-            if (2..max_width).contains(&label) {
-                let mag = columns[x * h + y].norm();
-                magnitude[label] += mag;
-                power[label] += mag * mag;
+            for (j, value) in data[y * w + first..y * w + first + count]
+                .iter()
+                .enumerate()
+            {
+                columns[j * h + y] = *value;
+            }
+        }
+        column_fft.process_with_scratch(columns, &mut scratch);
+        for (j, column) in columns.chunks_exact(h).enumerate() {
+            let x = first + j;
+            let cj = x.min(w - 1 - x) as f64;
+            for (y, value) in column.iter().enumerate() {
+                let ri = y.min(h - 1 - y) as f64;
+                let label = (ri * ri + cj * cj).sqrt().floor() as usize + 1;
+                if (2..max_width).contains(&label) {
+                    let mag = value.norm();
+                    magnitude[label] += mag;
+                    power[label] += mag * mag;
+                }
             }
         }
     }
@@ -453,6 +501,110 @@ mod tests {
     use crate::pipeline::pipeline_measure::MeasurementValues;
     use kornia_image::{Image, ImageSize};
     use std::sync::Arc;
+
+    /// A plane's pixels as the spectrum's input.
+    fn spectrum_of(plane: &Plane) -> Spectrum {
+        Spectrum {
+            width: plane.width,
+            height: plane.height,
+            data: plane.iter().map(|v| Complex::new(v, 0.0)).collect(),
+        }
+    }
+
+    /// The slope before (2026-11-03): the values copied into complex
+    /// numbers, the whole transform transposed into a second copy.
+    fn slope_before(w: usize, h: usize, values: &[f64]) -> Option<f64> {
+        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if values.is_empty() || min == max {
+            return None;
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let mut data: Vec<Complex<f64>> =
+            values.iter().map(|v| Complex::new(v - mean, 0.0)).collect();
+        let mut planner = FftPlanner::<f64>::new();
+        planner.plan_fft_forward(w).process(&mut data);
+        let mut columns = vec![Complex::new(0.0, 0.0); w * h];
+        for y in 0..h {
+            for x in 0..w {
+                columns[x * h + y] = data[y * w + x];
+            }
+        }
+        drop(data);
+        planner.plan_fft_forward(h).process(&mut columns);
+        let max_width = (w.min(h) as f64 / 8.0).floor() as usize;
+        if max_width <= 2 {
+            return None;
+        }
+        let mut magnitude = vec![0.0; max_width];
+        let mut power = vec![0.0; max_width];
+        for x in 0..w {
+            let cj = x.min(w - 1 - x) as f64;
+            for y in 0..h {
+                let ri = y.min(h - 1 - y) as f64;
+                let label = (ri * ri + cj * cj).sqrt().floor() as usize + 1;
+                if (2..max_width).contains(&label) {
+                    let mag = columns[x * h + y].norm();
+                    magnitude[label] += mag;
+                    power[label] += mag * mag;
+                }
+            }
+        }
+        let points: Vec<(f64, f64)> = (2..max_width)
+            .filter(|&r| magnitude[r] > 0.0 && power[r] > 0.0)
+            .map(|r| ((r as f64).ln(), power[r].ln()))
+            .collect();
+        if points.len() < 2 {
+            return None;
+        }
+        let n = points.len() as f64;
+        let (mx, my) = (
+            points.iter().map(|p| p.0).sum::<f64>() / n,
+            points.iter().map(|p| p.1).sum::<f64>() / n,
+        );
+        let sxy: f64 = points.iter().map(|(x, y)| (x - mx) * (y - my)).sum();
+        let sxx: f64 = points.iter().map(|(x, _)| (x - mx).powi(2)).sum();
+        Some(sxy / sxx)
+    }
+
+    /// Columns a few at a time give the slope of the whole transposed
+    /// transform, bit for bit - odd, prime, power-of-two and unequal sides.
+    #[test]
+    fn the_slope_is_the_one_of_before() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for (w, h) in [
+            (64, 64),
+            (33, 129),
+            (130, 41),
+            (97, 101),
+            (256, 40),
+            (33, 1000),
+            (512, 512),
+            (1000, 48),
+        ] {
+            let values: Vec<f32> = (0..w * h)
+                .map(|i| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    ((i % w) as f32 * 0.01).sin() + (seed % 1000) as f32 / 4000.0
+                })
+                .collect();
+            let plane = Plane {
+                width: w,
+                height: h,
+                values: Cow::Borrowed(&values),
+            };
+            let before: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+            let now = power_log_log_slope(spectrum_of(&plane));
+            assert_eq!(
+                now.map(f64::to_bits),
+                slope_before(w, h, &before).map(f64::to_bits),
+                "{w} x {h}"
+            );
+            assert!(now.is_some(), "{w} x {h}");
+        }
+    }
 
     #[derive(serde::Deserialize)]
     struct Case {
@@ -493,7 +645,7 @@ mod tests {
             let plane = Plane {
                 width: case.width,
                 height: case.height,
-                values: case.image.iter().map(|&v| v as f32 as f64).collect(),
+                values: Cow::Owned(case.image.iter().map(|&v| v as f32).collect()),
             };
             let stats = TileStats::of(&plane);
             let name = &case.name;
@@ -505,7 +657,7 @@ mod tests {
             assert!(close(min, case.percent_minimal), "{name}: % min {min}");
             let noise = stats.noise().unwrap();
             assert!(close(noise, case.noise), "{name}: noise {noise}");
-            let slope = power_log_log_slope(&plane);
+            let slope = power_log_log_slope(spectrum_of(&plane));
             let expected = case.power_log_log_slope.unwrap();
             assert!(
                 (slope.unwrap() - expected).abs() < 1e-9,
@@ -532,18 +684,18 @@ mod tests {
             .into_iter()
             .find(|c| c.name == "saturated_8_bit")
             .unwrap();
-        let values: Vec<f64> = case.image.iter().map(|&v| v as f32 as f64).collect();
+        let values: Vec<f32> = case.image.iter().map(|&v| v as f32).collect();
         let whole = TileStats::of(&Plane {
             width: case.width,
             height: case.height,
-            values: values.clone(),
+            values: Cow::Borrowed(&values),
         });
         let half = case.height / 2;
         let part = |rows: std::ops::Range<usize>| {
             TileStats::of(&Plane {
                 width: case.width,
                 height: rows.len(),
-                values: values[rows.start * case.width..rows.end * case.width].to_vec(),
+                values: Cow::Borrowed(&values[rows.start * case.width..rows.end * case.width]),
             })
         };
         let merged = part(0..half).merge(part(half..case.height));
@@ -563,9 +715,9 @@ mod tests {
         let flat = Plane {
             width: 64,
             height: 64,
-            values: vec![0.3; 64 * 64],
+            values: Cow::Owned(vec![0.3; 64 * 64]),
         };
-        assert_eq!(power_log_log_slope(&flat), None);
+        assert_eq!(power_log_log_slope(spectrum_of(&flat)), None);
         let stats = TileStats::of(&flat);
         // 0.3 isn't exact in binary: zero up to rounding.
         assert!(stats.focus_score().unwrap() < 1e-20);
@@ -683,6 +835,6 @@ mod tests {
         }));
         let window = spectrum_window(&[tile], |_| Ok(container.clone())).unwrap();
         assert_eq!((window.width, window.height), (MAX_SPECTRUM_SIDE, 10));
-        assert_eq!(window.values[0], 50.0, "starts 50 pixels in");
+        assert_eq!(window.data[0].re, 50.0, "starts 50 pixels in");
     }
 }

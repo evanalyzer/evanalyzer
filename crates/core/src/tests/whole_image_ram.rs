@@ -66,10 +66,11 @@ fn not_measured(command: &PipelineCommand) -> Option<&'static str> {
         PipelineCommand::AiObjectClassifier(_) => {
             Some("needs a trained model; measures its rings tile by tile (measure_intensities_of)")
         }
-        // The power spectrum's window is at most 4096² pixels (`MAX_SPECTRUM_SIDE`):
-        // up to ~670 MB, but not more on a larger slide - the test slides are smaller.
+        // The power spectrum's window is at most 4096² pixels (`MAX_SPECTRUM_SIDE`,
+        // 16 bytes each: 268 MB) - growing with the test slides, not more on
+        // a larger slide. The tile statistics read each tile in place.
         PipelineCommand::MeasureImageQuality(_) => Some(
-            "the spectrum's window is capped at 4096² pixels (bounded, larger than the test slides)",
+            "the spectrum's window is capped at 4096² pixels (268 MB, larger than the test slides)",
         ),
         _ => None,
     }
