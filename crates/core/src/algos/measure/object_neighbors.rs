@@ -14,9 +14,10 @@
 //! names that object) and the angle between those two.
 //!
 //! Worked out per object on label rasters of its surroundings only, so
-//! whole slides need no raster of their size -
-//! except "Expand until adjacent", which first grows every object over the
-//! whole image.
+//! whole slides need no raster of their size; "Expand until adjacent" grows
+//! the objects row by row ([`expanded`]).
+
+mod expanded;
 
 use crate::algos::libs::feature_transform::nearest_features;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
@@ -106,11 +107,6 @@ const VALUES: [(&str, &str, MeasurementUnit); 5] = [
         MeasurementUnit::None,
     ),
 ];
-
-/// "Expand until adjacent" needs the whole image as one raster (labels,
-/// the feature transform and the grown labels: 16 bytes per pixel, ~2 GB
-/// here) - up to this many pixels.
-const EXPAND_MAX_PIXELS: usize = 128 * 1024 * 1024;
 
 /// One object's values: (value, the object it is about) per [`VALUES`].
 type Row = [(f64, Option<ObjectId>); VALUES.len()];
@@ -302,23 +298,11 @@ impl Patch {
     }
 }
 
-/// Where the labels of the measured objects come from: painted per window
-/// (later objects over earlier ones), or the grown whole-image raster.
-enum Labels<'a> {
-    Painted(&'a Indexed<'a>),
-    Raster { labels: Vec<u32>, width: usize },
-}
-
-impl Labels<'_> {
-    fn patch(&self, window: [usize; 4]) -> Patch {
-        let [x0, y0, x1, y1] = window;
-        let labels = match self {
-            Labels::Painted(indexed) => paint(indexed, window),
-            Labels::Raster { labels, width } => (y0..y1)
-                .flat_map(|y| labels[y * width + x0..y * width + x1].iter().copied())
-                .collect(),
-        };
-        Patch { window, labels }
+/// The painted labels of `indexed`'s objects in `window`.
+fn patch(indexed: &Indexed, window: [usize; 4]) -> Patch {
+    Patch {
+        window,
+        labels: paint(indexed, window),
     }
 }
 
@@ -420,95 +404,20 @@ fn neighbors(
     let same = others.is_none();
     let neighbor_list = others.unwrap_or(objects);
 
-    // The labels the dilations and outlines see.
-    let (labels, distance) = match method {
+    match method {
         NeighborMethod::ExpandUntilAdjacent => {
-            if width * height > EXPAND_MAX_PIXELS {
-                return Err(InternalErrors::InvalidArgument(format!(
-                    "Measure object neighbors: \"Expand until adjacent\" needs the whole \
-                     image at once - {width} x {height} is too big; use \"Within a distance\""
-                )));
-            }
-            (
-                Labels::Raster {
-                    labels: grown(objects, width, height),
-                    width,
-                },
-                1,
-            )
-        }
-        NeighborMethod::Adjacent => (Labels::Painted(objects), 1),
-        NeighborMethod::WithinDistance => (Labels::Painted(objects), distance.max(1)),
-    };
-    let neighbor_labels = match (&labels, same) {
-        (_, true) => None,
-        _ => Some(Labels::Painted(neighbor_list)),
-    };
-    let reach = disk(distance as f64);
-    let touch = disk(distance as f64 + 0.5);
-    let extents = match &labels {
-        Labels::Raster { labels, width } => Some(raster_extents(labels, *width, n)),
-        Labels::Painted(_) => None,
-    };
-
-    for (index, row) in rows.iter_mut().enumerate() {
-        let label = index as u32 + 1;
-        // Where the object's pixels are in the labels (others may cover
-        // some of its own, as in a label image).
-        let extent = match &extents {
-            Some(extents) => extents[index],
-            None => {
-                let [x0, y0, x1, y1] = objects.objects[index].bbox.map(|v| v as usize);
-                let own = labels.patch([x0, y0, x1 + 1, y1 + 1]);
-                patch_extent(&own, label)
-            }
-        };
-        let Some([ex0, ey0, ex1, ey1]) = extent else {
-            row[0].0 = 0.0;
-            row[1].0 = 0.0;
-            continue;
-        };
-        let d = distance as usize;
-        let window = [
-            ex0.saturating_sub(d),
-            ey0.saturating_sub(d),
-            (ex1 + d + 1).min(width),
-            (ey1 + d + 1).min(height),
-        ];
-        let patch = labels.patch(window);
-        let npatch = neighbor_labels.as_ref().map(|l| l.patch(window));
-        let npatch = npatch.as_ref().unwrap_or(&patch);
-
-        // The neighbours: the labels a dilation of the object reaches.
-        let extended = dilate(&patch, |l| l == label, &reach, distance as f64);
-        let found: BTreeSet<u32> = extended
-            .iter()
-            .zip(&npatch.labels)
-            .filter(|(e, l)| **e && **l != 0 && !(same && **l == label))
-            .map(|(_, l)| *l)
-            .collect();
-        row[0].0 = found.len() as f64;
-
-        // Percent touching: outline pixels next to the neighbours.
-        let touch_radius = distance as f64 + 0.5;
-        let near_others = if same {
-            dilate(&patch, |l| l != 0 && l != label, &touch, touch_radius)
-        } else {
-            dilate(npatch, |l| l != 0, &touch, touch_radius)
-        };
-        let (mut perimeter, mut touching) = (0usize, 0usize);
-        let pw = patch.width();
-        for (i, l) in patch.labels.iter().enumerate() {
-            let (x, y) = (window[0] + i % pw, window[1] + i / pw);
-            if *l != label || !is_outline(&patch, x, y, (width, height)) {
-                continue;
-            }
-            perimeter += 1;
-            if near_others[i] {
-                touching += 1;
+            for (row, (count, touching)) in
+                rows.iter_mut()
+                    .zip(expanded::values(objects, others, (width, height)))
+            {
+                row[0].0 = count;
+                row[1].0 = touching;
             }
         }
-        row[1].0 = touching as f64 * 100.0 / perimeter as f64;
+        NeighborMethod::Adjacent => painted_values(&mut rows, objects, others, 1, (width, height)),
+        NeighborMethod::WithinDistance => {
+            painted_values(&mut rows, objects, others, distance.max(1), (width, height))
+        }
     }
 
     // The closest objects, centre to centre.
@@ -541,6 +450,75 @@ fn neighbors(
     Ok(rows)
 }
 
+/// "Adjacent" / "Within a distance": each object's neighbours and percent
+/// touching (`rows`' first two values) on the painted labels of its
+/// surroundings; `others`: the neighbours when they aren't the objects.
+fn painted_values(
+    rows: &mut [Row],
+    objects: &Indexed,
+    others: Option<&Indexed>,
+    distance: i64,
+    (width, height): (usize, usize),
+) {
+    let same = others.is_none();
+    let reach = disk(distance as f64);
+    let touch = disk(distance as f64 + 0.5);
+
+    for (index, row) in rows.iter_mut().enumerate() {
+        let label = index as u32 + 1;
+        // Where the object's pixels are in the labels (others may cover
+        // some of its own, as in a label image).
+        let [x0, y0, x1, y1] = objects.objects[index].bbox.map(|v| v as usize);
+        let extent = patch_extent(&patch(objects, [x0, y0, x1 + 1, y1 + 1]), label);
+        let Some([ex0, ey0, ex1, ey1]) = extent else {
+            row[0].0 = 0.0;
+            row[1].0 = 0.0;
+            continue;
+        };
+        let d = distance as usize;
+        let window = [
+            ex0.saturating_sub(d),
+            ey0.saturating_sub(d),
+            (ex1 + d + 1).min(width),
+            (ey1 + d + 1).min(height),
+        ];
+        let labels = patch(objects, window);
+        let npatch = others.map(|others| patch(others, window));
+        let npatch = npatch.as_ref().unwrap_or(&labels);
+
+        // The neighbours: the labels a dilation of the object reaches.
+        let extended = dilate(&labels, |l| l == label, &reach, distance as f64);
+        let found: BTreeSet<u32> = extended
+            .iter()
+            .zip(&npatch.labels)
+            .filter(|(e, l)| **e && **l != 0 && !(same && **l == label))
+            .map(|(_, l)| *l)
+            .collect();
+        row[0].0 = found.len() as f64;
+
+        // Percent touching: outline pixels next to the neighbours.
+        let touch_radius = distance as f64 + 0.5;
+        let near_others = if same {
+            dilate(&labels, |l| l != 0 && l != label, &touch, touch_radius)
+        } else {
+            dilate(npatch, |l| l != 0, &touch, touch_radius)
+        };
+        let (mut perimeter, mut touching) = (0usize, 0usize);
+        let pw = labels.width();
+        for (i, l) in labels.labels.iter().enumerate() {
+            let (x, y) = (window[0] + i % pw, window[1] + i / pw);
+            if *l != label || !is_outline(&labels, x, y, (width, height)) {
+                continue;
+            }
+            perimeter += 1;
+            if near_others[i] {
+                touching += 1;
+            }
+        }
+        row[1].0 = touching as f64 * 100.0 / perimeter as f64;
+    }
+}
+
 /// The box `[x0, y0, x1, y1]` (inclusive) of `label`'s pixels in `patch`.
 fn patch_extent(patch: &Patch, label: u32) -> Option<[usize; 4]> {
     let w = patch.width();
@@ -556,23 +534,6 @@ fn patch_extent(patch: &Patch, label: u32) -> Option<[usize; 4]> {
         });
     }
     extent
-}
-
-/// Each label's box in a whole-image raster.
-fn raster_extents(labels: &[u32], width: usize, n: usize) -> Vec<Option<[usize; 4]>> {
-    let mut extents: Vec<Option<[usize; 4]>> = vec![None; n];
-    for (i, l) in labels.iter().enumerate() {
-        if *l == 0 {
-            continue;
-        }
-        let (x, y) = (i % width, i / width);
-        let e = &mut extents[*l as usize - 1];
-        *e = Some(match *e {
-            None => [x, y, x, y],
-            Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
-        });
-    }
-    extents
 }
 
 /// centrosome's `outline`: a pixel on the image border, or with a
@@ -604,20 +565,6 @@ fn is_outline(patch: &Patch, x: usize, y: usize, (width, height): (usize, usize)
         }
     }
     false
-}
-
-/// The objects' labels over the whole image, every background pixel given
-/// the label of its nearest object pixel (the exact Euclidean feature
-/// transform, so ties resolve like SciPy's `distance_transform_edt` indices).
-fn grown(objects: &Indexed, width: usize, height: usize) -> Vec<u32> {
-    let labels = paint(objects, [0, 0, width, height]);
-    let ft = nearest_features(width, height, |x, y| labels[y * width + x] != 0);
-    (0..labels.len())
-        .map(|i| match (labels[i], ft.get(i)) {
-            (0, Some((r, c))) => labels[r as usize * width + c as usize],
-            (l, _) => l,
-        })
-        .collect()
 }
 
 /// The centres in a grid, to find the nearest of a point.

@@ -125,13 +125,13 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
                 parent_class: CELL,
             })
         }
-        // "Expand until adjacent" grows a label raster of the whole image -
-        // up to 128 megapixels, refused above (TODO): "Within a distance".
         C::MeasureObjectNeighbors(_) => C::MeasureObjectNeighbors(MeasureObjectNeighborsSettings {
             id,
             objects: CELL,
             neighbors: CELL,
-            method: MeasureObjectNeighborsNeighborMethodSettings::WithinDistance,
+            // The default, and the one growing over the whole image ("Within
+            // a distance" / "Adjacent" paint each object's surroundings only).
+            method: MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent,
             distance: 5,
         }),
         C::MeasureObjectShape(_) => {

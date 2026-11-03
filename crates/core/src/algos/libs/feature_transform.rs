@@ -76,6 +76,20 @@ pub(crate) fn nearest_features(
     NearestFeatures { ft }
 }
 
+/// The row pass of [`nearest_features`] on its own: `line` holds row `y`'s
+/// candidates (each column's nearest feature in that column as (row,
+/// column), row -1: none); afterwards each position holds the nearest of
+/// them - the same as [`nearest_features`] gives for that row when the
+/// candidates are its column pass's. `g` and `f` are scratch space.
+pub(crate) fn nearest_in_row(
+    line: &mut [[i32; 2]],
+    y: usize,
+    g: &mut Vec<usize>,
+    f: &mut Vec<[i32; 2]>,
+) {
+    voronoi_ft(line, [y as i32, 0], 1, g, f);
+}
+
 /// SciPy's `_VoronoiFT` along one line (`d`: the axis it runs along, 0 =
 /// down a column, 1 = along a row; `coor`: the line's coordinate on the
 /// other axis): each position gets the candidate (row -1: none) nearest to

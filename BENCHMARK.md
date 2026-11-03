@@ -655,8 +655,9 @@ every 40 px on 8192² (42,025 objects), same class as neighbours.
 - Expand: the feature transform stored (row, column) as two `i64` in an
   `Option` (24 bytes per pixel); now two `i32` (8 bytes). Expand
   Without Overlap gained the same: 2.4 s / 376 MB → 1.3 s / 255 MB
-  (margin 8, same test as above). The whole-image raster is limited to
-  128 MP (~2 GB); bigger images: "Within a distance".
+  (margin 8, same test as above). The whole-image raster was limited to
+  128 MP (~2 GB) - gone since 2026-11-03, see "Neighbors: Expand until
+  adjacent row by row".
 
 ### Shape: Feret, convex area, Euler number, radii (2026-10-24)
 
@@ -1822,6 +1823,29 @@ every run now. Old (HEAD 424c5617) / new alternated, 4 runs, medians:
 
 Time within the noise (± 2 %); peak RAM 1-3 % lower in every case, at the
 edge of the run-to-run noise (± 60 MB) - consistent with ~55 bytes per object.
+
+## Neighbors: Expand until adjacent row by row (2026-11-03)
+
+Measure Object Neighbors' default method grew the objects over one raster
+of the whole image (labels, feature transform, grown labels: 16 bytes per
+pixel; refused above 128 MP). Now row by row: each column keeps its object
+pixels as runs, the feature transform's row pass gets each row's
+candidates from them - the same input as the whole-image transform, so the
+same labels (randomized test against a frozen copy of the old code, ties
+included); neighbours and percent touching are counted on three rows at a
+time. RAM per slide: the runs (per object, like the masks) and a few rows -
+`whole_image_ram`: 0.30 bytes per pixel (before: ~16).
+
+`bench_object_neighbors` (a 9 × 9 object every 40 px, release, one
+thread), old / new alternated, 3 runs (medians); peak RSS of the test
+process (objects included):
+
+| Image | Old | New |
+|---|---|---|
+| 1024², 676 objects | 37 ms / 32 MB | 18.7 ms / 21 MB |
+| 2048², 2,601 objects | 179 ms / 75 MB | 71 ms / 24 MB |
+| 8192², 42,025 objects | 3.40 s / 929 MB | 1.16 s / 99 MB |
+| 16384², 168,100 objects | refused (> 128 MP) | 4.9 s / 345 MB |
 
 ## Peak RAM overview - for the system requirements
 
