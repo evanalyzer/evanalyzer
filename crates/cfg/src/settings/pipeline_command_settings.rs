@@ -2487,6 +2487,11 @@ pub struct ClassifyObjectsSettings {
     /// - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
     /// - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
     /// - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
+    ///
+    /// With no criterion set (every range at its default, edge touching
+    /// allowed, no intensity filter, `overlapping_with` Unset) every object
+    /// matches - except for the three remove-on-match operations, where then
+    /// nothing matches and nothing is removed.
     pub match_handling: ObjectClassifyObjectsClassifyMatchHandlingSettings,
     /// Class label assigned to (or removed from) objects by the chosen operation
     ///
@@ -2500,6 +2505,7 @@ pub struct ClassifyObjectsSettings {
     /// class by at least `min_intersection_size`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
+    /// Unset with no other criterion set: the remove-on-match operations remove nothing.
     pub overlapping_with: ObjectClass,
     /// Minimum intersection size with an `overlapping_with` object, in `size_unit`
     ///

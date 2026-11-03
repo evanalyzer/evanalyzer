@@ -26,6 +26,7 @@ use evanalyzer_cfg::core_types::{
     ObjectClass::{self, Unset},
     ObjectId, PixelUnits, SegmentationClass, SizeUnits,
 };
+use evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings;
 use log::{debug, info, warn};
 use macros::CommandsMeta;
 
@@ -186,6 +187,11 @@ pub struct ClassifyObjects {
     /// - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
     /// - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
     /// - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
+    ///
+    /// With no criterion set (every range at its default, edge touching
+    /// allowed, no intensity filter, `overlapping_with` Unset) every object
+    /// matches - except for the three remove-on-match operations, where then
+    /// nothing matches and nothing is removed.
     #[cmdsmeta(default = ClassifyMatchHandling::RemoveAllClassesIfNotMatch)]
     pub match_handling: ClassifyMatchHandling,
 
@@ -203,6 +209,7 @@ pub struct ClassifyObjects {
     /// class by at least `min_intersection_size`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
+    /// Unset with no other criterion set: the remove-on-match operations remove nothing.
     #[cmdsmeta(default = ObjectClass::Unset, display_name = "Intersecting With", visibility = Advanced)]
     pub overlapping_with: ObjectClass,
 
@@ -392,6 +399,13 @@ impl ImageAlgorithm for ClassifyObjects {
         if self.input_classes.is_empty() && self.origin_segmentation.is_empty() {
             return Ok(());
         }
+        // "Remove objects matching criteria" without a criterion: nothing
+        // matches, so nothing is removed (not every object). The editor
+        // warns about it too.
+        if self.removes_on_match() && !self.has_criterion() {
+            debug!("Classify objects: removes on match without a criterion - nothing to remove");
+            return Ok(());
+        }
         let px_size = ctx.pixel_sizes();
         let pixel_area_size_nm = px_size.px_size_x * px_size.px_size_y;
         let min_intersection_px = self
@@ -540,7 +554,47 @@ impl ImageAlgorithm for ClassifyObjects {
     }
 }
 
+/// Whether a Classify Objects step with these settings removes on match
+/// without a criterion - and so removes nothing. For the editor's warning.
+pub fn removes_nothing_without_criterion(settings: &ClassifyObjectsSettings) -> bool {
+    let classify = ClassifyObjects::from(settings.clone());
+    classify.removes_on_match() && !classify.has_criterion()
+}
+
 impl ClassifyObjects {
+    /// Whether `match_handling` removes classes from the objects matching
+    /// the criteria - the operations that do nothing without a criterion.
+    fn removes_on_match(&self) -> bool {
+        matches!(
+            self.match_handling,
+            ClassifyMatchHandling::RemoveAllClassesIfMatch
+                | ClassifyMatchHandling::RemoveInputClassIfMatch
+                | ClassifyMatchHandling::RemoveOutputClassIfMatch
+        )
+    }
+
+    /// Whether any criterion narrows the objects down: a range off its
+    /// default, edge touching forbidden, an intensity filter or an
+    /// `overlapping_with` class. Without one every object passes.
+    fn has_criterion(&self) -> bool {
+        let open = Self::default();
+        self.overlapping_with != Unset
+            || !self.intensity_filters.is_empty()
+            || self.allow_edge_touching != open.allow_edge_touching
+            || self.min_size != open.min_size
+            || self.max_size != open.max_size
+            || self.min_circularity != open.min_circularity
+            || self.max_circularity != open.max_circularity
+            || self.min_solidity != open.min_solidity
+            || self.max_solidity != open.max_solidity
+            || self.min_aspect_ratio != open.min_aspect_ratio
+            || self.max_aspect_ratio != open.max_aspect_ratio
+            || self.min_eccentricity != open.min_eccentricity
+            || self.max_eccentricity != open.max_eccentricity
+            || self.min_feret != open.min_feret
+            || self.max_feret != open.max_feret
+    }
+
     /// Evaluates whether an object matches the classification criteria.
     ///
     /// # Arguments
@@ -1048,6 +1102,7 @@ mod tests {
     fn remove_input_class_if_match_strips_listed_input_classes_only() {
         let cmd = ClassifyObjects {
             input_classes: vec![CLASS_A],
+            allow_edge_touching: false,
             match_handling: ClassifyMatchHandling::RemoveInputClassIfMatch,
             ..Default::default()
         };
@@ -1097,6 +1152,7 @@ mod tests {
         let cmd = ClassifyObjects {
             input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_A,
+            allow_edge_touching: false,
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfMatch,
             ..Default::default()
         };
@@ -1143,6 +1199,7 @@ mod tests {
     fn remove_all_classes_if_match_clears_every_class() {
         let cmd = ClassifyObjects {
             input_classes: vec![CLASS_A, CLASS_B],
+            allow_edge_touching: false,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ..Default::default()
         };
@@ -1160,6 +1217,140 @@ mod tests {
                 .object_classes()
                 .is_empty()
         );
+    }
+
+    /// Remove on match without a criterion (`overlapping_with` Unset, every
+    /// range at its default): nothing matches, nothing is removed.
+    #[test]
+    fn remove_on_match_without_a_criterion_removes_nothing() {
+        for (name, match_handling) in [
+            ("remove all", ClassifyMatchHandling::RemoveAllClassesIfMatch),
+            (
+                "remove input",
+                ClassifyMatchHandling::RemoveInputClassIfMatch,
+            ),
+            (
+                "remove output",
+                ClassifyMatchHandling::RemoveOutputClassIfMatch,
+            ),
+        ] {
+            let cmd = ClassifyObjects {
+                input_classes: vec![CLASS_A],
+                output_class: CLASS_A,
+                match_handling,
+                ..Default::default()
+            };
+            assert!(!cmd.has_criterion());
+            let mut cache = GlobalPipelineCache::default();
+            cache.object_cache.insert(
+                ObjectId(ID_A),
+                make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+            );
+            run(&cmd, &mut cache);
+
+            assert!(
+                object(&cache, ID_A).is_of(&CLASS_A, Scope::Global),
+                "{name}"
+            );
+        }
+    }
+
+    /// The other operations still act on every selected object without a
+    /// criterion - e.g. reclassify renames a class.
+    #[test]
+    fn reclassify_on_match_without_a_criterion_still_reclassifies_every_object() {
+        let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A],
+            output_class: CLASS_B,
+            match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
+            ..Default::default()
+        };
+        assert!(!cmd.has_criterion());
+        let mut cache = GlobalPipelineCache::default();
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
+        run(&cmd, &mut cache);
+
+        assert!(object(&cache, ID_A).is_of(&CLASS_B, Scope::Global));
+    }
+
+    /// Each setting off its default counts as a criterion.
+    #[test]
+    fn has_criterion_sees_every_narrowed_setting() {
+        let open = ClassifyObjects::default();
+        assert!(!open.has_criterion());
+        let narrowed = [
+            ClassifyObjects {
+                overlapping_with: CLASS_B,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                intensity_filters: vec![intensity_filter(
+                    0,
+                    IntensityMetric::Avg,
+                    IntensityComparison::Above,
+                    0.0,
+                )],
+                ..Default::default()
+            },
+            ClassifyObjects {
+                allow_edge_touching: false,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                min_size: 1.0,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                max_size: 1000.0,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                min_circularity: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                max_circularity: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                min_solidity: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                max_solidity: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                min_aspect_ratio: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                max_aspect_ratio: 2.0,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                min_eccentricity: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                max_eccentricity: 0.5,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                min_feret: 1.0,
+                ..Default::default()
+            },
+            ClassifyObjects {
+                max_feret: 1000.0,
+                ..Default::default()
+            },
+        ];
+        for (i, cmd) in narrowed.iter().enumerate() {
+            assert!(cmd.has_criterion(), "setting {i}");
+        }
     }
 
     #[test]
@@ -1533,9 +1724,10 @@ mod tests {
             cache.object_cache.insert(object.id.clone(), object);
         }
         // No input classes, a segmentation class only: every object of it
-        // the command sees loses its classes.
+        // the command sees loses its classes (none touches the edge).
         let clear_all = ClassifyObjects {
             origin_segmentation: vec![SegmentationClass(0)],
+            allow_edge_touching: false,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ..Default::default()
         };
