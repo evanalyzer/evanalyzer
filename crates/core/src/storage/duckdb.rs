@@ -2120,15 +2120,11 @@ mod tests {
     use crate::object::{Object, ObjectInit};
     use crate::pipeline::pipeline_measure::ObjectValue;
     use bitvec::prelude::*;
-    use std::collections::HashSet;
 
     fn object_in_classes(id: u128, classes: &[u32]) -> Object {
         Object::new(ObjectInit {
             id: ObjectId(id),
-            object_class: classes
-                .iter()
-                .map(|c| ObjectClass::Global(*c))
-                .collect::<HashSet<_>>(),
+            object_class: classes.iter().map(|c| ObjectClass::Global(*c)).collect(),
             bbox: [0, 0, 1, 1],
             mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
             area: 4,

@@ -228,7 +228,7 @@ fn gather_labeled_objects(project: &ProjectSettings) -> Vec<TrainingImage> {
 /// yet at this project-gathering stage).
 fn resolve_pixel_label(
     class_labels: &[PixelClassLabel],
-    object_class: &std::collections::HashSet<ObjectClass>,
+    object_class: &std::collections::BTreeSet<ObjectClass>,
 ) -> Option<SegmentationClass> {
     let mut matches = class_labels.iter().filter(|label| {
         object_class
@@ -271,7 +271,7 @@ mod tests {
     fn labeled_object(id: u32, class: ObjectClass) -> ObjectMetricSettings {
         ObjectMetricSettings {
             id: ObjectId(id.into()),
-            object_class: HashSet::from([class]),
+            object_class: std::collections::BTreeSet::from([class]),
             ..Default::default()
         }
     }
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn resolve_pixel_label_matches_the_one_configured_class() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Global(1)]);
+        let object_class = std::collections::BTreeSet::from([ObjectClass::Global(1)]);
         assert_eq!(
             resolve_pixel_label(&labels, &object_class),
             Some(SegmentationClass(1))
@@ -331,14 +331,15 @@ mod tests {
     #[test]
     fn resolve_pixel_label_is_none_for_an_unconfigured_class() {
         let labels = vec![class_label(1, "Cell")];
-        let object_class = HashSet::from([ObjectClass::Global(99)]);
+        let object_class = std::collections::BTreeSet::from([ObjectClass::Global(99)]);
         assert_eq!(resolve_pixel_label(&labels, &object_class), None);
     }
 
     #[test]
     fn resolve_pixel_label_is_none_when_ambiguous() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
+        let object_class =
+            std::collections::BTreeSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
         assert_eq!(resolve_pixel_label(&labels, &object_class), None);
     }
 

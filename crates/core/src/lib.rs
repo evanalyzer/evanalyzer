@@ -63,6 +63,7 @@ pub use evanalyzer_cfg::core_types::ZProjection;
 pub use crate::ai_learning::utils::{bbox_overlaps_tile, tile_grid};
 pub use crate::object::Intensity;
 pub use crate::object::Object;
+pub use crate::object::ObjectClasses;
 pub use crate::object::ObjectInit;
 pub use crate::object::Track;
 pub use crate::object::intensities::{ChannelTile, IntensityAccumulator, MaskIntensities};

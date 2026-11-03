@@ -14,7 +14,6 @@ use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_core::Object;
 use kornia_image::ImageSize;
-use std::collections::HashSet;
 
 /// A manually annotated object from its painted `mask` (covering `bbox` =
 /// `[x1, y1, x2, y2]` in full-image pixels, inclusive) on `plane` of an
@@ -30,9 +29,9 @@ pub fn annotation_from_mask(
     object_class: ObjectClass,
 ) -> ObjectMetricSettings {
     let classes = if object_class == ObjectClass::Unset {
-        HashSet::new()
+        evanalyzer_core::ObjectClasses::new()
     } else {
-        HashSet::from([object_class])
+        evanalyzer_core::ObjectClasses::from([object_class])
     };
     Object::from_mask_geometry(
         &ImageSize {

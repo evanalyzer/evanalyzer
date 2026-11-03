@@ -377,7 +377,7 @@ mod tests {
     use crate::object::{Intensity, Track};
     use evanalyzer_cfg::core_types::{ObjectId, TrackId};
     use indexmap::IndexMap;
-    use std::collections::HashSet;
+
     use std::fs;
     use tempfile::TempDir;
 
@@ -601,7 +601,7 @@ mod tests {
         let named_id = ObjectId::next();
         let named = crate::object::Object::new(crate::object::ObjectInit {
             id: named_id.clone(),
-            object_class: HashSet::from([ObjectClass::Global(5)]),
+            object_class: crate::object::ObjectClasses::from([ObjectClass::Global(5)]),
             area: 10,
             bbox: [0, 0, 3, 3],
             ..Default::default()
@@ -610,7 +610,7 @@ mod tests {
         let unnamed_id = ObjectId::next();
         let unnamed = crate::object::Object::new(crate::object::ObjectInit {
             id: unnamed_id.clone(),
-            object_class: HashSet::from([ObjectClass::Global(7)]),
+            object_class: crate::object::ObjectClasses::from([ObjectClass::Global(7)]),
             area: 10,
             bbox: [0, 0, 3, 3],
             ..Default::default()
@@ -619,7 +619,7 @@ mod tests {
         let unset_id = ObjectId::next();
         let unset = crate::object::Object::new(crate::object::ObjectInit {
             id: unset_id.clone(),
-            object_class: HashSet::from([ObjectClass::Unset]),
+            object_class: crate::object::ObjectClasses::from([ObjectClass::Unset]),
             area: 10,
             bbox: [0, 0, 3, 3],
             ..Default::default()

@@ -26,8 +26,8 @@
 
 use super::object_scratch::TileObjectStore;
 use crate::ImagePlane;
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
-use std::collections::{HashMap, HashSet};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectId};
+use std::collections::HashMap;
 
 /// Everything a spatial query (`spatial_grid::BboxGrid::build_from_bboxes`)
 /// or the "never merge two objects from the same tile" rule needs about one
@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) struct ObjectMetadata {
     pub(crate) tile_index: usize,
     pub(crate) bbox: [u32; 4],
-    pub(crate) object_class: HashSet<ObjectClass>,
+    pub(crate) object_class: crate::object::ObjectClasses,
     pub(crate) plane: ImagePlane,
 }
 
@@ -105,6 +105,7 @@ mod tests {
     use crate::object::{Object, ObjectInit};
     use crate::pipeline::scope::Scope;
     use bitvec::prelude::*;
+    use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::core_types::ObjectId;
 
     fn tile(offset_x: usize, offset_y: usize, width: usize, height: usize) -> ImageTile {

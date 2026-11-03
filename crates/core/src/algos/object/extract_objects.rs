@@ -9,6 +9,7 @@
 
 use crate::ImageDimensionality;
 use crate::image::Point2d;
+use crate::object::ObjectClasses;
 use crate::pipeline::scope::Scope;
 use crate::{
     ImagePlane,
@@ -26,7 +27,6 @@ use evanalyzer_cfg::core_types::{
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Represents a bounded object extracted from a labeled image.
@@ -303,9 +303,9 @@ impl ImageAlgorithm for ExtractObjects {
                     id: ObjectId::next(),
                     segmentation_class,
                     object_class: if object_class == ObjectClass::Unset {
-                        HashSet::new()
+                        ObjectClasses::new()
                     } else {
-                        HashSet::from([object_class])
+                        ObjectClasses::from([object_class])
                     },
                     scope: scope.of_class(&object_class),
                     bbox: bb,

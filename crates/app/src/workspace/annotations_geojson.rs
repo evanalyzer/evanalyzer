@@ -678,7 +678,7 @@ pub fn read_image_geojson(
                 c: 0,
                 t: plane_value("t"),
             },
-            HashSet::new(),
+            evanalyzer_core::ObjectClasses::new(),
         )
         .to_object_settings();
         object.z_projection = properties
@@ -1400,7 +1400,7 @@ mod tests {
             .objects;
         assert_eq!(
             objects[0].object_class,
-            HashSet::from([ObjectClass::Global(nuclei)])
+            std::collections::BTreeSet::from([ObjectClass::Global(nuclei)])
         );
         assert_eq!(objects[0].bbox, [1, 1, 3, 2]);
         assert_eq!(objects[0].area, 6);

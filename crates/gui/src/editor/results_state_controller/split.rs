@@ -706,7 +706,7 @@ impl ResultsStateController {
             class_order.iter().map(|id| ObjectClass::Global(*id as u32)),
             selected_class.map_or(ObjectClass::Unset, |id| ObjectClass::Global(id as u32)),
         );
-        let classes_of = |object: &ResultObject| -> HashSet<ObjectClass> {
+        let classes_of = |object: &ResultObject| -> std::collections::BTreeSet<ObjectClass> {
             (object.class_id >= 0)
                 .then(|| ObjectClass::Global(object.class_id as u32))
                 .into_iter()

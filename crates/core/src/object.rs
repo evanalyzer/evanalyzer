@@ -14,6 +14,7 @@ use crate::ImageTile;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::scope::Scope;
 use bitvec::prelude::*;
+pub use classes::ObjectClasses;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::{
     core_types::{ObjectClass, ObjectId, SegmentationClass, TrackId, ZProjection},
@@ -22,10 +23,10 @@ use evanalyzer_cfg::{
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// An object's (or annotation's) intensities over its mask - one
 /// implementation for the pipeline and stored annotations.
+pub mod classes;
 pub mod intensities;
 pub mod regions;
 /// Shape measurements computed on demand (Feret, convex area, Euler number,
@@ -88,8 +89,8 @@ pub struct Object {
     // Semantic class after threshold
     pub segmentation_class: SegmentationClass,
 
-    // Dedicated class after classify object.
-    object_class: HashSet<ObjectClass>,
+    // Dedicated class after classify object - sorted (see `ObjectClasses`).
+    object_class: ObjectClasses,
 
     /// The scope the object lives in
     scope: Scope,
@@ -177,7 +178,7 @@ pub struct Object {
 pub struct ObjectInit {
     pub id: ObjectId,
     pub segmentation_class: SegmentationClass,
-    pub object_class: HashSet<ObjectClass>,
+    pub object_class: ObjectClasses,
     pub scope: Scope,
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
     /// Kept links of an object rebuilt from another (a stored object, a
@@ -444,7 +445,7 @@ impl Object {
 
     /// The object's classes - local ones only mean something together with
     /// [`Self::scope`].
-    pub fn object_classes(&self) -> &HashSet<ObjectClass> {
+    pub fn object_classes(&self) -> &ObjectClasses {
         &self.object_class
     }
 
@@ -852,7 +853,7 @@ impl Object {
         ObjectMetricSettings {
             id: self.id.clone(),
             segmentation_class: self.segmentation_class,
-            object_class: self.object_class.clone(),
+            object_class: self.object_class.to_set(),
             // A freshly extracted/measured `Object` has no notion of
             // training exclusion - that's a manual decision made later on
             // the already-persisted `ObjectMetricSettings`, in the AI
@@ -904,7 +905,7 @@ impl Object {
         mask: BitVec<u64, Lsb0>,
         bbox: [u32; 4],
         plane: ImagePlane,
-        object_class: HashSet<ObjectClass>,
+        object_class: ObjectClasses,
     ) -> Self {
         let mut object = Object::new(ObjectInit {
             id: ObjectId::next(),
@@ -942,7 +943,7 @@ impl Object {
         Object::new(ObjectInit {
             id: s.id,
             segmentation_class: s.segmentation_class,
-            object_class: s.object_class,
+            object_class: s.object_class.into(),
             // Stored and annotated objects only have project classes.
             scope: Scope::Global,
             colocalized_with: s.colocalized_with,
@@ -1668,7 +1669,7 @@ mod tests {
             mask,
             [10, 20, 12, 22],
             ImagePlane { z: 2, c: 1, t: 3 },
-            HashSet::from([ObjectClass::Global(4)]),
+            ObjectClasses::from([ObjectClass::Global(4)]),
         );
         assert_eq!(object.area, 5);
         assert_eq!(object.get_centroid(), (11.0, 21.0));
@@ -1771,7 +1772,7 @@ mod tests {
             BitVec::<u64, Lsb0>::repeat(true, 2),
             [2, 3, 3, 3],
             ImagePlane { z: 0, c: 0, t: 0 },
-            HashSet::new(),
+            ObjectClasses::new(),
         );
         assert!(object.touches_edge);
         assert!(object.get_perimeter() > 0.0);

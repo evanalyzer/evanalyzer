@@ -19,7 +19,7 @@
 use bitvec::prelude::*;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// The lines' opacity.
 const LINK_ALPHA: f32 = 0.9;
@@ -411,7 +411,11 @@ impl ZOrder {
     }
 
     /// Bigger = further on top.
-    pub(crate) fn key(&self, classes: &HashSet<ObjectClass>, is_selected_object: bool) -> u32 {
+    pub(crate) fn key(
+        &self,
+        classes: &std::collections::BTreeSet<ObjectClass>,
+        is_selected_object: bool,
+    ) -> u32 {
         let in_selected_class = matches!(self.selected_class, ObjectClass::Global(_))
             && classes.contains(&self.selected_class);
         let best_rank = classes

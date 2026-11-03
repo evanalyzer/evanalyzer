@@ -16,7 +16,7 @@ use bitvec::prelude::*;
 use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 #[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize, Clone, JsonSchema)]
@@ -62,8 +62,9 @@ pub struct ObjectMetricSettings {
     // Semantic class after threshold
     pub segmentation_class: SegmentationClass,
 
-    // Dedicated class after classify object
-    pub object_class: HashSet<ObjectClass>,
+    // Dedicated class after classify object - sorted: the same order in
+    // every file.
+    pub object_class: BTreeSet<ObjectClass>,
 
     // Excludes this object from AI classifier training even though it has an
     // `object_class` assigned (e.g. a bad/outlier annotation) - unlike

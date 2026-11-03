@@ -676,7 +676,7 @@ mod tests {
     fn labeled_object(id: u32, class: ObjectClass) -> ObjectMetricSettings {
         ObjectMetricSettings {
             id: ObjectId(id.into()),
-            object_class: HashSet::from([class]),
+            object_class: std::collections::BTreeSet::from([class]),
             ..Default::default()
         }
     }

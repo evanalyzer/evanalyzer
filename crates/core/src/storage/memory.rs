@@ -258,7 +258,7 @@ mod tests {
                 ObjectId(id),
                 Object::new(ObjectInit {
                     id: ObjectId(id),
-                    object_class: HashSet::from([ObjectClass::Global(class)]),
+                    object_class: crate::object::ObjectClasses::from([ObjectClass::Global(class)]),
                     area: 4,
                     bbox: [10, 20, 14, 30],
                     plane: crate::ImagePlane { z: 0, c: 0, t },

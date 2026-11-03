@@ -1990,7 +1990,7 @@ mod tests {
         for object in objects.iter() {
             assert_eq!(
                 object.object_class,
-                std::collections::HashSet::from([ObjectClass::Global(7)]),
+                std::collections::BTreeSet::from([ObjectClass::Global(7)]),
                 "reclassified into the instance's class, nothing local left"
             );
         }
@@ -2114,7 +2114,7 @@ mod tests {
         for object in objects.iter() {
             assert_eq!(
                 object.object_class,
-                std::collections::HashSet::from([ObjectClass::Global(7)]),
+                std::collections::BTreeSet::from([ObjectClass::Global(7)]),
                 "through the nested module and back, nothing local left"
             );
         }

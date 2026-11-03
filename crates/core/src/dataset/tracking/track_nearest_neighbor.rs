@@ -307,13 +307,13 @@ mod store_tests {
     use crate::pipeline::pipeline_cache::GlobalPipelineCache;
     use crate::{DuckDbExporter, PipelineResultExporter};
     use evanalyzer_cfg::core_types::{ImagePlane, ObjectId, TrackId};
-    use std::collections::HashSet;
+
     use std::sync::{Arc, atomic::AtomicBool};
 
     fn cell(id: u128, class: u32, t: i32, x: u32, track: u64) -> Object {
         let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
-            object_class: HashSet::from([ObjectClass::Global(class)]),
+            object_class: crate::object::ObjectClasses::from([ObjectClass::Global(class)]),
             area: 4,
             bbox: [x, 10, x + 2, 12],
             plane: ImagePlane { z: 0, c: 0, t },

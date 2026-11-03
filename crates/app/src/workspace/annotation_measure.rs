@@ -67,7 +67,7 @@ mod tests {
     use evanalyzer_cfg::core_types::ImageTile;
     use evanalyzer_core::ChannelTile;
     use kornia_image::ImageSize;
-    use std::collections::HashSet;
+
     use std::path::PathBuf;
 
     fn fixture() -> PathBuf {
@@ -117,7 +117,7 @@ mod tests {
                     mask.clone(),
                     *bbox,
                     ImagePlane { z: 0, c: 0, t: 0 },
-                    HashSet::new(),
+                    evanalyzer_core::ObjectClasses::new(),
                 )
                 .to_object_settings()
             })
@@ -218,7 +218,7 @@ mod tests {
                         mask,
                         [x0, y0, x0 + side - 1, y0 + side - 1],
                         ImagePlane { z: 0, c: 0, t: 0 },
-                        HashSet::new(),
+                        evanalyzer_core::ObjectClasses::new(),
                     )
                     .to_object_settings(),
                 ];

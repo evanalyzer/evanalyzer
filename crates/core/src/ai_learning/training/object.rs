@@ -23,7 +23,6 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
 };
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use indexmap::IndexMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -299,7 +298,7 @@ fn measure_image(
 /// data for a single-label classifier.
 fn resolve_label(
     class_labels: &[ObjectClassLabel],
-    object_class: &HashSet<ObjectClass>,
+    object_class: &std::collections::BTreeSet<ObjectClass>,
 ) -> Result<usize, &'static str> {
     let mut matches = class_labels
         .iter()
@@ -389,21 +388,22 @@ mod tests {
     #[test]
     fn resolve_label_matches_the_one_configured_class() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Global(2)]);
+        let object_class = std::collections::BTreeSet::from([ObjectClass::Global(2)]);
         assert_eq!(resolve_label(&labels, &object_class), Ok(1));
     }
 
     #[test]
     fn resolve_label_errors_when_no_class_matches() {
         let labels = vec![class_label(1, "Cell")];
-        let object_class = HashSet::from([ObjectClass::Global(99)]);
+        let object_class = std::collections::BTreeSet::from([ObjectClass::Global(99)]);
         assert!(resolve_label(&labels, &object_class).is_err());
     }
 
     #[test]
     fn resolve_label_errors_when_multiple_classes_match() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
+        let object_class =
+            std::collections::BTreeSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
         assert!(resolve_label(&labels, &object_class).is_err());
     }
 
@@ -412,7 +412,7 @@ mod tests {
     fn labeled_object(id: u128, class: ObjectClass, area: usize) -> ObjectMetricSettings {
         ObjectMetricSettings {
             id: ObjectId(id),
-            object_class: HashSet::from([class]),
+            object_class: std::collections::BTreeSet::from([class]),
             area,
             ..Default::default()
         }
@@ -603,7 +603,7 @@ mod tests {
             mask,
             [x0, y0, x0 + side - 1, y0 + side - 1],
             ImagePlane { z: 0, c: 0, t: 0 },
-            HashSet::from([ObjectClass::Global(1)]),
+            crate::object::ObjectClasses::from([ObjectClass::Global(1)]),
         )
         .to_object_settings();
         let spec = AiLearningObjectFeatureSettings {

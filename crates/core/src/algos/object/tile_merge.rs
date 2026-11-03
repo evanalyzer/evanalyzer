@@ -195,7 +195,7 @@ impl ImageAlgorithm for TileMerge {
 
                 let geometry = union_merge(&object_refs);
 
-                let mut object_class = std::collections::HashSet::new();
+                let mut object_class = crate::object::ObjectClasses::new();
                 for o in &object_refs {
                     object_class.extend(o.object_classes().iter().copied());
                 }

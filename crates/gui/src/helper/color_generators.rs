@@ -11,12 +11,11 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::ObjectClass;
 use slint::Color;
-use std::collections::HashSet;
 
 pub fn get_colors_from_class(
     project: &ProjectWithRuntime,
     transparency: u8,
-    classes: &HashSet<ObjectClass>,
+    classes: &std::collections::BTreeSet<ObjectClass>,
 ) -> Color {
     let mut r = 0u32;
     let mut g = 0u32;
@@ -73,6 +72,7 @@ pub fn color_from_rgb(rgb: [f32; 3]) -> Color {
 mod tests {
     use super::*;
     use evanalyzer_cfg::settings::classification_settings::Class;
+    use std::collections::BTreeSet;
 
     fn project_with_class(id: u32, hex_color: u32) -> ProjectWithRuntime {
         let mut project = ProjectWithRuntime::default();
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn get_colors_from_class_with_no_classes_defaults_to_opaque_red() {
         let project = ProjectWithRuntime::default();
-        let color = get_colors_from_class(&project, 128, &HashSet::new());
+        let color = get_colors_from_class(&project, 128, &BTreeSet::new());
         assert_eq!(
             (color.red(), color.green(), color.blue(), color.alpha()),
             (0xFF, 0, 0, 0xFF)
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn get_colors_from_class_uses_the_registered_classs_color_and_given_transparency() {
         let project = project_with_class(1, 0x00FF00); // pure green
-        let classes = HashSet::from([ObjectClass::Global(1)]);
+        let classes = BTreeSet::from([ObjectClass::Global(1)]);
         let color = get_colors_from_class(&project, 64, &classes);
         assert_eq!(
             (color.red(), color.green(), color.blue(), color.alpha()),
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn get_colors_from_class_falls_back_to_red_for_an_unknown_class() {
         let project = ProjectWithRuntime::default(); // no classes registered
-        let classes = HashSet::from([ObjectClass::Global(99)]);
+        let classes = BTreeSet::from([ObjectClass::Global(99)]);
         let color = get_colors_from_class(&project, 200, &classes);
         assert_eq!(
             (color.red(), color.green(), color.blue(), color.alpha()),
@@ -130,7 +130,7 @@ mod tests {
             color: 0x0000FF, // blue
             ..Default::default()
         });
-        let classes = HashSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
+        let classes = BTreeSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
         let color = get_colors_from_class(&project, 255, &classes);
         // (255+0)/2 = 127 (integer division), (0+255)/2 = 127
         assert_eq!(color.red(), 127);

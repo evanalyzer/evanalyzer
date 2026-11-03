@@ -159,7 +159,7 @@ fn main() {
                     id.clone(),
                     Object::new(ObjectInit {
                         id,
-                        object_class,
+                        object_class: object_class.into(),
                         intensities,
                         track: Track {
                             id: TrackId(track),

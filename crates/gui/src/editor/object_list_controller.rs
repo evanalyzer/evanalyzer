@@ -911,10 +911,9 @@ mod tests {
     // -- compute_visible_rows / precompute_label_counts -----------------------
 
     use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
-    use std::collections::HashSet;
 
     fn object_with_class(id: u128, seg_class: u32, has_class: bool) -> ObjectMetricSettings {
-        let mut object_class = HashSet::new();
+        let mut object_class = std::collections::BTreeSet::new();
         if has_class {
             object_class.insert(ObjectClass::Global(1));
         }

@@ -33,7 +33,7 @@ macro_rules! object_class_set_from_u32 {
     // Branch for raw u32 numbers: oc_set![1, 2, 3]
     ( $($val:expr),* $(,)? ) => {
         {
-            let mut temp_set = std::collections::HashSet::new();
+            let mut temp_set = std::collections::BTreeSet::new();
             $(
                 temp_set.insert(ObjectClass::Global($val));
             )*

@@ -1799,6 +1799,30 @@ The clear gain is where shape values were recomputed (Classify Objects: CPU
 other work (the database append) - the 2-thread run shows the allocations'
 share (-8 %). Changes within ± 3 % are run-to-run noise.
 
+## Object classes as a sorted list (2026-11-03)
+
+An object's classes were a `HashSet`: the exported `object_class_name` /
+`object_class_id` listed the same classes in a random order per run, so the
+results weren't byte-identical (200 × 2048² + 5 Classify Objects: 4 runs, 4
+different row hashes). Now a sorted `Vec` (`object::ObjectClasses`; settings
+a `BTreeSet`, same file format). Per object: 24 bytes + one small block for
+the classes instead of 48 bytes + a hash table (~64 bytes) - about 55 bytes
+less per object kept in RAM; `contains` compares 1-6 values instead of
+hashing. Checked: all other columns identical, each object's class set
+identical (322,244 objects, 245,522 with several classes); same row hash in
+every run now. Old (HEAD 424c5617) / new alternated, 4 runs, medians:
+
+| Case | Old: wall / CPU / peak | New |
+|---|---|---|
+| 400 × 1024² | 3.85 s / 14.2 s / 946 MB | 3.90 s / 14.1 s / 928 MB |
+| 200 × 2048² | 4.03 s / 30.9 s / 2,017 MB | 3.96 s / 31.0 s / 1,978 MB |
+| 200 × 2048² + 5 Classify Objects | 4.12 s / 32.0 s / 2,066 MB | 4.19 s / 30.9 s / 2,002 MB |
+| 200 × 2048², 2 threads | 11.75 s / 21.7 s / 564 MB | 11.62 s / 21.8 s / 555 MB |
+| `tests/haut`, Voronoi | 16.0 s / 206 s / 7,248 MB | 16.0 s / 203 s / 7,154 MB |
+
+Time within the noise (± 2 %); peak RAM 1-3 % lower in every case, at the
+edge of the run-to-run noise (± 60 MB) - consistent with ~55 bytes per object.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

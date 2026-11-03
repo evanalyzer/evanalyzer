@@ -329,13 +329,13 @@ mod store_tests {
     use crate::storage::stored_object::ObjectFilter;
     use crate::{DuckDbExporter, PipelineResultExporter};
     use evanalyzer_cfg::core_types::{ImagePlane, ObjectId, TrackId};
-    use std::collections::HashSet;
+
     use std::sync::{Arc, atomic::AtomicBool};
 
     fn cell(id: u128, class: u32, t: i32, x: u32, track: u64) -> Object {
         let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
-            object_class: HashSet::from([ObjectClass::Global(class)]),
+            object_class: crate::object::ObjectClasses::from([ObjectClass::Global(class)]),
             area: 4,
             bbox: [x, 10, x + 1, 11],
             mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 4],

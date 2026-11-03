@@ -28,7 +28,6 @@ use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use slint::{Color, ComponentHandle, Model, VecModel};
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -2009,7 +2008,7 @@ impl ViewportController {
 pub(crate) fn is_object_drawn<P: ProjectExt + ?Sized>(
     project: &P,
     hide_unclassified: bool,
-    classes: &HashSet<ObjectClass>,
+    classes: &std::collections::BTreeSet<ObjectClass>,
 ) -> bool {
     if classes.is_empty() {
         return !hide_unclassified;

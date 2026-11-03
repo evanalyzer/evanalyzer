@@ -139,7 +139,7 @@ fn object(id: u128, size: u32, spread: bool) -> Object {
     let (mask_data, area) = mask(id, size);
     Object::new(ObjectInit {
         id: ObjectId(id),
-        object_class,
+        object_class: object_class.into(),
         intensities,
         colocalized_with,
         bbox: [x, y, x + size - 1, y + size - 1],
