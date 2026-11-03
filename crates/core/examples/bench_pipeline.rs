@@ -15,6 +15,10 @@
 //     <workdir> [--images N] [--size PX] [--threads N] [--spots N] [--classify N]
 //
 // `--classify N` adds N Classify Objects steps (class filtering by size).
+// `--max-ram MB` plans with that much RAM at most.
+// `--hessian N` adds N Hessian steps before the blur (an expensive command:
+// 28 bytes per tile pixel beyond the worker's buffers), then loads the
+// channel again. Without `--threads`: the app's planned threads.
 // `--source 1` starts from the scratchpad, `--source 2` from no image, both
 // with a Load Image Channel step first (0: the channel itself, the default).
 // `--shared 1`: pipeline 1 stores channel 0 in shared memory slot 1, the
@@ -81,6 +85,16 @@ fn main() {
     let threads = arg("--threads", 0);
     let spots = arg("--spots", 20000) as u32;
     let blurs = arg("--blurs", 1);
+    let hessians = arg("--hessian", 0);
+    // `--max-ram MB`: plan as if the computer had no more RAM (as the app's
+    // option).
+    let max_ram = arg("--max-ram", 0) as u64;
+    if max_ram > 0 {
+        evanalyzer_core::memory::set_resource_limits(evanalyzer_core::memory::ResourceLimits {
+            max_threads: None,
+            max_ram_mb: Some(max_ram),
+        });
+    }
     let classify = arg("--classify", 0);
     let module = arg("--module", 0);
     let source = arg("--source", 0);
@@ -100,8 +114,21 @@ fn main() {
         }
         std::sync::Arc::make_mut(&mut project.images.list.0).insert(
             name.clone(),
+            // Its size and channel, as the app's folder scan finds them (the
+            // planner sizes threads and caches by them).
             std::sync::Arc::new(ImageEntry {
                 rel_path: name,
+                series: [(
+                    0,
+                    evanalyzer_cfg::settings::images_settings::SeriesSettings {
+                        image_width: size as u64,
+                        image_height: size as u64,
+                        channels: [(0, Default::default())].into_iter().collect(),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
                 ..Default::default()
             }),
         );
@@ -143,6 +170,17 @@ fn main() {
                 ))
             })
             .into_iter()
+            .chain((0..hessians).map(|_| step(PipelineCommand::Hessian(Default::default()))))
+            // Back to the channel: the objects as without the Hessian.
+            .chain((hessians > 0).then(|| {
+                step(PipelineCommand::LoadChannel(
+                    evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
+                        channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+                        projection: evanalyzer_cfg::settings::pipeline_command_settings::MathLoadChannelChannelZProjectionSettings::Auto,
+                        z_index: 0,
+                    },
+                ))
+            }))
             .chain((0..blurs).map(|_| {
                 step(PipelineCommand::GaussianBlur(GaussianBlurSettings {
                     kernel_size: 5,
@@ -215,8 +253,9 @@ fn main() {
         Some(format!("bench_t{threads}")),
     )
     .unwrap();
+    // As the app: the planner's threads (cores, RAM, the commands).
     let parallelism = if threads == 0 {
-        std::thread::available_parallelism().unwrap().get()
+        job.recommended_parallelism()
     } else {
         threads
     };

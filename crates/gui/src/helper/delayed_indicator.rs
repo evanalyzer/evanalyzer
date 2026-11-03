@@ -14,7 +14,7 @@
 
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::AppWindow;
 
@@ -24,10 +24,18 @@ pub(crate) const SHOW_FOR: Duration = Duration::from_millis(400);
 /// Shows or hides the indicator in the window.
 type Show = fn(&AppWindow, bool);
 
+/// Both delays on Slint's timers - one clock (a test's mocked one too; the
+/// time shown was measured on the system's clock before, which a slow test
+/// run let pass between two lines).
 struct Inner {
     busy: Cell<bool>,
-    shown_since: Cell<Option<Instant>>,
-    timer: slint::Timer,
+    shown: Cell<bool>,
+    /// Shown for [`SHOW_FOR`] already: may go.
+    shown_long_enough: Cell<bool>,
+    /// Shows it after [`SHOW_AFTER`].
+    show_timer: slint::Timer,
+    /// Ends [`SHOW_FOR`] after it was shown.
+    shown_timer: slint::Timer,
     show: Show,
 }
 
@@ -37,8 +45,10 @@ impl DelayedIndicator {
     pub(crate) fn new(show: Show) -> Self {
         Self(Rc::new(Inner {
             busy: Cell::new(false),
-            shown_since: Cell::new(None),
-            timer: slint::Timer::default(),
+            shown: Cell::new(false),
+            shown_long_enough: Cell::new(false),
+            show_timer: slint::Timer::default(),
+            shown_timer: slint::Timer::default(),
             show,
         }))
     }
@@ -47,37 +57,44 @@ impl DelayedIndicator {
     pub(crate) fn set_busy(&self, ui: &slint::Weak<AppWindow>, busy: bool) {
         let inner = &self.0;
         inner.busy.set(busy);
-        match (busy, inner.shown_since.get()) {
-            // Shown already: stays (a pending hide is off).
-            (true, Some(_)) => inner.timer.stop(),
-            (true, None) => {
+        match (busy, inner.shown.get()) {
+            // Shown already: stays.
+            (true, true) => {}
+            (true, false) => {
                 let (ui, weak) = (ui.clone(), Rc::downgrade(inner));
                 inner
-                    .timer
+                    .show_timer
                     .start(slint::TimerMode::SingleShot, SHOW_AFTER, move || {
-                        if let Some(inner) = weak.upgrade() {
-                            if inner.busy.get() && inner.shown_since.get().is_none() {
-                                inner.shown_since.set(Some(Instant::now()));
-                                show(&inner, &ui, true);
-                            }
+                        let Some(inner) = weak.upgrade() else {
+                            return;
+                        };
+                        if !inner.busy.get() || inner.shown.get() {
+                            return;
                         }
+                        inner.shown.set(true);
+                        inner.shown_long_enough.set(false);
+                        show(&inner, &ui, true);
+                        let (ui, weak) = (ui.clone(), Rc::downgrade(&inner));
+                        inner.shown_timer.start(
+                            slint::TimerMode::SingleShot,
+                            SHOW_FOR,
+                            move || {
+                                if let Some(inner) = Weak::upgrade(&weak) {
+                                    inner.shown_long_enough.set(true);
+                                    hide(&inner, &ui);
+                                }
+                            },
+                        );
                     });
             }
             // Never shown: nothing to hide.
-            (false, None) => inner.timer.stop(),
-            (false, Some(since)) => match SHOW_FOR.checked_sub(since.elapsed()) {
-                None => hide(inner, ui),
-                Some(left) => {
-                    let (ui, weak) = (ui.clone(), Rc::downgrade(inner));
-                    inner
-                        .timer
-                        .start(slint::TimerMode::SingleShot, left, move || {
-                            if let Some(inner) = Weak::upgrade(&weak) {
-                                hide(&inner, &ui);
-                            }
-                        });
+            (false, false) => inner.show_timer.stop(),
+            // Shown long enough: goes now - else when it has been.
+            (false, true) => {
+                if inner.shown_long_enough.get() {
+                    hide(inner, ui);
                 }
-            },
+            }
         }
     }
 }
@@ -88,9 +105,10 @@ fn show(inner: &Inner, ui: &slint::Weak<AppWindow>, on: bool) {
     }
 }
 
+/// Hides it unless the work goes on.
 fn hide(inner: &Inner, ui: &slint::Weak<AppWindow>) {
     if !inner.busy.get() {
-        inner.shown_since.set(None);
+        inner.shown.set(false);
         show(inner, ui, false);
     }
 }

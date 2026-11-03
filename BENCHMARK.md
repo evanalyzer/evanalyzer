@@ -1971,6 +1971,37 @@ Old / new alternated, 4 runs, medians - same rows hash everywhere:
 No difference beyond the noise on small images; the slide -95 MB (212,413
 objects boxed). The planning costs nothing at run time.
 
+## Step 2: a RAM pool for the expensive commands - rejected (2026-11-03)
+
+Idea: plan the workers with their own buffers only and let the commands
+that declare RAM per tile pixel (Hessian 28, Rolling Ball 12, Gaussian
+Blur 4, ...) take it from a pool while they run - fewer of them at once,
+the cheap steps on all threads. Waiting inside rayon deadlocks (a worker
+helping a holder's parallel loop picks up a tile and waits for the
+holder's RAM - a test reproduced it 3 of 3 times), so the commands ran in a
+command pool of their own, the worker waiting on a channel. A thread per
+command first: +250-380 MB (each new thread its own malloc arena); with
+persistent command threads, old (every worker planned for the hungriest
+command) / new alternated, 4 runs, medians, identical results:
+
+| Case | Old: wall / CPU / peak | New |
+|---|---|---|
+| 400 × 1024² (blur) | 4.18 s / 15.1 s / 958 MB | 4.10 s / 15.0 s / 908 MB |
+| 400 × 1024², no blur | 3.98 s / 11.0 s / 820 MB | 3.87 s / 10.8 s / 848 MB |
+| 200 × 2048² | 4.05 s / 32.5 s / 1,964 MB | 4.05 s / 31.0 s / 2,142 MB |
+| 200 × 2048² + Hessian | 5.78 s / 70.2 s / 2,926 MB | 5.44 s / 66.3 s / 3,539 MB |
+| + Hessian, `--max-ram 2048` (10 / 11 threads) | 6.68 s / 55.1 s / 1,814 MB | 6.18 s / 54.8 s / 2,138 MB |
+| 2 threads | 12.23 s / 22.9 s / 542 MB | 11.47 s / 21.6 s / 570 MB |
+| `tests/haut` | 16.95 s / 217 s / 7,212 MB | 17.05 s / 215 s / 7,339 MB |
+| `tests/haut`, `--max-ram 4096` | 41.6 s / 155 s / 2,850 MB | 38.1 s / 155 s / 3,098 MB |
+
+Up to 8 % faster, but more RAM in most cases (small images too) - not
+taken. The gain is small anyway: an expensive command needs more per tile
+than a worker's own buffers (Hessian 117 MB vs 81 MB at 2048²), so the pool
+leaves little room for more threads. `bench_pipeline` gained `--hessian N`,
+`--max-ram MB` and the images' sizes (the planner sized for 4096² tiles
+without them); without `--threads` it now uses the app's planned threads.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

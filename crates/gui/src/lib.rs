@@ -1718,8 +1718,8 @@ mod ui_state_tests {
         assert_eq!(info.get_system_error(), "");
     }
 
-    /// Slint's Royalty-free license asks for its AboutSlint widget in the
-    /// About screen: it's there, whole and inside the dialog's hero.
+    /// Slint's Royalty-free license asks for its logo in the About screen:
+    /// on the Licenses tab, whole and inside the window.
     #[test]
     fn the_about_dialog_shows_made_with_slint() {
         use i_slint_backend_testing::ElementHandle;
@@ -1728,24 +1728,21 @@ mod ui_state_tests {
         ui.window().set_size(slint::LogicalSize::new(1280.0, 720.0));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::About);
+        let logo = || ElementHandle::find_by_accessible_label(&ui, "Made with Slint").next();
+        assert!(logo().is_none(), "only on the Licenses tab");
 
-        let logo = ElementHandle::find_by_accessible_label(&ui, "#MadeWithSlint")
+        ElementHandle::find_by_accessible_label(&ui, "Licenses")
             .next()
-            .expect("AboutSlint's logo");
+            .expect("the Licenses tab")
+            .invoke_accessible_default_action();
+        let logo = logo().expect("Slint's logo");
         let (at, size) = (logo.absolute_position(), logo.size());
-        assert!(size.width >= 100.0, "{size:?}");
-        // Not stretched: the logo (212 x 97) keeps its aspect ratio.
-        let aspect = size.height / size.width;
-        assert!((aspect - 97.0 / 212.0).abs() < 0.01, "{size:?}");
-        // The hero: the dialog's left 280 px (the dialog is 880 px wide,
-        // centred).
-        let hero_left = (1280.0 - 880.0) / 2.0;
+        assert!(size.width >= 40.0 && size.height >= 16.0, "{size:?}");
         assert!(
-            at.x >= hero_left && at.x + size.width <= hero_left + 280.0,
-            "{at:?} {size:?}"
-        );
-        assert!(
-            at.y >= 0.0 && at.y + size.height <= 720.0,
+            at.x >= 0.0
+                && at.x + size.width <= 1280.0
+                && at.y >= 0.0
+                && at.y + size.height <= 720.0,
             "{at:?} {size:?}"
         );
     }
