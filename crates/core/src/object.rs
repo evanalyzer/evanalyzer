@@ -445,6 +445,35 @@ impl Object {
 
     /// The object's classes - local ones only mean something together with
     /// [`Self::scope`].
+    /// About how much RAM this object takes: the struct and what it holds
+    /// on the heap (mask, intensities, classes, relations; each allocation
+    /// with the allocator's ~16 bytes). For the RAM budget - a whole slide's
+    /// objects stay in RAM until its export - not to the byte.
+    pub fn ram_bytes(&self) -> u64 {
+        const ALLOCATION: usize = 16;
+        let heap = |bytes: usize| if bytes == 0 { 0 } else { bytes + ALLOCATION };
+        let mask = heap(self.mask_data.capacity().div_ceil(8));
+        let intensities = heap(
+            self.intensities.capacity()
+                * (std::mem::size_of::<(i32, Intensity)>() + 2 * std::mem::size_of::<usize>()),
+        );
+        let classes = heap(self.object_class.len() * std::mem::size_of::<ObjectClass>());
+        let partners: usize = self
+            .colocalized_with
+            .values()
+            .map(|ids| heap(ids.capacity() * std::mem::size_of::<ObjectId>()))
+            .sum::<usize>()
+            + heap(
+                self.colocalized_with.capacity()
+                    * (std::mem::size_of::<(ObjectClass, Vec<ObjectId>)>() + 16),
+            );
+        let parents =
+            heap(self.parents.capacity() * (std::mem::size_of::<(ObjectClass, ObjectId)>() + 16));
+        let track = heap(self.track.object_ids.capacity() * std::mem::size_of::<ObjectId>());
+        (std::mem::size_of::<Object>() + mask + intensities + classes + partners + parents + track)
+            as u64
+    }
+
     pub fn object_classes(&self) -> &ObjectClasses {
         &self.object_class
     }

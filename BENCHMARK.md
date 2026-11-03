@@ -1930,6 +1930,47 @@ No difference beyond the noise. Also found: a list past 65,536 values
 checked "all whole gray values?" over the whole list for every value -
 quadratic when it started with whole values (a test: 18.5 → 0.1 s).
 
+## Objects and commands in the RAM plan (2026-11-03)
+
+**Objects.** A whole slide's objects stay in RAM until its export and no
+budget counted them. Now, for one tiled image on every worker, what each
+finished tile's objects take (`ObjectCache::entry_bytes`, within 3 % of the
+measured RAM in `whole_image_ram`) comes off the merged image cache's cap -
+the channel tiles spill instead, down to the cache's floor (2 tiles). The
+objects are boxed in the cache now: a B-tree keeps its values in partly
+empty nodes, with the 528-byte `Object` inline that was ~450 bytes more per
+object - 3,073 small objects 4.9 → 3.6 MB (-27 %). Found on the way: clru
+0.6.3's `resize` panics on a filled cache when the capacity stays the same
+(it rebuilds its lookup over slots eviction left empty) - the cap is set by
+building a new LRU now (test `the_same_cap_again_after_evictions...`).
+
+**Commands.** Each tile command declares what it takes per tile pixel
+beyond the worker's buffers (`ImageAlgorithm::ram_per_tile_pixel`); the
+planner adds the job's largest to each worker (`estimate_ram_budget`), the
+threads and caches follow. `tests/tile_ram.rs` measures every tile command
+(512² vs 1024², defaults or valid settings) against its declaration
+(+0.25 B tolerance): Canny, Hessian 28; Structure Tensor 24; Rolling Ball,
+Sobel, Weighted Deviation 12; Fill Holes, Watershed 9; Blur, Laplacian,
+Morphological Transform 8; Gaussian Blur, Median Subtract, Rank Filter,
+Illumination Correction, Color Deconvolution, Color Filter 4; Save Image 1;
+the rest 0. Not measured: the AI models (need libtorch and a model). A
+Hessian pipeline on 4096² tiles: +470 MB per worker the plan didn't know
+(21 workers: ~10 GB).
+
+Old / new alternated, 4 runs, medians - same rows hash everywhere:
+
+| Case | Old: wall / CPU / peak | New |
+|---|---|---|
+| 400 × 1024² | 4.05 s / 14.9 s / 978 MB | 4.08 s / 14.8 s / 956 MB |
+| 200 × 2048² | 4.28 s / 32.7 s / 2,005 MB | 4.25 s / 32.6 s / 1,997 MB |
+| + 5 Classify Objects | 4.36 s / 32.9 s / 2,004 MB | 4.32 s / 32.5 s / 2,026 MB |
+| 2 threads | 12.18 s / 22.7 s / 555 MB | 12.67 s / 23.1 s / 546 MB |
+| `tests/haut` | 17.6 s / 225 s / 7,294 MB | 17.35 s / 222 s / 7,138 MB |
+| `tests/haut`, `--max-ram 4096` | 37.4 s / 154.7 s / 3,134 MB | 37.9 s / 154.1 s / 3,039 MB |
+
+No difference beyond the noise on small images; the slide -95 MB (212,413
+objects boxed). The planning costs nothing at run time.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

@@ -71,6 +71,11 @@ impl ImageAlgorithm for MedianSubtract {
         "Median Subtract"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        4.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata::DANMAYR]
     }

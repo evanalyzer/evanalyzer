@@ -266,7 +266,21 @@ impl ImageCache {
             };
             spill_to_disk(&self.spill, &mut inner.image_index, address, &image);
         }
-        inner.hot_cache.resize(capacity);
+        // A new cache with the rest, not `CLruCache::resize`: clru 0.6.3's
+        // `resize` panics on a filled weighted cache (it resizes its slots to
+        // the byte capacity, then rebuilds its lookup from them) - a whole
+        // slide lowers the cap again and again as its objects come in.
+        // Oldest first, so the order of use stays.
+        let mut resized = new_hot_cache(capacity.get());
+        let entries: Vec<(CacheAddress, Arc<ImageContainer>)> = inner
+            .hot_cache
+            .iter()
+            .map(|(address, image)| (*address, Arc::clone(image)))
+            .collect();
+        for (address, image) in entries.into_iter().rev() {
+            let _ = resized.put_with_weight(address, image);
+        }
+        inner.hot_cache = resized;
     }
 
     /// Inserts `img` at `address`, returning the previously stored image (if
@@ -811,6 +825,81 @@ mod tests {
         assert_eq!(
             cache.get(&first).unwrap().as_f32_slice(),
             Some([1.0; 16].as_slice())
+        );
+    }
+
+    /// A filled cache whose cap goes down again and again while images come
+    /// in and are read (a whole slide's objects come off it as tiles
+    /// finish): what doesn't fit is spilled, every image still reads back
+    /// (clru's own `resize` panicked here, 2026-11-03).
+    #[test]
+    fn a_cache_lowered_while_in_use_keeps_every_image() {
+        let mut cache = cache_with_capacity(64 * 60);
+        let address = |i: u32| CacheAddress::Memory(MemoryId::PipelineContext(i));
+        let mut seed = 0x9e37_79b9u64;
+        let mut next = |n: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as u32
+        };
+        let mut inserted = 0u32;
+        let mut capacity = 64 * 60;
+        for _ in 0..300 {
+            match next(4) {
+                0 | 1 => {
+                    cache.insert(
+                        address(inserted),
+                        gray_container(4, 4, vec![inserted as f32; 16]),
+                    );
+                    inserted += 1;
+                }
+                2 if inserted > 0 => {
+                    let i = next(inserted);
+                    assert_eq!(
+                        cache.get(&address(i)).unwrap().as_f32_slice(),
+                        Some([i as f32; 16].as_slice())
+                    );
+                }
+                _ => {
+                    capacity = (capacity - next(130) as usize).max(200);
+                    cache.set_capacity_bytes(capacity as u64);
+                }
+            }
+        }
+        for i in 0..inserted {
+            assert_eq!(
+                cache.get(&address(i)).unwrap().as_f32_slice(),
+                Some([i as f32; 16].as_slice()),
+                "image {i}"
+            );
+        }
+    }
+
+    /// The same cap set again after an image pushed others out (a whole
+    /// slide's cap stays at its floor while tiles keep coming): clru's
+    /// `resize` with an unchanged capacity rebuilt its lookup over the slots
+    /// eviction left empty and panicked (2026-11-03).
+    #[test]
+    fn the_same_cap_again_after_evictions_keeps_every_image() {
+        let mut cache = cache_with_capacity(300);
+        let address = |i: u32| CacheAddress::Memory(MemoryId::PipelineContext(i));
+        for i in 0..3 {
+            cache.insert(address(i), gray_container(4, 4, vec![i as f32; 16]));
+        }
+        // 256 bytes: the three small ones go to disk.
+        cache.insert(address(3), gray_container(8, 8, vec![3.0; 64]));
+        cache.set_capacity_bytes(300);
+        cache.set_capacity_bytes(300);
+        for i in 0..3 {
+            assert_eq!(
+                cache.get(&address(i)).unwrap().as_f32_slice(),
+                Some([i as f32; 16].as_slice())
+            );
+        }
+        assert_eq!(
+            cache.get(&address(3)).unwrap().as_f32_slice(),
+            Some([3.0; 64].as_slice())
         );
     }
 

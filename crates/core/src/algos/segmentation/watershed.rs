@@ -235,6 +235,11 @@ impl ImageAlgorithm for Watershed {
         "Watershed"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        9.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata {
             cite_key: "vincent1991watersheds",

@@ -68,6 +68,11 @@ impl ImageAlgorithm for EdgeDetectionSobel {
         "Edge Detection Sobel"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        12.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata {
             cite_key: "sobel1968isotropic",

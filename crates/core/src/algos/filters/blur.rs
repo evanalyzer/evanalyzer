@@ -87,6 +87,11 @@ impl ImageAlgorithm for Blur {
         "Blur"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        8.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata::IMAGEJ]
     }

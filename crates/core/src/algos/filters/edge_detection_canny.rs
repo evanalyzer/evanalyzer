@@ -160,6 +160,11 @@ impl ImageAlgorithm for EdgeDetectionCanny {
         "Edge Detection Canny"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        28.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata {
             cite_key: "canny1986computational",

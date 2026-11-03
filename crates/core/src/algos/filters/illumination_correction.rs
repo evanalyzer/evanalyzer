@@ -198,6 +198,11 @@ impl ImageAlgorithm for IlluminationCorrection {
         "Illumination Correction"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        4.1
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata::CELLPROFILER]
     }

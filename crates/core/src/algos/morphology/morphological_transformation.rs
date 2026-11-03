@@ -133,6 +133,11 @@ impl ImageAlgorithm for MorphologicalCommand {
         "Morphological Transform"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        8.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata {
             cite_key: "serra1982image",

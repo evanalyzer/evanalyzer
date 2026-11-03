@@ -1072,13 +1072,34 @@ impl<'a> JobExecutor {
                 let merged = Mutex::new({
                     let mut merged = global_cache.clone();
                     merged.image_cache.set_capacity_bytes(merged_cache_bytes);
-                    merged
+                    (merged, 0u64)
                 });
+                // A whole slide's objects stay in RAM until its export: what
+                // they take comes off the cache's cap as tiles finish, so the
+                // channel tiles spill instead (down to the cache's floor).
+                let objects_count = merged_cache.counts_objects();
+                // Never above the cap it started with.
+                let floor = merged_cache.floor_bytes().min(merged_cache_bytes);
                 let merge_tile = |tile: ImageTile| -> Result<(), InternalErrors> {
-                    let cache = run_tile(tile, progress.clone())?;
-                    let mut merged = merged.lock().expect("Poisoned");
-                    merged.object_cache.extend(cache.object_cache);
+                    let mut cache = run_tile(tile, progress.clone())?;
+                    let added: u64 = match objects_count {
+                        true => cache
+                            .object_cache
+                            .values()
+                            .map(ObjectCache::entry_bytes)
+                            .sum(),
+                        false => 0,
+                    };
+                    let mut guard = merged.lock().expect("Poisoned");
+                    let (merged, objects_bytes) = &mut *guard;
+                    merged.object_cache.append(&mut cache.object_cache);
                     merged.image_cache.extend(cache.image_cache);
+                    if added > 0 {
+                        *objects_bytes += added;
+                        merged.image_cache.set_capacity_bytes(
+                            merged_cache_bytes.saturating_sub(*objects_bytes).max(floor),
+                        );
+                    }
                     Ok(())
                 };
 
@@ -1092,7 +1113,20 @@ impl<'a> JobExecutor {
                             .par_iter()
                             .try_for_each(|&tile| merge_tile(tile))
                     })
-                    .map(|()| merged.into_inner().expect("Poisoned"));
+                    .map(|()| {
+                        let (merged, objects_bytes) = merged.into_inner().expect("Poisoned");
+                        if objects_count {
+                            debug!(
+                                "{image_rel_path:?} t={t} z={z}: objects {} ({}), image cache cap {}",
+                                merged.object_cache.len(),
+                                crate::memory::format_binary_bytes(objects_bytes),
+                                crate::memory::format_binary_bytes(
+                                    merged_cache_bytes.saturating_sub(objects_bytes).max(floor)
+                                )
+                            );
+                        }
+                        merged
+                    });
 
                 debug!(
                     "{image_rel_path:?} t={t} z={z}: {} tiles in {:.2} s",
@@ -1849,6 +1883,9 @@ impl<'a> JobExecutor {
     pub fn estimate_ram_budget(&self) -> crate::memory::analysis::RamBudget {
         // A channel read with its own projection is one more channel image.
         let variants = self.channel_variants();
+        // What the hungriest command takes per tile pixel beyond the
+        // worker's buffers (they run one after another).
+        let per_pixel = self.command_bytes_per_tile_pixel();
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&self.active_series(entry)))
@@ -1860,11 +1897,23 @@ impl<'a> JobExecutor {
                     tile_height,
                     series.channels.len() + variants.len(),
                 )
+                .with_command_bytes(per_pixel, tile_width * tile_height)
             })
             .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
                 crate::memory::analysis::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
+                    .with_command_bytes(per_pixel, MAX_TILE_SIZE * MAX_TILE_SIZE)
             })
+    }
+
+    /// The most RAM per tile pixel any command of the job's pipelines
+    /// declares ([`ImageAlgorithm::ram_per_tile_pixel`](crate::algos::ImageAlgorithm::ram_per_tile_pixel)).
+    fn command_bytes_per_tile_pixel(&self) -> f64 {
+        self.pipelines_pre_process
+            .values()
+            .chain(self.pipelines_post_process.values())
+            .flat_map(|p| p.commands.iter().map(|(_, _, c)| c.ram_per_tile_pixel()))
+            .fold(0.0, f64::max)
     }
 
     /// Threads to run this job with, when the user didn't choose: as many as
@@ -5277,6 +5326,47 @@ mod estimate_ram_per_worker_bytes_tests {
             None,
             Default::default(),
         )
+    }
+
+    /// A job's workers are planned with what its hungriest command declares
+    /// per tile pixel - the largest, not the sum (they run one after
+    /// another).
+    #[test]
+    fn workers_are_planned_with_the_hungriest_command() {
+        use crate::pipeline::pipeline::{CorePipelineSettings, Pipeline};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("slide.tif"), image_entry(20_000, 20_000, 1));
+        let mut job = job_with(images);
+        let without = job.estimate_ram_budget();
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        for (i, command) in [
+            PipelineCommand::GaussianBlur(Default::default()),
+            PipelineCommand::Hessian(Default::default()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let algorithm = crate::job::algos_from_config::into_algorithm(command).unwrap();
+            pipeline.add_step(
+                evanalyzer_cfg::core_types::StepId(i as u32 + 1),
+                Scope::Global,
+                algorithm,
+            );
+        }
+        job.add_pre_process_pipeline(pipeline);
+        let with = job.estimate_ram_budget();
+        let tile_pixels = (MAX_TILE_SIZE * MAX_TILE_SIZE) as u64;
+        assert_eq!(
+            with.working_set_bytes - without.working_set_bytes,
+            28 * tile_pixels
+        );
+        assert_eq!(with.min_image_cache_bytes, without.min_image_cache_bytes);
     }
 
     /// The thread count without the tiled-image rule.

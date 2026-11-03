@@ -214,6 +214,11 @@ impl ImageAlgorithm for StructureTensor {
         "Structure Tensor"
     }
 
+    /// Measured by `tests::tile_ram` (see the trait method).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        24.0
+    }
+
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         vec![&CitationMetadata {
             cite_key: "bigun1987orientation",

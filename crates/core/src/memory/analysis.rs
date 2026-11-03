@@ -64,6 +64,16 @@ impl RamBudget {
     pub fn total_bytes(&self) -> u64 {
         self.working_set_bytes + self.min_image_cache_bytes + self.object_cache_margin_bytes
     }
+
+    /// With what a command takes beyond the worker's buffers -
+    /// `bytes_per_pixel` of the job's hungriest command
+    /// ([`ImageAlgorithm::ram_per_tile_pixel`](crate::algos::ImageAlgorithm::ram_per_tile_pixel))
+    /// on a tile of `tile_pixels` - counted as working set: the threads and
+    /// the caches are planned with it.
+    pub fn with_command_bytes(mut self, bytes_per_pixel: f64, tile_pixels: usize) -> Self {
+        self.working_set_bytes += (bytes_per_pixel * tile_pixels as f64).ceil() as u64;
+        self
+    }
 }
 
 /// Estimates the peak RAM one parallel worker can need to process one tile
@@ -190,6 +200,23 @@ pub enum MergedCacheBudget {
 }
 
 impl MergedCacheBudget {
+    /// Whether the plane's objects come off this cap as its tiles finish:
+    /// one tiled image on every worker (a whole slide) - many images, one
+    /// per worker, have few objects each (and no cost added for them).
+    pub fn counts_objects(&self) -> bool {
+        matches!(self, Self::PerPlane { .. })
+    }
+
+    /// The least the cap goes down to for objects: the tiles the merged
+    /// cache must hold ([`MERGED_CACHE_MIN_TILES`] of one tile's channels) -
+    /// smaller, it reloads them from disk again and again.
+    pub fn floor_bytes(&self) -> u64 {
+        match *self {
+            Self::Fixed(bytes) => bytes,
+            Self::PerPlane { budget, .. } => MERGED_CACHE_MIN_TILES * budget.min_image_cache_bytes,
+        }
+    }
+
     pub fn bytes(&self) -> u64 {
         match *self {
             Self::Fixed(bytes) => bytes,

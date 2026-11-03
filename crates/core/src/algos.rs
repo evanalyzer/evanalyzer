@@ -149,6 +149,19 @@ pub trait ImageAlgorithm: Send + Sync {
     fn cite(&self) -> Vec<&'static CitationMetadata>;
     fn execution_scope(&self) -> ExecutionScope;
 
+    /// The RAM this command takes at its peak per pixel of its tile, beyond
+    /// the worker's own buffers (working image, scratch pad, segmentation
+    /// and instance map - `memory::analysis::estimate_ram_budget`): its
+    /// temporary planes, kernels' outputs and the like. A job's worker is
+    /// planned with the largest of its commands' (they run one after
+    /// another - `JobExecutor::estimate_ram_budget`); `tests::tile_ram`
+    /// measures every command with its default settings against it. 0: none
+    /// worth counting. Whole-image commands: 0 - theirs is bounded per
+    /// window, not per tile (`tests::whole_image_ram`).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        0.0
+    }
+
     /// Override to `false` only for the rare command that reads `scratch_pad`
     /// as actual data (not just workspace) - e.g. `ImageMath` configured to
     /// use the scratch pad as its second operand - where retyping it ahead of

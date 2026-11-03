@@ -315,6 +315,30 @@ fn peak_bytes(command: &PipelineCommand, slide: &GlobalPipelineCache, side: usiz
 fn measure_whole_image_commands() {
     let (small_slide, large_slide) = (slide(SMALL), slide(LARGE));
     let mut failed = Vec::new();
+    // `ObjectCache::ram_bytes` - what the RAM budget counts for a slide's
+    // objects - against what they really take.
+    let before = counting_allocator::in_use();
+    let objects = large_slide.object_cache.clone();
+    let taken = counting_allocator::in_use() - before;
+    let estimated = objects.ram_bytes();
+    let ratio = estimated as f64 / taken as f64;
+    println!(
+        "size_of Object {} B, Intensity {} B",
+        std::mem::size_of::<Object>(),
+        std::mem::size_of::<crate::object::Intensity>()
+    );
+    println!(
+        "{} objects: {:.1} MB, estimated {:.1} MB ({ratio:.2})",
+        objects.len(),
+        taken as f64 / 1e6,
+        estimated as f64 / 1e6
+    );
+    if !(0.8..=1.3).contains(&ratio) {
+        failed.push(format!(
+            "ObjectCache::ram_bytes: {ratio:.2} of what objects take"
+        ));
+    }
+    drop(objects);
     for command in (0..).map_while(default_command) {
         let Ok(algorithm) = into_algorithm(command.clone()) else {
             continue;
