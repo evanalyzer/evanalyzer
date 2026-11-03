@@ -634,9 +634,14 @@ impl ClassifyObjects {
         }
 
         // Check solidity
-        let solidity = object.get_solidity();
-        if solidity < self.min_solidity || solidity > self.max_solidity {
-            return false;
+        // Solidity and Feret need the convex hull - not computed when their
+        // range is open (the defaults: every object passes).
+        let open = Self::default();
+        if self.min_solidity != open.min_solidity || self.max_solidity != open.max_solidity {
+            let solidity = object.get_solidity();
+            if solidity < self.min_solidity || solidity > self.max_solidity {
+                return false;
+            }
         }
 
         // Check aspect ratio
@@ -654,9 +659,11 @@ impl ClassifyObjects {
         }
 
         // Check Feret diameter
-        let feret = object.get_feret_diameter();
-        if feret < self.min_feret || feret > self.max_feret {
-            return false;
+        if self.min_feret != open.min_feret || self.max_feret != open.max_feret {
+            let feret = object.get_feret_diameter();
+            if feret < self.min_feret || feret > self.max_feret {
+                return false;
+            }
         }
 
         true

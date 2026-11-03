@@ -1752,6 +1752,53 @@ CLI: `step Propagation: 1.13 GiB more RAM in large blocks at its peak
 failed, 64 MB in large blocks in use (peak 64 MB), command: Propagation`
 in the crash log.
 
+## Fewer allocations: shape, intensities, export (2026-11-03)
+
+Where the allocations came from (heaptrack, call sites in our code): 200 ×
+2048² + 5 Classify Objects: ~150 per object - the shape values (convex hull,
+Feret) recomputed with 4-6 temporary vectors on every read, up to 6 × per
+object (39 % + 14 %), the export's text per object (37 %); the slide
+(`tests/haut`): ~30 per object - geometry (39 %), intensities' value lists
+grown step by step (31 %). Changes, all without RAM kept per object or
+thread:
+
+1. Export: object ids (objects, parents, coloc partners, measurement rows)
+   as Arrow UUIDs (16 bytes) instead of text DuckDB parsed back under the
+   connection lock.
+2. Classify Objects computes solidity and Feret only when their range is
+   narrowed (every object passes the open defaults); hull and Feret into
+   per-thread buffers, no boxed iterators; solidity finds each row's ends
+   with `first_one`/`last_one` instead of bit by bit.
+3. Intensities: the value list reserved once for the object's pixels.
+4. Export: text per row written into one reused buffer (class names' JSON
+   as before, character for character); measurement rows reference their
+   classes instead of copying them.
+
+Same results: every exported value identical (a hash over every row and
+column but the random ids; with the Classify steps per column and the
+classes as sorted sets - their order varies from run to run in the old build
+too, see TODO); hull, Feret and solidity bit-identical to the old code on
+500 random masks (test). Each change alone and all together, alternated per
+case (the machine's clock jumps between runs, so the variants of a case run
+back to back), 3 runs (medians):
+
+| Case | Old: wall / CPU / peak | 2 (shape) | 3 (intensities) | 1 + 4 (export) | All |
+|---|---|---|---|---|---|
+| 400 × 1024² | 4.03 s / 14.3 s / 957 MB | -1 % / +3 % | 0 % / +4 % | -1 % / +3 % | +1 % / +1 % / 982 MB |
+| 200 × 2048² | 4.03 s / 32.4 s / 2,013 MB | 0 % / -3 % | +3 % / -2 % | +3 % / 0 % | +2.5 % / -2 % / 2,009 MB |
+| 200 × 2048² + 5 Classify Objects | 4.33 s / 40.0 s / 1,998 MB | +1 % / **-21 %** | +2 % / +4 % | 0 % / +1 % | **-5 % / -19 %** |
+| 200 × 2048², 2 threads | 12.6 s / 23.0 s / 563 MB | -5 % / -4 % | -5 % / -2 % | -2 % / 0 % | **-8 % / -3.5 %** / 580 MB |
+| `tests/haut`, Voronoi | 16.3 s / 213 s / 7,211 MB | +1 % / 0 % | -1 % / +1 % | +1 % / -1 % | -2 % / -1 % |
+
+Peak RAM, 5 more runs old / all: + 5 Classify Objects 2,024-2,149 /
+1,969-2,087 MB, the slide 7,150-7,378 / 7,154-7,270 MB - no difference
+beyond the noise (± 60 MB between runs, either way).
+
+The clear gain is where shape values were recomputed (Classify Objects: CPU
+-19 to -21 %, wall -5 %); with all threads, wall time elsewhere is bound by
+other work (the database append) - the 2-thread run shows the allocations'
+share (-8 %). Changes within ± 3 % are run-to-run noise.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

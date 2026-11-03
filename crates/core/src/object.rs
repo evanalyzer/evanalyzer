@@ -710,35 +710,36 @@ impl Object {
         let width = (x_max - x_min + 1) as usize;
         let height = (y_max - y_min + 1) as usize;
 
-        // Per row, collect the outer corners of the leftmost and rightmost set pixels.
-        let mut points: Vec<(f64, f64)> = Vec::with_capacity(height * 4);
-        for ry in 0..height {
-            let row = ry * width;
-            let mut left: Option<usize> = None;
-            let mut right = 0usize;
-            for rx in 0..width {
-                if self.mask_data.get(row + rx).map(|b| *b).unwrap_or(false) {
-                    if left.is_none() {
-                        left = Some(rx);
-                    }
-                    right = rx;
+        // Per row, collect the outer corners of the leftmost and rightmost
+        // set pixels - into buffers reused per thread (classification and
+        // export ask for every object).
+        SOLIDITY_SCRATCH.with(|scratch| {
+            let (points, hull) = &mut *scratch.borrow_mut();
+            points.clear();
+            let len = self.mask_data.len();
+            for ry in 0..height {
+                let row = ry * width;
+                if row >= len {
+                    break;
                 }
-            }
-            if let Some(left) = left {
+                let bits = &self.mask_data[row..(row + width).min(len)];
+                let (Some(left), Some(right)) = (bits.first_one(), bits.last_one()) else {
+                    continue;
+                };
                 let (y0, y1) = (ry as f64, (ry + 1) as f64);
                 points.push((left as f64, y0));
                 points.push((left as f64, y1));
                 points.push(((right + 1) as f64, y0));
                 points.push(((right + 1) as f64, y1));
             }
-        }
 
-        let hull_area = convex_hull_area(&mut points);
-        if hull_area <= 0.0 {
-            // Degenerate (single pixel / thin line); the pixel union is its own hull.
-            return 1.0;
-        }
-        (self.area as f32 / hull_area as f32).min(1.0)
+            let hull_area = convex_hull_area(points, hull);
+            if hull_area <= 0.0 {
+                // Degenerate (single pixel / thin line); the pixel union is its own hull.
+                return 1.0;
+            }
+            (self.area as f32 / hull_area as f32).min(1.0)
+        })
     }
 
     /// Calculates aspect ratio: major axis / minor axis.
@@ -1591,10 +1592,16 @@ fn rasterize_geometry(
     }
 }
 
+thread_local! {
+    /// [`Object::get_solidity`]'s points and hull, reused per thread.
+    static SOLIDITY_SCRATCH: std::cell::RefCell<(Vec<(f64, f64)>, Vec<(f64, f64)>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
 /// Area of the convex hull of `points`, via Andrew's monotone chain + the shoelace
-/// formula. `points` is sorted (and may be reordered) in place. Returns 0.0 for fewer
-/// than three non-collinear points.
-fn convex_hull_area(points: &mut [(f64, f64)]) -> f64 {
+/// formula. `points` is sorted (and may be reordered) in place; `hull` is a buffer.
+/// Returns 0.0 for fewer than three non-collinear points.
+fn convex_hull_area(points: &mut [(f64, f64)], hull: &mut Vec<(f64, f64)>) -> f64 {
     if points.len() < 3 {
         return 0.0;
     }
@@ -1609,7 +1616,7 @@ fn convex_hull_area(points: &mut [(f64, f64)]) -> f64 {
         (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
     };
 
-    let mut hull: Vec<(f64, f64)> = Vec::with_capacity(points.len() + 1);
+    hull.clear();
     // Lower hull.
     for &p in points.iter() {
         while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {

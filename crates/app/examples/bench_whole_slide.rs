@@ -374,6 +374,16 @@ fn main() {
         )
         .unwrap_or(0);
     println!("measurements={values} sum={value_sum:.9} hash={value_hash:016x}");
+    // Every object row exactly, the random ids left out.
+    let rows_hash: u64 = conn
+        .query_row(
+            "SELECT coalesce(bit_xor(hash(t)), 0) FROM \
+             (SELECT * EXCLUDE (object_id, parent_ids, coloc_partner_ids) FROM objects) t",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    println!("rows_hash={rows_hash:016x}");
     // The objects' geometry and intensities, without their (random) ids,
     // per class.
     let mut stmt = conn

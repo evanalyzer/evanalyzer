@@ -14,9 +14,11 @@ use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, Measurem
 use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
 use crate::storage::{DatasetStore, ImageSummary, PipelineResultExporter};
 use duckdb::arrow::array::{
-    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float64Builder, Int32Builder,
-    ListBuilder, MapBuilder, StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
+    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, FixedSizeBinaryBuilder, Float64Builder,
+    Int32Builder, ListBuilder, MapBuilder, StringBuilder, UInt8Builder, UInt32Builder,
+    UInt64Builder,
 };
+use duckdb::arrow::datatypes::{DataType, Field, Schema};
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::types::Value;
 use duckdb::{Config, Connection, params};
@@ -26,9 +28,10 @@ use evanalyzer_cfg::core_types::{
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 /// One resident ("anchor") `Connection` per results file path, so every
@@ -547,6 +550,29 @@ impl DuckDbExporter {
         rows.flush(&mut app)
     }
 
+    /// `classes`' names as a JSON list of strings (as `json_string_array`
+    /// writes them), into `out`.
+    fn write_class_names<'c>(
+        &self,
+        out: &mut String,
+        classes: impl Iterator<Item = &'c ObjectClass>,
+    ) {
+        out.push('[');
+        for (i, class) in classes.enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            match class {
+                ObjectClass::Global(_) => match self.class_names.get(class) {
+                    Some((name, _color)) => write_json_string(out, name),
+                    None => write_json_string(out, &self.class_label(class)),
+                },
+                _ => write_json_string(out, &self.class_label(class)),
+            }
+        }
+        out.push(']');
+    }
+
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
@@ -621,19 +647,20 @@ const F64_COLUMNS: usize = F64::SurfaceAreaNm2 as usize + 1;
 /// path - the only way to append the `object_class_id` list: the row-wise
 /// `append_row` rejects list values ("appending List values is not yet
 /// supported", duckdb-rs issue #422). Arrow types map onto the table's:
-/// text into the UUID and JSON columns is converted by DuckDB.
+/// object ids as Arrow UUIDs (16 bytes, see [`uuid_field`]) - as text, DuckDB
+/// parsed them back under the connection lock; the JSON columns as text.
 struct ObjectColumns {
     image_name: StringBuilder,
     image_rel_path: StringBuilder,
     c_stack: Int32Builder,
     z_stack: Int32Builder,
     t_stack: Int32Builder,
-    object_id: StringBuilder,
+    object_id: FixedSizeBinaryBuilder,
     seg_class_name: StringBuilder,
     seg_class_id: Int32Builder,
     object_class_name: StringBuilder,
     object_class_id: ListBuilder<Int32Builder>,
-    parent_ids: MapBuilder<Int32Builder, StringBuilder>,
+    parent_ids: MapBuilder<Int32Builder, FixedSizeBinaryBuilder>,
     track_id: UInt64Builder,
     bbox_px: [UInt32Builder; 4],
     area_px: UInt64Builder,
@@ -641,7 +668,7 @@ struct ObjectColumns {
     image_bit_depth: UInt8Builder,
     /// `INTENSITY_COLUMNS`, in table order.
     intensities: [ListBuilder<Float64Builder>; INTENSITY_COLUMNS.len()],
-    coloc_partner_ids: MapBuilder<Int32Builder, ListBuilder<StringBuilder>>,
+    coloc_partner_ids: MapBuilder<Int32Builder, ListBuilder<FixedSizeBinaryBuilder>>,
     /// The per-object measurements' values, by `object_index`.
     measurement_values: ListBuilder<Float64Builder>,
     /// The mask, run-length encoded (`mask_codec`); NULL when not stored.
@@ -653,6 +680,66 @@ struct ObjectColumns {
     volume_px: UInt64Builder,
     touches_z_edge: BooleanBuilder,
     f64: Vec<Float64Builder>,
+    /// A row's text is formatted here, then copied into its column - no
+    /// `String` per row.
+    text: String,
+}
+
+/// The Arrow field of a UUID (canonical extension `arrow.uuid`: 16 bytes,
+/// big-endian) - DuckDB takes it into a UUID column as it is.
+fn uuid_field(name: &str) -> Field {
+    Field::new(name, DataType::FixedSizeBinary(16), true)
+        .with_metadata([("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into())
+}
+
+/// `id` as an Arrow UUID's bytes.
+fn uuid_bytes(id: &ObjectId) -> [u8; 16] {
+    id.0.to_be_bytes()
+}
+
+/// Appends `id` (NULL for `None`) to a builder of Arrow UUIDs.
+fn append_uuid(builder: &mut FixedSizeBinaryBuilder, id: Option<&ObjectId>) {
+    match id {
+        // Always 16 bytes: the builder's width.
+        Some(id) => builder
+            .append_value(uuid_bytes(id))
+            .expect("a UUID is 16 bytes"),
+        None => builder.append_null(),
+    }
+}
+
+/// A builder of Arrow UUIDs (see [`uuid_field`]).
+fn uuid_builder(rows: usize) -> FixedSizeBinaryBuilder {
+    FixedSizeBinaryBuilder::with_capacity(rows, 16)
+}
+
+/// `batch` with its `columns` typed as UUIDs (`RecordBatch::try_from_iter`
+/// leaves fields without their extension).
+fn with_uuid_columns(batch: RecordBatch, columns: &[&str]) -> Result<RecordBatch, InternalErrors> {
+    let schema = batch.schema();
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| match columns.contains(&f.name().as_str()) {
+            true => uuid_field(f.name()),
+            false => f.as_ref().clone(),
+        })
+        .collect();
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), batch.columns().to_vec())
+        .map_err(|e| InternalErrors::Io(e.to_string()))
+}
+
+/// Writes `value` as a JSON string (quoted, `\` and `"` escaped) to `out`.
+fn write_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
 }
 
 /// The per-channel intensity list columns, in table order, in gray values
@@ -709,12 +796,13 @@ impl ObjectColumns {
             c_stack: Int32Builder::with_capacity(rows),
             z_stack: Int32Builder::with_capacity(rows),
             t_stack: Int32Builder::with_capacity(rows),
-            object_id: StringBuilder::with_capacity(rows, rows * 36),
+            object_id: uuid_builder(rows),
             seg_class_name: strings(),
             seg_class_id: Int32Builder::with_capacity(rows),
             object_class_name: strings(),
             object_class_id: ListBuilder::with_capacity(Int32Builder::with_capacity(rows), rows),
-            parent_ids: MapBuilder::new(None, Int32Builder::new(), StringBuilder::new()),
+            parent_ids: MapBuilder::new(None, Int32Builder::new(), uuid_builder(0))
+                .with_values_field(uuid_field("values")),
             track_id: UInt64Builder::with_capacity(rows),
             bbox_px: std::array::from_fn(|_| UInt32Builder::with_capacity(rows)),
             area_px: UInt64Builder::with_capacity(rows),
@@ -726,8 +814,13 @@ impl ObjectColumns {
             coloc_partner_ids: MapBuilder::new(
                 None,
                 Int32Builder::new(),
-                ListBuilder::new(StringBuilder::new()),
-            ),
+                ListBuilder::new(uuid_builder(0)).with_field(uuid_field("item")),
+            )
+            .with_values_field(Field::new(
+                "values",
+                DataType::List(Arc::new(uuid_field("item"))),
+                true,
+            )),
             measurement_values: ListBuilder::new(Float64Builder::new()),
             mask: BinaryBuilder::with_capacity(rows, rows * 16),
             parent_track_ids: ListBuilder::new(UInt64Builder::new()),
@@ -738,6 +831,7 @@ impl ObjectColumns {
             f64: (0..F64_COLUMNS)
                 .map(|_| Float64Builder::with_capacity(rows))
                 .collect(),
+            text: String::new(),
         }
     }
 
@@ -785,7 +879,10 @@ impl ObjectColumns {
     ) -> Result<(), InternalErrors> {
         for (class, id) in parents {
             self.parent_ids.keys().append_value(class_key(class));
-            self.parent_ids.values().append_value(id.to_string());
+            self.parent_ids
+                .values()
+                .append_value(uuid_bytes(id))
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
         }
         self.parent_ids
             .append(true)
@@ -801,7 +898,10 @@ impl ObjectColumns {
             self.coloc_partner_ids.keys().append_value(class_key(class));
             let partners = self.coloc_partner_ids.values();
             for id in ids {
-                partners.values().append_value(id.to_string());
+                partners
+                    .values()
+                    .append_value(uuid_bytes(id))
+                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
             partners.append(true);
         }
@@ -967,7 +1067,9 @@ impl ObjectColumns {
         columns.push(("measurement_values", arr(&mut self.measurement_values)));
         columns.push(("mask", arr(&mut self.mask)));
         columns.push(("parent_track_ids", arr(&mut self.parent_track_ids)));
-        RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))
+        let batch =
+            RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))?;
+        with_uuid_columns(batch, &["object_id"])
     }
 }
 
@@ -1033,8 +1135,8 @@ struct MeasurementColumns {
     z_stack: Int32Builder,
     t_stack: Int32Builder,
     region: StringBuilder,
-    object_id: StringBuilder,
-    related_object_id: StringBuilder,
+    object_id: FixedSizeBinaryBuilder,
+    related_object_id: FixedSizeBinaryBuilder,
     object_class_name: StringBuilder,
     object_class_id: ListBuilder<Int32Builder>,
     step: StringBuilder,
@@ -1052,8 +1154,8 @@ impl MeasurementColumns {
             z_stack: Int32Builder::new(),
             t_stack: Int32Builder::new(),
             region: StringBuilder::new(),
-            object_id: StringBuilder::new(),
-            related_object_id: StringBuilder::new(),
+            object_id: uuid_builder(0),
+            related_object_id: uuid_builder(0),
             object_class_name: StringBuilder::new(),
             object_class_id: ListBuilder::new(Int32Builder::new()),
             step: StringBuilder::new(),
@@ -1086,6 +1188,7 @@ impl MeasurementColumns {
             ("value", arr(&mut self.value)),
         ])
         .map_err(|e| InternalErrors::Io(e.to_string()))
+        .and_then(|batch| with_uuid_columns(batch, &["object_id", "related_object_id"]))
     }
 }
 
@@ -1122,19 +1225,24 @@ impl<'a> MeasurementRows<'a> {
 
     /// Adds a row; a value that isn't a number (NaN, infinite) is NULL.
     fn push(&mut self, row: MeasurementRow<'_>, value: f64) {
-        let classes = match row.region {
+        // An object's classes are cached by id - referenced here, not copied
+        // per row.
+        if let (RowRegion::Object, Some(id)) = (&row.region, row.object)
+            && !self.object_classes.contains_key(id)
+            && let Some(object) = self.cache.object_cache.get(id)
+        {
+            let classes: Vec<ObjectClass> = object.object_classes().iter().copied().collect();
+            let entry = self.classes(&classes);
+            self.object_classes.insert(id.clone(), entry);
+        }
+        let class_row;
+        let classes: Option<&(String, Vec<i32>)> = match row.region {
             RowRegion::Image => None,
-            RowRegion::Class(class) => Some(self.classes(&[class])),
-            RowRegion::Object => row.object.and_then(|id| {
-                if !self.object_classes.contains_key(id) {
-                    let object = self.cache.object_cache.get(id)?;
-                    let classes: Vec<ObjectClass> =
-                        object.object_classes().iter().copied().collect();
-                    let entry = self.classes(&classes);
-                    self.object_classes.insert(id.clone(), entry);
-                }
-                self.object_classes.get(id).cloned()
-            }),
+            RowRegion::Class(class) => {
+                class_row = self.classes(&[class]);
+                Some(&class_row)
+            }
+            RowRegion::Object => row.object.and_then(|id| self.object_classes.get(id)),
         };
         let c = &mut self.columns;
         c.image_name.append_value(&self.image_name);
@@ -1146,15 +1254,13 @@ impl<'a> MeasurementRows<'a> {
             RowRegion::Class(_) => "class",
             RowRegion::Object => "object",
         });
-        c.object_id
-            .append_option(row.object.map(|id| id.to_string()));
-        c.related_object_id
-            .append_option(row.related.map(|id| id.to_string()));
+        append_uuid(&mut c.object_id, row.object);
+        append_uuid(&mut c.related_object_id, row.related);
         match classes {
             Some((names, ids)) => {
                 c.object_class_name.append_value(names);
                 for id in ids {
-                    c.object_class_id.values().append_value(id);
+                    c.object_class_id.values().append_value(*id);
                 }
                 c.object_class_id.append(true);
             }
@@ -1403,11 +1509,15 @@ CREATE TABLE IF NOT EXISTS run (
 // ---------------------------------------------------------------------------
 
 fn json_string_array(values: &[String]) -> String {
-    let items: Vec<String> = values
-        .iter()
-        .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
-        .collect();
-    format!("[{}]", items.join(","))
+    let mut out = String::from("[");
+    for (i, value) in values.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_json_string(&mut out, value);
+    }
+    out.push(']');
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1510,13 +1620,6 @@ impl DuckDbExporter {
                 1.0
             };
 
-            let object_class_names: Vec<String> = object
-                .object_classes()
-                .iter()
-                .filter(|c| **c != ObjectClass::Unset)
-                .map(|c| self.class_label(c))
-                .collect();
-
             let centroid_x_px = centroid.0 as f64;
             let centroid_y_px = centroid.1 as f64;
             // circularity and roundness use the identical 4π·area/perimeter² formula,
@@ -1531,13 +1634,23 @@ impl DuckDbExporter {
             // A volume lies on several planes: its extent is in the z columns.
             c.z_stack.append_option(planar.then_some(object.plane.z));
             c.t_stack.append_value(object.plane.t);
-            c.object_id.append_value(object.id.to_string());
-            c.seg_class_name
-                .append_value(object.segmentation_class.to_string());
+            c.object_id
+                .append_value(uuid_bytes(&object.id))
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            c.text.clear();
+            let _ = write!(c.text, "{}", object.segmentation_class);
+            c.seg_class_name.append_value(&c.text);
             c.seg_class_id
                 .append_value(object.segmentation_class.0 as i32);
-            c.object_class_name
-                .append_value(json_string_array(&object_class_names));
+            c.text.clear();
+            self.write_class_names(
+                &mut c.text,
+                object
+                    .object_classes()
+                    .iter()
+                    .filter(|c| **c != ObjectClass::Unset),
+            );
+            c.object_class_name.append_value(&c.text);
             for class in object.object_classes() {
                 if let ObjectClass::Global(n) = class {
                     c.object_class_id.values().append_value(*n as i32);
@@ -2198,6 +2311,31 @@ mod tests {
             .unwrap()
             .query_row("SELECT count(*) FROM objects", [], |row| row.get(0))
             .unwrap()
+    }
+
+    /// Class names as JSON: the same text as the `format!`/`replace` it
+    /// replaced, also with quotes, backslashes and non-ASCII letters.
+    #[test]
+    fn class_names_are_written_as_the_same_json() {
+        let before = |values: &[String]| {
+            let items: Vec<String> = values
+                .iter()
+                .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+                .collect();
+            format!("[{}]", items.join(","))
+        };
+        for names in [
+            vec![],
+            vec!["Nucleus".to_string()],
+            vec![
+                "Kupffer \"enlarged\"".to_string(),
+                "a\\b".to_string(),
+                "Zelle ä µ".to_string(),
+            ],
+            vec!["\\\"".to_string(), String::new()],
+        ] {
+            assert_eq!(json_string_array(&names), before(&names), "{names:?}");
+        }
     }
 
     #[test]

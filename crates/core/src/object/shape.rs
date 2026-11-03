@@ -45,6 +45,9 @@ struct Scratch {
     f: Vec<i64>,
     inside: Vec<i64>,
     points: Vec<(f64, f64)>,
+    rows: Vec<(i64, i64, i64)>,
+    unique: Vec<(f64, f64)>,
+    hull: Vec<(f64, f64)>,
 }
 
 thread_local! {
@@ -57,7 +60,12 @@ impl Object {
         let rows = self.row_extremes();
         SCRATCH.with(|scratch| {
             let scratch = &mut *scratch.borrow_mut();
-            let (min_feret, max_feret) = feret_from_rows(&rows, &mut scratch.points);
+            let (min_feret, max_feret) = feret_from_rows(
+                &rows,
+                &mut scratch.points,
+                &mut scratch.unique,
+                &mut scratch.hull,
+            );
             let convex_area =
                 convex_area_from_rows(&rows, self.bbox, self.area, &mut scratch.points);
             let (pw, ph) = self.pad_into(&mut scratch.padded);
@@ -96,15 +104,21 @@ impl Object {
     /// Per row the leftmost and rightmost pixel (only they can be hull
     /// vertices), as (y, left x, right x), top to bottom.
     fn row_extremes(&self) -> Vec<(i64, i64, i64)> {
+        let mut rows = Vec::new();
+        self.row_extremes_into(&mut rows);
+        rows
+    }
+
+    /// [`Self::row_extremes`] into `rows` (cleared first).
+    fn row_extremes_into(&self, rows: &mut Vec<(i64, i64, i64)>) {
         let [x0, y0, x1, y1] = self.bbox.map(|v| v as usize);
         let w = x1 - x0 + 1;
-        (0..=y1 - y0)
-            .filter_map(|r| {
-                let row = self.mask_data.get(r * w..(r + 1) * w)?;
-                let (left, right) = (row.first_one()?, row.last_one()?);
-                Some(((y0 + r) as i64, (x0 + left) as i64, (x0 + right) as i64))
-            })
-            .collect()
+        rows.clear();
+        rows.extend((0..=y1 - y0).filter_map(|r| {
+            let row = self.mask_data.get(r * w..(r + 1) * w)?;
+            let (left, right) = (row.first_one()?, row.last_one()?);
+            Some(((y0 + r) as i64, (x0 + left) as i64, (x0 + right) as i64))
+        }));
     }
 
     /// The minimum and maximum Feret (caliper) diameter over the pixel
@@ -112,7 +126,13 @@ impl Object {
     /// largest distance between two hull vertices, and the smallest width
     /// of the hull (rotating calipers). 0 / 0 for a single pixel.
     pub fn feret_diameters(&self) -> (f64, f64) {
-        feret_from_rows(&self.row_extremes(), &mut Vec::new())
+        // Buffers reused per thread: classification and export ask for every
+        // object, again and again.
+        SCRATCH.with(|scratch| {
+            let s = &mut *scratch.borrow_mut();
+            self.row_extremes_into(&mut s.rows);
+            feret_from_rows(&s.rows, &mut s.points, &mut s.unique, &mut s.hull)
+        })
     }
 
     /// The number of pixels whose centre lies in (or on) the convex hull of
@@ -138,7 +158,12 @@ impl Object {
 }
 
 /// [`Object::feret_diameters`] from the rows' extreme pixels.
-fn feret_from_rows(rows: &[(i64, i64, i64)], points: &mut Vec<(f64, f64)>) -> (f64, f64) {
+fn feret_from_rows(
+    rows: &[(i64, i64, i64)],
+    points: &mut Vec<(f64, f64)>,
+    unique: &mut Vec<(f64, f64)>,
+    hull: &mut Vec<(f64, f64)>,
+) -> (f64, f64) {
     points.clear();
     for &(y, left, right) in rows {
         // In (y, x) order already: the hull needs no sort.
@@ -147,8 +172,8 @@ fn feret_from_rows(rows: &[(i64, i64, i64)], points: &mut Vec<(f64, f64)>) -> (f
             points.push((y as f64, right as f64));
         }
     }
-    let hull = hull_of_sorted(points);
-    feret_of_hull(&hull)
+    hull_of_sorted_into(points, unique, hull);
+    feret_of_hull(hull)
 }
 
 /// [`Object::convex_area`] from the rows' extreme pixels: the hull of the
@@ -393,37 +418,49 @@ pub(crate) fn convex_hull(points: &mut [(f64, f64)]) -> Vec<(f64, f64)> {
 /// Andrew's monotone chain over `points` sorted lexicographically (any two
 /// coordinates; the orientation follows).
 fn hull_of_sorted(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    let mut unique: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+    let (mut unique, mut hull) = (Vec::new(), Vec::new());
+    hull_of_sorted_into(points, &mut unique, &mut hull);
+    hull
+}
+
+/// [`hull_of_sorted`] into `hull`, with `unique` as a buffer (both cleared
+/// first) - no allocation once they're large enough.
+fn hull_of_sorted_into(
+    points: &[(f64, f64)],
+    unique: &mut Vec<(f64, f64)>,
+    hull: &mut Vec<(f64, f64)>,
+) {
+    unique.clear();
+    hull.clear();
     for p in points.iter() {
         if unique.last() != Some(p) {
             unique.push(*p);
         }
     }
     if unique.len() < 3 {
-        return unique;
+        hull.extend_from_slice(unique);
+        return;
     }
     let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
         (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
     };
-    let mut hull: Vec<(f64, f64)> = Vec::with_capacity(unique.len() * 2);
-    for pass in 0..2 {
-        let start = hull.len();
-        let iter: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 {
-            Box::new(unique.iter())
-        } else {
-            Box::new(unique.iter().rev())
-        };
-        for &p in iter {
-            while hull.len() >= start + 2
-                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
-            {
-                hull.pop();
-            }
-            hull.push(p);
+    // The lower chain, then the upper (the points backwards).
+    let chain = |hull: &mut Vec<(f64, f64)>, p: (f64, f64), start: usize| {
+        while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+        {
+            hull.pop();
         }
-        hull.pop();
+        hull.push(p);
+    };
+    for &p in unique.iter() {
+        chain(hull, p, 0);
     }
-    hull
+    hull.pop();
+    let start = hull.len();
+    for &p in unique.iter().rev() {
+        chain(hull, p, start);
+    }
+    hull.pop();
 }
 
 /// The minimum width and the diameter of a convex polygon (vertices in
@@ -495,6 +532,135 @@ mod tests {
         min_feret_diameter: Vec<f64>,
         max_feret_diameter: Vec<f64>,
         equivalent_diameter: Vec<f64>,
+    }
+
+    /// The hull, the Feret diameters and the solidity as they were computed
+    /// before the reused buffers (2026-11-03) - the reference the new code
+    /// must match to the bit.
+    mod before {
+        pub fn hull_of_sorted(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
+            let mut unique: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+            for p in points.iter() {
+                if unique.last() != Some(p) {
+                    unique.push(*p);
+                }
+            }
+            if unique.len() < 3 {
+                return unique;
+            }
+            let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+                (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+            };
+            let mut hull: Vec<(f64, f64)> = Vec::with_capacity(unique.len() * 2);
+            for pass in 0..2 {
+                let start = hull.len();
+                let iter: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 {
+                    Box::new(unique.iter())
+                } else {
+                    Box::new(unique.iter().rev())
+                };
+                for &p in iter {
+                    while hull.len() >= start + 2
+                        && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+                    {
+                        hull.pop();
+                    }
+                    hull.push(p);
+                }
+                hull.pop();
+            }
+            hull
+        }
+
+        pub fn solidity(o: &crate::object::Object) -> f32 {
+            let [x_min, y_min, x_max, y_max] = o.bbox;
+            if o.area == 0 || x_max < x_min || y_max < y_min {
+                return 0.0;
+            }
+            let width = (x_max - x_min + 1) as usize;
+            let height = (y_max - y_min + 1) as usize;
+            let mut points: Vec<(f64, f64)> = Vec::with_capacity(height * 4);
+            for ry in 0..height {
+                let row = ry * width;
+                let mut left: Option<usize> = None;
+                let mut right = 0usize;
+                for rx in 0..width {
+                    if o.mask_data.get(row + rx).map(|b| *b).unwrap_or(false) {
+                        if left.is_none() {
+                            left = Some(rx);
+                        }
+                        right = rx;
+                    }
+                }
+                if let Some(left) = left {
+                    let (y0, y1) = (ry as f64, (ry + 1) as f64);
+                    points.push((left as f64, y0));
+                    points.push((left as f64, y1));
+                    points.push(((right + 1) as f64, y0));
+                    points.push(((right + 1) as f64, y1));
+                }
+            }
+            let mut hull = Vec::new();
+            let hull_area = super::super::super::convex_hull_area(&mut points, &mut hull);
+            if hull_area <= 0.0 {
+                return 1.0;
+            }
+            (o.area as f32 / hull_area as f32).min(1.0)
+        }
+    }
+
+    /// Random masks (also cut short): the hull, the Feret diameters and the
+    /// solidity are the same as before, to the bit.
+    #[test]
+    fn reused_buffers_give_the_values_of_before() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+        for case in 0..500 {
+            let (w, h) = (1 + next(40), 1 + next(40));
+            let density = 1 + next(9);
+            let mut mask: BitVec<u64, Lsb0> = (0..w * h).map(|_| next(10) < density).collect();
+            if case % 7 == 0 {
+                mask.truncate(next(w * h + 1));
+            }
+            if mask.not_any() {
+                continue;
+            }
+            let area = mask.count_ones();
+            let object = Object::new(ObjectInit {
+                id: ObjectId(case as u128),
+                bbox: [3, 5, 3 + w as u32 - 1, 5 + h as u32 - 1],
+                mask_data: mask,
+                area,
+                ..Default::default()
+            });
+            assert_eq!(
+                object.get_solidity().to_bits(),
+                before::solidity(&object).to_bits(),
+                "case {case}: solidity"
+            );
+            let rows = object.row_extremes();
+            let mut points = Vec::new();
+            for &(y, left, right) in &rows {
+                points.push((y as f64, left as f64));
+                if right != left {
+                    points.push((y as f64, right as f64));
+                }
+            }
+            let hull = before::hull_of_sorted(&points);
+            assert_eq!(hull_of_sorted(&points), hull, "case {case}: hull");
+            let (min, max) = object.feret_diameters();
+            let (min_before, max_before) = feret_of_hull(&hull);
+            assert_eq!(
+                (min.to_bits(), max.to_bits()),
+                (min_before.to_bits(), max_before.to_bits()),
+                "case {case}: feret"
+            );
+        }
     }
 
     fn objects(labels: &[u32], width: usize) -> Vec<Object> {

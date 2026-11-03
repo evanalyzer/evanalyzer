@@ -489,11 +489,19 @@ impl IntensityAccumulator {
     pub fn add(&mut self, mask: &BitVec<u64, Lsb0>, bbox: [u32; 4], tiles: &[ChannelTile<'_>]) {
         let [x_min, y_min, x_max, y_max] = bbox.map(|v| v as usize);
         let width = x_max - x_min + 1;
+        // At most this many values per channel: room for them at once, not
+        // grown step by step (one allocation instead of ~log2(n)).
+        let pixels = mask.count_ones().min(LIST_UP_TO);
         for (k, tile) in tiles.iter().enumerate() {
             let entry = self
                 .channels
                 .entry(tile.channel)
                 .or_insert_with(ChannelSums::new);
+            if entry.counts.is_none() {
+                entry
+                    .values
+                    .reserve(pixels.saturating_sub(entry.values.len()));
+            }
             // The part of the mask's box this region covers.
             let t = tile.tile;
             let (x0, x1) = (x_min.max(t.offset_x), (x_max + 1).min(t.offset_x + t.width));

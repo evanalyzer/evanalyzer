@@ -248,6 +248,16 @@ fn main() {
         )
         .unwrap();
     println!("sum area_px: {area}  sum intensity: {intensity:.6}");
+    // Every row exactly, the random ids left out, independent of the order.
+    let rows_hash: u64 = conn
+        .query_row(
+            "SELECT coalesce(bit_xor(hash(t)), 0) FROM \
+             (SELECT * EXCLUDE (object_id, parent_ids, coloc_partner_ids) FROM objects) t",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    println!("rows hash: {rows_hash:016x}");
     let mpx = images as f64 * (size as f64 * size as f64) / 1e6;
     println!(
         "threads={parallelism} images={images} size={size} result={:?} time={elapsed:.2}s  {:.2} img/s  {:.1} MPx/s",
