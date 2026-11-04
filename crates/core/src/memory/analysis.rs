@@ -32,6 +32,17 @@ const OBJECT_CACHE_MARGIN_DIVISOR: u64 = 16;
 /// If an image bigger than this size should be loaded it is splitted into tiles of this size
 pub const MAX_TILE_SIZE: usize = 4096;
 
+/// The program itself while it analyzes, without the job's own buffers -
+/// for the least RAM a job needs (`JobExecutor::minimum_ram_bytes`): the
+/// idle app measured 207 MB (BENCHMARK.md "Peak RAM overview"), rounded up
+/// for the analysis' thread pools and the results writer.
+pub const PROGRAM_BYTES: u64 = 256 << 20;
+
+/// The AI engine's libraries (libtorch, loaded on the first model run:
+/// ~280 MB), for a job with an AI step - its network and weights are the
+/// step's own (`ImageAlgorithm::shared_ram_bytes`).
+pub const AI_ENGINE_BYTES: u64 = 320 << 20;
+
 /// Peak per-worker RAM broken into the pieces that scale differently, so a
 /// caller can size an `ImageCache` budget on top of what's already
 /// accounted for (see [`recommended_image_cache_bytes`]) instead of only

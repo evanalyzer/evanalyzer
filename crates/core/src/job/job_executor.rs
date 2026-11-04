@@ -340,6 +340,20 @@ impl<'a> JobExecutor {
         // the user's limit (`--max-threads`) too.
         let parallelism = parallelism.clamp(1, crate::memory::cpu_cores());
         info!("Starting pipeline with {} parallel threads", parallelism);
+        let (minimum, ram) = (self.minimum_ram_bytes(), crate::memory::SystemRam::now());
+        info!(
+            "This job needs at least {} of RAM (this computer: {})",
+            crate::memory::format_binary_bytes(minimum),
+            crate::memory::format_binary_bytes(ram.total)
+        );
+        if minimum > ram.total {
+            warn!(
+                "This job needs at least {} of RAM, more than this computer has ({}) - it may \
+                 run out of memory. Smaller images, fewer channels or a smaller AI model need less.",
+                crate::memory::format_binary_bytes(minimum),
+                crate::memory::format_binary_bytes(ram.total)
+            );
+        }
         let start = Instant::now();
         // Trained models are loaded once for this run and dropped after it.
         let _models =
@@ -1889,10 +1903,24 @@ impl<'a> JobExecutor {
         let per_pixel = self.command_bytes_per_tile_pixel();
         // Read once (not per image): the AI steps size their pieces by it.
         let ram_total = crate::memory::SystemRam::now().total;
+        // Once per tile size, not per image (a model file's size is read
+        // for it - 100,000 images mostly share one or two sizes).
+        let shared = std::cell::RefCell::new(Vec::<((usize, usize), u64)>::new());
         let budget = |tile_width: usize, tile_height: usize, channels: usize| {
+            let key = (tile_width, tile_height);
+            let known = shared
+                .borrow()
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, b)| *b);
+            let shared_bytes = known.unwrap_or_else(|| {
+                let bytes = self.shared_ram_bytes(tile_width, tile_height, ram_total);
+                shared.borrow_mut().push((key, bytes));
+                bytes
+            });
             crate::memory::analysis::estimate_ram_budget(tile_width, tile_height, channels)
                 .with_command_bytes(per_pixel, tile_width * tile_height)
-                .with_shared_bytes(self.shared_ram_bytes(tile_width, tile_height, ram_total))
+                .with_shared_bytes(shared_bytes)
         };
         self.images
             .values()
@@ -1965,6 +1993,45 @@ impl<'a> JobExecutor {
             &budget,
             self.result_storage.reserved_memory_bytes(),
         )
+    }
+
+    /// The least RAM this job runs in - with one thread: its buffers and
+    /// the smallest image cache ([`RamBudget::total_bytes`](crate::memory::analysis::RamBudget::total_bytes)),
+    /// what it takes once (an AI network and its weights), for one image of
+    /// several tiles the merged cache's smallest share, the results file's
+    /// smallest share (DuckDB, [`RESULTS_FILE_MIN_MB`](crate::memory::storage::RESULTS_FILE_MIN_MB))
+    /// and the program itself ([`PROGRAM_BYTES`](crate::memory::analysis::PROGRAM_BYTES),
+    /// with an AI step its engine's libraries:
+    /// [`AI_ENGINE_BYTES`](crate::memory::analysis::AI_ENGINE_BYTES)). Less,
+    /// and it runs out of memory or swaps; more makes it faster (threads,
+    /// caches).
+    pub fn minimum_ram_bytes(&self) -> u64 {
+        let budget = self.estimate_ram_budget();
+        let mut images = self.images.values();
+        let tiled = match (images.next(), images.next()) {
+            (Some(entry), None) => entry
+                .series
+                .get(&self.active_series(entry))
+                .is_some_and(|s| s.image_width.max(s.image_height) > MAX_TILE_SIZE as u64),
+            _ => false,
+        };
+        let merged = match tiled {
+            true => crate::memory::analysis::MERGED_CACHE_MIN_TILES * budget.min_image_cache_bytes,
+            false => 0,
+        };
+        use crate::memory::analysis::{AI_ENGINE_BYTES, PROGRAM_BYTES};
+        // Only an AI step takes RAM once for the job (`shared_ram_bytes`).
+        let ai_engine = if budget.shared_bytes > 0 {
+            AI_ENGINE_BYTES
+        } else {
+            0
+        };
+        PROGRAM_BYTES
+            + ai_engine
+            + budget.total_bytes()
+            + budget.shared_bytes
+            + merged
+            + (crate::memory::storage::RESULTS_FILE_MIN_MB << 20)
     }
 
     /// Flat total of [`estimate_ram_budget`](Self::estimate_ram_budget) -
@@ -5441,10 +5508,66 @@ mod estimate_ram_per_worker_bytes_tests {
             with_step(20_000, unet()).shared_bytes <= ram / 3
                 || input(1600.0, tile) == 512 + 2 * 128
         );
-        // Not per worker.
+        // Per worker only what the step keeps of the answer (8 bytes per
+        // pixel), not the network.
         assert_eq!(
-            with_step(20_000, unet()).total_bytes(),
-            with_step(20_000, None).total_bytes()
+            with_step(20_000, unet()).total_bytes() - with_step(20_000, None).total_bytes(),
+            8 * (tile * tile) as u64
+        );
+    }
+
+    /// The least RAM a job runs in: the program, one thread with its
+    /// smallest cache and the results file's floor; a slide adds the merged
+    /// cache's smallest share, an AI step its engine and network once.
+    #[test]
+    fn the_minimum_ram_counts_one_thread_and_what_the_job_takes_once() {
+        use crate::pipeline::pipeline::{CorePipelineSettings, Pipeline};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        let job = |width: u64, unet: bool| {
+            let mut images = IndexMap::new();
+            images.insert(PathBuf::from("a.tif"), image_entry(width, width, 1));
+            let mut job = job_with(images);
+            if unet {
+                let mut pipeline = Pipeline::new(
+                    PipelineId(1),
+                    CorePipelineSettings {
+                        start_image: ImageAddress::Channel(0),
+                    },
+                );
+                let command = PipelineCommand::UNet(Default::default());
+                let algorithm = crate::job::algos_from_config::into_algorithm(command).unwrap();
+                pipeline.add_step(
+                    evanalyzer_cfg::core_types::StepId(1),
+                    Scope::Global,
+                    algorithm,
+                );
+                job.add_pre_process_pipeline(pipeline);
+            }
+            job
+        };
+        use crate::memory::analysis::{AI_ENGINE_BYTES, PROGRAM_BYTES};
+        let small = job(1024, false);
+        let budget = small.estimate_ram_budget();
+        assert_eq!(
+            small.minimum_ram_bytes(),
+            PROGRAM_BYTES
+                + budget.total_bytes()
+                + (crate::memory::storage::RESULTS_FILE_MIN_MB << 20)
+        );
+        let slide = job(20_000, false);
+        let budget = slide.estimate_ram_budget();
+        assert_eq!(
+            slide.minimum_ram_bytes(),
+            PROGRAM_BYTES
+                + budget.total_bytes()
+                + crate::memory::analysis::MERGED_CACHE_MIN_TILES * budget.min_image_cache_bytes
+                + (crate::memory::storage::RESULTS_FILE_MIN_MB << 20)
+        );
+        let with_ai = job(20_000, true);
+        let ai = with_ai.estimate_ram_budget();
+        assert_eq!(
+            with_ai.minimum_ram_bytes() - slide.minimum_ram_bytes(),
+            AI_ENGINE_BYTES + ai.shared_bytes + (ai.total_bytes() - budget.total_bytes())
         );
     }
 

@@ -9,7 +9,7 @@
 //! `VmHWM` reset through `/proc/self/clear_refs`).
 //!
 //!   LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo run --release -p evanalyzer_ai \
-//!     --features test-support --example bench_ai_ram -- <stardist|unet32|unet64|unet-file=PATH> <side> [threads] [piece side]
+//!     --features test-support --example bench_ai_ram -- <stardist|unet32|unet64|unet-file=PATH|cellpose-light> <side> [threads] [piece side]
 //!
 //! `unet-file=PATH`: a real U-Net's TorchScript file (e.g. bioimage.io's
 //! `joyful-pig`), foreground channel 0, boundary channel 1.
@@ -21,7 +21,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_ai::torch::test_support::{bench_stardist_model, bench_unet_model};
+use evanalyzer_ai::torch::test_support::{
+    bench_cellpose_model, bench_stardist_model, bench_unet_model,
+};
 use evanalyzer_ai::{DeviceSelection, EngineConfig, Image, Request, Task, infer};
 use std::time::Instant;
 
@@ -56,7 +58,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let kind = args
         .get(1)
-        .expect("stardist | unet32 | unet64 | unet-file=PATH")
+        .expect("stardist | unet32 | unet64 | unet-file=PATH | cellpose-light")
         .as_str();
     let side: usize = args.get(2).expect("side").parse().unwrap();
     let threads: usize = args.get(3).map_or_else(
@@ -80,6 +82,17 @@ fn main() {
             unet,
         ),
         "stardist" => (bench_stardist_model(), Task::StarDist { piece_side }),
+        // The cost around Cellpose's network: its 256² pieces blended over
+        // the whole image (next to no compute in the model).
+        "cellpose-light" => (
+            bench_cellpose_model(0),
+            Task::Cellpose {
+                net_width: side,
+                net_height: side,
+                input_channels: 2,
+                replicate_gray_channel: false,
+            },
+        ),
         "unet32" | "unet64" => (bench_unet_model(kind[4..].parse().unwrap()), unet),
         other => panic!("unknown model {other}"),
     };

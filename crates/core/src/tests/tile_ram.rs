@@ -54,8 +54,65 @@ fn configured(command: PipelineCommand) -> PipelineCommand {
             kernel_size: 5,
             sigma: 1.0,
         }),
+        #[cfg(feature = "libtorch-in-process")]
+        C::UNet(s) => C::UNet(UNetSettings {
+            model_path: models().unet.clone(),
+            ..s
+        }),
+        #[cfg(feature = "libtorch-in-process")]
+        C::Stardist(s) => C::Stardist(StardistSettings {
+            model_path: models().stardist.clone(),
+            ..s
+        }),
+        #[cfg(feature = "libtorch-in-process")]
+        C::Cellpose(s) => C::Cellpose(CellposeSettings {
+            model_path: models().cellpose.clone(),
+            ..s
+        }),
+        #[cfg(feature = "libtorch-in-process")]
+        C::Yolov5(s) => C::Yolov5(Yolov5Settings {
+            model_path: models().yolo.clone(),
+            ..s
+        }),
         other => other,
     }
+}
+
+/// Stand-in networks of the real layouts for the AI steps
+/// (`evanalyzer_ai::torch::test_support`): what the analysis keeps of an
+/// inference per worker doesn't depend on the weights.
+#[cfg(feature = "libtorch-in-process")]
+struct Models {
+    _dirs: Vec<tempfile::TempDir>,
+    unet: std::path::PathBuf,
+    stardist: std::path::PathBuf,
+    cellpose: std::path::PathBuf,
+    yolo: std::path::PathBuf,
+}
+
+#[cfg(feature = "libtorch-in-process")]
+fn models() -> &'static Models {
+    use evanalyzer_ai::torch::test_support as t;
+    static MODELS: std::sync::OnceLock<Models> = std::sync::OnceLock::new();
+    MODELS.get_or_init(|| {
+        let mut dirs = Vec::new();
+        let mut keep = |(dir, path): (tempfile::TempDir, std::path::PathBuf)| {
+            dirs.push(dir);
+            path
+        };
+        let unet = keep(t::bench_unet_model(32));
+        // Cells of 24 px at ~4000 on ~500 (see `tile`).
+        let stardist = keep(t::stardist_cells_model(2000.0, 12.0));
+        let cellpose = keep(t::bench_cellpose_model(0));
+        let yolo = keep(t::bench_yolo_box_model());
+        Models {
+            _dirs: dirs,
+            unet,
+            stardist,
+            cellpose,
+            yolo,
+        }
+    })
 }
 
 /// Commands reading a color (RGB) image.
@@ -177,9 +234,11 @@ const TOLERANCE: f64 = 0.25;
 fn not_measured(command: &PipelineCommand) -> Option<&'static str> {
     use PipelineCommand as C;
     match command {
-        C::Cellpose(_) | C::Stardist(_) | C::UNet(_) | C::Yolov5(_) | C::PixelClassifier(_) => {
-            Some("needs a model (and libtorch) - TODO: measure the AI models")
+        #[cfg(not(feature = "libtorch-in-process"))]
+        C::Cellpose(_) | C::Stardist(_) | C::UNet(_) | C::Yolov5(_) => {
+            Some("needs libtorch - run with `--features libtorch-in-process`")
         }
+        C::PixelClassifier(_) => Some("needs a trained classifier"),
         _ => None,
     }
 }

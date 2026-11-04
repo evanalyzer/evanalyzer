@@ -487,6 +487,17 @@ component DetailPane inherits Rectangle {
                     }
                 }
 
+                // What it takes in RAM on the shown image (commands).
+                if cmd.ram != "": DetailSection {
+                    title: "RAM";
+                    Text {
+                        text: cmd.ram;
+                        color: Ink.text-dim;
+                        font-size: Ink.fs-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+
                 // The publications of its method (commands).
                 if cmd.citations.length > 0: DetailSection {
                     title: "CITE";

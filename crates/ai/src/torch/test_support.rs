@@ -215,3 +215,30 @@ pub fn bench_unet_model(base: i64) -> (tempfile::TempDir, std::path::PathBuf) {
             .sigmoid()
     })
 }
+
+/// A YOLOv5 detection model (single output) that always reports one
+/// 100x100 box of class 1 at the window centre, traced at its 640² window.
+pub fn bench_yolo_box_model() -> (tempfile::TempDir, std::path::PathBuf) {
+    trace_and_save_model(3, 640, 640, |x| {
+        // Built from the input with plain numbers: a tensor created inside
+        // the traced closure (e.g. `Tensor::from_slice`) is saved as zeros.
+        let one = x.mean(Kind::Float) * 0.0 + 1.0;
+        let values = [320.0, 320.0, 100.0, 100.0, 0.9, 0.1, 0.9];
+        let columns: Vec<Tensor> = values.iter().map(|&v| &one * v).collect();
+        Tensor::stack(&columns, 0).reshape([1, 1, 7])
+    })
+}
+
+/// A StarDist model with the outputs of a well-fitting one on bright cells
+/// of `radius` px (grid 2, 32 rays): the object probability high on bright
+/// pixels (above `threshold`), every ray `radius` long - for what the
+/// analysis keeps of its answer (candidates, masks), which depends on the
+/// outputs, not the network.
+pub fn stardist_cells_model(threshold: f64, radius: f64) -> (tempfile::TempDir, std::path::PathBuf) {
+    trace_and_save_model(1, 64, 64, |x| {
+        let grid = x.avg_pool2d([2, 2], [2, 2], [0, 0], false, true, None::<i64>);
+        let prob = ((&grid - threshold) * 0.01).sigmoid();
+        let dist = (grid.zeros_like() + radius).repeat([1, 32, 1, 1]);
+        Tensor::cat(&[prob, dist], 1)
+    })
+}

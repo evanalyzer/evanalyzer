@@ -187,6 +187,28 @@ impl ImageAlgorithm for Cellpose {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
     }
+
+    /// What the step keeps per worker: the flows and the cell probability,
+    /// and the dynamics' planes - 42 bytes per pixel (`tests::tile_ram`;
+    /// the image is only scaled down, so per tile pixel at most).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        42.0
+    }
+
+    /// One inference at a time on the CPU: the network on one 256² piece
+    /// (Cellpose-SAM's ViT; estimated from a 1024² run: ~1.7 GB peak with
+    /// its 1.2 GB of weights - BENCHMARK.md "AI models: Cellpose through the
+    /// plugin") plus the pieces blended over the image, 46 bytes per pixel
+    /// (measured with a stand-in: 766 MB at 4096²), and the model's
+    /// weights. The image is only ever scaled down (`max_resize`), so the
+    /// tile's pixels bound it.
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, _ram_total: u64) -> u64 {
+        const NETWORK_BYTES: u64 = 512 << 20;
+        const BLEND_BYTES_PER_PIXEL: u64 = 48;
+        NETWORK_BYTES
+            + BLEND_BYTES_PER_PIXEL * (tile_width * tile_height) as u64
+            + super::model_bytes(&self.model_path)
+    }
 }
 
 impl Cellpose {

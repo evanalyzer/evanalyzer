@@ -183,6 +183,25 @@ impl ImageAlgorithm for Yolov5 {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
     }
+
+    /// What the step keeps per worker: the RGB planes handed over and the
+    /// label maps at the scaled size - 24 bytes per pixel at `image_scale`
+    /// 1 (`tests::tile_ram`), the scaled part growing with its square.
+    fn ram_per_tile_pixel(&self) -> f64 {
+        let scale = self.image_scale.clamp(0.05, 4.0) as f64;
+        12.0 + 12.0 * scale.max(1.0).powi(2)
+    }
+
+    /// One inference at a time on the CPU: the network on one 640² window
+    /// (a YOLOv5 of any size: estimated 512 MB) plus the scaled RGB image
+    /// handed to the engine (12 bytes per pixel, `image_scale`² times the
+    /// tile's) and the model's weights.
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, _ram_total: u64) -> u64 {
+        const NETWORK_BYTES: u64 = 512 << 20;
+        let scale = self.image_scale.clamp(0.05, 4.0) as f64;
+        let pixels = (tile_width * tile_height) as f64 * scale * scale;
+        NETWORK_BYTES + (12.0 * pixels) as u64 + super::model_bytes(&self.model_path)
+    }
 }
 
 impl Yolov5 {
@@ -435,14 +454,7 @@ mod tests {
     /// A detection model (single output) that always reports one 100x100
     /// box of class 1 at the window centre.
     fn centre_box_model() -> (tempfile::TempDir, PathBuf) {
-        trace_and_save_model(3, 640, 640, |x| {
-            // Built from the input with plain numbers: a tensor created inside
-            // the traced closure (e.g. `Tensor::from_slice`) is saved as zeros.
-            let one = x.mean(Kind::Float) * 0.0 + 1.0;
-            let values = [320.0, 320.0, 100.0, 100.0, 0.9, 0.1, 0.9];
-            let columns: Vec<Tensor> = values.iter().map(|&v| &one * v).collect();
-            Tensor::stack(&columns, 0).reshape([1, 1, 7])
-        })
+        evanalyzer_ai::torch::test_support::bench_yolo_box_model()
     }
 
     fn objects(ctx: &PipelineContext) -> Vec<(u32, usize)> {

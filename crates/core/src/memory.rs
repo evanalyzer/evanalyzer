@@ -31,6 +31,7 @@
 
 pub mod accounting;
 pub mod analysis;
+pub mod command_ram;
 pub mod storage;
 pub mod viewer;
 

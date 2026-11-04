@@ -2062,6 +2062,36 @@ RAM plan: U-Net 1.6 KB, StarDist 0.4 KB per pixel of the network's largest
 input, once per job (`ImageAlgorithm::shared_ram_bytes`); measured
 `joyful-pig` 1,653 MB at 1024², 6,411 MB at 2048² (1.55 KB per pixel).
 
+## AI steps per thread and StarDist's candidates (2026-11-04)
+
+`tests::tile_ram` now measures the AI steps too (`--features
+libtorch-in-process`, stand-in models): what each keeps of the answer per
+analysis thread, beyond the network (planned once per job) -
+
+| Step | Before | Now (declared) |
+|---|---|---|
+| U-Net | 8 B/px (not declared) | 8 B/px |
+| YOLOv5 | 24 B/px (not declared) | 24 B/px |
+| Cellpose | 42 B/px (not declared) | 42 B/px |
+| StarDist | 386 B/px (not declared: 6.5 GB on a 4096² tile) | 100 B/px |
+
+StarDist kept a byte mask per candidate (every grid cell above the
+threshold), now one bit per pixel; its suppression compared each kept
+candidate with all candidates, now only with those in the grid cells its box
+touches (the same result: `suppression_with_the_grid_keeps_what_comparing_all_kept`,
+400 random squares × 20 rounds × 4 thresholds). Post-processing of a 2048²
+tile of 24 px cells, flat probability 0.9 (590,000 candidates, 8,188 kept;
+`bench_stardist_postprocessing`, release, alternated):
+
+| Variant | Time | Peak RAM |
+|---|---|---|
+| Byte masks, all pairs (before) | 19.6-20.4 s | 1,494 MB |
+| Bit masks, all pairs | 20.0-23.6 s | 271 MB |
+| Bit masks, grid (now) | 7.9-8.6 s | 280 MB |
+
+The step picker's RAM line (one `DetailSection`): generated UI code 58.63 →
+58.67 MB (+39 KB).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2121,6 +2151,7 @@ graphics driver).
 | Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
 | Track Nearest Neighbor, same objects (image by image; was 384 MB all at once) | 199-229 MB | 2026-10-29 | Lineage in the results, Track Nearest Neighbor image by image |
 | Whole slide `tests/haut` with Propagation, 21 threads / 4 threads and `--max-ram 6000` | 7.55-7.65 GB / 3.9 GB (was 11.1-11.3 / 7.07 GB) | 2026-10-29 | Whole-image commands without RAM per pixel |
+| StarDist post-processing, 2048² tile, 590,000 candidates | 280 MB (was 1,494 MB) | 2026-11-04 | AI steps per thread and StarDist's candidates |
 | One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | 2048² pieces: StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB, joyful-pig 7.4 GB (was 6.3 / 10.6 / ~21 / 25.2 GB); 1024² pieces (8-16 GB computers): 1.3 / 1.2 GB; up to 2048² whole: 1.6 / 2.7 / 5.4 / 6.4 GB | 2026-11-04 | AI models: RAM per inference |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill

@@ -1123,6 +1123,12 @@ impl PipelinesController {
                         let mut detail = to_command_def(m);
                         // Only for the selected command: building it can cost.
                         if let Some(command) = default_command(command_id) {
+                            let image = *manager
+                                .viewport_controller
+                                .full_image_size
+                                .lock()
+                                .expect("Poisoned");
+                            detail.ram = command_ram_text(&command, image).into();
                             detail.citations = ModelRc::new(VecModel::from(
                                 evanalyzer_app::exporter::command_citations(&command)
                                     .into_iter()
@@ -6571,8 +6577,53 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         authors: ModelRc::default(),
         creation_time: "".into(),
         citations: ModelRc::default(),
+        ram: "".into(),
     };
     detail
+}
+
+/// What `command` (its defaults) takes in RAM on the analysis tiles of an
+/// image of `image` (width, height; none shown: a whole slide's tiles) -
+/// for the step picker. The numbers the analysis plans with
+/// (`evanalyzer_app::memory::command_ram`).
+fn command_ram_text(command: &PipelineCommand, image: (i64, i64)) -> String {
+    use evanalyzer_app::memory::{MAX_TILE_SIZE, command_ram};
+    let side = |v: i64| match v {
+        v if v > 0 => (v as usize).min(MAX_TILE_SIZE),
+        _ => MAX_TILE_SIZE,
+    };
+    let (width, height) = (side(image.0), side(image.1));
+    let Some(ram) = command_ram(command.clone(), width, height) else {
+        return String::new();
+    };
+    let size = |bytes: u64| match bytes {
+        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
+        b => format!("{} MB", (b as f64 / (1u64 << 20) as f64).ceil() as u64),
+    };
+    let tiles = match image.0 > 0 {
+        true => format!("On this image's {width} × {height} tiles"),
+        false => format!("On {width} × {height} tiles (a whole slide's)"),
+    };
+    let mut parts = Vec::new();
+    if ram.per_thread_bytes >= 1 << 20 {
+        parts.push(format!("{} per analysis thread", size(ram.per_thread_bytes)));
+    }
+    if ram.once_bytes >= 1 << 20 {
+        parts.push(format!(
+            "{} once for the run (the AI network and its weights; one image at a time)",
+            size(ram.once_bytes)
+        ));
+    }
+    match (ram.whole_image, parts.is_empty()) {
+        (true, _) => "Runs on the whole image, window by window or object by object: its RAM \
+                      doesn't grow with the image's size."
+            .into(),
+        (false, true) => format!("{tiles}: next to none beyond the analysis' own buffers."),
+        (false, false) => format!(
+            "{tiles}: {}. More threads run at once where the RAM allows.",
+            parts.join(", ")
+        ),
+    }
 }
 
 /// A step's name as lists show it: the command's, or the module's.
@@ -6646,6 +6697,7 @@ fn library_module_to_command_def(idx: usize, path: &Path, template: &ModuleTempl
         .collect();
     CommandDef {
         citations: ModelRc::default(),
+        ram: "".into(),
         id: LIBRARY_MODULE_PICKER_ID_BASE + idx as i32,
         name: definition.meta.name.clone().into(),
         summary: if definition.meta.short_description.is_empty() {
@@ -6728,6 +6780,7 @@ fn module_to_command_def(
         .collect();
     CommandDef {
         citations: ModelRc::default(),
+        ram: "".into(),
         id: MODULE_PICKER_ID_BASE + idx as i32,
         name: definition.meta.name.clone().into(),
         summary: summary.into(),
@@ -11497,6 +11550,34 @@ mod tests {
         picker.invoke_select(99_999);
         picker.invoke_select(-7);
         assert_eq!(step_names(&ui_state, 1).len(), 5);
+    }
+
+    /// The picker names what a command takes in RAM: a filter per analysis
+    /// thread (Hessian: 28 bytes per pixel - 448 MB on a slide's 4096²
+    /// tiles, no image shown), a command working in the analysis' own
+    /// buffers next to none, a whole-image command that it doesn't grow
+    /// with the image.
+    #[test]
+    fn picker_detail_names_the_ram_a_command_takes() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
+        let id = |name: &str| {
+            all_command_meta()
+                .into_iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+                .id
+        };
+        let picker = ui.global::<CommandPickerState>();
+        picker.invoke_select(id("Hessian"));
+        let ram = picker.get_detail().ram.to_string();
+        assert!(ram.contains("448 MB per analysis thread"), "{ram}");
+        assert!(ram.contains("4096 × 4096"), "{ram}");
+        picker.invoke_select(id("Threshold"));
+        let ram = picker.get_detail().ram.to_string();
+        assert!(ram.contains("next to none"), "{ram}");
+        picker.invoke_select(id("Propagation"));
+        let ram = picker.get_detail().ram.to_string();
+        assert!(ram.contains("whole image"), "{ram}");
     }
 
     #[test]

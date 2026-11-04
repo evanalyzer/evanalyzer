@@ -66,14 +66,129 @@ pub struct Stardist {
 }
 
 /// One star-convex polygon candidate, produced from a single grid cell.
+#[cfg_attr(test, derive(Clone))]
 struct Candidate {
     score: f32,
     /// Inclusive pixel bounds `[min_x, min_y, max_x, max_y]`, clipped to the image.
     bbox: [i64; 4],
     /// Rasterized fill mask local to `bbox`, row-major, width = `bbox` width.
-    mask: Vec<bool>,
+    mask: Bits,
     /// Number of `true` entries in `mask` (i.e. the polygon's pixel area).
     area: usize,
+}
+
+/// A candidate's mask, one bit per pixel: a tile has many candidates per
+/// object (every grid cell above the threshold), with a byte per pixel
+/// their masks took 386 bytes per tile pixel (6.5 GB on a 4096² tile,
+/// `tests::tile_ram`).
+#[derive(Debug, Clone, PartialEq)]
+struct Bits {
+    words: Vec<u64>,
+    len: usize,
+}
+
+impl Bits {
+    fn new(len: usize) -> Self {
+        Self {
+            words: vec![0; len.div_ceil(64)],
+            len,
+        }
+    }
+
+    fn set(&mut self, index: usize) {
+        self.words[index / 64] |= 1 << (index % 64);
+    }
+
+    fn get(&self, index: usize) -> bool {
+        index < self.len && self.words[index / 64] & (1 << (index % 64)) != 0
+    }
+
+    fn count_ones(&self) -> usize {
+        self.words.iter().map(|w| w.count_ones() as usize).sum()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = bool> + '_ {
+        (0..self.len).map(|i| self.get(i))
+    }
+}
+
+impl std::ops::Index<usize> for Bits {
+    type Output = bool;
+    fn index(&self, index: usize) -> &bool {
+        assert!(index < self.len, "bit {index} of {}", self.len);
+        if self.get(index) { &true } else { &false }
+    }
+}
+
+#[cfg(test)]
+impl From<Vec<bool>> for Bits {
+    fn from(values: Vec<bool>) -> Self {
+        let mut bits = Self::new(values.len());
+        for (i, _) in values.iter().enumerate().filter(|(_, v)| **v) {
+            bits.set(i);
+        }
+        bits
+    }
+}
+
+/// The candidates whose boxes touch each cell of a grid over the tile - for
+/// finding a candidate's neighbours without looking at all of them.
+struct CandidateGrid {
+    /// Cell side (pixels).
+    cell: i64,
+    columns: usize,
+    rows: usize,
+    /// Per cell, the candidates touching it.
+    cells: Vec<Vec<u32>>,
+}
+
+impl CandidateGrid {
+    /// Cells of about a typical object's size: a candidate is in a few.
+    const CELL: i64 = 64;
+
+    fn new(candidates: &[Candidate]) -> Self {
+        let (max_x, max_y) = candidates
+            .iter()
+            .fold((0, 0), |(x, y), c| (x.max(c.bbox[2]), y.max(c.bbox[3])));
+        let cell = Self::CELL;
+        let columns = (max_x / cell + 1) as usize;
+        let rows = (max_y / cell + 1) as usize;
+        let mut cells = vec![Vec::new(); columns * rows];
+        for (index, c) in candidates.iter().enumerate() {
+            for row in (c.bbox[1] / cell)..=(c.bbox[3] / cell) {
+                for column in (c.bbox[0] / cell)..=(c.bbox[2] / cell) {
+                    cells[row as usize * columns + column as usize].push(index as u32);
+                }
+            }
+        }
+        Self {
+            cell,
+            columns,
+            rows,
+            cells,
+        }
+    }
+
+    /// The candidates in the cells `bbox` touches (one may come more than
+    /// once - in several cells).
+    fn near(&self, bbox: &[i64; 4]) -> impl Iterator<Item = usize> + '_ {
+        let cell = |v: i64, n: usize| ((v.max(0) / self.cell) as usize).min(n - 1);
+        let (x0, x1) = (cell(bbox[0], self.columns), cell(bbox[2], self.columns));
+        let (y0, y1) = (cell(bbox[1], self.rows), cell(bbox[3], self.rows));
+        (y0..=y1).flat_map(move |row| {
+            (x0..=x1).flat_map(move |column| {
+                self.cells[row * self.columns + column]
+                    .iter()
+                    .map(|&j| j as usize)
+            })
+        })
+    }
 }
 
 /// What the network takes per pixel of the image it gets at once (see
@@ -167,13 +282,22 @@ impl ImageAlgorithm for Stardist {
         ExecutionScope::Tile
     }
 
+    /// What the step keeps per worker: the answer (probability and 32 rays
+    /// per grid cell) and the candidates' polygons and bit masks - ~100
+    /// bytes per pixel on cells of 24 px (`tests::tile_ram`, a well-fitting
+    /// model's outputs); more candidates (a lower threshold, larger
+    /// objects) take more.
+    fn ram_per_tile_pixel(&self) -> f64 {
+        100.0
+    }
+
     /// One inference at a time on the CPU (the AI engine's one slot): the
     /// network's activations on the largest image it gets at once - the
     /// tile, or a piece of it beyond 2048² ([`evanalyzer_ai::largest_model_input`]).
     /// 0.4 KB per pixel: measured 0.37 KB for the layout of StarDist's
     /// `2D_versatile_fluo` (BENCHMARK.md "AI models: RAM per inference" -
     /// [`NETWORK_BYTES_PER_PIXEL`]). On a GPU they are in its memory - planned anyway (the computer may
-    /// run on its CPU).
+    /// run on its CPU). Plus the model's weights (one copy).
     fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
         let piece = evanalyzer_ai::piece_side_for(
             NETWORK_BYTES_PER_PIXEL,
@@ -183,7 +307,7 @@ impl ImageAlgorithm for Stardist {
         );
         let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
             * evanalyzer_ai::largest_model_input(tile_height, piece);
-        (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64
+        (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
     }
 }
 
@@ -284,7 +408,7 @@ impl Stardist {
         }
 
         let mask = Self::rasterize_polygon(polygon, bbox);
-        let area = mask.iter().filter(|&&b| b).count();
+        let area = mask.count_ones();
         if area == 0 {
             return None;
         }
@@ -300,11 +424,11 @@ impl Stardist {
     /// Fills a simple (non-self-intersecting) polygon using an even-odd scanline
     /// rasterizer, sampling at pixel centers. Star-convex polygons (rays cast from
     /// a single interior center) are always simple, so this is exact.
-    fn rasterize_polygon(polygon: &[(f32, f32)], bbox: [i64; 4]) -> Vec<bool> {
+    fn rasterize_polygon(polygon: &[(f32, f32)], bbox: [i64; 4]) -> Bits {
         let [min_x, min_y, max_x, max_y] = bbox;
         let local_w = (max_x - min_x + 1) as usize;
         let local_h = (max_y - min_y + 1) as usize;
-        let mut mask = vec![false; local_w * local_h];
+        let mut mask = Bits::new(local_w * local_h);
 
         let n = polygon.len();
         for row in 0..local_h {
@@ -328,7 +452,7 @@ impl Stardist {
                 let x_start = (pair[0].round() as i64 - min_x).clamp(0, local_w as i64 - 1);
                 let x_end = (pair[1].round() as i64 - min_x).clamp(0, local_w as i64 - 1);
                 for x in x_start..=x_end {
-                    mask[row * local_w + x as usize] = true;
+                    mask.set(row * local_w + x as usize);
                 }
             }
         }
@@ -357,7 +481,7 @@ impl Stardist {
             for x in min_x..=max_x {
                 let a_idx = ((y - a.bbox[1]) * a_w + (x - a.bbox[0])) as usize;
                 let b_idx = ((y - b.bbox[1]) * b_w + (x - b.bbox[0])) as usize;
-                if a.mask[a_idx] && b.mask[b_idx] {
+                if a.mask.get(a_idx) && b.mask.get(b_idx) {
                     intersection += 1;
                 }
             }
@@ -389,13 +513,25 @@ impl Stardist {
 
         let mut suppressed = vec![false; candidates.len()];
         let mut keep_order = Vec::new();
+        // Only candidates whose boxes overlap can suppress each other: a grid
+        // of cells lists the candidates whose box touches each, so a kept
+        // candidate is compared with its neighbours only - not with all
+        // (590,000 candidates on a 2048² tile took 20 s). The same result:
+        // which candidates one suppresses doesn't depend on the order they
+        // are looked at in.
+        let grid = CandidateGrid::new(&candidates);
+        let mut seen = vec![usize::MAX; candidates.len()];
 
         for &i in &order {
             if suppressed[i] {
                 continue;
             }
             keep_order.push(i);
-            for &j in &order {
+            for j in grid.near(&candidates[i].bbox) {
+                if seen[j] == i {
+                    continue;
+                }
+                seen[j] = i;
                 if j == i
                     || suppressed[j]
                     || !Self::bbox_overlaps(&candidates[i].bbox, &candidates[j].bbox)
@@ -438,7 +574,7 @@ impl Stardist {
             for y in min_y..=max_y {
                 for x in min_x..=max_x {
                     let local_idx = (y - min_y) as usize * local_w + (x - min_x) as usize;
-                    if !candidate.mask[local_idx] {
+                    if !candidate.mask.get(local_idx) {
                         continue;
                     }
                     let global_idx = y as usize * width + x as usize;
@@ -583,8 +719,71 @@ mod tests {
         Candidate {
             score,
             bbox,
-            mask: vec![true; w * w],
+            mask: vec![true; w * w].into(),
             area: w * w,
+        }
+    }
+
+    /// The grid's suppression keeps exactly the candidates the old one did
+    /// (every kept candidate against every candidate), on many overlapping
+    /// squares of all sizes - some across several grid cells, some as large
+    /// as the tile - and IoU thresholds from strict to lax.
+    #[test]
+    fn suppression_with_the_grid_keeps_what_comparing_all_kept() {
+        let all_pairs = |candidates: &[Candidate], threshold: f32| -> Vec<[i64; 4]> {
+            let mut order: Vec<usize> = (0..candidates.len()).collect();
+            order.sort_by(|&a, &b| {
+                candidates[b]
+                    .score
+                    .partial_cmp(&candidates[a].score)
+                    .unwrap()
+            });
+            let mut suppressed = vec![false; candidates.len()];
+            let mut kept = Vec::new();
+            for &i in &order {
+                if suppressed[i] {
+                    continue;
+                }
+                kept.push(candidates[i].bbox);
+                for &j in &order {
+                    if j != i
+                        && !suppressed[j]
+                        && Stardist::bbox_overlaps(&candidates[i].bbox, &candidates[j].bbox)
+                        && Stardist::iou(&candidates[i], &candidates[j]) > threshold
+                    {
+                        suppressed[j] = true;
+                    }
+                }
+            }
+            kept
+        };
+        let mut state = 12345u64;
+        let mut next = |n: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) % n
+        };
+        for round in 0..20 {
+            let candidates: Vec<Candidate> = (0..400)
+                .map(|k| {
+                    let side = if k % 97 == 0 {
+                        300
+                    } else {
+                        4 + next(60) as i64
+                    };
+                    let score = (next(1000) as f32 + k as f32 * 1e-4) / 1000.0;
+                    square(next(400) as i64, next(400) as i64, side, score)
+                })
+                .collect();
+            for threshold in [0.0, 0.1, 0.3, 0.7] {
+                let expected = all_pairs(&candidates, threshold);
+                let kept: Vec<[i64; 4]> = Stardist::non_max_suppress(candidates.clone(), threshold)
+                    .iter()
+                    .map(|c| c.bbox)
+                    .collect();
+                assert_eq!(kept, expected, "round {round}, threshold {threshold}");
+            }
         }
     }
 
@@ -602,7 +801,7 @@ mod tests {
         let mask = Stardist::rasterize_polygon(&polygon, bbox);
         assert_eq!(mask.len(), 16);
         assert!(
-            mask.iter().all(|&b| b),
+            mask.iter().all(|b| b),
             "every pixel center lies inside the square"
         );
     }
@@ -719,7 +918,7 @@ mod tests {
         let a = Candidate {
             score: 0.9,
             bbox: [0, 0, 3, 3],
-            mask: a_mask,
+            mask: a_mask.into(),
             area: 4,
         };
         let mut b_mask = vec![false; 16];
@@ -731,7 +930,7 @@ mod tests {
         let b = Candidate {
             score: 0.5,
             bbox: [2, 2, 5, 5],
-            mask: b_mask,
+            mask: b_mask.into(),
             area: 4,
         };
         assert_eq!(Stardist::iou(&a, &b), 0.0);
@@ -856,7 +1055,7 @@ mod tests {
         let candidate = Candidate {
             score: 0.9,
             bbox: [0, 0, 1, 1],
-            mask: vec![true, false, false, true], // (0,0) and (1,1) only
+            mask: vec![true, false, false, true].into(), // (0,0) and (1,1) only
             area: 2,
         };
         let mut seg = vec![0u32; 4];
@@ -946,5 +1145,43 @@ mod tests {
     fn build_candidate_returns_none_for_a_polygon_with_an_infinite_vertex() {
         let polygon = [(1.0, 1.0), (f32::INFINITY, 5.0), (5.0, 5.0), (1.0, 5.0)];
         assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
+    }
+
+    /// The post-processing of a StarDist answer on a 2048² tile of cells
+    /// (24 px, 1 in 32² - as a well-fitting model gives it: probability 1
+    /// inside, rays of 12 px): time and the most RAM it holds. Run with
+    ///   cargo test --release -p evanalyzer_core --lib bench_stardist_post -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_stardist_postprocessing() {
+        use crate::tests::counting_allocator;
+        let (side, grid, rays) = (2048usize, 2usize, 32usize);
+        let (gw, gh) = (side / grid, side / grid);
+        let prob: Vec<f32> = (0..gw * gh)
+            .map(|i| {
+                let (x, y) = ((i % gw) * grid, (i / gw) * grid);
+                let cell = (4..28).contains(&(x % 32)) && (4..28).contains(&(y % 32));
+                if cell { 0.9 } else { 0.0 }
+            })
+            .collect();
+        let dist = vec![12.0f32; rays * gw * gh];
+        let cmd = stardist(0.5, 0.3);
+        let mut seg = vec![0u32; side * side];
+        let mut inst = vec![0u32; side * side];
+        for round in 0..3 {
+            let before = counting_allocator::in_use();
+            counting_allocator::reset_peak();
+            let start = std::time::Instant::now();
+            let candidates = cmd.build_candidates(&prob, &dist, gh, gw, rays, side, side);
+            let n = candidates.len();
+            let kept = Stardist::non_max_suppress(candidates, cmd.nms_threshold);
+            Stardist::write_instances(&kept, side, 1, &mut seg, &mut inst);
+            println!(
+                "BENCH StarDist post {side}² round {round}: {:.2} s, peak +{:.0} MB, {n} candidates, {} kept",
+                start.elapsed().as_secs_f64(),
+                (counting_allocator::peak() - before) as f64 / 1e6,
+                kept.len()
+            );
+        }
     }
 }

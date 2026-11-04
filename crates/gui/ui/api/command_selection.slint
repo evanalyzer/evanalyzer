@@ -33,6 +33,9 @@ export struct CommandDef {
     // The publications of the method a command implements, formatted, one
     // per entry - filled for the selected command (`detail`).
     citations: [string],
+    // What the command takes in RAM on the shown image's tiles ("" none
+    // worth naming) - filled for the selected command (`detail`).
+    ram: string,
 }
 
 export global CommandPickerState {

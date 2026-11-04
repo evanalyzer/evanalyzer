@@ -186,6 +186,12 @@ impl ImageAlgorithm for UNet {
         ExecutionScope::Tile
     }
 
+    /// What the step keeps of the answer per worker: the foreground and
+    /// boundary probabilities (8 bytes per pixel, `tests::tile_ram`).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        8.0
+    }
+
     /// One inference at a time on the CPU (the AI engine's one slot): the
     /// network's activations on the largest image it gets at once - the
     /// tile, or a piece of it beyond 2048² ([`evanalyzer_ai::largest_model_input`]).
@@ -193,7 +199,7 @@ impl ImageAlgorithm for UNet {
     /// 0.67 / 1.3 KB for U-Nets of depth 4 from 32 / 64 filters
     /// (BENCHMARK.md "AI models: RAM per inference" - [`NETWORK_BYTES_PER_PIXEL`]).
     /// On a GPU they are in its memory - planned anyway (the computer may
-    /// run on its CPU).
+    /// run on its CPU). Plus the model's weights (one copy).
     fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
         let piece = evanalyzer_ai::piece_side_for(
             NETWORK_BYTES_PER_PIXEL,
@@ -203,7 +209,7 @@ impl ImageAlgorithm for UNet {
         );
         let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
             * evanalyzer_ai::largest_model_input(tile_height, piece);
-        (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64
+        (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
     }
 }
 

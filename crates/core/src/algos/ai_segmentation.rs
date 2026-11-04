@@ -14,6 +14,12 @@ pub mod stardist;
 pub mod unet;
 pub mod yolov5;
 
+/// The RAM a model's weights take once loaded: about its file's size
+/// (0 when it can't be read - no model chosen yet).
+pub(crate) fn model_bytes(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map_or(0, |m| m.len())
+}
+
 /// Nearest-neighbor resize of a label map (OpenCV's `INTER_NEAREST`, as used
 /// by Cellpose and YOLOv5 to scale masks back up): target pixel `d` takes
 /// source pixel `floor(d * src / dst)`.
