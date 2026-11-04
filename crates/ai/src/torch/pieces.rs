@@ -31,10 +31,10 @@
 //! pixels (a slide's 4096² tiles already have their own statistics, per
 //! tile). Logged when it happens.
 //!
-//! The piece side comes with the request: the analysis picks it from the
-//! computer's RAM ([`crate::api::piece_side_for`]) - 2048² where it fits,
-//! 1024² or 512² on a small computer. A tile of up to it per side runs as
-//! one piece - as before, without a copy or a probe. Pieces are as large as
+//! The piece side comes with the request: the step's setting (saved with
+//! the project, never from the computer's RAM - it is part of the result).
+//! A tile of up to it per side runs as one piece - as before, without a
+//! copy or a probe. Pieces are as large as
 //! the RAM allows: libtorch uses many cores less well on small inputs, and
 //! the halo is computed twice - 1024² pieces made a 2048² tile 1.3-1.9x
 //! slower (BENCHMARK.md).
@@ -247,21 +247,39 @@ pub(crate) fn receptive_halo(
     Ok((halo < center - ALIGN).then_some(halo))
 }
 
-/// The halo to run pieces with, from [`receptive_halo`]'s answer:
-/// [`WHOLE_IMAGE_HALO`] for a model seeing the whole image (logged - its
-/// pieces differ a little from the whole tile).
-pub(crate) fn halo_of(measured: Option<usize>, model: &std::path::Path) -> usize {
-    match measured {
-        Some(halo) => halo,
+/// How a `width x height` tile runs with the request's `pieces`: `None`
+/// whole, else `(halo, piece side)`. `measured` gives the model's
+/// [`receptive_halo`] (asked only when a tile may need pieces): a model
+/// seeing a limited neighbourhood runs in `pieces.local_side` with its
+/// halo, one seeing the whole image in `pieces.whole_image_side` with
+/// [`WHOLE_IMAGE_HALO`] (logged - its pieces differ a little from the whole
+/// tile).
+pub(crate) fn plan(
+    width: usize,
+    height: usize,
+    pieces: crate::api::Pieces,
+    measured: impl FnOnce() -> Result<Option<usize>>,
+    model: &std::path::Path,
+) -> Result<Option<(usize, usize)>> {
+    let (local, whole_image) = (
+        piece_side(pieces.local_side),
+        piece_side(pieces.whole_image_side),
+    );
+    if !needs_pieces(width, height, local.min(whole_image)) {
+        return Ok(None);
+    }
+    let (halo, piece) = match measured()? {
+        Some(halo) => (halo, local),
         None => {
             log::info!(
-                "AI model {} normalizes by the whole image: big tiles run in pieces with \
-                 {WHOLE_IMAGE_HALO} px of context - a few pixels differ from one piece",
+                "AI model {} normalizes by the whole image: big tiles run in {whole_image}² \
+                 pieces with {WHOLE_IMAGE_HALO} px of context - a few pixels differ from one piece",
                 model.display()
             );
-            WHOLE_IMAGE_HALO
+            (WHOLE_IMAGE_HALO, whole_image)
         }
-    }
+    };
+    Ok(needs_pieces(width, height, piece).then_some((halo, piece)))
 }
 
 #[cfg(test)]
@@ -310,6 +328,49 @@ mod tests {
         (0..width * height)
             .map(|i| ((i * 7919) % 101) as f32 / 101.0)
             .collect()
+    }
+
+    /// A tile up to the smaller side runs whole without measuring the model;
+    /// beyond, a model seeing a limited neighbourhood gets the local side
+    /// with its halo, one seeing the whole image its side with
+    /// [`WHOLE_IMAGE_HALO`].
+    #[test]
+    fn the_plan_gives_each_kind_of_model_its_pieces() {
+        let auto = crate::api::Pieces {
+            local_side: 2048,
+            whole_image_side: 1024,
+        };
+        let model = std::path::Path::new("m.pt");
+        let never = || -> Result<Option<usize>> { panic!("measured a tile that runs whole") };
+        assert_eq!(plan(1024, 1024, auto, never, model).unwrap(), None);
+        let local = || Ok(Some(96));
+        assert_eq!(
+            plan(4096, 4096, auto, local, model).unwrap(),
+            Some((96, 2048))
+        );
+        assert_eq!(
+            plan(2048, 2048, auto, local, model).unwrap(),
+            None,
+            "fits the local side"
+        );
+        let whole = || Ok(None);
+        assert_eq!(
+            plan(4096, 4096, auto, whole, model).unwrap(),
+            Some((WHOLE_IMAGE_HALO, 1024))
+        );
+        assert_eq!(
+            plan(2048, 2048, auto, whole, model).unwrap(),
+            Some((WHOLE_IMAGE_HALO, 1024))
+        );
+        let fixed = crate::api::Pieces::fixed(512);
+        assert_eq!(
+            plan(1024, 1024, fixed, local, model).unwrap(),
+            Some((96, 512))
+        );
+        assert_eq!(
+            plan(1024, 1024, fixed, whole, model).unwrap(),
+            Some((WHOLE_IMAGE_HALO, 512))
+        );
     }
 
     #[test]

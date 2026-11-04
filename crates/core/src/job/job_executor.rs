@@ -1901,8 +1901,6 @@ impl<'a> JobExecutor {
         // What the hungriest command takes per tile pixel beyond the
         // worker's buffers (they run one after another).
         let per_pixel = self.command_bytes_per_tile_pixel();
-        // Read once (not per image): the AI steps size their pieces by it.
-        let ram_total = crate::memory::SystemRam::now().total;
         // Once per tile size, not per image (a model file's size is read
         // for it - 100,000 images mostly share one or two sizes).
         let shared = std::cell::RefCell::new(Vec::<((usize, usize), u64)>::new());
@@ -1914,7 +1912,7 @@ impl<'a> JobExecutor {
                 .find(|(k, _)| *k == key)
                 .map(|(_, b)| *b);
             let shared_bytes = known.unwrap_or_else(|| {
-                let bytes = self.shared_ram_bytes(tile_width, tile_height, ram_total);
+                let bytes = self.shared_ram_bytes(tile_width, tile_height);
                 shared.borrow_mut().push((key, bytes));
                 bytes
             });
@@ -1940,12 +1938,12 @@ impl<'a> JobExecutor {
     /// job on a `tile_width x tile_height` tile
     /// ([`ImageAlgorithm::shared_ram_bytes`](crate::algos::ImageAlgorithm::shared_ram_bytes):
     /// an AI inference).
-    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
         self.pipelines_pre_process
             .values()
             .chain(self.pipelines_post_process.values())
             .flat_map(|p| p.commands.iter())
-            .map(|(_, _, c)| c.shared_ram_bytes(tile_width, tile_height, ram_total))
+            .map(|(_, _, c)| c.shared_ram_bytes(tile_width, tile_height))
             .max()
             .unwrap_or(0)
     }
@@ -5483,10 +5481,12 @@ mod estimate_ram_per_worker_bytes_tests {
         };
         let unet = || Some(PipelineCommand::UNet(Default::default()));
         let stardist = || Some(PipelineCommand::Stardist(Default::default()));
-        // The pieces this computer's RAM gets (`evanalyzer_ai::piece_side_for`).
+        // Auto: the larger of the pieces this computer's RAM gives a local
+        // model and the whole-image models' 1024, plus the planned halo.
         let ram = crate::memory::SystemRam::now().total;
         let input = |bytes_per_pixel: f64, side: usize| {
-            let piece = evanalyzer_ai::piece_side_for(bytes_per_pixel, ram, side, side);
+            let local = evanalyzer_ai::piece_side_for(bytes_per_pixel, ram, side, side);
+            let piece = local.max(evanalyzer_ai::WHOLE_IMAGE_PIECE_SIDE);
             evanalyzer_ai::largest_model_input(side, piece) as u64
         };
         let tile = MAX_TILE_SIZE;
@@ -5495,18 +5495,10 @@ mod estimate_ram_per_worker_bytes_tests {
             with_step(20_000, unet()).shared_bytes,
             1600 * input(1600.0, tile).pow(2)
         );
-        assert_eq!(
-            with_step(1024, unet()).shared_bytes,
-            1600 * input(1600.0, 1024).pow(2)
-        );
+        assert_eq!(with_step(1024, unet()).shared_bytes, 1600 * 1024 * 1024);
         assert_eq!(
             with_step(20_000, stardist()).shared_bytes,
             400 * input(400.0, tile).pow(2)
-        );
-        // At most a third of the RAM - or the smallest pieces.
-        assert!(
-            with_step(20_000, unet()).shared_bytes <= ram / 3
-                || input(1600.0, tile) == 512 + 2 * 128
         );
         // Per worker only what the step keeps of the answer (8 bytes per
         // pixel), not the network.

@@ -30,33 +30,22 @@ pub struct CommandRam {
     pub whole_image: bool,
 }
 
-/// What `command` takes on a `tile_width x tile_height` tile on this
-/// computer (its RAM decides an AI network's pieces). `None`: its settings
-/// don't make a command.
+/// What `command` takes on a `tile_width x tile_height` tile. `None`: its
+/// settings don't make a command.
 pub fn command_ram(
     command: PipelineCommand,
     tile_width: usize,
     tile_height: usize,
 ) -> Option<CommandRam> {
     let algorithm = into_algorithm(command).ok()?;
-    Some(ram_of(
-        algorithm.as_ref(),
-        tile_width,
-        tile_height,
-        super::SystemRam::now().total,
-    ))
+    Some(ram_of(algorithm.as_ref(), tile_width, tile_height))
 }
 
-fn ram_of(
-    algorithm: &dyn ImageAlgorithm,
-    tile_width: usize,
-    tile_height: usize,
-    ram_total: u64,
-) -> CommandRam {
+fn ram_of(algorithm: &dyn ImageAlgorithm, tile_width: usize, tile_height: usize) -> CommandRam {
     let pixels = (tile_width * tile_height) as f64;
     CommandRam {
         per_thread_bytes: (algorithm.ram_per_tile_pixel() * pixels).ceil() as u64,
-        once_bytes: algorithm.shared_ram_bytes(tile_width, tile_height, ram_total),
+        once_bytes: algorithm.shared_ram_bytes(tile_width, tile_height),
         whole_image: algorithm.execution_scope() != ExecutionScope::Tile,
     }
 }

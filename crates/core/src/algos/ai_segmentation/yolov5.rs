@@ -196,7 +196,7 @@ impl ImageAlgorithm for Yolov5 {
     /// (a YOLOv5 of any size: estimated 512 MB) plus the scaled RGB image
     /// handed to the engine (12 bytes per pixel, `image_scale`² times the
     /// tile's) and the model's weights.
-    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, _ram_total: u64) -> u64 {
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
         const NETWORK_BYTES: u64 = 512 << 20;
         let scale = self.image_scale.clamp(0.05, 4.0) as f64;
         let pixels = (tile_width * tile_height) as f64 * scale * scale;

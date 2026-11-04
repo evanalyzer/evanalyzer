@@ -826,8 +826,14 @@ fn stardist_settings_convert_and_clamp_thresholds() {
         segmentation_class: SegmentationClass(3),
         probability_threshold: -0.5,
         nms_threshold: 2.0,
+        piece_size: AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 99_999 },
     };
     let result = Stardist::from(settings);
+    assert_eq!(
+        result.piece_size,
+        PieceSize::Fixed { side: 99_999 },
+        "clamped where used"
+    );
     assert_eq!(result.model_path, PathBuf::from("stardist.pt"));
     assert_eq!(result.segmentation_class, SegmentationClass(3));
     assert_eq!(result.probability_threshold, 0.0);
@@ -921,8 +927,14 @@ fn unet_settings_convert_and_clamp_probability_threshold() {
         foreground_channel: 1,
         boundary_channel: 0,
         boundary_threshold: -1.0,
+        piece_size: AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 100 },
     };
     let result = UNet::from(settings);
+    assert_eq!(
+        result.piece_size,
+        PieceSize::Fixed { side: 100 },
+        "clamped where used"
+    );
     assert_eq!(result.model_path, PathBuf::from("unet.pt"));
     assert_eq!(result.segmentation_class, SegmentationClass(2));
     assert_eq!(result.probability_threshold, 1.0);
@@ -1528,4 +1540,39 @@ fn yolo_class_mapping_settings_convert_both_classes() {
     });
     assert_eq!(mapping.model_class, 12);
     assert_eq!(mapping.segmentation_class, SegmentationClass(5));
+}
+
+/// A U-Net or StarDist step of a project saved before the piece size
+/// existed loads with the default (Auto) - the field is `optional`. In the
+/// project file it is `{"type": "AUTO"}` or `{"type": "FIXED", "side": 1024}`.
+#[test]
+fn ai_steps_saved_without_a_piece_size_get_auto() {
+    let mut unet = serde_json::to_value(UNetSettings::default()).unwrap();
+    unet.as_object_mut().unwrap().remove("pieceSize").unwrap();
+    let unet: UNetSettings = serde_json::from_value(unet).unwrap();
+    assert_eq!(
+        unet.piece_size,
+        AiSegmentationPieceSizePieceSizeSettings::Auto
+    );
+    let mut stardist = serde_json::to_value(StardistSettings::default()).unwrap();
+    stardist
+        .as_object_mut()
+        .unwrap()
+        .remove("pieceSize")
+        .unwrap();
+    let stardist: StardistSettings = serde_json::from_value(stardist).unwrap();
+    assert_eq!(
+        stardist.piece_size,
+        AiSegmentationPieceSizePieceSizeSettings::Auto
+    );
+    let file =
+        |value: &AiSegmentationPieceSizePieceSizeSettings| serde_json::to_value(value).unwrap();
+    assert_eq!(
+        file(&AiSegmentationPieceSizePieceSizeSettings::Auto),
+        serde_json::json!({"type": "AUTO"})
+    );
+    assert_eq!(
+        file(&AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 1024 }),
+        serde_json::json!({"type": "FIXED", "side": 1024})
+    );
 }

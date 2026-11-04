@@ -2023,11 +2023,11 @@ Before - the whole tile through the network, RAM per pixel constant:
 Now (`crates/ai/src/torch/pieces.rs`): a tile beyond the piece side runs
 in pieces plus a halo = the model's receptive field, measured once per model
 (an empty image and one bright pixel, as StarDist); a model that sees the
-whole image (InstanceNorm) gets 128 px. The piece side comes from the
-computer's RAM (`evanalyzer_ai::piece_side_for`: the largest of 2048 / 1024
-/ 512 whose input takes at most a third of it) - on this 62 GB computer
-2048²; 1024² is what an 8-16 GB computer gets for a U-Net (forced with the
-bench's piece argument). On power, 22 threads, 2 runs each, alternated:
+whole image (InstanceNorm) gets 128 px. The piece side is the step's
+setting (`piece_size`, default Auto: as large as the RAM allows for a model
+seeing a limited neighbourhood - the same result up to rounding - and 1024
+on every computer for one seeing the whole image); the bench's piece
+argument sets it. On power, 22 threads, 2 runs each, alternated:
 
 | Case | Before (whole tile) | 2048² pieces | 1024² pieces |
 |---|---|---|---|
@@ -2041,9 +2041,9 @@ bench's piece argument). On power, 22 threads, 2 runs each, alternated:
 The stand-in networks get 30-45 % slower on a slide tile in 2048² pieces
 (the halo, 80-112 px, is computed twice; libtorch uses 22 cores less well
 on smaller inputs), the real `joyful-pig` 8x faster (libtorch on its 25 GB
-of activations at once). Images up to 2048² run whole as before where a
-third of the RAM holds them (U-Net 2048²: from ~16 GB); on smaller
-computers 1024² pieces - 1.5-1.9x slower, a third of the RAM. The padding
+of activations at once). Auto on a large computer runs a 2048² image whole
+as before; on 8-16 GB (1024² pieces) it is 1.5-1.9x slower, at a third of
+the RAM. The padding
 fix (StarDist) and the request's piece side cost nothing: committed pieces
 vs now, StarDist 2048² 2.6-2.9 / 2.8-2.9 s, 4096² 12.6-14.1 / 12.9-14.2 s,
 U-Net 32 4096² 26.1-29.5 / 26.4-29.7 s, same RAM.
@@ -2055,8 +2055,8 @@ halo 112 px, U-Net 80 px; `real_networks_in_pieces_give_the_whole_tile`, on
 ~5e-5. The real bioimage.io `joyful-pig` (InstanceNorm in every layer) can't
 be split exactly; with 1024² pieces a halo of 16 / 64 / 128 px flips 0.18 /
 0.10 / 0.06 % of the foreground and 0.64 / 0.44 / 0.31 % of the boundary
-pixels - run with 128 px (decided 2026-11-04). Its result then depends on
-the piece side, i.e. on the computer's RAM class.
+pixels - run with 128 px (decided 2026-11-04). Its result depends on the
+piece size - a step setting, so on the project, not the computer.
 
 RAM plan: U-Net 1.6 KB, StarDist 0.4 KB per pixel of the network's largest
 input, once per job (`ImageAlgorithm::shared_ram_bytes`); measured

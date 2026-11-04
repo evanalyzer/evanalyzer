@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use super::PieceSize;
 use evanalyzer_ai::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
@@ -63,6 +64,11 @@ pub struct Stardist {
     /// candidate polygon is suppressed in favor of an overlapping higher-scoring one.
     #[cmdsmeta(default = 0.3, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub nms_threshold: f32,
+
+    /// How large the pieces are that a large tile runs through the network
+    /// in: smaller ones take less RAM, larger ones are faster.
+    #[cmdsmeta(default = PieceSize::Auto, optional = true, visibility = Advanced)]
+    pub piece_size: PieceSize,
 }
 
 /// One star-convex polygon candidate, produced from a single grid cell.
@@ -195,12 +201,12 @@ impl CandidateGrid {
 /// `shared_ram_bytes`).
 const NETWORK_BYTES_PER_PIXEL: f64 = 400.0;
 
-/// The piece side for a `width x height` tile on this computer (its RAM or
-/// the user's limit, [`evanalyzer_ai::piece_side_for`]) - what the planner
-/// reserved for (`shared_ram_bytes`).
-fn piece_side(width: usize, height: usize) -> usize {
-    let ram_total = crate::memory::SystemRam::now().total;
-    evanalyzer_ai::piece_side_for(NETWORK_BYTES_PER_PIXEL, ram_total, width, height)
+impl Stardist {
+    /// The pieces a `width x height` tile runs in (see [`PieceSize::pieces`]).
+    fn pieces(&self, width: usize, height: usize) -> evanalyzer_ai::Pieces {
+        self.piece_size
+            .pieces(NETWORK_BYTES_PER_PIXEL, width, height)
+    }
 }
 
 impl ImageAlgorithm for Stardist {
@@ -217,7 +223,7 @@ impl ImageAlgorithm for Stardist {
         let request = Request {
             model: self.model_path.clone(),
             task: Task::StarDist {
-                piece_side: piece_side(width, height),
+                pieces: self.pieces(width, height),
             },
         };
         let image = Image {
@@ -293,18 +299,14 @@ impl ImageAlgorithm for Stardist {
 
     /// One inference at a time on the CPU (the AI engine's one slot): the
     /// network's activations on the largest image it gets at once - the
-    /// tile, or a piece of it beyond 2048² ([`evanalyzer_ai::largest_model_input`]).
+    /// tile, or a piece of it (`piece_size`, [`evanalyzer_ai::largest_model_input`]).
     /// 0.4 KB per pixel: measured 0.37 KB for the layout of StarDist's
     /// `2D_versatile_fluo` (BENCHMARK.md "AI models: RAM per inference" -
     /// [`NETWORK_BYTES_PER_PIXEL`]). On a GPU they are in its memory - planned anyway (the computer may
     /// run on its CPU). Plus the model's weights (one copy).
-    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
-        let piece = evanalyzer_ai::piece_side_for(
-            NETWORK_BYTES_PER_PIXEL,
-            ram_total,
-            tile_width,
-            tile_height,
-        );
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
+        // Before the run it isn't known which of the two the model gets.
+        let piece = self.pieces(tile_width, tile_height).largest();
         let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
             * evanalyzer_ai::largest_model_input(tile_height, piece);
         (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
@@ -603,6 +605,7 @@ mod tests {
             segmentation_class: SegmentationClass(1),
             probability_threshold,
             nms_threshold,
+            piece_size: PieceSize::Auto,
         }
     }
 

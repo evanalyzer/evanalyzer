@@ -330,6 +330,17 @@ impl From<SegmentationThresholdOtsuMiddleClassSettings> for OtsuMiddleClass {
     }
 }
 
+impl From<AiSegmentationPieceSizePieceSizeSettings> for PieceSize {
+    fn from(_s: AiSegmentationPieceSizePieceSizeSettings) -> Self {
+        match _s {
+            AiSegmentationPieceSizePieceSizeSettings::Auto => PieceSize::Auto,
+            AiSegmentationPieceSizePieceSizeSettings::Fixed { side } => {
+                PieceSize::Fixed { side: side }
+            }
+        }
+    }
+}
+
 impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
     fn from(_s: FiltersRankFilterRankFilterTypeSettings) -> Self {
         match _s {
@@ -1140,6 +1151,7 @@ impl From<StardistSettings> for Stardist {
             segmentation_class: _s.segmentation_class,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
+            piece_size: PieceSize::from(_s.piece_size),
         }
     }
 }
@@ -1254,6 +1266,7 @@ impl From<UNetSettings> for UNet {
             foreground_channel: _s.foreground_channel,
             boundary_channel: _s.boundary_channel,
             boundary_threshold: _s.boundary_threshold.clamp(0.0, 1.0),
+            piece_size: PieceSize::from(_s.piece_size),
         }
     }
 }

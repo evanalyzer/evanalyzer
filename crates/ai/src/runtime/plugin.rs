@@ -530,7 +530,9 @@ mod tests {
         // as a message.
         let request = Request {
             model: "/no/such/model.pt".into(),
-            task: crate::api::Task::StarDist { piece_side: 2048 },
+            task: crate::api::Task::StarDist {
+                pieces: crate::api::Pieces::fixed(2048),
+            },
         };
         let pixels = [0.0f32; 4];
         let image = Image {

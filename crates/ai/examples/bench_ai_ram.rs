@@ -65,13 +65,13 @@ fn main() {
         || std::thread::available_parallelism().unwrap().get(),
         |t| t.parse().unwrap(),
     );
-    // The pieces of a big computer (`evanalyzer_ai::piece_side_for`).
+    // The step's piece size.
     let piece_side: usize = args.get(4).map_or(2048, |p| p.parse().unwrap());
     let unet = Task::UNet {
         foreground_channel: 0,
         softmax: false,
         boundary_channel: 1,
-        piece_side,
+        pieces: evanalyzer_ai::Pieces::fixed(piece_side),
     };
     let ((_dir, model), task) = match kind {
         file if file.starts_with("unet-file=") => (
@@ -81,7 +81,12 @@ fn main() {
             ),
             unet,
         ),
-        "stardist" => (bench_stardist_model(), Task::StarDist { piece_side }),
+        "stardist" => (
+            bench_stardist_model(),
+            Task::StarDist {
+                pieces: evanalyzer_ai::Pieces::fixed(piece_side),
+            },
+        ),
         // The cost around Cellpose's network: its 256² pieces blended over
         // the whole image (next to no compute in the model).
         "cellpose-light" => (

@@ -6606,7 +6606,10 @@ fn command_ram_text(command: &PipelineCommand, image: (i64, i64)) -> String {
     };
     let mut parts = Vec::new();
     if ram.per_thread_bytes >= 1 << 20 {
-        parts.push(format!("{} per analysis thread", size(ram.per_thread_bytes)));
+        parts.push(format!(
+            "{} per analysis thread",
+            size(ram.per_thread_bytes)
+        ));
     }
     if ram.once_bytes >= 1 << 20 {
         parts.push(format!(

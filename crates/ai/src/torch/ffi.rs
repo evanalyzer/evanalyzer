@@ -275,7 +275,7 @@ mod tests {
                 foreground_channel: 0,
                 softmax: false,
                 boundary_channel: -1,
-                piece_side: 2048,
+                pieces: crate::api::Pieces::fixed(2048),
             },
         };
         let pixels: Vec<f32> = (0..4).map(|v| v as f32 / 4.0).collect();

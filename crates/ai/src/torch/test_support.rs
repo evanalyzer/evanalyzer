@@ -234,7 +234,10 @@ pub fn bench_yolo_box_model() -> (tempfile::TempDir, std::path::PathBuf) {
 /// pixels (above `threshold`), every ray `radius` long - for what the
 /// analysis keeps of its answer (candidates, masks), which depends on the
 /// outputs, not the network.
-pub fn stardist_cells_model(threshold: f64, radius: f64) -> (tempfile::TempDir, std::path::PathBuf) {
+pub fn stardist_cells_model(
+    threshold: f64,
+    radius: f64,
+) -> (tempfile::TempDir, std::path::PathBuf) {
     trace_and_save_model(1, 64, 64, |x| {
         let grid = x.avg_pool2d([2, 2], [2, 2], [0, 0], false, true, None::<i64>);
         let prob = ((&grid - threshold) * 0.01).sigmoid();

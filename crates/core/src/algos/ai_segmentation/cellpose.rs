@@ -202,7 +202,7 @@ impl ImageAlgorithm for Cellpose {
     /// (measured with a stand-in: 766 MB at 4096²), and the model's
     /// weights. The image is only ever scaled down (`max_resize`), so the
     /// tile's pixels bound it.
-    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, _ram_total: u64) -> u64 {
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
         const NETWORK_BYTES: u64 = 512 << 20;
         const BLEND_BYTES_PER_PIXEL: u64 = 48;
         NETWORK_BYTES

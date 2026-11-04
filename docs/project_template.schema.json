@@ -93,6 +93,45 @@
         }
       }
     },
+    "AiSegmentationPieceSizePieceSizeSettings": {
+      "description": "How large the pieces are that a large tile runs through a U-Net or\nStarDist network in (square; a tile up to a piece runs whole). Smaller\npieces take less RAM, larger ones are faster - a U-Net on a slide: 1024\n~2.6 GB at once, 2048 ~8.5 GB.",
+      "oneOf": [
+        {
+          "description": "As large as the computer's RAM allows (2048, 1024 or 512) for a\nmodel seeing a limited neighbourhood - its result is the same\nwhatever the size, up to float rounding; 1024 on every computer for\na model normalizing by the whole image (InstanceNorm), whose result\nthe size changes a little.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "AUTO"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The same pieces for every model on every computer.",
+          "type": "object",
+          "properties": {
+            "side": {
+              "description": "Pixels per side of a piece.",
+              "type": "integer",
+              "format": "int32",
+              "maximum": 4096,
+              "minimum": 256
+            },
+            "type": {
+              "type": "string",
+              "const": "FIXED"
+            }
+          },
+          "required": [
+            "type",
+            "side"
+          ]
+        }
+      ]
+    },
     "AiSegmentationUnetUNetOutputModeSettings": {
       "description": "How a multi-channel U-Net output should be turned into a single foreground\nprobability map. Ignored for single-channel outputs, which are always\ntreated as already-activated foreground probabilities.",
       "oneOf": [
@@ -4268,6 +4307,13 @@
           "maximum": 1,
           "minimum": 0
         },
+        "pieceSize": {
+          "description": "How large the pieces are that a large tile runs through the network\nin: smaller ones take less RAM, larger ones are faster.",
+          "$ref": "#/$defs/AiSegmentationPieceSizePieceSizeSettings",
+          "default": {
+            "type": "AUTO"
+          }
+        },
         "probabilityThreshold": {
           "description": "Probability above which a grid cell is considered a candidate object center.",
           "type": "number",
@@ -4643,6 +4689,13 @@
           "description": "How to interpret the model output when it has more than one channel.\nIgnored for single-channel outputs.",
           "$ref": "#/$defs/AiSegmentationUnetUNetOutputModeSettings",
           "default": "SOFTMAX_CLASSES"
+        },
+        "pieceSize": {
+          "description": "How large the pieces are that a large tile runs through the network\nin: smaller ones take less RAM, larger ones are faster.",
+          "$ref": "#/$defs/AiSegmentationPieceSizePieceSizeSettings",
+          "default": {
+            "type": "AUTO"
+          }
         },
         "probabilityThreshold": {
           "description": "Probability above which a pixel is classified as foreground.",

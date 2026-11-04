@@ -12,6 +12,8 @@ use evanalyzer_ai::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 
+use super::PieceSize;
+
 use crate::{
     ai_devices,
     algos::{ExecutionScope, ImageAlgorithm},
@@ -103,18 +105,23 @@ pub struct UNet {
     /// (separate more aggressively); higher values cut thinner gaps.
     #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub boundary_threshold: f32,
+
+    /// How large the pieces are that a large tile runs through the network
+    /// in: smaller ones take less RAM, larger ones are faster.
+    #[cmdsmeta(default = PieceSize::Auto, optional = true, visibility = Advanced)]
+    pub piece_size: PieceSize,
 }
 
 /// What the network takes per pixel of the image it gets at once (see
 /// `shared_ram_bytes`).
 const NETWORK_BYTES_PER_PIXEL: f64 = 1600.0;
 
-/// The piece side for a `width x height` tile on this computer (its RAM or
-/// the user's limit, [`evanalyzer_ai::piece_side_for`]) - what the planner
-/// reserved for (`shared_ram_bytes`).
-fn piece_side(width: usize, height: usize) -> usize {
-    let ram_total = crate::memory::SystemRam::now().total;
-    evanalyzer_ai::piece_side_for(NETWORK_BYTES_PER_PIXEL, ram_total, width, height)
+impl UNet {
+    /// The pieces a `width x height` tile runs in (see [`PieceSize::pieces`]).
+    fn pieces(&self, width: usize, height: usize) -> evanalyzer_ai::Pieces {
+        self.piece_size
+            .pieces(NETWORK_BYTES_PER_PIXEL, width, height)
+    }
 }
 
 impl ImageAlgorithm for UNet {
@@ -133,7 +140,7 @@ impl ImageAlgorithm for UNet {
                 foreground_channel: self.foreground_channel,
                 softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
                 boundary_channel: self.boundary_channel,
-                piece_side: piece_side(width, height),
+                pieces: self.pieces(width, height),
             },
         };
         let image = Image {
@@ -194,19 +201,15 @@ impl ImageAlgorithm for UNet {
 
     /// One inference at a time on the CPU (the AI engine's one slot): the
     /// network's activations on the largest image it gets at once - the
-    /// tile, or a piece of it beyond 2048² ([`evanalyzer_ai::largest_model_input`]).
+    /// tile, or a piece of it (`piece_size`, [`evanalyzer_ai::largest_model_input`]).
     /// 1.6 KB per pixel: measured 1.55 KB for bioimage.io's `joyful-pig`,
     /// 0.67 / 1.3 KB for U-Nets of depth 4 from 32 / 64 filters
     /// (BENCHMARK.md "AI models: RAM per inference" - [`NETWORK_BYTES_PER_PIXEL`]).
     /// On a GPU they are in its memory - planned anyway (the computer may
     /// run on its CPU). Plus the model's weights (one copy).
-    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
-        let piece = evanalyzer_ai::piece_side_for(
-            NETWORK_BYTES_PER_PIXEL,
-            ram_total,
-            tile_width,
-            tile_height,
-        );
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
+        // Before the run it isn't known which of the two the model gets.
+        let piece = self.pieces(tile_width, tile_height).largest();
         let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
             * evanalyzer_ai::largest_model_input(tile_height, piece);
         (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
@@ -271,7 +274,40 @@ mod tests {
             foreground_channel: 1,
             boundary_channel: -1,
             boundary_threshold: 0.5,
+            piece_size: PieceSize::Auto,
         }
+    }
+
+    /// A set piece size is the same for every model and every computer;
+    /// Auto gives a model seeing a limited neighbourhood what the RAM
+    /// allows, one seeing the whole image 1024 - and the RAM plan takes the
+    /// larger (the kind of model is known only in the run).
+    #[test]
+    fn a_set_piece_size_is_fixed_auto_follows_the_ram_where_it_may() {
+        use evanalyzer_ai::{Pieces, WHOLE_IMAGE_PIECE_SIDE, piece_side_for};
+        let with = |piece_size| UNet {
+            piece_size,
+            ..unet(PathBuf::new())
+        };
+        let fixed = |side| PieceSize::Fixed { side };
+        assert_eq!(with(fixed(512)).pieces(4096, 4096), Pieces::fixed(512));
+        assert_eq!(with(fixed(100)).pieces(4096, 4096), Pieces::fixed(256));
+        assert_eq!(with(fixed(99_999)).pieces(4096, 4096), Pieces::fixed(4096));
+        let ram = crate::memory::SystemRam::now().total;
+        let auto = with(PieceSize::Auto).pieces(4096, 4096);
+        assert_eq!(auto.local_side, piece_side_for(1600.0, ram, 4096, 4096));
+        assert_eq!(auto.whole_image_side, WHOLE_IMAGE_PIECE_SIDE);
+        let piece = |p: u64| 1600 * (p + 256).min(4096).pow(2);
+        assert_eq!(with(fixed(1024)).shared_ram_bytes(4096, 4096), piece(1024));
+        assert_eq!(with(fixed(2048)).shared_ram_bytes(4096, 4096), piece(2048));
+        assert_eq!(
+            with(fixed(4096)).shared_ram_bytes(4096, 4096),
+            1600 * 4096 * 4096
+        );
+        assert_eq!(
+            with(PieceSize::Auto).shared_ram_bytes(4096, 4096),
+            piece(auto.largest() as u64)
+        );
     }
 
     #[cfg(feature = "libtorch-in-process")]

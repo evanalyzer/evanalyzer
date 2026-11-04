@@ -9,10 +9,13 @@
 
 pub mod cellpose;
 pub(crate) mod classifier_cache;
+pub mod piece_size;
 pub mod pixel_classifier;
 pub mod stardist;
 pub mod unet;
 pub mod yolov5;
+
+pub use piece_size::PieceSize;
 
 /// The RAM a model's weights take once loaded: about its file's size
 /// (0 when it can't be read - no model chosen yet).

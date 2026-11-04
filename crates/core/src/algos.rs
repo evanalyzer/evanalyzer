@@ -22,6 +22,7 @@ mod script;
 mod segmentation;
 mod spartial_transform;
 
+pub use self::ai_segmentation::PieceSize;
 pub use self::ai_segmentation::cellpose::Cellpose;
 pub use self::ai_segmentation::pixel_classifier::PixelClassifier;
 pub use self::ai_segmentation::pixel_classifier::SegmentationMapping;
@@ -165,10 +166,8 @@ pub trait ImageAlgorithm: Send + Sync {
     /// RAM one run takes on a `tile_width x tile_height` tile that the
     /// job's workers share - its runs take turns, so the planner counts it
     /// once for the job, not per worker ([`RamBudget::shared_bytes`](crate::memory::analysis::RamBudget::shared_bytes)).
-    /// An AI inference: one at a time on the CPU. `ram_total`: the
-    /// computer's RAM (or the user's limit, [`SystemRam::total`](crate::memory::SystemRam::total))
-    /// - what the command sizes its work by. 0: none.
-    fn shared_ram_bytes(&self, _tile_width: usize, _tile_height: usize, _ram_total: u64) -> u64 {
+    /// An AI inference: one at a time on the CPU. 0: none.
+    fn shared_ram_bytes(&self, _tile_width: usize, _tile_height: usize) -> u64 {
         0
     }
 

@@ -79,14 +79,14 @@ impl InferenceEngine for TorchEngine {
                 foreground_channel,
                 softmax,
                 boundary_channel,
-                piece_side,
+                pieces,
             } => unet::run(
                 scheduler,
                 model,
                 foreground_channel,
                 softmax,
                 boundary_channel,
-                piece_side,
+                pieces,
                 image,
             ),
             Task::Cellpose {
@@ -103,7 +103,7 @@ impl InferenceEngine for TorchEngine {
                 replicate_gray_channel,
                 image,
             ),
-            Task::StarDist { piece_side } => stardist::run(scheduler, model, piece_side, image),
+            Task::StarDist { pieces } => stardist::run(scheduler, model, pieces, image),
             Task::Yolov5 {
                 width,
                 height,

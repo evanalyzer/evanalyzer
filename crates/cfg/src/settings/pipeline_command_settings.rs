@@ -602,6 +602,36 @@ pub enum SegmentationThresholdOtsuMiddleClassSettings {
     Background,
 }
 
+/// How large the pieces are that a large tile runs through a U-Net or
+/// StarDist network in (square; a tile up to a piece runs whole). Smaller
+/// pieces take less RAM, larger ones are faster - a U-Net on a slide: 1024
+/// ~2.6 GB at once, 2048 ~8.5 GB.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiSegmentationPieceSizePieceSizeSettings {
+    /// As large as the computer's RAM allows (2048, 1024 or 512) for a
+    /// model seeing a limited neighbourhood - its result is the same
+    /// whatever the size, up to float rounding; 1024 on every computer for
+    /// a model normalizing by the whole image (InstanceNorm), whose result
+    /// the size changes a little.
+    #[serde(alias = "auto")]
+    Auto,
+    /// The same pieces for every model on every computer.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "fixed")]
+    Fixed {
+        /// Pixels per side of a piece.
+        #[schemars(range(min = 256, max = 4096))]
+        side: i32,
+    },
+}
+
+impl Default for AiSegmentationPieceSizePieceSizeSettings {
+    fn default() -> Self {
+        Self::Auto {}
+    }
+}
+
 /// Specifies the statistical operation to perform on the local pixel neighborhood.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -1891,6 +1921,9 @@ pub struct SegmentationMappingSettings {
     pub segmentation_class: SegmentationClass,
 }
 
+fn _serde_default_stardist_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
+    AiSegmentationPieceSizePieceSizeSettings::Auto
+}
 /// Instance segmentation using a pretrained StarDist model exported as TorchScript.
 ///
 /// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
@@ -1928,6 +1961,10 @@ pub struct StardistSettings {
     /// candidate polygon is suppressed in favor of an overlapping higher-scoring one.
     #[schemars(range(min = 0, max = 1))]
     pub nms_threshold: f32,
+    /// How large the pieces are that a large tile runs through the network
+    /// in: smaller ones take less RAM, larger ones are faster.
+    #[serde(default = "_serde_default_stardist_piece_size")]
+    pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
 }
 
 impl Default for StardistSettings {
@@ -1937,6 +1974,7 @@ impl Default for StardistSettings {
             segmentation_class: SegmentationClass(1),
             probability_threshold: 0.5f32,
             nms_threshold: 0.3f32,
+            piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
         }
     }
 }
@@ -2002,6 +2040,9 @@ impl Default for ThresholdEntrySettings {
     }
 }
 
+fn _serde_default_unet_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
+    AiSegmentationPieceSizePieceSizeSettings::Auto
+}
 /// Semantic segmentation using a pretrained U-Net exported as TorchScript.
 ///
 /// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
@@ -2062,6 +2103,10 @@ pub struct UNetSettings {
     /// (separate more aggressively); higher values cut thinner gaps.
     #[schemars(range(min = 0, max = 1))]
     pub boundary_threshold: f32,
+    /// How large the pieces are that a large tile runs through the network
+    /// in: smaller ones take less RAM, larger ones are faster.
+    #[serde(default = "_serde_default_unet_piece_size")]
+    pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
 }
 
 impl Default for UNetSettings {
@@ -2074,6 +2119,7 @@ impl Default for UNetSettings {
             foreground_channel: 1i32,
             boundary_channel: -1i32,
             boundary_threshold: 0.5f32,
+            piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
         }
     }
 }
