@@ -204,7 +204,10 @@ pub struct ClassifyObjects {
 
     /// Additional criterion: the object must intersect an object carrying this class
     ///
-    /// If unset (the default) this filter is not applied. When set, an object only
+    /// If unset (the default) this filter is not applied - with a
+    /// remove-on-match operation and no other criterion the step then
+    /// removes nothing: how a module switches an optional removal off
+    /// (e.g. spots on tetraspecks, for images without them). When set, an object only
     /// satisfies the overall criteria if it also overlaps at least one object carrying this
     /// class by at least `min_intersection_size`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
@@ -552,13 +555,6 @@ impl ImageAlgorithm for ClassifyObjects {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::WholeImage
     }
-}
-
-/// Whether a Classify Objects step with these settings removes on match
-/// without a criterion - and so removes nothing. For the editor's warning.
-pub fn removes_nothing_without_criterion(settings: &ClassifyObjectsSettings) -> bool {
-    let classify = ClassifyObjects::from(settings.clone());
-    classify.removes_on_match() && !classify.has_criterion()
 }
 
 impl ClassifyObjects {

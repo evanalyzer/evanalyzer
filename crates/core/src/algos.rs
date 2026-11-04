@@ -93,7 +93,6 @@ pub use self::object::classify_objects::ClassifyObjects;
 pub use self::object::classify_objects::IntensityComparison;
 pub use self::object::classify_objects::IntensityFilter;
 pub use self::object::classify_objects::IntensityMetric;
-pub use self::object::classify_objects::removes_nothing_without_criterion;
 pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::ColocalizeObjects;
 pub use self::object::extract_objects::{ExtractClassMapping, ExtractObjects};

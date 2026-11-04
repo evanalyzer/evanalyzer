@@ -2546,7 +2546,10 @@ pub struct ClassifyObjectsSettings {
     pub output_class: ObjectClass,
     /// Additional criterion: the object must intersect an object carrying this class
     ///
-    /// If unset (the default) this filter is not applied. When set, an object only
+    /// If unset (the default) this filter is not applied - with a
+    /// remove-on-match operation and no other criterion the step then
+    /// removes nothing: how a module switches an optional removal off
+    /// (e.g. spots on tetraspecks, for images without them). When set, an object only
     /// satisfies the overall criteria if it also overlaps at least one object carrying this
     /// class by at least `min_intersection_size`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,

@@ -39,7 +39,7 @@ use evanalyzer_cfg::{
         project_settings::ProjectSettings,
     },
 };
-use evanalyzer_core::{ScopeCounter, expand_step, removes_nothing_without_criterion};
+use evanalyzer_core::{ScopeCounter, expand_step};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -678,37 +678,6 @@ fn check_steps(project: &ProjectSettings) -> Vec<ModuleProblem> {
                         ModuleProblem::warning(None, at, message)
                             .about(keys)
                             .inside(detail(command)),
-                    );
-                }
-
-                // Removes on match without a criterion: nothing matches, the
-                // run removes nothing (`ClassifyObjects::execute`). Not on
-                // top of the "classifies nothing" warning below.
-                if let PipelineCommand::ClassifyObjects(classify) = &command.command
-                    && !(classify.input_classes.is_empty()
-                        && classify.origin_segmentation.is_empty())
-                    && removes_nothing_without_criterion(classify)
-                {
-                    let mut keys = setting(command, "match_handling");
-                    keys.extend(setting(command, "overlapping_with"));
-                    keys.dedup();
-                    let who = subject(command, &keys);
-                    problems.push(
-                        ModuleProblem::warning(
-                            None,
-                            at,
-                            format!(
-                                "{} - but no criterion is set, so no object matches and \
-                                 the step removes nothing; set e.g. “Intersecting With” or \
-                                 a size range",
-                                who.says(
-                                    "set to remove matching objects",
-                                    "removes matching objects"
-                                )
-                            ),
-                        )
-                        .about(keys)
-                        .inside(detail(command)),
                     );
                 }
 
@@ -2172,14 +2141,16 @@ mod tests {
         assert_eq!(messages(&check_project(&project)), Vec::<String>::new());
     }
 
-    /// "Remove objects matching criteria" without a criterion removes
-    /// nothing - warned; with one ("Intersecting With") it's fine.
+    /// "Remove objects matching criteria" with "Intersecting With" Unset
+    /// removes nothing - on purpose, not warned: it's how a module's
+    /// optional removal is switched off (Spot Count: no tetraspecks in the
+    /// images, so none to remove the spots on).
     #[test]
-    fn removing_matching_objects_without_a_criterion_is_warned() {
+    fn removing_matching_objects_without_a_criterion_is_no_problem() {
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ClassifyObjectsSettings, ObjectClassifyObjectsClassifyMatchHandlingSettings,
         };
-        let warned = |overlapping_with| {
+        let problems = |overlapping_with| {
             let mut project = spots_project();
             project.pipelines[0].steps.push(step(
                 2,
@@ -2191,11 +2162,11 @@ mod tests {
                     ..Default::default()
                 }),
             ));
-            check_project(&project)
-                .iter()
-                .any(|p| p.message.contains("the step removes nothing"))
+            messages(&check_project(&project))
         };
-        assert!(warned(ObjectClass::Unset));
-        assert!(!warned(ObjectClass::Global(2)));
+        assert_eq!(
+            problems(ObjectClass::Unset),
+            problems(ObjectClass::Global(2))
+        );
     }
 }

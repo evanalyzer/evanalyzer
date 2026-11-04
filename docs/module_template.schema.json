@@ -466,7 +466,7 @@
           "default": "UNSET"
         },
         "overlappingWith": {
-          "description": "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_size`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.\nUnset with no other criterion set: the remove-on-match operations remove nothing.",
+          "description": "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied - with a\nremove-on-match operation and no other criterion the step then\nremoves nothing: how a module switches an optional removal off\n(e.g. spots on tetraspecks, for images without them). When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_size`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.\nUnset with no other criterion set: the remove-on-match operations remove nothing.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },

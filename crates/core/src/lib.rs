@@ -77,7 +77,7 @@ pub use crate::pipeline::pipeline_cache::{channel_pixel_slice, sample_channel_pi
 // Job execution
 pub use crate::algos::{
     ParamDecl, ParamKind, ScriptValue, apply_command_param, command_parameters,
-    declared_script_params, removes_nothing_without_criterion, script_syntax_error,
+    declared_script_params, script_syntax_error,
 };
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
 
