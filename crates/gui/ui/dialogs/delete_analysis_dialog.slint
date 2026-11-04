@@ -1,0 +1,142 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// dialogs/delete_analysis_dialog.slint — deletes an analysis's whole
+// folder from the disk (results file, control images, the snapshot of its
+// settings) after saying what goes and how much. Can't be undone; Cancel
+// has the focus.
+
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ResultsListState } from "../api/results_list.slint";
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDivider } from "../ink/ink.slint";
+
+// One part of the folder: "Control images (412 files)" ... "860 MB".
+component Part inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> size;
+    in property <bool> strong: false;
+    spacing: 12px;
+    Text {
+        horizontal-stretch: 1;
+        text: root.label;
+        color: Ink.text;
+        font-size: Ink.fs-body;
+        font-weight: root.strong ? 600 : 400;
+        overflow: elide;
+    }
+    Text {
+        text: root.size;
+        color: Ink.text;
+        font-size: Ink.fs-body;
+        font-family: Ink.font-mono;
+        font-weight: root.strong ? 600 : 400;
+    }
+}
+
+export component DeleteAnalysisDialog inherits InkDialog {
+    title: ResultsListState.delete_running ? "The analysis is still running" : "Delete the analysis “\{ResultsListState.delete_name}”?";
+    card-width: 460px;
+    modal: true;
+    close => {
+        if !ResultsListState.delete_busy {
+            GlobalAppState.active_dialog = DialogType.none;
+        }
+    }
+
+    VerticalLayout {
+        spacing: 12px;
+
+        if ResultsListState.delete_running: Text {
+            text: "“\{ResultsListState.delete_name}” is still being written - stop the analysis first, then delete it.";
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-heading;
+        }
+
+        if !ResultsListState.delete_running: Text {
+            text: "Its folder is deleted from the disk, with everything in it. This can't be undone - export what you still need first.";
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-heading;
+        }
+
+        if !ResultsListState.delete_running: Rectangle {
+            background: Ink.raised;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Ink.border;
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 6px;
+                Text {
+                    text: ResultsListState.delete_folder;
+                    color: Ink.text-dim;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    wrap: word-wrap;
+                }
+                Part {
+                    label: "Results";
+                    size: ResultsListState.delete_results;
+                }
+                if ResultsListState.delete_images != "": Part {
+                    label: "Control images (\{ResultsListState.delete_images})";
+                    size: ResultsListState.delete_images_size;
+                }
+                Part {
+                    label: "Settings of the run";
+                    size: ResultsListState.delete_settings;
+                }
+                if ResultsListState.delete_other != "": Part {
+                    label: "Other files";
+                    size: ResultsListState.delete_other;
+                }
+                InkDivider { }
+                Part {
+                    label: "Freed";
+                    size: ResultsListState.delete_total;
+                    strong: true;
+                }
+            }
+        }
+
+        if !ResultsListState.delete_running: Text {
+            text: ResultsListState.delete_open_now ? "It's open now: EVA closes it first. The project, its images and its views stay." : "The project, its images and its views stay.";
+            wrap: word-wrap;
+            color: Ink.text-dim;
+            font-size: Ink.fs-secondary;
+        }
+
+        if ResultsListState.delete_error != "": Text {
+            text: ResultsListState.delete_error;
+            wrap: word-wrap;
+            color: Ink.err;
+            font-size: Ink.fs-secondary;
+        }
+
+        InkDialogFooter {
+            cancel := InkButton {
+                text: ResultsListState.delete_running ? "Close" : "Cancel";
+                enabled: !ResultsListState.delete_busy;
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.none;
+                }
+            }
+
+            if !ResultsListState.delete_running: InkButton {
+                kind: InkButtonKind.danger;
+                text: ResultsListState.delete_busy ? "Deleting…" : ResultsListState.delete_error != "" ? "Try again" : "Delete \{ResultsListState.delete_total}";
+                enabled: !ResultsListState.delete_busy;
+                clicked => {
+                    ResultsListState.delete_confirmed();
+                }
+            }
+        }
+    }
+
+    init => {
+        cancel.focus();
+    }
+}

@@ -51,6 +51,8 @@ import {
     ConfirmDeleteClassDialog,
 } from "dialogs/classification_confirm_delete.slint";
 
+import { DeleteAnalysisDialog } from "dialogs/delete_analysis_dialog.slint";
+
 import {
     ConfirmAutoAddClassesDialog,
 } from "dialogs/classification_confirm_auto_add_dialog.slint";
@@ -290,6 +292,7 @@ export component AppWindow inherits Window {
                 if (GlobalAppState.active_dialog == DialogType.shortcuts_help): ShortcutsHelpDialog { }
                 if (GlobalAppState.active_dialog == DialogType.project_settings): ProjectSettingsDialog { }
                 if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete): ConfirmDeleteClassDialog { }
+                if (GlobalAppState.active_dialog == DialogType.delete_analysis): DeleteAnalysisDialog { }
                 if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete_all): ConfirmDeleteClassDialog {
                     all: true;
                 }

@@ -274,6 +274,11 @@ impl PipelineWorker {
             };
             let job_id = job.id().map(str::to_string);
             let output_dir = job.output_path().clone();
+            // Its folder can't be deleted while it is written.
+            if !is_preview {
+                self.results_list_controller
+                    .set_running_analysis(Some(output_dir.clone()));
+            }
 
             info!("Pipeline job started ...");
 
@@ -554,6 +559,7 @@ impl PipelineWorker {
                 self.viewport_controller.clear_prediction();
             }
             if !is_preview {
+                self.results_list_controller.set_running_analysis(None);
                 self.pipeline_controller
                     .analysis_running
                     .store(false, std::sync::atomic::Ordering::SeqCst);

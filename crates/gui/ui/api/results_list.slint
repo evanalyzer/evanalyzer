@@ -21,4 +21,26 @@ export global ResultsListState {
     callback result_selected(string);
     callback refresh_clicked();
     callback open_folder_clicked();
+    /// One analysis's own folder (its results file's `path`).
+    callback show_in_folder(string);
+
+    // Deleting an analysis from the disk (dialogs/delete_analysis_dialog.slint):
+    // the one asked about, what is in its folder, sizes formatted.
+    callback delete_requested(string);
+    callback delete_confirmed();
+    in property <string> delete_name;
+    in property <string> delete_folder;
+    in property <string> delete_results;
+    in property <string> delete_images;
+    in property <string> delete_images_size;
+    in property <string> delete_settings;
+    in property <string> delete_other;
+    in property <string> delete_total;
+    /// It is the one open in Results: closed first.
+    in property <bool> delete_open_now;
+    /// It is still being written: it can't be deleted.
+    in property <bool> delete_running;
+    in property <bool> delete_busy;
+    /// Why it (or part of it) couldn't be deleted.
+    in property <string> delete_error;
 }

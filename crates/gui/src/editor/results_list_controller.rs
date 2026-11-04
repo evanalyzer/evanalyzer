@@ -11,6 +11,7 @@ use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
 use crate::{PipelineRunningState, ResultItemData, ResultsListState, UiState};
 use evanalyzer_app::fs::FileSystem;
+use evanalyzer_app::results::{AnalysisFolder, analysis_folder, delete_analysis};
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
 use slint::ComponentHandle;
@@ -24,6 +25,11 @@ pub struct ResultsListController {
     /// The results database of the analysis that finished last - what its
     /// note's "Open results" opens.
     last_analysis_results: Mutex<Option<PathBuf>>,
+    /// The folder the running analysis writes into: not to be deleted.
+    running_analysis: Mutex<Option<PathBuf>>,
+    /// The analysis the delete question is about, and whether it is the
+    /// one open in Results.
+    pending_delete: Mutex<Option<(AnalysisFolder, bool)>>,
 }
 
 impl ResultsListController {
@@ -37,7 +43,14 @@ impl ResultsListController {
             app_state: app_state.clone(),
             results_state_controller,
             last_analysis_results: Mutex::new(None),
+            running_analysis: Mutex::new(None),
+            pending_delete: Mutex::new(None),
         }
+    }
+
+    /// The folder an analysis now writes into (`None`: none runs).
+    pub fn set_running_analysis(&self, dir: Option<PathBuf>) {
+        *self.running_analysis.lock().expect("Poisoned") = dir;
     }
 
     /// An analysis finished, writing into `output_dir`: its results database
@@ -70,6 +83,37 @@ impl ResultsListController {
             ui.global::<ResultsListState>()
                 .on_open_folder_clicked(move || {
                     manager.open_results_folder();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsListState>()
+                .on_show_in_folder(move |path| {
+                    if let Some(dir) = Path::new(path.as_str()).parent() {
+                        manager.open_folder(dir.to_path_buf());
+                    }
+                });
+
+            let manager = self.clone();
+            let weak = ui.as_weak();
+            ui.global::<ResultsListState>()
+                .on_delete_requested(move |path| {
+                    let Some(ui) = weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<ResultsListState>();
+                    let open_now = open_results_path(&ui).as_deref() == Some(path.as_str());
+                    state.set_delete_error("".into());
+                    state.set_delete_busy(false);
+                    manager.ask_to_delete(PathBuf::from(path.as_str()), open_now);
+                });
+
+            let manager = self.clone();
+            let weak = ui.as_weak();
+            ui.global::<ResultsListState>()
+                .on_delete_confirmed(move || {
+                    // The analysis open now - selected again in the new list.
+                    let open = weak.upgrade().and_then(|ui| open_results_path(&ui));
+                    manager.delete_pending(open);
                 });
 
             // The finished analysis' note: its results, not whichever
@@ -145,6 +189,158 @@ impl ResultsListController {
         });
     }
 
+    /// The project's folder (`None`: not saved yet).
+    fn project_dir(&self) -> Option<PathBuf> {
+        let project = self.app_state.get_project();
+        project
+            .tmp_settings
+            .current_project
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+    }
+
+    /// Opens the question for deleting the analysis of `results_file`:
+    /// what its folder holds (read off the UI thread - a run's control
+    /// images can be many), or that it is still running.
+    fn ask_to_delete(self: &Arc<Self>, results_file: PathBuf, open_now: bool) {
+        let Some(project_dir) = self.project_dir() else {
+            return;
+        };
+        let manager = self.clone();
+        crate::helper::ui_thread::spawn(move || {
+            let backend = manager.app_state.backend();
+            let folder = match analysis_folder(backend.files(), &project_dir, &results_file) {
+                Ok(folder) => folder,
+                Err(e) => {
+                    warn!("Can't delete {results_file:?}: {e}");
+                    manager.sync_results_files_to_slint();
+                    return;
+                }
+            };
+            let running = manager
+                .running_analysis
+                .lock()
+                .expect("Poisoned")
+                .as_deref()
+                == Some(folder.dir.as_path());
+            let shown = |bytes: u64| format_file_size(bytes);
+            let images = match folder.images {
+                0 => String::new(),
+                1 => "1 file".to_string(),
+                n => format!("{n} files"),
+            };
+            let other = match folder.other_bytes {
+                0 => String::new(),
+                b => shown(b),
+            };
+            let (name, dir) = (
+                folder.name.clone(),
+                relative_folder(&project_dir, &folder.dir),
+            );
+            let (results, images_size) = (shown(folder.results_bytes), shown(folder.images_bytes));
+            let (settings, total) = (shown(folder.settings_bytes), shown(folder.total_bytes()));
+            *manager.pending_delete.lock().expect("Poisoned") = Some((folder, open_now));
+            let ui_handle = manager.ui.clone();
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                let Some(ui) = ui_handle.upgrade() else {
+                    return;
+                };
+                let state = ui.global::<ResultsListState>();
+                state.set_delete_name(name.into());
+                state.set_delete_folder(dir.into());
+                state.set_delete_results(results.into());
+                state.set_delete_images(images.into());
+                state.set_delete_images_size(images_size.into());
+                state.set_delete_settings(settings.into());
+                state.set_delete_other(other.into());
+                state.set_delete_total(total.into());
+                state.set_delete_open_now(open_now);
+                state.set_delete_running(running);
+                ui.global::<crate::GlobalAppState>()
+                    .set_active_dialog(crate::DialogType::DeleteAnalysis);
+            });
+        });
+    }
+
+    /// Deletes the analysis the question is about - its results closed
+    /// first when they are open. The question closes when it is gone, or
+    /// says what was left.
+    fn delete_pending(self: &Arc<Self>, open: Option<String>) {
+        let Some((folder, open_now)) = self.pending_delete.lock().expect("Poisoned").clone() else {
+            return;
+        };
+        if self.running_analysis.lock().expect("Poisoned").as_deref() == Some(folder.dir.as_path())
+        {
+            return;
+        }
+        self.set_delete_busy(true);
+        let manager = self.clone();
+        let delete = move || {
+            let backend = manager.app_state.backend();
+            let result = delete_analysis(backend.files(), &folder);
+            {
+                let mut last = manager.last_analysis_results.lock().expect("Poisoned");
+                if last.as_deref().and_then(Path::parent) == Some(folder.dir.as_path()) {
+                    *last = None;
+                }
+            }
+            match &result {
+                Ok(()) => log::info!("Deleted the analysis {:?}", folder.dir),
+                Err(e) => warn!("Deleting the analysis {:?}: {e}", folder.dir),
+            }
+            // The deleted one isn't selected any more.
+            let open = open.filter(|_| !open_now);
+            manager.after_delete(result, open);
+        };
+        match open_now {
+            true => self.results_state_controller.close_database_then(delete),
+            false => {
+                crate::helper::ui_thread::spawn(delete);
+            }
+        }
+    }
+
+    /// The list after deleting: the question closed (or saying what was
+    /// left), `open` (the analysis open in Results, if another one) still
+    /// selected.
+    fn after_delete(&self, result: Result<(), String>, open: Option<String>) {
+        let ui_handle = self.ui.clone();
+        self.sync_results_files_to_slint();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_handle.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsListState>();
+            let list = state.get_results_list();
+            let index = open
+                .and_then(|open| {
+                    (0..slint::Model::row_count(&list))
+                        .find(|&i| slint::Model::row_data(&list, i).is_some_and(|r| r.path == open))
+                })
+                .map_or(-1, |i| i as i32);
+            state.set_selected_result_index(index);
+            state.set_delete_busy(false);
+            match result {
+                Ok(()) => {
+                    state.set_delete_error("".into());
+                    ui.global::<crate::GlobalAppState>()
+                        .set_active_dialog(crate::DialogType::None);
+                }
+                Err(e) => state.set_delete_error(e.into()),
+            }
+        });
+    }
+
+    fn set_delete_busy(&self, busy: bool) {
+        let ui_handle = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.global::<ResultsListState>().set_delete_busy(busy);
+            }
+        });
+    }
+
     fn open_results_folder(&self) {
         let project = self.app_state.get_project();
         let Some(current_project) = &project.tmp_settings.current_project else {
@@ -156,12 +352,25 @@ impl ResultsListController {
         let results_dir = project_dir.join("results");
         drop(project);
 
-        // The results live on the server: the local file manager can't show
-        // them, so browse them in-app - picking a results file opens it.
+        let path = if results_dir.exists() || self.app_state.backend().is_remote() {
+            results_dir
+        } else {
+            // Fall back to the project directory itself
+            results_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(results_dir)
+        };
+        self.open_folder(path);
+    }
+
+    /// Shows `dir` - in the file manager, or for results on a server in the
+    /// app's file browser (picking a results file opens it).
+    fn open_folder(&self, dir: PathBuf) {
         if self.app_state.backend().is_remote() {
             let request = crate::FileRequest::open_file("Results")
                 .filter("Results", &[RESULTS_FILE_EXTENSION])
-                .start_in(results_dir);
+                .start_in(dir);
             let table = self.results_state_controller.clone();
             self.app_state.file_browser.open(request, move |path| {
                 if let Some(path) = path {
@@ -171,25 +380,27 @@ impl ResultsListController {
             return;
         }
 
-        let path = if results_dir.exists() {
-            results_dir
-        } else {
-            // Fall back to the project directory itself
-            match std::fs::metadata(&results_dir.parent().unwrap_or(&results_dir)) {
-                _ => results_dir
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or(results_dir),
-            }
-        };
-
         #[cfg(target_os = "linux")]
-        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
         #[cfg(target_os = "macos")]
-        let _ = std::process::Command::new("open").arg(&path).spawn();
+        let _ = std::process::Command::new("open").arg(&dir).spawn();
         #[cfg(target_os = "windows")]
-        let _ = std::process::Command::new("explorer").arg(&path).spawn();
+        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
     }
+}
+
+/// The results file of the analysis open in Results (`None`: none).
+fn open_results_path(ui: &AppWindow) -> Option<String> {
+    let state = ui.global::<ResultsListState>();
+    let index = usize::try_from(state.get_selected_result_index()).ok()?;
+    slint::Model::row_data(&state.get_results_list(), index).map(|r| r.path.to_string())
+}
+
+/// `dir` below the project's folder, as the question shows it
+/// ("results/20261023T091000Z__serum/").
+fn relative_folder(project_dir: &Path, dir: &Path) -> String {
+    let shown = dir.strip_prefix(project_dir).unwrap_or(dir);
+    format!("{}/", shown.to_string_lossy().replace('\\', "/"))
 }
 
 /// The results database an analysis wrote into `dir` (its own results

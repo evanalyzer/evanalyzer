@@ -6,9 +6,24 @@
 // analysis shown (a menu of all), where in the plate one is; on the right
 // Z/T and Export.
 
-import { ResultsRailMode, ResultsState, ResultsViewTab } from "../api/results.slint";
+import {
+    ResultsRailMode,
+    ResultsState,
+    ResultsViewTab,
+} from "../api/results.slint";
 import { ResultsListState } from "../api/results_list.slint";
-import { Ink, InkIcons, InkSegmented, InkButton, InkIconButton, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkTextField } from "../ink/ink.slint";
+import {
+    Ink,
+    InkIcons,
+    InkSegmented,
+    InkButton,
+    InkIconButton,
+    InkMenuFrame,
+    InkMenuItem,
+    InkMenuCaption,
+    InkMenuSeparator,
+    InkTextField,
+} from "../ink/ink.slint";
 import { GlobalPlaneStepper } from "results_common.slint";
 
 // The analysis shown: "Analysis 16 Oct ▾" - a click lists them all.
@@ -34,6 +49,7 @@ component AnalysisChip inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
+
         Image {
             y: (parent.height - self.height) / 2;
             source: InkIcons.caret-down;
@@ -87,6 +103,7 @@ component ViewTab inherits Rectangle {
             color: root.active ? Ink.text : Ink.text-dim;
             vertical-alignment: center;
         }
+
         if root.tab.show-kind: VerticalLayout {
             alignment: center;
             Rectangle {
@@ -135,6 +152,7 @@ component ViewTab inherits Rectangle {
             background: Ink.panel;
             border-radius: Ink.radius-md;
         }
+
         InkTextField {
             y: (parent.height - self.height) / 2;
             width: parent.width;
@@ -248,6 +266,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                 }
             }
         }
+
         if root.tabs-overflow: VerticalLayout {
             alignment: center;
             all-button := InkIconButton {
@@ -273,7 +292,6 @@ export component ResultsBarNav inherits HorizontalLayout {
         }
     }
 
-
     // Every view, the one shown ticked - for when they don't all fit.
     all-menu := PopupWindow {
         x: root.all-x;
@@ -284,6 +302,7 @@ export component ResultsBarNav inherits HorizontalLayout {
             InkMenuCaption {
                 text: "VIEWS · \{ResultsState.views.length}";
             }
+
             for tab in ResultsState.views: InkMenuItem {
                 text: tab.name;
                 shortcut: tab.kind;
@@ -308,24 +327,28 @@ export component ResultsBarNav inherits HorizontalLayout {
             InkMenuCaption {
                 text: "NEW VIEW";
             }
+
             InkMenuItem {
                 text: "List";
                 clicked => {
                     ResultsState.view-new("list");
                 }
             }
+
             InkMenuItem {
                 text: "Plate";
                 clicked => {
                     ResultsState.view-new("plate");
                 }
             }
+
             InkMenuItem {
                 text: "Charts";
                 clicked => {
                     ResultsState.view-new("charts");
                 }
             }
+
             InkMenuItem {
                 text: "Tracks";
                 enabled: ResultsState.has-tracks;
@@ -333,7 +356,9 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-new("tracks");
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 text: "A copy of the view shown";
                 clicked => {
@@ -353,6 +378,7 @@ export component ResultsBarNav inherits HorizontalLayout {
             InkMenuCaption {
                 text: "SHOW AS";
             }
+
             InkMenuItem {
                 text: "List";
                 checked: root.menu-tab.kind == "LIST";
@@ -360,6 +386,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-show-as(root.menu-id, "list");
                 }
             }
+
             InkMenuItem {
                 text: "Plate";
                 checked: root.menu-tab.kind == "PLATE";
@@ -367,6 +394,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-show-as(root.menu-id, "plate");
                 }
             }
+
             InkMenuItem {
                 text: "Charts";
                 checked: root.menu-tab.kind == "CHART";
@@ -374,6 +402,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-show-as(root.menu-id, "charts");
                 }
             }
+
             InkMenuItem {
                 text: "Tracks";
                 checked: root.menu-tab.kind == "TRACKS";
@@ -382,13 +411,16 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-show-as(root.menu-id, "tracks");
                 }
             }
+
             InkMenuSeparator { }
+
             InkMenuItem {
                 text: "Rename…";
                 clicked => {
                     ResultsState.renaming-view = root.menu-id;
                 }
             }
+
             InkMenuItem {
                 text: "Move left";
                 enabled: root.menu-index > 0;
@@ -396,6 +428,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-move(root.menu-id, -1);
                 }
             }
+
             InkMenuItem {
                 text: "Move right";
                 enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views.length - 1;
@@ -403,12 +436,14 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-move(root.menu-id, 1);
                 }
             }
+
             InkMenuItem {
                 text: "Duplicate";
                 clicked => {
                     ResultsState.view-duplicate(root.menu-id);
                 }
             }
+
             InkMenuItem {
                 text: "Back to how it was saved";
                 enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views-revertable.length && ResultsState.views-revertable[root.menu-index];
@@ -416,6 +451,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsState.view-revert(root.menu-id);
                 }
             }
+
             InkMenuItem {
                 text: "Delete";
                 danger: true;
@@ -436,6 +472,7 @@ export component ResultsBarNav inherits HorizontalLayout {
             InkMenuCaption {
                 text: "ANALYSES · \{ResultsListState.results_list.length}";
             }
+
             for data[index] in ResultsListState.results_list: InkMenuItem {
                 icon: InkIcons.table;
                 text: data.name;
@@ -451,6 +488,7 @@ export component ResultsBarNav inherits HorizontalLayout {
                 enabled: false;
             }
             InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.refresh;
                 text: "Refresh";
@@ -458,11 +496,21 @@ export component ResultsBarNav inherits HorizontalLayout {
                     ResultsListState.refresh_clicked();
                 }
             }
+
             InkMenuItem {
                 icon: InkIcons.folder;
                 text: "Show the output folder";
                 clicked => {
                     ResultsListState.open_folder_clicked();
+                }
+            }
+            // The open analysis: the others' from the results panel's ⋯.
+            if ResultsListState.selected_result_index >= 0 && ResultsListState.selected_result_index < ResultsListState.results_list.length: InkMenuSeparator { }
+            if ResultsListState.selected_result_index >= 0 && ResultsListState.selected_result_index < ResultsListState.results_list.length: InkMenuItem {
+                text: "Delete “\{ResultsListState.results_list[ResultsListState.selected_result_index].name}”";
+                danger: true;
+                clicked => {
+                    ResultsListState.delete_requested(ResultsListState.results_list[ResultsListState.selected_result_index].path);
                 }
             }
         }

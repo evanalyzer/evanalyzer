@@ -12,6 +12,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod ai_learning;
+pub mod analysis_folders;
 pub mod annotation_measure;
 pub mod annotations_geojson;
 pub mod bioimageio;

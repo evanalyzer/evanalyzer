@@ -149,6 +149,9 @@ pub mod results {
         TrackSummaryExport, TrackSummaryFilter,
     };
     pub use crate::backend::local::results::{colorize, colorize_thumbnail};
+    pub use crate::workspace::analysis_folders::{
+        AnalysisFolder, analysis_folder, delete_analysis,
+    };
 
     pub use crate::backend::local::ResultsGenerator as LocalResultsGenerator;
 }

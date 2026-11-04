@@ -6,9 +6,30 @@
 
 import { ResultItemData, ResultsListState } from "../api/results_list.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkIconButton, InkHint, InkButton, InkDivider } from "../ink/ink.slint";
+import {
+    Ink,
+    InkIcons,
+    InkPanelHead,
+    InkListRow,
+    InkBusy,
+    InkIconButton,
+    InkHint,
+    InkButton,
+    InkDivider,
+    InkMenuFrame,
+    InkMenuCaption,
+    InkMenuItem,
+    InkMenuSeparator,
+} from "../ink/ink.slint";
 
 export component ResultsListPanel inherits Rectangle {
+    // The analysis the row menu is for.
+    property <string> menu-path;
+    property <string> menu-name;
+    property <int> menu-index: -1;
+    property <length> menu-x;
+    property <length> menu-y;
+
     VerticalLayout {
         spacing: 0px;
 
@@ -20,6 +41,7 @@ export component ResultsListPanel inherits Rectangle {
                 closable: false;
                 borderless: true;
             }
+
             HorizontalLayout {
                 padding-right: 6px;
                 spacing: 2px;
@@ -32,6 +54,7 @@ export component ResultsListPanel inherits Rectangle {
                         ResultsListState.refresh_clicked();
                     }
                 }
+
                 InkIconButton {
                     y: (Ink.head-h - self.height) / 2;
                     size: 24px;
@@ -58,9 +81,18 @@ export component ResultsListPanel inherits Rectangle {
                     subtitle: data.modified + " · " + data.file_size;
                     icon: InkIcons.table;
                     selected: ResultsListState.selected_result_index == index;
+                    has-more: true;
                     clicked => {
                         ResultsListState.selected_result_index = index;
                         ResultsListState.result_selected(data.path);
+                    }
+                    context-menu(x, y) => {
+                        root.menu-path = data.path;
+                        root.menu-name = data.name;
+                        root.menu-index = index;
+                        root.menu-x = max(0px, min(self.x + x, root.width - 220px));
+                        root.menu-y = self.absolute-position.y - root.absolute-position.y + y + 4px;
+                        row-menu.show();
                     }
                 }
             }
@@ -76,6 +108,7 @@ export component ResultsListPanel inherits Rectangle {
                     color: Ink.text;
                     horizontal-alignment: center;
                 }
+
                 InkHint {
                     text: "Run the pipelines on the images - each run writes its results here.";
                     horizontal-alignment: center;
@@ -85,6 +118,7 @@ export component ResultsListPanel inherits Rectangle {
             if ResultsListState.is_scanning || ResultsListState.is_loading: Rectangle {
                 background: Ink.glass;
                 TouchArea { }
+
                 VerticalLayout {
                     alignment: center;
                     spacing: 8px;
@@ -94,12 +128,52 @@ export component ResultsListPanel inherits Rectangle {
                             size: 18px;
                         }
                     }
+
                     if ResultsListState.is_loading: Text {
                         text: "Opening…";
                         font-size: Ink.fs-secondary;
                         color: Ink.text-dim;
                         horizontal-alignment: center;
                     }
+                }
+            }
+        }
+    }
+
+    row-menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + root.menu-y;
+            menu-width: 220px;
+            InkMenuCaption {
+                text: root.menu-name;
+            }
+
+            InkMenuItem {
+                icon: InkIcons.table;
+                text: "Open";
+                clicked => {
+                    ResultsListState.selected_result_index = root.menu-index;
+                    ResultsListState.result_selected(root.menu-path);
+                }
+            }
+
+            InkMenuItem {
+                icon: InkIcons.folder;
+                text: "Show in the folder";
+                clicked => {
+                    ResultsListState.show_in_folder(root.menu-path);
+                }
+            }
+
+            InkMenuSeparator { }
+
+            InkMenuItem {
+                text: "Delete from disk…";
+                danger: true;
+                clicked => {
+                    ResultsListState.delete_requested(root.menu-path);
                 }
             }
         }

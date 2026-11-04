@@ -2672,6 +2672,16 @@ impl ResultsStateController {
         self.run_db_job(|manager| manager.close_database_now());
     }
 
+    /// Closes the open results, then runs `then` - on the database thread,
+    /// so this controller's handle on the file is gone first (deleting an
+    /// open file fails on Windows).
+    pub fn close_database_then(self: &Arc<Self>, then: impl FnOnce() + Send + 'static) {
+        self.run_db_job(move |manager| {
+            manager.close_database_now();
+            then();
+        });
+    }
+
     fn close_database_now(&self) {
         *self.result_generator.lock().expect("Poisoned") = None;
         *self.view_unavailable.lock().expect("Poisoned") = None;
@@ -6593,6 +6603,130 @@ pub(crate) mod tests {
             ui.global::<ResultsState>().get_database_name(),
             "finished.evadb"
         );
+    }
+
+    /// Waits (draining the UI queue) until `done` - for work on threads.
+    fn wait_until(ui: &crate::AppWindow, done: impl Fn(&crate::AppWindow) -> bool) {
+        for _ in 0..500 {
+            drain_ui_queue();
+            if done(ui) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out");
+    }
+
+    /// Deleting an analysis from the disk: the question says what its
+    /// folder holds; deleting the open one closes it first and removes the
+    /// whole folder, the other analysis stays (and stays selected when it
+    /// was the open one); a running analysis's folder isn't deleted.
+    #[test]
+    fn deleting_an_analysis_removes_its_folder_after_the_question() {
+        use crate::editor::results_list_controller::ResultsListController;
+        use crate::{DialogType, GlobalAppState, ResultsListState};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = dir.path().join("plate");
+        let results_dir = project.join("results");
+        let older = results_dir.join("20261001T000000Z__older");
+        let newer = results_dir.join("20261021T000000Z__newer");
+        for (folder, name) in [(&older, "older"), (&newer, "newer")] {
+            std::fs::create_dir_all(folder.join("images")).unwrap();
+            seed_test_db(&folder.join(format!("{name}.evadb")));
+            std::fs::write(folder.join(format!("{name}.evaproj")), "{}").unwrap();
+            std::fs::write(folder.join("images").join("a.png"), [0u8; 10]).unwrap();
+            std::fs::write(folder.join("images").join("b.png"), [0u8; 10]).unwrap();
+        }
+        // The newer one is newest by its time.
+        let file = std::fs::File::options()
+            .write(true)
+            .open(newer.join("newer.evadb"))
+            .unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+
+        let ui = test_ui_window();
+        let ui_state = test_ui_state();
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(project.join("plate.evaproj"));
+        let results = make_controller_with_state(ui.as_weak(), ui_state.clone());
+        results.attach_callbacks();
+        let list = Arc::new(ResultsListController::new(
+            ui.as_weak(),
+            ui_state,
+            results.clone(),
+        ));
+        list.attach_callbacks();
+        list.sync_results_files_to_slint();
+        drain_ui_queue();
+        let state = ui.global::<ResultsListState>();
+        let dialog = |ui: &crate::AppWindow| ui.global::<GlobalAppState>().get_active_dialog();
+        let path_of = |i: usize| {
+            slint::Model::row_data(&state.get_results_list(), i)
+                .unwrap()
+                .path
+                .to_string()
+        };
+        assert_eq!(slint::Model::row_count(&state.get_results_list()), 2);
+        let (newer_path, older_path) = (path_of(0), path_of(1));
+        assert!(newer_path.ends_with("newer.evadb"), "{newer_path}");
+
+        // A running analysis's folder: the question says so, nothing goes.
+        list.set_running_analysis(Some(older.clone()));
+        state.invoke_delete_requested(older_path.clone().into());
+        wait_until(&ui, |ui| dialog(ui) == DialogType::DeleteAnalysis);
+        assert!(state.get_delete_running());
+        state.invoke_delete_confirmed();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        drain_ui_queue();
+        assert!(older.exists());
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::None);
+        list.set_running_analysis(None);
+
+        // The open one: closed first, its whole folder gone.
+        state.set_selected_result_index(1);
+        state.invoke_result_selected(older_path.clone().into());
+        wait_until(&ui, |_| results.has_open_database());
+        state.invoke_delete_requested(older_path.into());
+        wait_until(&ui, |ui| dialog(ui) == DialogType::DeleteAnalysis);
+        assert!(!state.get_delete_running());
+        assert!(state.get_delete_open_now());
+        assert_eq!(state.get_delete_name(), "older");
+        assert_eq!(
+            state.get_delete_folder(),
+            "results/20261001T000000Z__older/"
+        );
+        assert_eq!(state.get_delete_images(), "2 files");
+        assert_eq!(state.get_delete_images_size(), "20 B");
+        assert!(!state.get_delete_total().is_empty());
+        state.invoke_delete_confirmed();
+        wait_until(&ui, |ui| dialog(ui) == DialogType::None);
+        assert!(!older.exists());
+        assert!(newer.exists());
+        assert!(!results.has_open_database());
+        assert_eq!(slint::Model::row_count(&state.get_results_list()), 1);
+        assert_eq!(state.get_selected_result_index(), -1);
+        assert_eq!(state.get_delete_error(), "");
+
+        // Another one while one is open: the open one stays selected.
+        let another = results_dir.join("20261002T000000Z__another");
+        std::fs::create_dir_all(&another).unwrap();
+        seed_test_db(&another.join("another.evadb"));
+        list.sync_results_files_to_slint();
+        drain_ui_queue();
+        state.set_selected_result_index(0);
+        state.invoke_result_selected(newer_path.clone().into());
+        wait_until(&ui, |_| results.has_open_database());
+        state.invoke_delete_requested(path_of(1).into());
+        wait_until(&ui, |ui| dialog(ui) == DialogType::DeleteAnalysis);
+        assert!(!state.get_delete_open_now());
+        state.invoke_delete_confirmed();
+        wait_until(&ui, |ui| dialog(ui) == DialogType::None);
+        assert!(!another.exists());
+        assert!(results.has_open_database());
+        assert_eq!(state.get_selected_result_index(), 0);
+        assert_eq!(path_of(0), newer_path);
     }
 
     #[test]
