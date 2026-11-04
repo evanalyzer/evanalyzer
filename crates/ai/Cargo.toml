@@ -40,6 +40,10 @@ test-support = ["torch", "dep:tempfile"]
 name = "make_bench_models"
 required-features = ["test-support"]
 
+[[example]]
+name = "bench_ai_ram"
+required-features = ["test-support"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

@@ -9,6 +9,7 @@
 //! StarDist inference: the object probability and the ray distances per
 //! grid cell, flattened.
 
+use super::pieces::{self, Planes};
 use super::{Result, scheduler::TorchScheduler};
 use crate::api::{Image, Response};
 use std::path::Path;
@@ -30,28 +31,56 @@ pub(crate) fn run(
             )
         },
         |model, device| {
-            let input = Tensor::from_slice(pixels)
-                .to_device(device)
-                .to_kind(Kind::Float)
-                .reshape([1, 1, height as i64, width as i64]);
-
-            let (prob_tensor, dist_tensor) = split_outputs(model, input)?;
-
-            let prob_sizes = prob_tensor.size();
-            let dist_sizes = dist_tensor.size();
-            let grid_height = prob_sizes[prob_sizes.len() - 2] as usize;
-            let grid_width = prob_sizes[prob_sizes.len() - 1] as usize;
-            let n_rays = dist_sizes[dist_sizes.len() - 3] as usize;
-
+            let predict = |pixels: &[f32], w: usize, h: usize| predict(model, device, pixels, w, h);
+            // A big tile in pieces (RAM of one piece), see `pieces`.
+            let halo = match pieces::needs_pieces(width, height) {
+                true => scheduler.halo(model_path, || pieces::receptive_halo(predict))?,
+                false => None,
+            };
+            let planes = match halo {
+                Some(halo) => pieces::run(pixels, width, height, halo, predict)?,
+                None => predict(pixels, width, height)?,
+            };
             Ok(Response::StarDist {
-                prob: flatten(&prob_tensor, grid_height * grid_width)?,
-                dist: flatten(&dist_tensor, n_rays * grid_height * grid_width)?,
-                grid_height,
-                grid_width,
-                n_rays,
+                prob: planes.first,
+                dist: planes.rest,
+                grid_height: planes.height,
+                grid_width: planes.width,
+                n_rays: planes.planes - 1,
             })
         },
     )
+}
+
+/// The model on a `width x height` image: the object probability, then the
+/// ray distances, per grid cell - as [`Planes`].
+pub(super) fn predict(
+    model: &CModule,
+    device: Device,
+    pixels: &[f32],
+    width: usize,
+    height: usize,
+) -> Result<Planes> {
+    let input = Tensor::from_slice(pixels)
+        .to_device(device)
+        .to_kind(Kind::Float)
+        .reshape([1, 1, height as i64, width as i64]);
+
+    let (prob_tensor, dist_tensor) = split_outputs(model, input)?;
+
+    let prob_sizes = prob_tensor.size();
+    let dist_sizes = dist_tensor.size();
+    let grid_height = prob_sizes[prob_sizes.len() - 2] as usize;
+    let grid_width = prob_sizes[prob_sizes.len() - 1] as usize;
+    let n_rays = dist_sizes[dist_sizes.len() - 3] as usize;
+
+    Ok(Planes {
+        planes: 1 + n_rays,
+        width: grid_width,
+        height: grid_height,
+        first: flatten(&prob_tensor, grid_height * grid_width)?,
+        rest: flatten(&dist_tensor, n_rays * grid_height * grid_width)?,
+    })
 }
 
 fn flatten(tensor: &Tensor, len: usize) -> Result<Vec<f32>> {

@@ -94,3 +94,124 @@ pub fn bench_cellpose_model(conv_layers: usize) -> (tempfile::TempDir, std::path
         Tensor::cat(&[zeros.shallow_clone(), zeros, cell_logit], 1)
     })
 }
+
+/// A weight of `shape` around `value` (0.5-1.5 times it), irregular - so a
+/// pixel computed from other context than on the whole image shows - made
+/// by traced operations (`arange`, `sin`) on `x`: a tensor made in a traced
+/// closure from data would be saved as zeros (see the module doc).
+fn constant_weight(x: &Tensor, shape: [i64; 4], value: f64) -> Tensor {
+    let count: i64 = shape.iter().product();
+    let wave = (Tensor::arange(count, (Kind::Float, x.device())) * 0.7853 + 0.3).sin();
+    (x.mean(Kind::Float) * 0.0 + value + wave * (0.5 * value)).reshape(shape)
+}
+
+/// Two 3x3 convolutions with ReLU from `in_channels` to `out_channels` - one
+/// level of a U-Net.
+fn conv_block(x: &Tensor, seed: &Tensor, in_channels: i64, out_channels: i64) -> Tensor {
+    let w1 = constant_weight(
+        seed,
+        [out_channels, in_channels, 3, 3],
+        1.0 / (9 * in_channels) as f64,
+    );
+    let w2 = constant_weight(
+        seed,
+        [out_channels, out_channels, 3, 3],
+        1.0 / (9 * out_channels) as f64,
+    );
+    x.conv2d(&w1, None::<Tensor>, [1, 1], [1, 1], [1, 1], 1)
+        .relu()
+        .conv2d(&w2, None::<Tensor>, [1, 1], [1, 1], [1, 1], 1)
+        .relu()
+}
+
+/// A U-Net of `depth` poolings from `base` filters (doubled per level), on
+/// `x` of `in_channels`: the encoder's outputs are kept for the skip
+/// connections, the decoder upsamples (transposed 2x2 convolution) and
+/// concatenates. Only size-independent operations, so the traced model runs
+/// on any side that is a multiple of 2^`depth`.
+fn unet(x: &Tensor, seed: &Tensor, in_channels: i64, base: i64, depth: usize) -> Tensor {
+    let mut skips = Vec::new();
+    let mut features = x.shallow_clone();
+    let mut channels = in_channels;
+    for level in 0..depth {
+        let out = base << level;
+        features = conv_block(&features, seed, channels, out);
+        channels = out;
+        skips.push(features.shallow_clone());
+        features = features.max_pool2d([2, 2], [2, 2], [0, 0], [1, 1], false);
+    }
+    features = conv_block(&features, seed, channels, base << depth);
+    channels = base << depth;
+    for level in (0..depth).rev() {
+        let out = base << level;
+        let up = constant_weight(seed, [channels, out, 2, 2], 1.0 / (4 * channels) as f64);
+        features =
+            features.conv_transpose2d(&up, None::<Tensor>, [2, 2], [0, 0], [0, 0], 1, [1, 1]);
+        features = Tensor::cat(&[skips.pop().unwrap(), features], 1);
+        features = conv_block(&features, seed, 2 * out, out);
+        channels = out;
+    }
+    features
+}
+
+/// A stand-in StarDist model for RAM benchmarks, laid out as StarDist's
+/// `2D_versatile_fluo` (its `config.json`): 1 input channel, two 3x3
+/// convolutions of 32 filters at full resolution, a 2x2 pooling (grid
+/// 2x2), a U-Net of depth 3 from 32 filters, a 3x3 convolution of 128
+/// filters, then the object probability (sigmoid) and 32 ray distances -
+/// one `[1, 33, H/2, W/2]` tensor. Constant weights: the activations - and
+/// so the RAM - are those of the real network, the values are not.
+pub fn bench_stardist_model() -> (tempfile::TempDir, std::path::PathBuf) {
+    trace_and_save_model(1, 64, 64, |x| {
+        let seed = x.shallow_clone();
+        let full = conv_block(x, &seed, 1, 32);
+        let grid = full.max_pool2d([2, 2], [2, 2], [0, 0], [1, 1], false);
+        let features = unet(&grid, &seed, 32, 32, 3);
+        let after = constant_weight(&seed, [128, 32, 3, 3], 1.0 / 288.0);
+        let features = features
+            .conv2d(&after, None::<Tensor>, [1, 1], [1, 1], [1, 1], 1)
+            .relu();
+        let prob = features
+            .conv2d(
+                &constant_weight(&seed, [1, 128, 1, 1], 1.0 / 128.0),
+                None::<Tensor>,
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                1,
+            )
+            .sigmoid();
+        let dist = features
+            .conv2d(
+                &constant_weight(&seed, [32, 128, 1, 1], 1.0 / 128.0),
+                None::<Tensor>,
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                1,
+            )
+            .relu();
+        Tensor::cat(&[prob, dist], 1)
+    })
+}
+
+/// A stand-in U-Net for RAM benchmarks, laid out as the 2D U-Nets of the
+/// bioimage.io model zoo: 1 input channel, depth 4 from `base` filters
+/// (32 or 64), 2 output channels (foreground, boundary) from a 1x1
+/// convolution. Constant weights (see [`bench_stardist_model`]).
+pub fn bench_unet_model(base: i64) -> (tempfile::TempDir, std::path::PathBuf) {
+    trace_and_save_model(1, 64, 64, |x| {
+        let seed = x.shallow_clone();
+        let features = unet(x, &seed, 1, base, 4);
+        features
+            .conv2d(
+                &constant_weight(&seed, [2, base, 1, 1], 1.0 / base as f64),
+                None::<Tensor>,
+                [1, 1],
+                [0, 0],
+                [1, 1],
+                1,
+            )
+            .sigmoid()
+    })
+}

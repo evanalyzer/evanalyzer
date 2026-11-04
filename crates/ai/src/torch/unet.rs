@@ -9,10 +9,11 @@
 //! U-Net inference: the tile padded to the model's needs, the prediction
 //! cropped back and reduced to the foreground (and boundary) probability.
 
+use super::pieces::{self, Planes};
 use super::{Result, scheduler::TorchScheduler};
 use crate::api::{Image, Response};
 use std::path::Path;
-use tch::{Device, Kind, Tensor};
+use tch::{CModule, Device, Kind, Tensor};
 
 /// Side lengths the model is run at must be a multiple of this: a standard
 /// U-Net halves the image 4 times (2^4), and odd intermediate sizes make its
@@ -42,74 +43,114 @@ pub(crate) fn run(
             )
         },
         |model, device| {
-            let input = Tensor::from_slice(pixels)
-                .to_device(device)
-                .to_kind(Kind::Float)
-                .reshape([1, 1, height as i64, width as i64]);
-            let (top, bottom) = padding(height as i64);
-            let (left, right) = padding(width as i64);
-            // Mirroring needs every pad to be smaller than the side it mirrors;
-            // a tiny tile repeats its edge pixels instead.
-            let mode = if top < height as i64
-                && bottom < height as i64
-                && left < width as i64
-                && right < width as i64
-            {
-                "reflect"
-            } else {
-                "replicate"
+            let predict = |pixels: &[f32], w: usize, h: usize| {
+                predict(
+                    model,
+                    device,
+                    pixels,
+                    w,
+                    h,
+                    foreground_channel,
+                    softmax,
+                    boundary_channel,
+                )
             };
-            let padded = input.pad([left, right, top, bottom], mode, None);
-
-            // Without `no_grad`, the model's own weights (loaded with
-            // `requires_grad = true`, the default for `nn.Parameter`) make this
-            // forward pass record a full autograd graph even though `.eval()`
-            // was called - wasting memory that's never needed for inference.
-            let output = tch::no_grad(|| model.forward_ts(&[padded]))
-                .map_err(|e| format!("U-Net inference failed: {e}"))?;
-            let out_size = output.size();
-            if out_size.len() != 4
-                || out_size[2] < top + height as i64
-                || out_size[3] < left + width as i64
-            {
-                return Err(format!(
-                    "U-Net output has shape {out_size:?}; expected [1, C, H, W] the size of the \
-                     (padded) input"
-                ));
-            }
-            let output = output
-                .narrow(2, top, height as i64)
-                .narrow(3, left, width as i64);
-
-            let channels = *output.size().get(1).unwrap_or(&1);
-            let foreground = if channels > 1 {
-                let idx = (foreground_channel as i64).clamp(0, channels - 1);
-                if softmax {
-                    output.softmax(1, Kind::Float).narrow(1, idx, 1)
-                } else {
-                    output.narrow(1, idx, 1)
-                }
-            } else {
-                output.shallow_clone()
+            // A big tile in pieces (RAM of one piece), see `pieces`.
+            let halo = match pieces::needs_pieces(width, height) {
+                true => scheduler.halo(model_path, || pieces::receptive_halo(predict))?,
+                false => None,
             };
-            let probabilities = channel_to_vec(&foreground, width, height)?;
-
-            // Optional boundary channel: boundary-aware models (e.g.
-            // affable-shark) predict an independent boundary map, which opens
-            // thin gaps between touching objects so they separate downstream.
-            let boundary =
-                if boundary_channel >= 0 && channels > 1 && (boundary_channel as i64) < channels {
-                    let b = output.narrow(1, boundary_channel as i64, 1);
-                    Some(channel_to_vec(&b, width, height)?)
-                } else {
-                    None
-                };
+            let planes = match halo {
+                Some(halo) => pieces::run(pixels, width, height, halo, predict)?,
+                None => predict(pixels, width, height)?,
+            };
             Ok(Response::UNet {
-                probabilities,
-                boundary,
+                probabilities: planes.first,
+                boundary: (planes.planes > 1).then_some(planes.rest),
             })
         },
     )
+}
+
+/// The model on a `width x height` image: the foreground probability, and
+/// the boundary one if the model has it - as [`Planes`].
+#[allow(clippy::too_many_arguments)]
+pub(super) fn predict(
+    model: &CModule,
+    device: Device,
+    pixels: &[f32],
+    width: usize,
+    height: usize,
+    foreground_channel: i32,
+    softmax: bool,
+    boundary_channel: i32,
+) -> Result<Planes> {
+    let input = Tensor::from_slice(pixels)
+        .to_device(device)
+        .to_kind(Kind::Float)
+        .reshape([1, 1, height as i64, width as i64]);
+    let (top, bottom) = padding(height as i64);
+    let (left, right) = padding(width as i64);
+    // Mirroring needs every pad to be smaller than the side it mirrors;
+    // a tiny tile repeats its edge pixels instead.
+    let mode = if top < height as i64
+        && bottom < height as i64
+        && left < width as i64
+        && right < width as i64
+    {
+        "reflect"
+    } else {
+        "replicate"
+    };
+    let padded = input.pad([left, right, top, bottom], mode, None);
+
+    // Without `no_grad`, the model's own weights (loaded with
+    // `requires_grad = true`, the default for `nn.Parameter`) make this
+    // forward pass record a full autograd graph even though `.eval()`
+    // was called - wasting memory that's never needed for inference.
+    let output = tch::no_grad(|| model.forward_ts(&[padded]))
+        .map_err(|e| format!("U-Net inference failed: {e}"))?;
+    let out_size = output.size();
+    if out_size.len() != 4 || out_size[2] < top + height as i64 || out_size[3] < left + width as i64
+    {
+        return Err(format!(
+            "U-Net output has shape {out_size:?}; expected [1, C, H, W] the size of the \
+             (padded) input"
+        ));
+    }
+    let output = output
+        .narrow(2, top, height as i64)
+        .narrow(3, left, width as i64);
+
+    let channels = *output.size().get(1).unwrap_or(&1);
+    let foreground = if channels > 1 {
+        let idx = (foreground_channel as i64).clamp(0, channels - 1);
+        if softmax {
+            output.softmax(1, Kind::Float).narrow(1, idx, 1)
+        } else {
+            output.narrow(1, idx, 1)
+        }
+    } else {
+        output.shallow_clone()
+    };
+    let first = channel_to_vec(&foreground, width, height)?;
+
+    // Optional boundary channel: boundary-aware models (e.g.
+    // affable-shark) predict an independent boundary map, which opens
+    // thin gaps between touching objects so they separate downstream.
+    let rest = if boundary_channel >= 0 && channels > 1 && (boundary_channel as i64) < channels {
+        let b = output.narrow(1, boundary_channel as i64, 1);
+        channel_to_vec(&b, width, height)?
+    } else {
+        Vec::new()
+    };
+    Ok(Planes {
+        planes: if rest.is_empty() { 1 } else { 2 },
+        width,
+        height,
+        first,
+        rest,
+    })
 }
 
 /// Padding `(before, after)` for one side of `len` pixels: `MARGIN` before,

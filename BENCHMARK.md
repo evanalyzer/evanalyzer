@@ -2002,6 +2002,52 @@ leaves little room for more threads. `bench_pipeline` gained `--hessian N`,
 `--max-ram MB` and the images' sizes (the planner sized for 4096² tiles
 without them); without `--threads` it now uses the app's planned threads.
 
+## AI models: RAM per inference, U-Net and StarDist in pieces (2026-11-04)
+
+`cargo run --release -p evanalyzer_ai --features test-support --example
+bench_ai_ram -- <stardist|unet32|unet64> <side>`: stand-in networks with
+the real layouts (`test_support`: StarDist `2D_versatile_fluo` - 32 filters
+at full size, grid 2, U-Net depth 3, 128 features, 32 rays; bioimage.io
+U-Nets of depth 4 from 32 or 64 filters), through `evanalyzer_ai::infer`
+on the CPU (22 threads, one inference at a time). Peak RAM of one inference
+above the loaded model.
+
+Before - the whole tile through the network, RAM per pixel constant:
+
+| Model | 512² | 1024² | 2048² | 4096² |
+|---|---|---|---|---|
+| StarDist | 168 MB | 441 MB | 1,571 MB | 6,288 MB |
+| U-Net 32 | 235 MB | 706 MB | 2,702 MB | 10,605 MB |
+| U-Net 64 | 490 MB | 1,375 MB | 5,373 MB | ~21 GB (not finished) |
+
+Now (`crates/ai/src/torch/pieces.rs`): a tile beyond 2048² per side runs in
+pieces of 2048² plus a halo = the model's receptive field, measured once per
+model (an empty image and one bright pixel, as StarDist); a model that sees
+the whole image (InstanceNorm) runs whole. Old / new alternated:
+
+| Case | Old: time / RAM | New: time / RAM |
+|---|---|---|
+| StarDist 2048² (one piece) | 9.9-11.6 s / 1,568 MB | 10.0-11.6 s / 1,568 MB |
+| StarDist 4096² | 15.2-39.1 s / 6,288 MB | 22.5-47.5 s / 2,355-2,361 MB |
+| U-Net 32 4096² | 31.2-31.5 s / 10,592 MB | 39.9-42.1 s / 3,076-3,094 MB |
+| U-Net 64 4096² | - | 101.4-101.8 s / 5,785-5,841 MB |
+
+Times on battery with a changing CPU clock (the 2048² row is ~3x slower
+than unthrottled), so only old/new pairs side by side compare: a 4096² tile
++20-30 % for the AI step (halo computed twice; libtorch uses 22 cores less
+well on smaller inputs) - to measure again on power. Pieces of 1024² first
+(unthrottled): StarDist 2048² 2.9-3.0 → 5.3-6.6 s, U-Net 32 2048² 6.1-7.8 →
+9.3-11.5 s, U-Net 64 2048² 17.3-22.3 → 27.0-29.9 s - slower on small
+images, rejected; StarDist 4096² 1,259 MB at 21-23 s.
+
+Results: in pieces equal to the whole tile up to float rounding - largest
+difference 9.7e-8 of the range, no pixel on the other side of 0.5 (StarDist
+halo 112 px, U-Net 80 px; `real_networks_in_pieces_give_the_whole_tile`). A
+too narrow halo (16 px) differs ~5e-5. The real bioimage.io `joyful-pig`
+(InstanceNorm in every layer) is seen as "whole image" and runs whole; in
+pieces it would flip 0.06-0.18 % of the foreground and 0.3-0.6 % of the
+boundary pixels (halo 128-16 px).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2061,6 +2107,7 @@ graphics driver).
 | Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
 | Track Nearest Neighbor, same objects (image by image; was 384 MB all at once) | 199-229 MB | 2026-10-29 | Lineage in the results, Track Nearest Neighbor image by image |
 | Whole slide `tests/haut` with Propagation, 21 threads / 4 threads and `--max-ram 6000` | 7.55-7.65 GB / 3.9 GB (was 11.1-11.3 / 7.07 GB) | 2026-10-29 | Whole-image commands without RAM per pixel |
+| One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB (was 6.3 / 10.6 / ~21 GB); up to 2048²: 1.6 / 2.7 / 5.4 GB | 2026-11-04 | AI models: RAM per inference |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.

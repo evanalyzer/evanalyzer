@@ -18,6 +18,7 @@
 
 mod cellpose;
 pub mod ffi;
+mod pieces;
 mod scheduler;
 mod stardist;
 mod unet;

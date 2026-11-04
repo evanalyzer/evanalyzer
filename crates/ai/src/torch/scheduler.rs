@@ -49,6 +49,7 @@ fn get_or_insert<V, E>(
 }
 
 type ModelMap = HashMap<PathBuf, (Option<SystemTime>, Arc<CModule>)>;
+type HaloMap = HashMap<PathBuf, (Option<SystemTime>, Arc<Option<usize>>)>;
 
 /// One device AI models run on, with the models loaded onto it.
 struct TorchDevice {
@@ -83,6 +84,9 @@ struct SlotState {
 /// slots. Set up once per process (`--ai-devices`, `--gpu-slots`).
 pub(crate) struct TorchScheduler {
     devices: Vec<TorchDevice>,
+    /// Each model's halo for running it in pieces ([`super::pieces`]),
+    /// measured once (`None`: it runs whole).
+    halos: Mutex<HaloMap>,
     slots: Mutex<Vec<SlotState>>,
     freed: Condvar,
     cores: usize,
@@ -106,6 +110,7 @@ impl TorchScheduler {
                     models: Mutex::new(HashMap::new()),
                 })
                 .collect(),
+            halos: Mutex::new(HashMap::new()),
             slots: Mutex::new(slots),
             freed: Condvar::new(),
             cores: cores.max(1),
@@ -247,12 +252,28 @@ impl TorchScheduler {
     /// Lets go of the models on every device. A run using one keeps it (its
     /// `Arc`) until it is done; the next run loads it again.
     pub(crate) fn release_models(&self) {
+        self.halos
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         for TorchDevice { models, .. } in &self.devices {
             models
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clear();
         }
+    }
+
+    /// The halo of the model at `path` for running it in pieces - `measure`d
+    /// on its first big tile, then kept (a new file at `path` is measured
+    /// again).
+    pub(crate) fn halo(
+        &self,
+        path: &Path,
+        measure: impl FnOnce() -> Result<Option<usize>>,
+    ) -> Result<Option<usize>> {
+        let mut halos = self.halos.lock().unwrap_or_else(PoisonError::into_inner);
+        get_or_insert(&mut halos, path, measure).map(|halo| *halo)
     }
 
     /// The model at `path` on device `index`, loaded once per device.
