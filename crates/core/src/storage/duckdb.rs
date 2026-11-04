@@ -2100,20 +2100,29 @@ mod tests {
             users: 1,
         };
         let total = crate::memory::SystemRam::now().total;
-        let share = |n| crate::memory::storage::results_memory_limit_per_file_mb(total, n) as f64;
+        // What DuckDB reports for a share: it truncates to 0.1 GiB (1997 MB
+        // reads back as 1.8 GiB), so compare readouts, not MB with a margin.
+        let share = |n| {
+            let mb = crate::memory::storage::results_memory_limit_per_file_mb(total, n);
+            let probe = Connection::open_in_memory().unwrap();
+            probe
+                .execute_batch(&format!("SET memory_limit = '{mb}MB'"))
+                .unwrap();
+            memory_limit_mb(&probe)
+        };
         let mut files = HashMap::new();
         files.insert(PathBuf::from("a"), open("a.evadb"));
         files.insert(PathBuf::from("b"), open("b.evadb"));
 
         share_memory_limit(&files);
         for shared in files.values() {
-            assert!((memory_limit_mb(&shared.anchor) - share(2)).abs() < 64.0);
+            assert_eq!(memory_limit_mb(&shared.anchor), share(2));
         }
 
         files.remove(&PathBuf::from("b"));
         share_memory_limit(&files);
         let a = &files[&PathBuf::from("a")].anchor;
-        assert!((memory_limit_mb(a) - share(1)).abs() < 64.0);
+        assert_eq!(memory_limit_mb(a), share(1));
     }
 
     use super::*;
