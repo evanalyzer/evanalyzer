@@ -105,6 +105,18 @@ pub struct UNet {
     pub boundary_threshold: f32,
 }
 
+/// What the network takes per pixel of the image it gets at once (see
+/// `shared_ram_bytes`).
+const NETWORK_BYTES_PER_PIXEL: f64 = 1600.0;
+
+/// The piece side for a `width x height` tile on this computer (its RAM or
+/// the user's limit, [`evanalyzer_ai::piece_side_for`]) - what the planner
+/// reserved for (`shared_ram_bytes`).
+fn piece_side(width: usize, height: usize) -> usize {
+    let ram_total = crate::memory::SystemRam::now().total;
+    evanalyzer_ai::piece_side_for(NETWORK_BYTES_PER_PIXEL, ram_total, width, height)
+}
+
 impl ImageAlgorithm for UNet {
     fn execute(
         &self,
@@ -121,6 +133,7 @@ impl ImageAlgorithm for UNet {
                 foreground_channel: self.foreground_channel,
                 softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
                 boundary_channel: self.boundary_channel,
+                piece_side: piece_side(width, height),
             },
         };
         let image = Image {
@@ -171,6 +184,26 @@ impl ImageAlgorithm for UNet {
 
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
+    }
+
+    /// One inference at a time on the CPU (the AI engine's one slot): the
+    /// network's activations on the largest image it gets at once - the
+    /// tile, or a piece of it beyond 2048² ([`evanalyzer_ai::largest_model_input`]).
+    /// 1.6 KB per pixel: measured 1.55 KB for bioimage.io's `joyful-pig`,
+    /// 0.67 / 1.3 KB for U-Nets of depth 4 from 32 / 64 filters
+    /// (BENCHMARK.md "AI models: RAM per inference" - [`NETWORK_BYTES_PER_PIXEL`]).
+    /// On a GPU they are in its memory - planned anyway (the computer may
+    /// run on its CPU).
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
+        let piece = evanalyzer_ai::piece_side_for(
+            NETWORK_BYTES_PER_PIXEL,
+            ram_total,
+            tile_width,
+            tile_height,
+        );
+        let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
+            * evanalyzer_ai::largest_model_input(tile_height, piece);
+        (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64
     }
 }
 

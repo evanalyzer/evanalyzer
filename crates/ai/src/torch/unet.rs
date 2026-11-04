@@ -30,6 +30,7 @@ pub(crate) fn run(
     foreground_channel: i32,
     softmax: bool,
     boundary_channel: i32,
+    piece_side: usize,
     image: Image<'_>,
 ) -> Result<Response> {
     let (width, height) = (image.width, image.height);
@@ -56,12 +57,16 @@ pub(crate) fn run(
                 )
             };
             // A big tile in pieces (RAM of one piece), see `pieces`.
-            let halo = match pieces::needs_pieces(width, height) {
-                true => scheduler.halo(model_path, || pieces::receptive_halo(predict))?,
+            let piece = pieces::piece_side(piece_side);
+            let halo = match pieces::needs_pieces(width, height, piece) {
+                true => Some(pieces::halo_of(
+                    scheduler.halo(model_path, || pieces::receptive_halo(predict))?,
+                    model_path,
+                )),
                 false => None,
             };
             let planes = match halo {
-                Some(halo) => pieces::run(pixels, width, height, halo, predict)?,
+                Some(halo) => pieces::run(pixels, width, height, halo, piece, predict)?,
                 None => predict(pixels, width, height)?,
             };
             Ok(Response::UNet {

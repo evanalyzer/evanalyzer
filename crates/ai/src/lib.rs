@@ -29,8 +29,8 @@ mod runtime;
 pub mod torch;
 
 pub use api::{
-    Detection, DeviceSelection, EngineConfig, Image, InferenceEngine, Request, Response, Task,
-    box_iou,
+    Detection, DeviceSelection, EngineConfig, Image, InferenceEngine, PIECE_SIDES, Request,
+    Response, Task, box_iou, largest_model_input, piece_side_for,
 };
 use std::sync::OnceLock;
 
@@ -114,7 +114,7 @@ mod tests {
     fn a_build_without_an_engine_says_so() {
         let request = Request {
             model: "model.pt".into(),
-            task: Task::StarDist,
+            task: Task::StarDist { piece_side: 2048 },
         };
         let image = Image {
             width: 1,

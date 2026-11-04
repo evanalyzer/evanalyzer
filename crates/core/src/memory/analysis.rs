@@ -56,6 +56,11 @@ pub struct RamBudget {
     pub min_image_cache_bytes: u64,
     /// Heuristic margin for one tile's worth of object masks/metadata.
     pub object_cache_margin_bytes: u64,
+    /// What a command takes once for the whole job, not per worker - its
+    /// runs take turns (an AI inference on the CPU: one at a time,
+    /// [`ImageAlgorithm::shared_ram_bytes`](crate::algos::ImageAlgorithm::shared_ram_bytes)).
+    /// Taken off the free RAM before the workers and caches are planned.
+    pub shared_bytes: u64,
 }
 
 impl RamBudget {
@@ -72,6 +77,12 @@ impl RamBudget {
     /// the caches are planned with it.
     pub fn with_command_bytes(mut self, bytes_per_pixel: f64, tile_pixels: usize) -> Self {
         self.working_set_bytes += (bytes_per_pixel * tile_pixels as f64).ceil() as u64;
+        self
+    }
+
+    /// With `bytes` taken once for the job ([`RamBudget::shared_bytes`]).
+    pub fn with_shared_bytes(mut self, bytes: u64) -> Self {
+        self.shared_bytes = bytes;
         self
     }
 }
@@ -102,6 +113,7 @@ pub fn estimate_ram_budget(
         working_set_bytes: plane_bytes * WORKING_SET_BUFFERS,
         min_image_cache_bytes: plane_bytes * channel_count.max(1) as u64,
         object_cache_margin_bytes: plane_bytes / OBJECT_CACHE_MARGIN_DIVISOR,
+        shared_bytes: 0,
     }
 }
 
@@ -131,8 +143,10 @@ pub fn recommended_image_cache_bytes(
     parallelism: usize,
     non_cache_bytes_per_worker: u64,
     min_image_cache_bytes: u64,
+    shared_bytes: u64,
 ) -> u64 {
-    let per_worker_share = available_memory_bytes() / (parallelism.max(1) as u64);
+    let per_worker_share =
+        available_memory_bytes().saturating_sub(shared_bytes) / (parallelism.max(1) as u64);
     per_worker_share
         .saturating_sub(non_cache_bytes_per_worker)
         .max(min_image_cache_bytes)
@@ -249,7 +263,7 @@ pub fn merged_cache_bytes(
     reserved_bytes: u64,
 ) -> u64 {
     let workers = parallelism.max(1) as u64;
-    let free = available.saturating_sub(workers * budget.total_bytes());
+    let free = available.saturating_sub(workers * budget.total_bytes() + budget.shared_bytes);
     let tiles_in_work = (workers * budget.min_image_cache_bytes).min(free);
     free.saturating_sub(reserved_bytes.min(available / 4))
         .max(tiles_in_work)
@@ -278,11 +292,22 @@ fn analysis_cores(cores: usize, max_threads: Option<usize>) -> usize {
 /// over-commits on a large/many-channel image or, just as bad, needlessly
 /// caps a small/modest image down to a single thread on a low-RAM machine.
 pub fn recommended_parallelism(ram_per_worker_bytes: u64) -> usize {
+    parallelism_for(ram_per_worker_bytes, 0)
+}
+
+/// [`recommended_parallelism`] for `budget`: its workers in the RAM left
+/// after what the job takes once ([`RamBudget::shared_bytes`]).
+pub fn recommended_parallelism_for(budget: &RamBudget) -> usize {
+    parallelism_for(budget.total_bytes(), budget.shared_bytes)
+}
+
+fn parallelism_for(ram_per_worker_bytes: u64, shared_bytes: u64) -> usize {
     let cores = analysis_cores(
         std::thread::available_parallelism().map_or(1, |n| n.get()),
         super::resource_limits().max_threads,
     );
-    let ram_capped = (available_memory_bytes() / ram_per_worker_bytes.max(1)).max(1) as usize;
+    let free = available_memory_bytes().saturating_sub(shared_bytes);
+    let ram_capped = (free / ram_per_worker_bytes.max(1)).max(1) as usize;
     cores.min(ram_capped).max(1)
 }
 
@@ -408,14 +433,17 @@ mod tests {
         // machine's RAM could give a meaningful share to) must still fall
         // back to the minimum, not starve the cache to near-zero.
         let min = 64_000_000;
-        assert_eq!(recommended_image_cache_bytes(1_000_000, 10_000, min), min);
+        assert_eq!(
+            recommended_image_cache_bytes(1_000_000, 10_000, min, 0),
+            min
+        );
     }
 
     #[test]
     fn recommended_image_cache_bytes_grows_when_fewer_workers_share_the_same_ram() {
         let min = 1_000_000;
-        let many_workers = recommended_image_cache_bytes(64, 10_000_000, min);
-        let few_workers = recommended_image_cache_bytes(2, 10_000_000, min);
+        let many_workers = recommended_image_cache_bytes(64, 10_000_000, min, 0);
+        let few_workers = recommended_image_cache_bytes(2, 10_000_000, min, 0);
         assert!(
             few_workers >= many_workers,
             "fewer concurrent workers must never result in a smaller per-worker cache"
@@ -451,6 +479,32 @@ mod tests {
         assert_eq!(
             tiled_image_parallelism(64 * GB, 21, 21, &budget, 2 * GB),
             21
+        );
+    }
+
+    /// RAM a job takes once (an AI inference) comes off the free RAM before
+    /// the workers and the caches are planned - and nothing without it.
+    #[test]
+    fn shared_bytes_come_off_the_free_ram_once() {
+        let budget = estimate_ram_budget(4096, 4096, 3);
+        let shared = budget.with_shared_bytes(8 * GB);
+        let available = 64 * GB;
+        assert_eq!(
+            merged_cache_bytes(available, 4, &budget, 0)
+                - merged_cache_bytes(available, 4, &shared, 0),
+            8 * GB
+        );
+        assert_eq!(budget.total_bytes(), shared.total_bytes());
+        // More than all the RAM there is: one worker.
+        let huge = budget.with_shared_bytes(u64::MAX / 2);
+        assert_eq!(recommended_parallelism_for(&huge), 1);
+        assert_eq!(
+            recommended_parallelism_for(&budget),
+            recommended_parallelism(budget.total_bytes())
+        );
+        assert!(
+            recommended_image_cache_bytes(2, 0, 1, u64::MAX / 2) == 1,
+            "the cache keeps its minimum"
         );
     }
 

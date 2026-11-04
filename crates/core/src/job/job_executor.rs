@@ -350,6 +350,7 @@ impl<'a> JobExecutor {
             parallelism,
             ram_budget.working_set_bytes + ram_budget.object_cache_margin_bytes,
             ram_budget.min_image_cache_bytes,
+            ram_budget.shared_bytes,
         );
         info!(
             "Image cache capacity: {} bytes/worker ({}) x {} worker(s)",
@@ -1886,24 +1887,39 @@ impl<'a> JobExecutor {
         // What the hungriest command takes per tile pixel beyond the
         // worker's buffers (they run one after another).
         let per_pixel = self.command_bytes_per_tile_pixel();
+        // Read once (not per image): the AI steps size their pieces by it.
+        let ram_total = crate::memory::SystemRam::now().total;
+        let budget = |tile_width: usize, tile_height: usize, channels: usize| {
+            crate::memory::analysis::estimate_ram_budget(tile_width, tile_height, channels)
+                .with_command_bytes(per_pixel, tile_width * tile_height)
+                .with_shared_bytes(self.shared_ram_bytes(tile_width, tile_height, ram_total))
+        };
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&self.active_series(entry)))
             .map(|series| {
-                let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
-                let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::memory::analysis::estimate_ram_budget(
-                    tile_width,
-                    tile_height,
+                budget(
+                    (series.image_width as usize).min(MAX_TILE_SIZE),
+                    (series.image_height as usize).min(MAX_TILE_SIZE),
                     series.channels.len() + variants.len(),
                 )
-                .with_command_bytes(per_pixel, tile_width * tile_height)
             })
-            .max_by_key(|budget| budget.total_bytes())
-            .unwrap_or_else(|| {
-                crate::memory::analysis::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
-                    .with_command_bytes(per_pixel, MAX_TILE_SIZE * MAX_TILE_SIZE)
-            })
+            .max_by_key(|budget| (budget.total_bytes(), budget.shared_bytes))
+            .unwrap_or_else(|| budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1))
+    }
+
+    /// The most RAM any command of the job's pipelines takes once for the
+    /// job on a `tile_width x tile_height` tile
+    /// ([`ImageAlgorithm::shared_ram_bytes`](crate::algos::ImageAlgorithm::shared_ram_bytes):
+    /// an AI inference).
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
+        self.pipelines_pre_process
+            .values()
+            .chain(self.pipelines_post_process.values())
+            .flat_map(|p| p.commands.iter())
+            .map(|(_, _, c)| c.shared_ram_bytes(tile_width, tile_height, ram_total))
+            .max()
+            .unwrap_or(0)
     }
 
     /// The most RAM per tile pixel any command of the job's pipelines
@@ -1924,7 +1940,7 @@ impl<'a> JobExecutor {
     /// ([`tiled_image_parallelism`](crate::memory::analysis::tiled_image_parallelism)).
     pub fn recommended_parallelism(&self) -> usize {
         let budget = self.estimate_ram_budget();
-        let threads = crate::memory::analysis::recommended_parallelism(budget.total_bytes());
+        let threads = crate::memory::analysis::recommended_parallelism_for(&budget);
         // A preview runs a few small tiles (the visible ones), not the
         // whole slide into the merged cache.
         if self.preview_tile_settings.is_some() {
@@ -5367,6 +5383,69 @@ mod estimate_ram_per_worker_bytes_tests {
             28 * tile_pixels
         );
         assert_eq!(with.min_image_cache_bytes, without.min_image_cache_bytes);
+    }
+
+    /// An AI step's network RAM is counted once for the job (one inference
+    /// at a time), not per worker: on the largest image the network gets -
+    /// a 2048² piece with its halo on a slide, the image itself when
+    /// smaller. Without one, nothing is shared.
+    #[test]
+    fn an_ai_step_is_planned_once_for_the_job() {
+        use crate::pipeline::pipeline::{CorePipelineSettings, Pipeline};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        let with_step = |width: u64, command: Option<PipelineCommand>| {
+            let mut images = IndexMap::new();
+            images.insert(PathBuf::from("a.tif"), image_entry(width, width, 1));
+            let mut job = job_with(images);
+            if let Some(command) = command {
+                let mut pipeline = Pipeline::new(
+                    PipelineId(1),
+                    CorePipelineSettings {
+                        start_image: ImageAddress::Channel(0),
+                    },
+                );
+                let algorithm = crate::job::algos_from_config::into_algorithm(command).unwrap();
+                pipeline.add_step(
+                    evanalyzer_cfg::core_types::StepId(1),
+                    Scope::Global,
+                    algorithm,
+                );
+                job.add_pre_process_pipeline(pipeline);
+            }
+            job.estimate_ram_budget()
+        };
+        let unet = || Some(PipelineCommand::UNet(Default::default()));
+        let stardist = || Some(PipelineCommand::Stardist(Default::default()));
+        // The pieces this computer's RAM gets (`evanalyzer_ai::piece_side_for`).
+        let ram = crate::memory::SystemRam::now().total;
+        let input = |bytes_per_pixel: f64, side: usize| {
+            let piece = evanalyzer_ai::piece_side_for(bytes_per_pixel, ram, side, side);
+            evanalyzer_ai::largest_model_input(side, piece) as u64
+        };
+        let tile = MAX_TILE_SIZE;
+        assert_eq!(with_step(20_000, None).shared_bytes, 0);
+        assert_eq!(
+            with_step(20_000, unet()).shared_bytes,
+            1600 * input(1600.0, tile).pow(2)
+        );
+        assert_eq!(
+            with_step(1024, unet()).shared_bytes,
+            1600 * input(1600.0, 1024).pow(2)
+        );
+        assert_eq!(
+            with_step(20_000, stardist()).shared_bytes,
+            400 * input(400.0, tile).pow(2)
+        );
+        // At most a third of the RAM - or the smallest pieces.
+        assert!(
+            with_step(20_000, unet()).shared_bytes <= ram / 3
+                || input(1600.0, tile) == 512 + 2 * 128
+        );
+        // Not per worker.
+        assert_eq!(
+            with_step(20_000, unet()).total_bytes(),
+            with_step(20_000, None).total_bytes()
+        );
     }
 
     /// The thread count without the tiled-image rule.

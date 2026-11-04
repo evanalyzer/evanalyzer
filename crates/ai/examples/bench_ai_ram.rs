@@ -9,7 +9,10 @@
 //! `VmHWM` reset through `/proc/self/clear_refs`).
 //!
 //!   LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo run --release -p evanalyzer_ai \
-//!     --features test-support --example bench_ai_ram -- <stardist|unet32|unet64> <side> [threads]
+//!     --features test-support --example bench_ai_ram -- <stardist|unet32|unet64|unet-file=PATH> <side> [threads] [piece side]
+//!
+//! `unet-file=PATH`: a real U-Net's TorchScript file (e.g. bioimage.io's
+//! `joyful-pig`), foreground channel 0, boundary channel 1.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-11-04
@@ -51,22 +54,33 @@ fn image(side: usize) -> Vec<f32> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let kind = args.get(1).expect("stardist | unet32 | unet64").as_str();
+    let kind = args
+        .get(1)
+        .expect("stardist | unet32 | unet64 | unet-file=PATH")
+        .as_str();
     let side: usize = args.get(2).expect("side").parse().unwrap();
     let threads: usize = args.get(3).map_or_else(
         || std::thread::available_parallelism().unwrap().get(),
         |t| t.parse().unwrap(),
     );
+    // The pieces of a big computer (`evanalyzer_ai::piece_side_for`).
+    let piece_side: usize = args.get(4).map_or(2048, |p| p.parse().unwrap());
+    let unet = Task::UNet {
+        foreground_channel: 0,
+        softmax: false,
+        boundary_channel: 1,
+        piece_side,
+    };
     let ((_dir, model), task) = match kind {
-        "stardist" => (bench_stardist_model(), Task::StarDist),
-        "unet32" | "unet64" => (
-            bench_unet_model(kind[4..].parse().unwrap()),
-            Task::UNet {
-                foreground_channel: 0,
-                softmax: false,
-                boundary_channel: 1,
-            },
+        file if file.starts_with("unet-file=") => (
+            (
+                tempfile::tempdir().unwrap(),
+                file["unet-file=".len()..].into(),
+            ),
+            unet,
         ),
+        "stardist" => (bench_stardist_model(), Task::StarDist { piece_side }),
+        "unet32" | "unet64" => (bench_unet_model(kind[4..].parse().unwrap()), unet),
         other => panic!("unknown model {other}"),
     };
     let request = Request { model, task };

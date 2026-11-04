@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 /// Bumped on every change to the types or the C functions below: a plugin
 /// built against another version is refused.
-pub const API_VERSION: u32 = 3;
+pub const API_VERSION: u32 = 4;
 
 /// Which devices AI inference may use.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -62,6 +62,48 @@ pub struct EngineInfo {
     pub devices: Vec<DeviceInfo>,
 }
 
+/// The sides of the part of a piece a U-Net or StarDist keeps, largest
+/// first: a tile side beyond the chosen one runs in pieces
+/// (`torch::pieces`). Larger pieces are faster (libtorch uses many cores
+/// better, the halo is computed less often), smaller ones take less RAM -
+/// [`piece_side_for`] picks.
+pub const PIECE_SIDES: [usize; 3] = [2048, 1024, 512];
+
+/// The halo of the pieces as planned: a model that sees the whole image
+/// gets this one; the measured receptive fields were 80-112 px (U-Net,
+/// StarDist layouts) - a wider one is rare (at most 240 px, the probe's
+/// limit).
+pub const PLANNED_HALO: usize = 128;
+
+/// The largest image side a U-Net or StarDist is run at on a tile side of
+/// `side` with pieces of `piece`: the side itself up to `piece`, else a
+/// piece with its halo on both sides (as planned, [`PLANNED_HALO`]). For
+/// RAM plans: a network's RAM grows with the pixels it gets at once.
+pub fn largest_model_input(side: usize, piece: usize) -> usize {
+    if side <= piece {
+        side
+    } else {
+        side.min(piece + 2 * PLANNED_HALO)
+    }
+}
+
+/// The piece side for a `width x height` tile of a network taking
+/// `bytes_per_pixel` of its input: the largest of [`PIECE_SIDES`] whose
+/// largest input ([`largest_model_input`]) takes at most a third of
+/// `ram_bytes` - the computer's RAM (or the user's limit), not what is free
+/// now: the same on every run of a computer, so its results are too. The
+/// smallest when none fits.
+pub fn piece_side_for(bytes_per_pixel: f64, ram_bytes: u64, width: usize, height: usize) -> usize {
+    let budget = ram_bytes as f64 / 3.0;
+    PIECE_SIDES
+        .into_iter()
+        .find(|&piece| {
+            let pixels = largest_model_input(width, piece) * largest_model_input(height, piece);
+            bytes_per_pixel * pixels as f64 <= budget
+        })
+        .unwrap_or(PIECE_SIDES[PIECE_SIDES.len() - 1])
+}
+
 /// One model run: which model file, and what to compute with it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
@@ -85,6 +127,8 @@ pub enum Task {
         softmax: bool,
         /// A boundary-probability channel (boundary-aware models), `-1` none.
         boundary_channel: i32,
+        /// A tile side beyond this runs in pieces of it ([`piece_side_for`]).
+        piece_side: usize,
     },
     /// Cellpose(-SAM) flows: run in 256 x 256 tiles, blended.
     Cellpose {
@@ -97,7 +141,10 @@ pub enum Task {
         replicate_gray_channel: bool,
     },
     /// StarDist probability and ray distances.
-    StarDist,
+    StarDist {
+        /// A tile side beyond this runs in pieces of it ([`piece_side_for`]).
+        piece_side: usize,
+    },
     /// YOLOv5 detection (and instance masks for segmentation exports), run
     /// in overlapping 640 x 640 windows; detections in image coordinates,
     /// before the global NMS.
@@ -363,7 +410,7 @@ pub mod ffi {
     /// `void eva_ai_free(Buf)` - gives a buffer back to the plugin.
     pub type FreeFn = unsafe extern "C" fn(buf: Buf);
     /// `void eva_ai_release_models(void)` - lets go of every loaded model
-    /// (interface version 3).
+    /// (interface version 4).
     pub type ReleaseModelsFn = unsafe extern "C" fn();
 
     pub const SYMBOL_API_VERSION: &[u8] = b"eva_ai_api_version\0";
@@ -386,6 +433,30 @@ pub mod ffi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GB: u64 = 1 << 30;
+
+    /// A U-Net (1.6 KB per pixel) and StarDist (0.4 KB) on a 4096² slide
+    /// tile and smaller images: 2048² pieces where a third of the RAM holds
+    /// one, smaller ones on a small computer; an image up to the piece side
+    /// whole.
+    #[test]
+    fn pieces_as_large_as_a_third_of_the_ram_holds() {
+        let unet = |ram: u64, side: usize| piece_side_for(1600.0, ram, side, side);
+        assert_eq!(unet(64 * GB, 4096), 2048);
+        assert_eq!(unet(32 * GB, 4096), 2048);
+        assert_eq!(unet(16 * GB, 4096), 1024);
+        assert_eq!(unet(8 * GB, 4096), 1024);
+        assert_eq!(unet(4 * GB, 4096), 512);
+        assert_eq!(unet(GB, 4096), 512, "the smallest when none fits");
+        assert_eq!(unet(64 * GB, 2048), 2048, "whole");
+        assert_eq!(unet(8 * GB, 2048), 1024);
+        assert_eq!(unet(8 * GB, 1024), 2048, "whole: it fits");
+        assert_eq!(piece_side_for(400.0, 8 * GB, 4096, 4096), 2048);
+        assert_eq!(largest_model_input(4096, 2048), 2048 + 256);
+        assert_eq!(largest_model_input(2048, 2048), 2048);
+        assert_eq!(largest_model_input(1100, 1024), 1100);
+    }
 
     #[test]
     fn requests_and_responses_cross_the_interface_unchanged() {

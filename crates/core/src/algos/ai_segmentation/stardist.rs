@@ -76,6 +76,18 @@ struct Candidate {
     area: usize,
 }
 
+/// What the network takes per pixel of the image it gets at once (see
+/// `shared_ram_bytes`).
+const NETWORK_BYTES_PER_PIXEL: f64 = 400.0;
+
+/// The piece side for a `width x height` tile on this computer (its RAM or
+/// the user's limit, [`evanalyzer_ai::piece_side_for`]) - what the planner
+/// reserved for (`shared_ram_bytes`).
+fn piece_side(width: usize, height: usize) -> usize {
+    let ram_total = crate::memory::SystemRam::now().total;
+    evanalyzer_ai::piece_side_for(NETWORK_BYTES_PER_PIXEL, ram_total, width, height)
+}
+
 impl ImageAlgorithm for Stardist {
     fn execute(
         &self,
@@ -89,7 +101,9 @@ impl ImageAlgorithm for Stardist {
 
         let request = Request {
             model: self.model_path.clone(),
-            task: Task::StarDist,
+            task: Task::StarDist {
+                piece_side: piece_side(width, height),
+            },
         };
         let image = Image {
             width,
@@ -151,6 +165,25 @@ impl ImageAlgorithm for Stardist {
 
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
+    }
+
+    /// One inference at a time on the CPU (the AI engine's one slot): the
+    /// network's activations on the largest image it gets at once - the
+    /// tile, or a piece of it beyond 2048² ([`evanalyzer_ai::largest_model_input`]).
+    /// 0.4 KB per pixel: measured 0.37 KB for the layout of StarDist's
+    /// `2D_versatile_fluo` (BENCHMARK.md "AI models: RAM per inference" -
+    /// [`NETWORK_BYTES_PER_PIXEL`]). On a GPU they are in its memory - planned anyway (the computer may
+    /// run on its CPU).
+    fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize, ram_total: u64) -> u64 {
+        let piece = evanalyzer_ai::piece_side_for(
+            NETWORK_BYTES_PER_PIXEL,
+            ram_total,
+            tile_width,
+            tile_height,
+        );
+        let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
+            * evanalyzer_ai::largest_model_input(tile_height, piece);
+        (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64
     }
 }
 

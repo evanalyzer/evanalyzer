@@ -18,6 +18,7 @@ use tch::{CModule, Device, IValue, Kind, Tensor};
 pub(crate) fn run(
     scheduler: &TorchScheduler,
     model_path: &Path,
+    piece_side: usize,
     image: Image<'_>,
 ) -> Result<Response> {
     let (width, height) = (image.width, image.height);
@@ -33,12 +34,16 @@ pub(crate) fn run(
         |model, device| {
             let predict = |pixels: &[f32], w: usize, h: usize| predict(model, device, pixels, w, h);
             // A big tile in pieces (RAM of one piece), see `pieces`.
-            let halo = match pieces::needs_pieces(width, height) {
-                true => scheduler.halo(model_path, || pieces::receptive_halo(predict))?,
+            let piece = pieces::piece_side(piece_side);
+            let halo = match pieces::needs_pieces(width, height, piece) {
+                true => Some(pieces::halo_of(
+                    scheduler.halo(model_path, || pieces::receptive_halo(predict))?,
+                    model_path,
+                )),
                 false => None,
             };
             let planes = match halo {
-                Some(halo) => pieces::run(pixels, width, height, halo, predict)?,
+                Some(halo) => pieces::run(pixels, width, height, halo, piece, predict)?,
                 None => predict(pixels, width, height)?,
             };
             Ok(Response::StarDist {
@@ -52,8 +57,16 @@ pub(crate) fn run(
     )
 }
 
+/// Side lengths StarDist networks run at are a multiple of this - StarDist
+/// pads to its `div_by` (2^depth x grid: 16 for `2D_versatile_fluo`); else
+/// the upsampled and the skipped features don't fit ("Expected size 137 but
+/// got size 136" at 1100 px).
+const SIZE_MULTIPLE: usize = 16;
+
 /// The model on a `width x height` image: the object probability, then the
-/// ray distances, per grid cell - as [`Planes`].
+/// ray distances, per grid cell - as [`Planes`]. A side that isn't a
+/// multiple of [`SIZE_MULTIPLE`] is padded at the end (mirrored, as
+/// StarDist) and the output cropped back to the image's grid cells.
 pub(super) fn predict(
     model: &CModule,
     device: Device,
@@ -65,21 +78,53 @@ pub(super) fn predict(
         .to_device(device)
         .to_kind(Kind::Float)
         .reshape([1, 1, height as i64, width as i64]);
+    let right = width.next_multiple_of(SIZE_MULTIPLE) - width;
+    let bottom = height.next_multiple_of(SIZE_MULTIPLE) - height;
+    let input = match (right, bottom) {
+        (0, 0) => input,
+        // Mirroring needs every pad smaller than its side; a tiny tile
+        // repeats its edge pixels instead.
+        _ => {
+            let mode = if right < width && bottom < height {
+                "reflect"
+            } else {
+                "replicate"
+            };
+            input.pad([0, right as i64, 0, bottom as i64], mode, None)
+        }
+    };
+    let (padded_width, padded_height) = (width + right, height + bottom);
 
     let (prob_tensor, dist_tensor) = split_outputs(model, input)?;
 
     let prob_sizes = prob_tensor.size();
     let dist_sizes = dist_tensor.size();
-    let grid_height = prob_sizes[prob_sizes.len() - 2] as usize;
-    let grid_width = prob_sizes[prob_sizes.len() - 1] as usize;
+    if prob_sizes.len() < 2 || dist_sizes.len() < 3 {
+        return Err("StarDist model output has too few dimensions".into());
+    }
+    let out_height = prob_sizes[prob_sizes.len() - 2] as usize;
+    let out_width = prob_sizes[prob_sizes.len() - 1] as usize;
     let n_rays = dist_sizes[dist_sizes.len() - 3] as usize;
+    if out_width == 0 || out_height == 0 {
+        return Err("StarDist model returned an empty output".into());
+    }
+    // The grid cells of the image itself (not of the padding).
+    let grid_x = (padded_width / out_width).max(1);
+    let grid_y = (padded_height / out_height).max(1);
+    let grid_width = (width / grid_x).clamp(1, out_width);
+    let grid_height = (height / grid_y).clamp(1, out_height);
+    let crop = |t: &Tensor| {
+        let dims = t.size().len() as i64;
+        t.narrow(dims - 2, 0, grid_height as i64)
+            .narrow(dims - 1, 0, grid_width as i64)
+    };
 
     Ok(Planes {
         planes: 1 + n_rays,
         width: grid_width,
         height: grid_height,
-        first: flatten(&prob_tensor, grid_height * grid_width)?,
-        rest: flatten(&dist_tensor, n_rays * grid_height * grid_width)?,
+        first: flatten(&crop(&prob_tensor), grid_height * grid_width)?,
+        rest: flatten(&crop(&dist_tensor), n_rays * grid_height * grid_width)?,
     })
 }
 
@@ -152,5 +197,52 @@ fn split_outputs(model: &CModule, input: Tensor) -> Result<(Tensor, Tensor)> {
             }
         }
         [] => Err("StarDist model returned no tensor outputs".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::torch::test_support::bench_stardist_model;
+
+    /// A real StarDist layout (`2D_versatile_fluo`, grid 2) on a tile whose
+    /// sides aren't multiples of 16 - which failed in the network before
+    /// the padding: it runs, gives the tile's own grid cells, and away from
+    /// the padded edge (the receptive field, 112 px) the same values as on a
+    /// larger image holding the tile.
+    #[test]
+    fn a_tile_not_a_multiple_of_16_runs_and_matches_a_larger_image() {
+        let (_dir, path) = bench_stardist_model();
+        let model = CModule::load_on_device(&path, Device::Cpu).unwrap();
+        let (big, width, height) = (304usize, 300usize, 290usize);
+        let image: Vec<f32> = (0..big * big)
+            .map(|i| (((i % big) / 23 + (i / big) / 19) % 3) as f32 * 0.4)
+            .collect();
+        let tile: Vec<f32> = (0..height)
+            .flat_map(|y| image[y * big..y * big + width].iter().copied())
+            .collect();
+        let whole = predict(&model, Device::Cpu, &image, big, big).unwrap();
+        let part = predict(&model, Device::Cpu, &tile, width, height).unwrap();
+        assert_eq!((part.width, part.height), (width / 2, height / 2));
+        assert_eq!(part.planes, 33);
+        let range = whole
+            .first
+            .iter()
+            .fold(0f32, |m, v| m.max(v.abs()))
+            .max(1e-6);
+        for plane in 0..part.planes {
+            for y in 0..(height - 112) / 2 {
+                for x in 0..(width - 112) / 2 {
+                    let (a, b) = (
+                        part.plane(plane)[y * part.width + x],
+                        whole.plane(plane)[y * whole.width + x],
+                    );
+                    assert!(
+                        (a - b).abs() <= 1e-5 * range.max(b.abs()),
+                        "plane {plane} ({x}, {y}): {a} vs {b}"
+                    );
+                }
+            }
+        }
     }
 }

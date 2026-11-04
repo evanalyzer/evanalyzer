@@ -2020,33 +2020,47 @@ Before - the whole tile through the network, RAM per pixel constant:
 | U-Net 32 | 235 MB | 706 MB | 2,702 MB | 10,605 MB |
 | U-Net 64 | 490 MB | 1,375 MB | 5,373 MB | ~21 GB (not finished) |
 
-Now (`crates/ai/src/torch/pieces.rs`): a tile beyond 2048² per side runs in
-pieces of 2048² plus a halo = the model's receptive field, measured once per
-model (an empty image and one bright pixel, as StarDist); a model that sees
-the whole image (InstanceNorm) runs whole. Old / new alternated:
+Now (`crates/ai/src/torch/pieces.rs`): a tile beyond the piece side runs
+in pieces plus a halo = the model's receptive field, measured once per model
+(an empty image and one bright pixel, as StarDist); a model that sees the
+whole image (InstanceNorm) gets 128 px. The piece side comes from the
+computer's RAM (`evanalyzer_ai::piece_side_for`: the largest of 2048 / 1024
+/ 512 whose input takes at most a third of it) - on this 62 GB computer
+2048²; 1024² is what an 8-16 GB computer gets for a U-Net (forced with the
+bench's piece argument). On power, 22 threads, 2 runs each, alternated:
 
-| Case | Old: time / RAM | New: time / RAM |
-|---|---|---|
-| StarDist 2048² (one piece) | 9.9-11.6 s / 1,568 MB | 10.0-11.6 s / 1,568 MB |
-| StarDist 4096² | 15.2-39.1 s / 6,288 MB | 22.5-47.5 s / 2,355-2,361 MB |
-| U-Net 32 4096² | 31.2-31.5 s / 10,592 MB | 39.9-42.1 s / 3,076-3,094 MB |
-| U-Net 64 4096² | - | 101.4-101.8 s / 5,785-5,841 MB |
+| Case | Before (whole tile) | 2048² pieces | 1024² pieces |
+|---|---|---|---|
+| StarDist 2048² | 2.9-3.1 s / 1,568 MB | (whole, unchanged) | 4.5-5.1 s / 672-684 MB |
+| U-Net 32 2048² | 5.9-6.0 s / 2,655 MB | (whole, unchanged) | 9.4-11.5 s / 805-826 MB |
+| StarDist 4096² | 9.0-9.5 s / 6,289 MB | 12.8-14.2 s / 2,349-2,357 MB | 19.3-22.3 s / 1,212-1,327 MB |
+| U-Net 32 4096² | 20.2-20.8 s / 10,592 MB | 25.5-28.8 s / 3,022-3,076 MB | 37.2-40.3 s / 1,093-1,198 MB |
+| `joyful-pig` (real) 4096² | 624-648 s / 25,164 MB | 74-80 s / 7,378-7,400 MB | - |
+| U-Net 64 4096² (battery) | ~21 GB (not finished) | 101 s / 5,841 MB | - |
 
-Times on battery with a changing CPU clock (the 2048² row is ~3x slower
-than unthrottled), so only old/new pairs side by side compare: a 4096² tile
-+20-30 % for the AI step (halo computed twice; libtorch uses 22 cores less
-well on smaller inputs) - to measure again on power. Pieces of 1024² first
-(unthrottled): StarDist 2048² 2.9-3.0 → 5.3-6.6 s, U-Net 32 2048² 6.1-7.8 →
-9.3-11.5 s, U-Net 64 2048² 17.3-22.3 → 27.0-29.9 s - slower on small
-images, rejected; StarDist 4096² 1,259 MB at 21-23 s.
+The stand-in networks get 30-45 % slower on a slide tile in 2048² pieces
+(the halo, 80-112 px, is computed twice; libtorch uses 22 cores less well
+on smaller inputs), the real `joyful-pig` 8x faster (libtorch on its 25 GB
+of activations at once). Images up to 2048² run whole as before where a
+third of the RAM holds them (U-Net 2048²: from ~16 GB); on smaller
+computers 1024² pieces - 1.5-1.9x slower, a third of the RAM. The padding
+fix (StarDist) and the request's piece side cost nothing: committed pieces
+vs now, StarDist 2048² 2.6-2.9 / 2.8-2.9 s, 4096² 12.6-14.1 / 12.9-14.2 s,
+U-Net 32 4096² 26.1-29.5 / 26.4-29.7 s, same RAM.
 
 Results: in pieces equal to the whole tile up to float rounding - largest
 difference 9.7e-8 of the range, no pixel on the other side of 0.5 (StarDist
-halo 112 px, U-Net 80 px; `real_networks_in_pieces_give_the_whole_tile`). A
-too narrow halo (16 px) differs ~5e-5. The real bioimage.io `joyful-pig`
-(InstanceNorm in every layer) is seen as "whole image" and runs whole; in
-pieces it would flip 0.06-0.18 % of the foreground and 0.3-0.6 % of the
-boundary pixels (halo 128-16 px).
+halo 112 px, U-Net 80 px; `real_networks_in_pieces_give_the_whole_tile`, on
+1024² pieces and a 2100 x 1100 tile). A too narrow halo (16 px) differs
+~5e-5. The real bioimage.io `joyful-pig` (InstanceNorm in every layer) can't
+be split exactly; with 1024² pieces a halo of 16 / 64 / 128 px flips 0.18 /
+0.10 / 0.06 % of the foreground and 0.64 / 0.44 / 0.31 % of the boundary
+pixels - run with 128 px (decided 2026-11-04). Its result then depends on
+the piece side, i.e. on the computer's RAM class.
+
+RAM plan: U-Net 1.6 KB, StarDist 0.4 KB per pixel of the network's largest
+input, once per job (`ImageAlgorithm::shared_ram_bytes`); measured
+`joyful-pig` 1,653 MB at 1024², 6,411 MB at 2048² (1.55 KB per pixel).
 
 ## Peak RAM overview - for the system requirements
 
@@ -2107,7 +2121,7 @@ graphics driver).
 | Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
 | Track Nearest Neighbor, same objects (image by image; was 384 MB all at once) | 199-229 MB | 2026-10-29 | Lineage in the results, Track Nearest Neighbor image by image |
 | Whole slide `tests/haut` with Propagation, 21 threads / 4 threads and `--max-ram 6000` | 7.55-7.65 GB / 3.9 GB (was 11.1-11.3 / 7.07 GB) | 2026-10-29 | Whole-image commands without RAM per pixel |
-| One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB (was 6.3 / 10.6 / ~21 GB); up to 2048²: 1.6 / 2.7 / 5.4 GB | 2026-11-04 | AI models: RAM per inference |
+| One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | 2048² pieces: StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB, joyful-pig 7.4 GB (was 6.3 / 10.6 / ~21 / 25.2 GB); 1024² pieces (8-16 GB computers): 1.3 / 1.2 GB; up to 2048² whole: 1.6 / 2.7 / 5.4 / 6.4 GB | 2026-11-04 | AI models: RAM per inference |
 
 Temp disk space for the image cache's spill: see "Whole slide: one unnamed spill
 file" - up to width × height × channels × 4 bytes per plane when RAM is short.
