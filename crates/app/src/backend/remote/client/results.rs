@@ -942,6 +942,26 @@ mod tests {
         assert!(remote.is_connected());
     }
 
+    /// Cancelled at once: the cancel reaches the worker right behind the
+    /// request, before its thread has started the export - and stops it.
+    #[test]
+    fn an_export_cancelled_right_away_is_cancelled_on_the_worker() {
+        let remote = connect(BrokenResultsBackend(LocalBackend::default()));
+        let db = remote.open_results(Path::new("/data/any.evadb")).unwrap();
+        for _ in 0..20 {
+            let start = Instant::now();
+            let result = waiting_export(db.as_ref(), &AtomicBool::new(true), &mut |_, _, _| {});
+            assert!(
+                matches!(result, Err(InternalErrors::Cancelled)),
+                "{result:?}"
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "stopped by the cancel, not by the export's own time limit"
+            );
+        }
+    }
+
     #[test]
     fn an_export_whose_connection_drops_reports_the_lost_connection() {
         let remote = connect(BrokenResultsBackend(LocalBackend::default()));

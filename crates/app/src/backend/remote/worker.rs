@@ -416,8 +416,19 @@ impl Session {
         };
         match msg {
             ClientMsg::Request { id, request } => {
+                // An export has no "started" reply: the client may cancel it
+                // right away, before its thread runs - so its cancel flag is
+                // known here already, where a `Cancel` is handled.
+                let export_cancel = matches!(request, Request::ExportResults { .. }).then(|| {
+                    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    self.running
+                        .lock()
+                        .unwrap()
+                        .insert(id, CancelHandle::new(Arc::clone(&flag)));
+                    flag
+                });
                 let session = Arc::clone(self);
-                std::thread::spawn(move || session.handle(id, request, blobs));
+                std::thread::spawn(move || session.handle(id, request, blobs, export_cancel));
             }
             ClientMsg::Cancel { id } => {
                 if let Some(cancel) = self.running.lock().unwrap().get(&id) {
@@ -456,7 +467,15 @@ impl Session {
         self.reply(id, Reply::Failed(e.into()), Vec::new());
     }
 
-    fn handle(&self, id: u64, request: Request, blobs: Vec<Vec<u8>>) {
+    /// `export_cancel`: an export's cancel flag, registered in `running`
+    /// (see `on_frame`); a new one without.
+    fn handle(
+        &self,
+        id: u64,
+        request: Request,
+        blobs: Vec<Vec<u8>>,
+        export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) {
         let files = self.backend.files();
         let none = Vec::new;
         match native_paths(request) {
@@ -558,13 +577,12 @@ impl Session {
                 });
                 let (source, export) = match prepared {
                     Ok(prepared) => prepared,
-                    Err(e) => return self.fail(id, &e),
+                    Err(e) => {
+                        self.running.lock().unwrap().remove(&id);
+                        return self.fail(id, &e);
+                    }
                 };
-                let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                self.running
-                    .lock()
-                    .unwrap()
-                    .insert(id, CancelHandle::new(Arc::clone(&flag)));
+                let flag = export_cancel.unwrap_or_default();
                 let result = source.export(&export, &flag, &mut |message, current, total| {
                     let progress = Reply::ExportProgress {
                         message: message.to_string(),
@@ -1113,7 +1131,7 @@ mod session_tests {
 
     /// The one reply `request` gets, handled synchronously.
     fn reply_to(session: &Session, rx: &Receiver<Vec<u8>>, request: Request) -> (u64, Reply) {
-        session.handle(7, request, Vec::new());
+        session.handle(7, request, Vec::new(), None);
         let ServerMsg::Reply { id, reply } = frame::decode::<ServerMsg>(&rx.try_recv().unwrap())
             .unwrap()
             .msg
@@ -1185,6 +1203,7 @@ mod session_tests {
                 path: PathBuf::from("/data/x"),
             },
             vec![b"contents".to_vec()],
+            None,
         );
         let ServerMsg::Reply { id, reply } = frame::decode::<ServerMsg>(&rx.try_recv().unwrap())
             .unwrap()
