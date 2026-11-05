@@ -1293,6 +1293,68 @@ mod tests {
         assert_eq!(gradient_at(&stops, 0.25), 0x800000);
         assert_eq!(gradient_at(&stops, 7.0), 0xFFFFFF, "clamped");
     }
+
+    /// A thumbnail is the strip's tile at most, in the channels' colors; an
+    /// image that can't be read gets none.
+    #[test]
+    fn a_thumbnail_is_made_small_from_the_image_and_none_without_one() {
+        let app_state = crate::editor::test_support::test_ui_state();
+        let path = crate::editor::test_support::grayscale_image_path();
+        let colors = std::collections::BTreeMap::from([(0, [1.0, 0.0, 0.0])]);
+        let thumb = make_thumb(&app_state, &path, 0, &colors).expect("a thumbnail");
+        assert!(thumb.width() > 0 && thumb.height() > 0);
+        assert!(
+            thumb.width() <= THUMB_KEPT.0 && thumb.height() <= THUMB_KEPT.1,
+            "{} x {}",
+            thumb.width(),
+            thumb.height()
+        );
+        assert!(
+            thumb.as_slice().iter().all(|px| px.g == 0 && px.b == 0),
+            "red only"
+        );
+        assert!(thumb.as_slice().iter().any(|px| px.r > 0));
+        // Another series than there is: the first.
+        assert!(make_thumb(&app_state, &path, 7, &colors).is_some());
+        let missing = path.with_file_name("not-there.tif");
+        assert!(make_thumb(&app_state, &missing, 0, &colors).is_none());
+    }
+
+    /// With reduced motion, or no zoom yet, the view lands at once; else it
+    /// flies there - part of the way on the first tick, exactly there once
+    /// [`FLY_MS`] are over.
+    #[test]
+    fn a_fly_lands_at_once_with_reduced_motion_else_after_its_time() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let view = ui.global::<ViewportSlintState>();
+        let at = |view: &ViewportSlintState| {
+            (
+                view.get_zoom_factor(),
+                view.get_offset_x(),
+                view.get_offset_y(),
+            )
+        };
+        view.set_zoom_factor(1.0);
+        fly_to_view(&ui, (2.0, -10.0, -20.0), (100.0, 100.0), true);
+        assert_eq!(at(&view), (2.0, -10.0, -20.0), "reduced motion");
+        view.set_zoom_factor(0.0);
+        fly_to_view(&ui, (3.0, -1.0, -2.0), (100.0, 100.0), false);
+        assert_eq!(at(&view), (3.0, -1.0, -2.0), "no zoom to start from");
+
+        view.set_zoom_factor(1.0);
+        view.set_offset_x(0.0);
+        view.set_offset_y(0.0);
+        fly_to_view(&ui, (4.0, -100.0, -100.0), (100.0, 100.0), false);
+        assert_eq!(at(&view), (1.0, 0.0, 0.0), "not before its first tick");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+        let (zoom, ..) = at(&view);
+        assert!(zoom > 1.0 && zoom < 4.0, "on its way: {zoom}");
+        std::thread::sleep(std::time::Duration::from_millis(FLY_MS as u64));
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+        assert_eq!(at(&view), (4.0, -100.0, -100.0), "landed");
+        assert!(FLY.with(|fly| fly.borrow().is_none()), "and stopped");
+    }
 }
 
 /// The card's "Children": how many objects of `objects` belong to `object`,

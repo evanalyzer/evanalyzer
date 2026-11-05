@@ -10499,4 +10499,693 @@ pub(crate) mod tests {
         assert_eq!(state.get_split_sel().mean, "–", "no such channel: nothing");
         let _ = controller;
     }
+
+    // -- split: Plate ----------------------------------------------------------
+
+    /// The image shown in the split gets `n` objects of class 1, 20 px
+    /// apart (copies of its first), none selected.
+    fn split_objects(controller: &ResultsStateController, n: u32) {
+        let mut split = controller.split.lock().unwrap();
+        let template = split.objects.first().cloned().expect("an object");
+        split.objects = Arc::new(
+            (0..n)
+                .map(|i| evanalyzer_app::results::ResultObject {
+                    object_id: format!("object-{i}"),
+                    class_id: 1,
+                    bbox_px: [i * 20, 0, i * 20 + 10, 10],
+                    ..template.clone()
+                })
+                .collect(),
+        );
+        split.selected = None;
+    }
+
+    /// Plate, a well clicked: its images in the filmstrip (names the
+    /// analysis lacks dropped), the first shown with the well in its title;
+    /// a strip image shown by its name, an unknown name changes nothing.
+    #[test]
+    fn split_a_wells_images_are_in_the_filmstrip_and_one_is_shown() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        drain_ui_queue();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        state.set_active_well("A1".into());
+        controller.split_show_well(vec![
+            "A1_01.tif".into(),
+            "B9_01.tif".into(),
+            "A1_02.tif".into(),
+        ]);
+        drain_ui_queue();
+        let thumbs: Vec<String> = state
+            .get_split_thumbs()
+            .iter()
+            .map(|thumb| thumb.key.to_string())
+            .collect();
+        assert_eq!(thumbs, ["A1_01.tif", "A1_02.tif"]);
+        assert_eq!(
+            controller.split.lock().unwrap().image.as_deref(),
+            Some("A1_01.tif")
+        );
+        assert_eq!(state.get_split_title(), "Well A1 · A1_01.tif");
+        assert_eq!(state.get_split_image_key(), "A1_01.tif");
+
+        state.invoke_split_show_image("A1_02.tif".into());
+        drain_ui_queue();
+        assert_eq!(state.get_split_title(), "Well A1 · A1_02.tif");
+        assert_eq!(state.get_split_image_key(), "A1_02.tif");
+        state.invoke_split_show_image("B9_01.tif".into());
+        drain_ui_queue();
+        assert_eq!(
+            controller.split.lock().unwrap().image.as_deref(),
+            Some("A1_02.tif"),
+            "not in the well: stays"
+        );
+
+        // "Open in Images" from the plate: its title on the bar, no ‹ ›.
+        state.invoke_split_open_in_images();
+        assert!(state.get_peek());
+        assert_eq!(state.get_peek_label(), "Well A1 · A1_02.tif");
+        assert!(!state.get_peek_can_step());
+        assert_eq!(
+            ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Images
+        );
+    }
+
+    /// A well's field shown by name, a heatmap tile on the image drilled
+    /// into: an unknown field or no image drilled into shows nothing.
+    #[test]
+    fn split_a_field_by_name_or_a_tile_without_an_image_shows_nothing_new() {
+        let (_ui, controller) = split_controller();
+        controller.split_show_image_named("B9_01.tif");
+        controller.split_show_tile("R0C0");
+        drain_ui_queue();
+        assert_eq!(controller.split.lock().unwrap().image, None);
+
+        controller.split_show_image_named("A2_01.tif");
+        drain_ui_queue();
+        let split = controller.split.lock().unwrap();
+        assert_eq!(split.image.as_deref(), Some("A2_01.tif"));
+        assert_eq!(split.objects.len(), 1, "its object");
+        assert_eq!(split.selected, None, "the whole image");
+    }
+
+    /// Plate: ‹ › go round the image's objects - ‹ first the last one -
+    /// "n / total" of the image's objects; without objects nothing happens.
+    #[test]
+    fn split_plate_arrows_go_round_the_images_objects() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        split_objects(&controller, 3);
+        let selected = || controller.split.lock().unwrap().selected;
+
+        state.invoke_split_step(-1);
+        drain_ui_queue();
+        assert_eq!(selected(), Some(2), "the last one");
+        assert_eq!((state.get_split_pos(), state.get_split_total()), (3, 3));
+        assert_eq!(state.get_split_sel().id, short_object_id("object-2"));
+        state.invoke_split_step(1);
+        assert_eq!(selected(), Some(0), "round");
+        state.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!(selected(), Some(1));
+        assert_eq!(state.get_split_pos(), 2);
+
+        split_objects(&controller, 0);
+        state.invoke_split_step(1);
+        assert_eq!(selected(), None);
+    }
+
+    /// List: ↑ with no row selected goes to the last row; without rows the
+    /// arrows do nothing.
+    #[test]
+    fn split_list_arrows_start_at_the_end_going_up_and_need_rows() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        let rows = controller.list_row_locations.lock().unwrap().clone();
+        state.set_list_selected_row(-1);
+        state.invoke_split_step(-1);
+        drain_ui_queue();
+        assert_eq!(state.get_list_selected_row(), rows.len() as i32 - 1);
+        assert_eq!(
+            controller.split.lock().unwrap().image.as_deref(),
+            Some(rows.last().unwrap().0.as_str())
+        );
+
+        controller.list_row_locations.lock().unwrap().clear();
+        state.set_list_selected_row(-1);
+        state.invoke_split_step(1);
+        assert_eq!(state.get_list_selected_row(), -1);
+    }
+
+    /// The selected object's family on the card and the image: a cell its
+    /// spots ("ClassB · 1") linked and in the child color, the rest dimmed;
+    /// a spot its cell ("ClassA") in the parent color.
+    #[test]
+    fn split_the_selected_objects_family_is_on_its_card_and_the_image() {
+        use crate::editor::object_render::{CHILD_RGB, DIMMED_RGB, PARENT_RGB, SELECTED_RGB};
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        split_objects(&controller, 3);
+        {
+            let mut split = controller.split.lock().unwrap();
+            let mut objects = (*split.objects).clone();
+            objects[1].class_id = 2;
+            objects[1].parent_ids = vec!["object-0".into()];
+            split.objects = Arc::new(objects);
+            split.selected = Some(0);
+        }
+        controller.split_push_selection(false);
+        controller.split_push_overlay();
+        drain_ui_queue();
+        let sel = state.get_split_sel();
+        assert_eq!(sel.children, "ClassB · 1");
+        assert_eq!(sel.parents, "");
+        let overlay = controller.viewport().results_overlay().unwrap();
+        let colors: Vec<[u8; 3]> = overlay.objects.iter().map(|o| o.rgb).collect();
+        assert_eq!(colors, [SELECTED_RGB, CHILD_RGB, DIMMED_RGB]);
+        assert!(overlay.objects[2].dimmed);
+        assert_eq!(overlay.links, [((25.5, 5.5), (5.5, 5.5))], "spot to cell");
+
+        controller.split.lock().unwrap().selected = Some(1);
+        controller.split_push_selection(false);
+        controller.split_push_overlay();
+        drain_ui_queue();
+        let sel = state.get_split_sel();
+        assert_eq!(
+            (sel.children.as_str(), sel.parents.as_str()),
+            ("", "ClassA")
+        );
+        let overlay = controller.viewport().results_overlay().unwrap();
+        assert_eq!(overlay.objects[0].rgb, PARENT_RGB);
+    }
+
+    /// Plate "Color by value": an object without a value is gray; the
+    /// highest value is the gradient's end.
+    #[test]
+    fn split_color_by_value_grays_an_object_without_a_value() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        split_objects(&controller, 3);
+        {
+            let mut split = controller.split.lock().unwrap();
+            let mut objects = (*split.objects).clone();
+            objects[0].value = Some(1.0);
+            objects[1].value = Some(3.0);
+            split.objects = Arc::new(objects);
+        }
+        state.invoke_split_by_value_changed(true);
+        let overlay = controller.viewport().results_overlay().unwrap();
+        assert_eq!(overlay.objects[2].rgb, [0x8A, 0x8A, 0x93], "no value");
+        let schema = controller
+            .matrix_filter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|filter| filter.color_schema.clone())
+            .unwrap_or_default();
+        let end = *evanalyzer_app::results::color_scale_gradient(&schema)
+            .last()
+            .unwrap();
+        assert_eq!(
+            overlay.objects[1].rgb,
+            [(end >> 16) as u8, (end >> 8) as u8, end as u8],
+            "the highest"
+        );
+        assert_ne!(overlay.objects[0].rgb, overlay.objects[1].rgb);
+    }
+
+    /// The viewer's plane moves the results only while the split shows its
+    /// image there.
+    #[test]
+    fn split_the_viewers_plane_moves_the_results_only_with_the_split_image() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        let t = || controller.plane_filter.lock().unwrap().selected_t_stack;
+
+        // Another image in the viewer.
+        let opened = controller
+            ._app_state
+            .get_project()
+            .tmp_settings
+            .current_image
+            .clone();
+        controller
+            ._app_state
+            .get_project_write()
+            .tmp_settings
+            .current_image = Some(PathBuf::from("/data/images/elsewhere.tif"));
+        controller._app_state.plane_changed(None, 1);
+        assert_eq!(t(), 0);
+        controller
+            ._app_state
+            .get_project_write()
+            .tmp_settings
+            .current_image = opened;
+
+        // The split away.
+        state.invoke_split_shown(false);
+        controller._app_state.plane_changed(None, 1);
+        assert_eq!(t(), 0);
+
+        state.invoke_split_shown(true);
+        controller._app_state.plane_changed(None, 1);
+        drain_ui_queue();
+        assert_eq!(t(), 1);
+        assert_eq!(state.get_t_stack(), 1);
+    }
+
+    /// The card's fold is a user setting.
+    #[test]
+    fn split_the_cards_fold_is_remembered() {
+        let (ui, controller) = split_controller();
+        ui.global::<ResultsState>()
+            .invoke_split_card_folded_changed(true);
+        assert!(
+            controller
+                ._app_state
+                .load_app_settings()
+                .results_split
+                .card_folded
+        );
+    }
+
+    /// An image on the disk: its channels in the card's picker, the channel
+    /// picked kept within them.
+    #[test]
+    fn split_an_image_on_disk_offers_its_channels_for_the_cards_mean() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        drain_ui_queue();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            crate::editor::test_support::grayscale_image_path(),
+            root.path().join("A1_01.tif"),
+        )
+        .unwrap();
+        controller._app_state.get_project_write().images.root = Some(root.path().to_path_buf());
+        state.invoke_split_channel_changed(5);
+        controller.split_show_image_named("A1_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_channels().row_count(), 1, "one channel");
+        assert_eq!(state.get_split_channel(), 0, "channel 5 isn't there");
+
+        // Not on the disk: none.
+        controller.split_show_image_named("A1_02.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_channels().row_count(), 0);
+    }
+
+    // -- split: Tracks ---------------------------------------------------------
+
+    /// `opened_tracked` at 500 nm a pixel, 30 s a frame, its images in the
+    /// project; A1_01 also has track 11 (T0 and T1, 33 px apart) and track
+    /// 12 (T1 only). Tracks, split on: A1_01's tracks beside it.
+    fn tracked_split() -> Opened {
+        tracked_split_with("")
+    }
+
+    /// [`tracked_split`], `sql` run on its database before it is opened.
+    fn tracked_split_with(sql: &str) -> Opened {
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        {
+            let conn = duckdb::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE ids AS SELECT object_id, row_number() OVER (ORDER BY object_id) AS n FROM objects;
+                 UPDATE objects SET track_id = ids.n, pixel_size_x_nm = 500 FROM ids WHERE objects.object_id = ids.object_id;
+                 INSERT INTO objects SELECT * REPLACE (1 AS t_stack, gen_random_uuid() AS object_id, \
+                     centroid_x_px + 3 AS centroid_x_px, centroid_y_px + 4 AS centroid_y_px) FROM objects;
+                 INSERT INTO objects SELECT * REPLACE (gen_random_uuid() AS object_id, 11::UBIGINT AS track_id, \
+                     bbox_xmin_px + 50 AS bbox_xmin_px, bbox_ymin_px + 50 AS bbox_ymin_px, \
+                     bbox_xmax_px + 50 AS bbox_xmax_px, bbox_ymax_px + 50 AS bbox_ymax_px, \
+                     centroid_x_px + 50 + 30 * t_stack AS centroid_x_px, centroid_y_px + 50 AS centroid_y_px) \
+                     FROM objects WHERE image_rel_path = 'A1_01.tif';
+                 INSERT INTO objects SELECT * REPLACE (gen_random_uuid() AS object_id, 12::UBIGINT AS track_id, \
+                     bbox_xmin_px + 70 AS bbox_xmin_px, bbox_ymin_px + 70 AS bbox_ymin_px, \
+                     bbox_xmax_px + 70 AS bbox_xmax_px, bbox_ymax_px + 70 AS bbox_ymax_px, \
+                     centroid_x_px + 70 AS centroid_x_px, centroid_y_px + 70 AS centroid_y_px) \
+                     FROM objects WHERE image_rel_path = 'A1_01.tif' AND t_stack = 1 AND track_id = 1;
+                 UPDATE images SET t_stacks = 2;
+                 ALTER TABLE images ADD COLUMN frame_interval_s DOUBLE;
+                 UPDATE images SET frame_interval_s = 30;",
+            )
+            .unwrap();
+            conn.execute_batch(sql).unwrap();
+        }
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        {
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            for name in ["A1_01.tif", "A1_02.tif", "A2_01.tif"] {
+                project.images.list.insert(
+                    PathBuf::from(name),
+                    ImageEntry {
+                        rel_path: PathBuf::from(name),
+                        file_size: 0,
+                        selected_series: 0,
+                        series: std::collections::BTreeMap::from([(0, SeriesSettings::default())]),
+                    },
+                );
+            }
+        }
+        ui.global::<crate::ImageMetaData>().set_nr_t_stacks(2);
+        let s = ui.global::<ResultsState>();
+        s.set_split(true);
+        s.set_rail_mode(ResultsRailMode::Tracks);
+        s.invoke_rail_mode_selected(ResultsRailMode::Tracks);
+        drain_ui_queue();
+        Opened {
+            ui,
+            controller,
+            _dir: dir,
+        }
+    }
+
+    fn track_ids(s: &ResultsState) -> Vec<String> {
+        s.get_track_rows()
+            .iter()
+            .map(|row| row.id.to_string())
+            .collect()
+    }
+
+    /// Tracks beside the image: the table, no row selected; a row selects
+    /// its track - its card in the unit picked (µm with a pixel size and a
+    /// frame interval), its object on the image, "n / total" of the tracks.
+    #[test]
+    fn tracks_a_row_selects_its_track_and_its_card_is_in_the_unit_picked() {
+        let o = tracked_split();
+        let s = o.state();
+        assert_eq!(s.get_tracks_image(), "A1_01.tif");
+        assert_eq!(s.get_tracks_summary(), "3 tracks");
+        assert_eq!(track_ids(&s), ["#1", "#11", "#12"]);
+        assert_eq!(s.get_track_selected(), -1);
+        assert!(!s.get_track_card().active);
+        assert!(s.get_tracks_um(), "pixel size and frame interval known");
+
+        s.invoke_tracks_unit_changed(1);
+        s.invoke_track_row_clicked(0);
+        drain_ui_queue();
+        let card = s.get_track_card();
+        assert!(card.active);
+        assert_eq!(card.id, "#1");
+        assert_eq!(card.span, "0–1 (2)");
+        assert_eq!(card.displacement, "2.50 µm", "5 px at 0.5 µm");
+        assert_eq!(card.speed, "5 µm/min", "5 px a frame of 30 s");
+        assert_eq!(s.get_track_selected(), 0);
+        assert_eq!((s.get_split_pos(), s.get_split_total()), (1, 3));
+        {
+            let split = o.controller.split.lock().unwrap();
+            let object = &split.objects[split.selected.expect("its object")];
+            assert_eq!(object.track_id, Some(1));
+        }
+
+        s.invoke_tracks_unit_changed(0);
+        drain_ui_queue();
+        assert_eq!(s.get_tracks_speed_unit(), "px/frame");
+        let card = s.get_track_card();
+        assert_eq!(
+            (card.displacement.as_str(), card.speed.as_str()),
+            ("5 px", "5 px/frame")
+        );
+        assert_eq!(
+            o.controller
+                ._app_state
+                .load_app_settings()
+                .results_split
+                .speed_unit,
+            evanalyzer_app::global::SpeedUnit::PxPerFrame
+        );
+        // A row past the table: nothing.
+        s.invoke_track_row_clicked(9);
+        assert_eq!(o.controller.tracks.lock().unwrap().selected, Some(0));
+    }
+
+    /// By speed: the fastest first, one without a speed last; the selected
+    /// track's row follows it.
+    #[test]
+    fn tracks_sorted_by_speed_keep_the_selected_track() {
+        let o = tracked_split();
+        let s = o.state();
+        s.invoke_track_row_clicked(0);
+        s.invoke_tracks_sort_changed(2);
+        drain_ui_queue();
+        assert_eq!(track_ids(&s), ["#11", "#1", "#12"]);
+        assert_eq!(s.get_track_selected(), 1, "#1 moved down");
+        let speeds: Vec<String> = s
+            .get_track_rows()
+            .iter()
+            .map(|r| r.speed.to_string())
+            .collect();
+        assert_eq!(speeds[2], "–", "one time point: no speed");
+        s.invoke_track_row_clicked(0);
+        drain_ui_queue();
+        assert_eq!(s.get_track_card().id, "#11");
+    }
+
+    /// ‹ › step through the table (round, ‹ first the last row); a track not
+    /// on the time point shown takes the viewer to its first one.
+    #[test]
+    fn tracks_arrows_go_round_and_to_a_tracks_first_time_point() {
+        let o = tracked_split();
+        let s = o.state();
+        let channels = o.ui.global::<crate::ChannelState>();
+        s.invoke_split_step(-1);
+        drain_ui_queue();
+        assert_eq!(s.get_track_card().id, "#12", "the last row");
+        assert_eq!(
+            o.controller.split.lock().unwrap().selected,
+            None,
+            "not at T0"
+        );
+        assert_eq!(channels.get_selected_t_stack(), 1, "to its first, T1");
+        assert_eq!((s.get_split_pos(), s.get_split_total()), (3, 3));
+
+        s.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!(s.get_track_card().id, "#1", "round");
+        assert!(
+            o.controller.split.lock().unwrap().selected.is_some(),
+            "on this time point"
+        );
+    }
+
+    /// ‹ › of the image: the previous / next analysed image's tracks (round).
+    #[test]
+    fn tracks_image_arrows_go_round_the_analysed_images() {
+        let o = tracked_split();
+        let s = o.state();
+        let names: Vec<String> = o
+            .controller
+            .images
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "A1_01.tif");
+        s.invoke_tracks_image_step(1);
+        drain_ui_queue();
+        assert_eq!(s.get_tracks_image(), names[1].as_str());
+        assert_eq!(s.get_tracks_summary(), "1 track");
+        assert_eq!(
+            o.controller.split.lock().unwrap().image.as_deref(),
+            Some(names[1].as_str()),
+            "beside its tracks"
+        );
+        s.invoke_tracks_image_step(-1);
+        s.invoke_tracks_image_step(-1);
+        drain_ui_queue();
+        assert_eq!(s.get_tracks_image(), names.last().unwrap().as_str());
+    }
+
+    /// The trails on the image: off, the last frames (at least one), whole
+    /// tracks, only the selected one, by track or class color - each a user
+    /// setting.
+    #[test]
+    fn tracks_trails_follow_the_trail_settings() {
+        use evanalyzer_app::global::TrailMode;
+        let o = tracked_split();
+        let s = o.state();
+        let trails = || {
+            o.controller
+                .viewport()
+                .results_overlay()
+                .expect("the image's objects")
+                .trails
+                .clone()
+        };
+        s.invoke_trail_changed(1, 0);
+        assert_eq!(trails().expect("trails").frames, Some(1), "at least one");
+        s.invoke_trail_changed(2, 5);
+        assert_eq!(trails().expect("trails").frames, None, "whole tracks");
+        let settings = o.controller._app_state.load_app_settings().results_split;
+        assert_eq!(
+            (settings.trail, settings.trail_frames),
+            (TrailMode::Whole, 5)
+        );
+        s.invoke_trail_changed(0, 5);
+        assert!(trails().is_none(), "off");
+        s.invoke_trail_changed(1, 5);
+
+        s.invoke_tracks_only_selected_changed(true);
+        assert!(trails().unwrap().only_selected);
+        s.invoke_track_row_clicked(1);
+        assert_eq!(trails().unwrap().selected, Some(1));
+
+        s.invoke_tracks_by_track_changed(true);
+        assert_eq!(
+            trails().unwrap().colors[0],
+            [0xFF, 0x8A, 0x4C],
+            "track 1's palette color"
+        );
+        s.invoke_tracks_by_track_changed(false);
+        assert_eq!(
+            trails().unwrap().colors[0],
+            [0xFF, 0xFF, 0xFF],
+            "its class has no color: white"
+        );
+        assert!(
+            !o.controller
+                ._app_state
+                .load_app_settings()
+                .results_split
+                .color_by_track
+        );
+    }
+
+    /// A click on an object selects its track; no track for it: none.
+    #[test]
+    fn tracks_a_click_on_an_object_selects_its_track() {
+        let o = tracked_split();
+        let s = o.state();
+        let (zoom, off_x, off_y, ..) = o.controller.viewport().view();
+        s.invoke_split_image_clicked(off_x + 55.0 * zoom, off_y + 55.0 * zoom);
+        drain_ui_queue();
+        assert_eq!(s.get_track_card().id, "#11");
+        assert_eq!(s.get_track_selected(), 1);
+        assert!(s.get_split_sel().active);
+
+        o.controller.tracks_object_clicked(None);
+        drain_ui_queue();
+        assert!(!s.get_track_card().active);
+        assert_eq!(s.get_track_selected(), -1);
+        assert_eq!(o.controller.tracks.lock().unwrap().selected, None);
+    }
+
+    /// The viewer on another time point: the results follow it (their T),
+    /// the image's objects are that time point's - the selected track's
+    /// selected; another Z plane reads its tracks again.
+    #[test]
+    fn tracks_the_viewers_plane_moves_the_results_and_the_objects() {
+        let o = tracked_split();
+        let s = o.state();
+        s.invoke_track_row_clicked(0);
+        drain_ui_queue();
+        let before: Vec<String> = o
+            .controller
+            .split
+            .lock()
+            .unwrap()
+            .objects
+            .iter()
+            .map(|obj| obj.object_id.clone())
+            .collect();
+
+        o.controller._app_state.plane_changed(None, 1);
+        drain_ui_queue();
+        assert_eq!(s.get_t_stack(), 1);
+        assert_eq!(
+            o.controller.plane_filter.lock().unwrap().selected_t_stack,
+            1
+        );
+        {
+            let split = o.controller.split.lock().unwrap();
+            assert_eq!(split.objects.len(), 3, "T1's: tracks 1, 11 and 12");
+            assert!(
+                split
+                    .objects
+                    .iter()
+                    .all(|obj| !before.contains(&obj.object_id))
+            );
+            let selected = &split.objects[split.selected.expect("the track's object")];
+            assert_eq!(selected.track_id, Some(1));
+        }
+
+        // Z 1 has nothing.
+        o.controller._app_state.plane_changed(Some(1), 1);
+        drain_ui_queue();
+        assert_eq!(s.get_z_stack(), 1);
+        assert_eq!(s.get_tracks_summary(), "No tracks");
+        assert!(o.controller.split.lock().unwrap().objects.is_empty());
+    }
+
+    /// Track 1 divided into 11 and 12: the summary counts it, the cards
+    /// name the family, the trails show it with the selected track.
+    #[test]
+    fn tracks_a_division_is_counted_and_on_the_cards() {
+        let o = tracked_split_with(
+            "ALTER TABLE objects ADD COLUMN parent_track_ids UBIGINT[];
+             UPDATE objects SET parent_track_ids = [1] WHERE track_id IN (11, 12);",
+        );
+        let s = o.state();
+        assert_eq!(s.get_tracks_summary(), "3 tracks · 1 division · 0 fusions");
+        s.invoke_track_row_clicked(0);
+        drain_ui_queue();
+        let card = s.get_track_card();
+        assert_eq!(
+            (card.from.as_str(), card.into.as_str()),
+            ("", "#11, #12 (division)")
+        );
+        let trails = o
+            .controller
+            .viewport()
+            .results_overlay()
+            .unwrap()
+            .trails
+            .clone()
+            .unwrap();
+        assert_eq!(trails.family, [1, 2], "its daughters");
+        s.invoke_track_row_clicked(1);
+        drain_ui_queue();
+        assert_eq!(s.get_track_card().from, "#1 (division)");
+    }
+
+    /// Split off in Tracks: every track; on again: the image's, as left.
+    #[test]
+    fn tracks_the_split_switches_between_one_images_and_every_track() {
+        let o = tracked_split();
+        let s = o.state();
+        s.invoke_track_row_clicked(1);
+        drain_ui_queue();
+        s.set_split(false);
+        s.invoke_split_changed(false);
+        drain_ui_queue();
+        assert_eq!(s.get_tracks_all_rows().row_count(), 5, "every image's");
+
+        s.set_split(true);
+        s.invoke_split_changed(true);
+        drain_ui_queue();
+        assert_eq!(s.get_tracks_image(), "A1_01.tif");
+        assert_eq!(track_ids(&s), ["#1", "#11", "#12"]);
+        assert_eq!(s.get_track_selected(), 1, "still selected");
+        assert_eq!(s.get_track_card().id, "#11");
+    }
 }

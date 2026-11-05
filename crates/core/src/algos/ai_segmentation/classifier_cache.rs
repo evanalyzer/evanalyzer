@@ -409,6 +409,30 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
     }
 
+    /// A model that fails to load is not kept: the next call loads again.
+    #[test]
+    fn load_cached_classifier_passes_an_error_on_and_does_not_keep_it() {
+        let _scope = ClassifierCacheScope::enter();
+        let path = PathBuf::from("/models/fails-first.evamodel");
+        let err = load_cached_classifier(&path, || {
+            Err::<SavedClassifier, _>(InternalErrors::Internal("corrupt model".into()))
+        })
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            InternalErrors::Internal("corrupt model".into()).to_string()
+        );
+
+        let load_calls = Cell::new(0);
+        let model = load_cached_classifier(&path, || {
+            load_calls.set(load_calls.get() + 1);
+            Ok::<_, InternalErrors>(sample_classifier())
+        })
+        .unwrap();
+        assert_eq!(load_calls.get(), 1, "the failure was not cached");
+        assert_eq!(model.version, sample_classifier().version);
+    }
+
     /// All threads share one load; the models go when the last run ends,
     /// not while another one still runs.
     #[test]

@@ -310,3 +310,55 @@ pub enum ConnectionSecurity {
     /// encrypted, but anyone in between could pose as the server.
     EncryptedUnverified,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::local::LocalBackend;
+
+    #[test]
+    fn a_local_backend_keeps_no_analyses_to_list_attach_or_forget() {
+        let backend = LocalBackend::default();
+
+        assert!(backend.list_jobs().unwrap().is_empty());
+        let Err(InternalErrors::InvalidArgument(text)) = backend.attach_job("job-7") else {
+            panic!("attaching locally must fail");
+        };
+        assert!(text.contains("'job-7'"), "{text}");
+        assert!(text.contains("only a server"), "{text}");
+        backend.forget_job("job-7").unwrap();
+    }
+
+    #[test]
+    fn a_local_backend_is_always_connected_and_needs_no_login() {
+        let backend = LocalBackend::default();
+
+        assert!(backend.is_connected());
+        assert_eq!(backend.connection_security(), ConnectionSecurity::Local);
+        assert_eq!(backend.user(), None);
+        backend.reconnect().unwrap();
+        backend.disconnect();
+        // Disconnecting has nothing to close locally.
+        assert!(backend.is_connected());
+    }
+
+    #[test]
+    fn an_analysis_request_without_base_results_is_a_full_analysis() {
+        let request = AnalysisRequest {
+            settings: ProjectSettings::default(),
+            project_path: PathBuf::from("/data/project"),
+            job_name: Some("run".into()),
+            threads: Some(2),
+            base_results: Some(PathBuf::from("/data/project/results/a.evadb")),
+        };
+        let mut json = serde_json::to_value(&request).unwrap();
+        json.as_object_mut().unwrap().remove("base_results");
+
+        let parsed: AnalysisRequest = serde_json::from_value(json).unwrap();
+
+        assert_eq!(parsed.base_results, None);
+        assert_eq!(parsed.project_path, request.project_path);
+        assert_eq!(parsed.job_name.as_deref(), Some("run"));
+        assert_eq!(parsed.threads, Some(2));
+    }
+}

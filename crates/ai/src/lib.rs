@@ -133,3 +133,51 @@ mod tests {
         assert!(err.contains("no AI model support"), "{err}");
     }
 }
+
+/// The app's build: models run in the plugin. Beside a test binary is no
+/// plugin, or the one `cargo test` built in target/debug/deps: either way
+/// the model here doesn't exist - an error message.
+#[cfg(all(test, feature = "torch-plugin", not(feature = "torch")))]
+mod plugin_tests {
+    use super::*;
+
+    /// The engine is chosen once: the config of later calls isn't asked
+    /// for, the plugin path can't change after it is set, and the
+    /// models are released (when there are any) without an error.
+    #[test]
+    fn the_engine_is_started_once_and_its_errors_are_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(set_plugin_path(dir.path().join("none.so")));
+        assert!(
+            !set_plugin_path(dir.path().join("other.so")),
+            "already chosen"
+        );
+
+        let request = Request {
+            model: dir.path().join("no-model.pt"),
+            task: Task::StarDist {
+                pieces: api::Pieces::fixed(2048),
+            },
+        };
+        let image = || Image {
+            width: 2,
+            height: 2,
+            channels: 1,
+            data: &[0.0; 4],
+        };
+        let config = || EngineConfig {
+            devices: DeviceSelection::Cpu,
+            gpu_slots: 1,
+            cores: 1,
+        };
+        let first = infer(&request, image(), config).unwrap_err();
+        let second = infer(&request, image(), || unreachable!("started already")).unwrap_err();
+        // (A plugin's torch adds a backtrace that differs after the first line.)
+        assert_eq!(first.lines().next(), second.lines().next());
+        assert!(
+            first.contains("AI plugin") || first.contains("Failed to load StarDist model"),
+            "{first}"
+        );
+        release_models();
+    }
+}

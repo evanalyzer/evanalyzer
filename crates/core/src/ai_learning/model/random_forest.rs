@@ -447,4 +447,92 @@ mod tests {
         let err = fit_random_forest(&rows, &labels, &RandomForestSettings::default()).unwrap_err();
         assert!(matches!(err, InternalErrors::Internal(_)));
     }
+
+    #[test]
+    fn fit_random_forest_rejects_zero_samples() {
+        let err = fit_random_forest(&[], &[], &RandomForestSettings::default()).unwrap_err();
+        assert!(err.to_string().contains("zero samples"), "{err}");
+    }
+
+    /// Every split criterion reaches smartcore as itself and fits the
+    /// clusters.
+    #[test]
+    fn every_split_criterion_is_passed_on_and_fits() {
+        let (rows, labels) = two_cluster_dataset();
+        for (criterion, expected) in [
+            (SplitCriterion::Gini, "Gini"),
+            (SplitCriterion::Entropy, "Entropy"),
+            (SplitCriterion::ClassificationError, "ClassificationError"),
+        ] {
+            let settings = RandomForestSettings {
+                criterion,
+                n_trees: 5,
+                max_depth: Some(3),
+                min_samples_leaf: 2,
+                min_samples_split: 3,
+                m: Some(1),
+                seed: 11,
+                ..Default::default()
+            };
+            let params = to_smartcore_params(&settings);
+            assert_eq!(format!("{:?}", params.criterion), expected);
+            assert_eq!(params.max_depth, Some(3));
+            assert_eq!(params.min_samples_leaf, 2);
+            assert_eq!(params.min_samples_split, 3);
+            assert_eq!(params.n_trees, 5);
+            assert_eq!(params.m, Some(1));
+            assert_eq!(params.seed, 11);
+            assert!(!params.keep_samples);
+
+            let classifier = fit_random_forest(&rows, &labels, &settings).unwrap();
+            assert_eq!(
+                classifier
+                    .predict(&[vec![0.05, 0.05], vec![10.05, 10.05]])
+                    .unwrap(),
+                [0, 1],
+                "{expected}"
+            );
+        }
+    }
+
+    /// Trees saved as `null` (never fitted) read as none: every row the
+    /// first class with no certainty - or an error without classes.
+    #[test]
+    fn a_forest_saved_without_trees_predicts_its_first_class_or_fails() {
+        let forest: Forest = serde_json::from_str(r#"{"trees":null,"classes":[3,4]}"#).unwrap();
+        assert!(forest.trees.is_empty());
+        assert_eq!(
+            forest
+                .predict_with_share(&[vec![1.0], vec![2.0], vec![3.0]])
+                .unwrap(),
+            (vec![3, 3, 3], vec![0.0, 0.0, 0.0])
+        );
+
+        for json in [r#"{"trees":null}"#, r#"{"trees":[],"classes":[]}"#] {
+            let forest: Forest = serde_json::from_str(json).unwrap();
+            let err = forest.predict_with_share(&[vec![1.0]]).unwrap_err();
+            assert!(err.to_string().contains("no classes"), "{json}: {err}");
+        }
+    }
+
+    #[test]
+    fn predict_with_share_of_no_rows_is_empty_and_ragged_rows_fail() {
+        let (rows, labels) = two_cluster_dataset();
+        let settings = RandomForestSettings {
+            n_trees: 3,
+            seed: 5,
+            ..Default::default()
+        };
+        let Classifier::RandomForest(forest) =
+            fit_random_forest(&rows, &labels, &settings).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(forest.predict_with_share(&[]).unwrap(), (vec![], vec![]));
+        assert!(
+            forest
+                .predict_with_share(&[vec![0.0, 0.0], vec![1.0]])
+                .is_err()
+        );
+    }
 }

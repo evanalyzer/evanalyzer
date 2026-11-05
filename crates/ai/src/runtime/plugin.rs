@@ -66,7 +66,17 @@ pub(crate) fn load(config: &EngineConfig) -> Result<Box<dyn InferenceEngine>, St
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let wants_gpu = config.devices != DeviceSelection::Cpu && !cuda_probe::usable_gpus().is_empty();
-    let candidates = candidates(CHOSEN.get().cloned(), exe_dir.as_deref(), wants_gpu);
+    load_from(
+        &candidates(CHOSEN.get().cloned(), exe_dir.as_deref(), wants_gpu),
+        config,
+    )
+}
+
+/// The first of `candidates` that loads, set up with `config`.
+fn load_from(
+    candidates: &[PathBuf],
+    config: &EngineConfig,
+) -> Result<Box<dyn InferenceEngine>, String> {
     let mut errors = Vec::new();
     for path in candidates.iter().filter(|p| p.is_file()) {
         log::info!("Loading the AI plugin {}", path.display());
@@ -510,6 +520,109 @@ mod tests {
         }
     }
 
+    /// No plugin in any of the places: "not installed", with where it
+    /// looked.
+    #[test]
+    fn no_plugin_anywhere_says_it_is_not_installed_and_where_it_looked() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.so"), dir.path().join("b.so"));
+        let err = load_from(&[a.clone(), b.clone()], &config()).err().unwrap();
+        assert!(err.contains("which is not installed"), "{err}");
+        assert!(
+            err.ends_with(&format!("Looked in: {}, {}", a.display(), b.display())),
+            "{err}"
+        );
+    }
+
+    /// Files that don't load are passed over; with none left, each one's
+    /// reason.
+    #[test]
+    fn files_that_do_not_load_are_passed_over_and_each_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.so"), dir.path().join("b.so"));
+        std::fs::write(&a, b"not a library").unwrap();
+        std::fs::write(&b, b"nor this").unwrap();
+        let err = load_from(&[a.clone(), b.clone()], &config()).err().unwrap();
+        assert!(
+            err.starts_with("The AI plugin could not be started: "),
+            "{err}"
+        );
+        let (first, second) = err.split_once("; ").expect("both named");
+        assert!(first.contains(&a.display().to_string()), "{err}");
+        assert!(second.starts_with(&b.display().to_string()), "{err}");
+    }
+
+    /// A broken file before the real plugin: the plugin after it is used.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_plugin_after_a_broken_file_is_loaded() {
+        let (folder, plugin) = installed_plugin(false);
+        let broken = folder.path().join("broken.so");
+        std::fs::write(&broken, b"not a library").unwrap();
+        let engine = load_from(&[broken, plugin], &config()).unwrap();
+        assert!(engine.info().name.starts_with("libtorch"));
+    }
+
+    /// A library that is no plugin loads - and may have brought libraries
+    /// into the process for good: the search stops at it, the plugin after
+    /// it isn't tried.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_library_that_is_no_plugin_stops_the_search() {
+        let libs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../libs/libtorch/lib");
+        let other = libs.join("libgomp.so.1");
+        if !other.is_file() {
+            eprintln!("skipped: no libtorch here");
+            return;
+        }
+        let (_folder, plugin) = installed_plugin(false);
+        let err = load_from(&[other.clone(), plugin], &config())
+            .err()
+            .unwrap();
+        assert!(
+            err.starts_with(&format!(
+                "The AI plugin could not be started: {}: not an AI plugin (",
+                std::path::absolute(&other).unwrap().display()
+            )),
+            "{err}"
+        );
+        assert!(!err.contains("; "), "only that one: {err}");
+    }
+
+    /// GPUs asked for that don't exist are left out: the plugin runs on
+    /// the CPU.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gpus_that_do_not_exist_leave_the_cpu() {
+        let (_folder, plugin) = installed_plugin(false);
+        let config = EngineConfig {
+            devices: DeviceSelection::Gpus(vec![7]),
+            ..config()
+        };
+        let engine = PluginEngine::load(&plugin, &config).unwrap();
+        assert_eq!(engine.info().devices.len(), 1);
+        assert_eq!(engine.info().devices[0].name, "CPU");
+    }
+
+    /// libtorch's CUDA library only if beside the plugin and loadable;
+    /// else the plugin runs without it (on the CPU).
+    #[test]
+    fn a_missing_or_broken_cuda_library_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join(library_name());
+        assert!(load_torch_cuda(&plugin).is_none(), "none there");
+        std::fs::write(dir.path().join(TORCH_CUDA), b"not a library").unwrap();
+        assert!(load_torch_cuda(&plugin).is_none(), "broken");
+        assert!(load_torch_cuda(Path::new("/")).is_none(), "no folder");
+    }
+
+    /// Only a CUDA plugin in `ai/cuda` beside the program counts - none
+    /// beside this test.
+    #[test]
+    fn no_cuda_plugin_is_installed_beside_a_test() {
+        assert!(!cuda_plugin_installed());
+    }
+
     /// The real plugin, built by cargo: loaded, set up, a model run through
     /// the C interface.
     #[test]
@@ -543,6 +656,12 @@ mod tests {
         };
         let err = engine.infer(&request, image).unwrap_err();
         assert!(err.contains("Failed to load StarDist model"), "{err}");
+
+        // Its models let go of, it runs again (loading them anew).
+        engine.release_models();
+        // (torch's backtrace after the first line differs.)
+        let again = engine.infer(&request, image).unwrap_err();
+        assert_eq!(again.lines().next(), err.lines().next());
     }
 
     /// The built plugin in a folder laid out as the release's `ai/cpu`

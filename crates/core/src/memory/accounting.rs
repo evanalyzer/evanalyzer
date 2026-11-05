@@ -231,6 +231,11 @@ pub fn large_peak() -> usize {
 mod tests {
     use super::*;
     use std::fmt::Write as _;
+    use std::sync::Mutex;
+
+    /// Held by the tests calling the allocator: one at a time changes the
+    /// counters.
+    static ALLOCATING: Mutex<()> = Mutex::new(());
 
     #[test]
     fn a_line_on_the_stack_is_cut_not_overflowed() {
@@ -252,5 +257,130 @@ mod tests {
         assert_eq!(COMMAND.with(Cell::get), "Voronoi");
         drop(outer);
         assert_eq!(COMMAND.with(Cell::get), "");
+    }
+
+    /// Only these tests call the allocator itself: the counters change by
+    /// exactly their blocks, though other tests run beside them.
+    #[test]
+    fn large_blocks_are_counted_and_small_ones_pass_through() {
+        let _one_at_a_time = ALLOCATING.lock().unwrap_or_else(|e| e.into_inner());
+        let allocator = AccountingAllocator;
+        let mib = LARGE_BYTES;
+        let base = large_in_use();
+        let small = Layout::from_size_align(LARGE_BYTES - 1, 8).unwrap();
+        let one = Layout::from_size_align(mib, 8).unwrap();
+        let two = Layout::from_size_align(2 * mib, 8).unwrap();
+        unsafe {
+            let p = allocator.alloc(small);
+            assert!(!p.is_null());
+            assert_eq!(large_in_use(), base, "below 1 MiB: not counted");
+            allocator.dealloc(p, small);
+            assert_eq!(large_in_use(), base);
+
+            let a = allocator.alloc(one);
+            assert!(!a.is_null());
+            assert_eq!(large_in_use(), base + mib, "1 MiB on: counted");
+            let z = allocator.alloc_zeroed(two);
+            assert!(!z.is_null());
+            assert!(
+                std::slice::from_raw_parts(z, 2 * mib)
+                    .iter()
+                    .all(|&b| b == 0)
+            );
+            assert_eq!(large_in_use(), base + 3 * mib);
+            assert!(large_peak() >= base + 3 * mib);
+            assert_eq!(
+                start_phase(),
+                base + 3 * mib,
+                "a phase starts from the bytes in use"
+            );
+
+            // Large to larger: the old size goes, the new comes.
+            a.write(7);
+            let a = allocator.realloc(a, one, 3 * mib);
+            assert!(!a.is_null());
+            assert_eq!(*a, 7, "realloc keeps the content");
+            assert_eq!(large_in_use(), base + 5 * mib);
+            let peak = large_peak();
+            assert!(peak >= base + 5 * mib);
+            // Large to small: no longer counted.
+            let three = Layout::from_size_align(3 * mib, 8).unwrap();
+            let a = allocator.realloc(a, three, 16);
+            assert!(!a.is_null());
+            assert_eq!(large_in_use(), base + 2 * mib);
+            // Small to large: counted from then on.
+            let tiny = Layout::from_size_align(16, 8).unwrap();
+            let a = allocator.realloc(a, tiny, mib);
+            assert!(!a.is_null());
+            assert_eq!(large_in_use(), base + 3 * mib);
+
+            allocator.dealloc(a, one);
+            allocator.dealloc(z, two);
+            assert_eq!(large_in_use(), base, "every block given back");
+            assert_eq!(large_peak(), peak, "freeing never lowers the peak");
+        }
+    }
+
+    /// A failed allocation counts nothing and - once a crash log is set -
+    /// notes its size, the large blocks in use and the command running.
+    #[test]
+    fn a_failed_allocation_is_noted_in_the_crash_log() {
+        use std::io::{Read as _, Seek as _};
+        let _one_at_a_time = ALLOCATING.lock().unwrap_or_else(|e| e.into_inner());
+        let allocator = AccountingAllocator;
+        // Larger than any address space: the system allocator fails.
+        let huge = Layout::from_size_align(1 << 62, 1).unwrap();
+        let base = large_in_use();
+        unsafe {
+            // No crash log yet: nothing to write to, nothing breaks.
+            assert!(allocator.alloc(huge).is_null());
+            assert_eq!(large_in_use(), base);
+
+            let file = tempfile::tempfile().unwrap();
+            log_out_of_memory_to(file.try_clone().unwrap());
+            assert!(allocator.alloc(huge).is_null());
+            {
+                let _running = running("Voronoi");
+                assert!(allocator.alloc_zeroed(huge).is_null());
+                let small = Layout::from_size_align(64, 8).unwrap();
+                let p = allocator.alloc(small);
+                assert!(allocator.realloc(p, small, 1 << 61).is_null());
+                assert_eq!(large_in_use(), base, "nothing counted on failure");
+                // A failed realloc leaves the old block as it was.
+                allocator.dealloc(p, small);
+            }
+
+            let mut log = String::new();
+            (&file).rewind().unwrap();
+            (&file).read_to_string(&mut log).unwrap();
+            let lines: Vec<&str> = log
+                .lines()
+                .filter(|l| l.starts_with("An allocation"))
+                .collect();
+            assert_eq!(lines.len(), 3, "{log}");
+            assert_eq!(
+                log.matches("=== EVAnalyzer out of memory (unix time ")
+                    .count(),
+                3
+            );
+            let in_use = format!("{} MB in large blocks in use", base >> 20);
+            assert!(lines[0].starts_with(&format!(
+                "An allocation of {} MB failed, {in_use}",
+                1u64 << 42
+            )));
+            assert!(lines[0].ends_with("command: -"), "no command running");
+            assert!(lines[1].starts_with(&format!("An allocation of {} MB failed", 1u64 << 42)));
+            assert!(lines[1].ends_with("command: Voronoi"));
+            assert!(lines[2].starts_with(&format!("An allocation of {} MB failed", 1u64 << 41)));
+            assert!(lines[2].ends_with("command: Voronoi"));
+        }
+    }
+
+    #[test]
+    fn a_stack_line_keeps_what_fits() {
+        let mut line = StackLine::default();
+        assert!(line.as_bytes().is_empty());
+        write!(line, "{} MB", 42).unwrap();
+        assert_eq!(line.as_bytes(), b"42 MB");
     }
 }

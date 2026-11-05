@@ -1100,4 +1100,836 @@ mod tests {
             vec![ObjectClass::Global(1), ObjectClass::Unset]
         );
     }
+
+    // --- The controller on a window --------------------------------------
+
+    use crate::editor::test_support::{
+        choose_file, fixture_image_path, project_with_fixture_image, project_with_one_image,
+        test_ui_window, ui_state_with_window,
+    };
+    use crate::editor::viewport_cache::ViewportCache;
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{FileBrowserState, UiState};
+    use bitvec::prelude::*;
+    use evanalyzer_cfg::settings::classification_settings::Class;
+
+    const NUCLEI: ObjectClass = ObjectClass::Global(5);
+    const TUMOR: ObjectClass = ObjectClass::Global(6);
+
+    /// A 2x2 object at x, of `classes`.
+    fn object(id: u128, classes: &[ObjectClass], x: u32) -> ObjectMetricSettings {
+        ObjectMetricSettings {
+            id: ObjectId(id),
+            object_class: classes.iter().cloned().collect(),
+            bbox: [x, 0, x + 1, 1],
+            mask_data: bitvec![u64, Lsb0; 1, 1, 1, 1],
+            area: 4,
+            ..Default::default()
+        }
+    }
+
+    /// `project` with the classes Nuclei (5) and Tumor (6), its image 20x20.
+    fn with_classes(mut project: ProjectWithRuntime) -> ProjectWithRuntime {
+        for (id, name, color) in [(5, "Nuclei", 0x3080f0), (6, "Tumor", 0xf03030)] {
+            project.settings.classification.classes_mut().push(Class {
+                id,
+                color,
+                name: name.into(),
+                notes: String::new(),
+            });
+        }
+        for image in project.settings.images.list.values_mut() {
+            for series in image.series.values_mut() {
+                series.image_width = 20;
+                series.image_height = 20;
+            }
+        }
+        project
+    }
+
+    /// The one-image project with these manual annotations and pipeline
+    /// objects.
+    fn project_with(
+        manual: Vec<ObjectMetricSettings>,
+        preview: Vec<ObjectMetricSettings>,
+    ) -> ProjectWithRuntime {
+        let mut project = with_classes(project_with_one_image());
+        project.get_selected_image_series_mut().unwrap().objects = manual;
+        project.tmp_settings.preview_objects = preview;
+        project
+    }
+
+    /// The controller with its collaborators on a headless window, its
+    /// callbacks attached.
+    fn controller(
+        project: ProjectWithRuntime,
+    ) -> (AppWindow, Arc<UiState>, Arc<AnnotationController>) {
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, project);
+        let weak = ui.as_weak();
+        let viewport = Arc::new(ViewportController::new(
+            weak.clone(),
+            ui_state.clone(),
+            Arc::new(ViewportCache::new(ui_state.clone())),
+        ));
+        let object_list = Arc::new(ObjectListController::new(
+            weak.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+        ));
+        let classification = Arc::new(ClassificationController::new(
+            weak.clone(),
+            ui_state.clone(),
+            object_list.clone(),
+            viewport.clone(),
+        ));
+        let controller = Arc::new(AnnotationController::new(
+            weak,
+            ui_state.clone(),
+            object_list,
+            classification,
+            viewport,
+        ));
+        controller.attach_callbacks();
+        (ui, ui_state, controller)
+    }
+
+    fn manual_objects(ui_state: &UiState) -> Vec<ObjectMetricSettings> {
+        ui_state
+            .get_project()
+            .get_objects()
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    fn rows(model: ModelRc<AnnotationClassRow>) -> Vec<(i32, String, i32)> {
+        model
+            .iter()
+            .map(|r| (r.id, r.name.to_string(), r.count))
+            .collect()
+    }
+
+    /// Unticks the row of `class` in `model`.
+    fn untick(model: &ModelRc<AnnotationClassRow>, class: &ObjectClass) {
+        let i = model.iter().position(|r| r.id == class.to_i32()).unwrap();
+        let mut row = model.row_data(i).unwrap();
+        row.checked = false;
+        model.set_row_data(i, row);
+    }
+
+    /// The message dialog shown: title, message, info (not a warning).
+    fn message(ui: &AppWindow) -> Option<(String, String, bool)> {
+        (ui.global::<GlobalAppState>().get_active_dialog() == DialogType::Warning).then(|| {
+            let w = ui.global::<WarningState>();
+            (
+                w.get_title().to_string(),
+                w.get_message().to_string(),
+                w.get_info(),
+            )
+        })
+    }
+
+    /// The copy dialog lists the pipeline objects' classes, most first,
+    /// unclassified by name.
+    #[test]
+    fn the_copy_dialog_lists_the_pipeline_classes_by_count() {
+        let (ui, _ui_state, _c) = controller(project_with(
+            vec![],
+            vec![
+                object(1, &[NUCLEI], 0),
+                object(2, &[NUCLEI], 3),
+                object(3, &[], 6),
+            ],
+        ));
+        let state = ui.global::<AnnotationState>();
+        state.set_copy_single(4);
+        state.invoke_open_copy_dialog();
+        assert_eq!(
+            rows(state.get_pipeline_classes()),
+            vec![(5, "Nuclei".into(), 2), (-1, "Unclassified".into(), 1)]
+        );
+        assert!(state.get_pipeline_classes().iter().all(|r| r.checked));
+        assert_eq!(state.get_copy_single(), -1, "all, not one");
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::CopyToManual
+        );
+    }
+
+    /// Copying copies the pipeline objects of the ticked classes only, with
+    /// their own classes, as one undo step.
+    #[test]
+    fn copying_takes_only_the_ticked_classes() {
+        let (ui, ui_state, _c) = controller(project_with(
+            vec![],
+            vec![
+                object(1, &[NUCLEI], 0),
+                object(2, &[TUMOR], 3),
+                object(3, &[], 6),
+            ],
+        ));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_copy_dialog();
+        untick(&state.get_pipeline_classes(), &TUMOR);
+        state.invoke_copy_all_to_manual(-1);
+        drain_ui_queue();
+
+        let copied = manual_objects(&ui_state);
+        let mut classes: Vec<_> = copied.iter().map(|o| o.object_class.clone()).collect();
+        classes.sort();
+        assert_eq!(classes, vec![[].into(), [NUCLEI].into()]);
+        assert!(
+            copied
+                .iter()
+                .all(|o| o.id != ObjectId(1) && o.id != ObjectId(3))
+        );
+        assert_eq!(
+            ui_state.get_project().get_preview_objects().len(),
+            3,
+            "the originals stay"
+        );
+        assert!(ui_state.is_dirty());
+        assert!(ui_state.undo());
+        assert!(manual_objects(&ui_state).is_empty(), "undone in one step");
+    }
+
+    /// A target class: every copy gets it instead of its own.
+    #[test]
+    fn copies_get_the_target_class() {
+        let (ui, ui_state, _c) = controller(project_with(
+            vec![],
+            vec![object(1, &[NUCLEI], 0), object(2, &[], 3)],
+        ));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_copy_dialog();
+        state.invoke_copy_all_to_manual(TUMOR.to_i32());
+        let classes: Vec<_> = manual_objects(&ui_state)
+            .into_iter()
+            .map(|o| o.object_class)
+            .collect();
+        assert_eq!(classes, vec![[TUMOR].into(), [TUMOR].into()]);
+    }
+
+    /// Nothing ticked copies nothing - not "all".
+    #[test]
+    fn copying_with_nothing_ticked_copies_nothing() {
+        let (ui, ui_state, _c) = controller(project_with(vec![], vec![object(1, &[NUCLEI], 0)]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_copy_dialog();
+        untick(&state.get_pipeline_classes(), &NUCLEI);
+        state.invoke_copy_all_to_manual(-1);
+        assert!(manual_objects(&ui_state).is_empty());
+        assert!(!ui_state.is_dirty());
+    }
+
+    /// The dialog for one pipeline object (its row after the manual ones):
+    /// its classes; copying copies only it and selects the copy.
+    #[test]
+    fn copying_one_pipeline_object_selects_its_copy() {
+        let (ui, ui_state, _c) = controller(project_with(
+            vec![object(10, &[], 10)],
+            vec![object(1, &[NUCLEI], 0), object(2, &[TUMOR, NUCLEI], 3)],
+        ));
+        let state = ui.global::<AnnotationState>();
+        // Row 1 is the manual annotation, 2 and 3 the pipeline objects.
+        state.invoke_open_copy_dialog_for(3);
+        assert_eq!(
+            rows(state.get_pipeline_classes()),
+            vec![(5, "Nuclei".into(), 1), (6, "Tumor".into(), 1)]
+        );
+        assert_eq!(state.get_copy_single(), 3);
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::CopyToManual
+        );
+
+        state.invoke_copy_all_to_manual(-1);
+        assert_eq!(state.get_copy_single(), -1, "reset for the next dialog");
+        let objects = manual_objects(&ui_state);
+        assert_eq!(objects.len(), 2);
+        let copy = &objects[1];
+        assert_eq!(copy.object_class, [NUCLEI, TUMOR].into());
+        assert_eq!(copy.bbox, [3, 0, 4, 1]);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(copy.id.clone())
+        );
+    }
+
+    /// One object copied to a target class gets only that class.
+    #[test]
+    fn copying_one_pipeline_object_to_a_class() {
+        let (ui, ui_state, _c) = controller(project_with(vec![], vec![object(1, &[NUCLEI], 0)]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_copy_dialog_for(1);
+        state.invoke_copy_all_to_manual(TUMOR.to_i32());
+        assert_eq!(manual_objects(&ui_state)[0].object_class, [TUMOR].into());
+    }
+
+    /// A row that is no pipeline object (a manual one, or none) opens no
+    /// dialog.
+    #[test]
+    fn the_copy_dialog_for_a_row_that_is_no_pipeline_object_stays_closed() {
+        let (ui, _ui_state, _c) = controller(project_with(
+            vec![object(10, &[], 10)],
+            vec![object(1, &[NUCLEI], 0)],
+        ));
+        let state = ui.global::<AnnotationState>();
+        for row in [0, 1, 3] {
+            state.invoke_open_copy_dialog_for(row);
+            assert_ne!(
+                ui.global::<GlobalAppState>().get_active_dialog(),
+                DialogType::CopyToManual,
+                "row {row}"
+            );
+        }
+    }
+
+    /// The delete dialog: the open image's classes and count; another
+    /// scope recounts, keeping what was unticked; Delete deletes those of
+    /// the ticked classes there.
+    #[test]
+    fn deleting_takes_the_ticked_classes_of_the_scope() {
+        let mut project = project_with(
+            vec![
+                object(1, &[NUCLEI], 0),
+                object(2, &[NUCLEI], 3),
+                object(3, &[TUMOR], 6),
+            ],
+            vec![],
+        );
+        let mut other = project
+            .settings
+            .images
+            .list
+            .get(Path::new("img.tif"))
+            .unwrap()
+            .clone();
+        other.rel_path = PathBuf::from("b.tif");
+        other.series.get_mut(&0).unwrap().objects =
+            vec![object(4, &[NUCLEI], 0), object(5, &[], 3)];
+        project
+            .settings
+            .images
+            .list
+            .insert(PathBuf::from("b.tif"), other);
+        let (ui, ui_state, _c) = controller(project);
+        let state = ui.global::<AnnotationState>();
+
+        state.invoke_open_delete_dialog();
+        assert_eq!(
+            rows(state.get_manual_classes()),
+            vec![(5, "Nuclei".into(), 2), (6, "Tumor".into(), 1)]
+        );
+        assert_eq!(state.get_delete_count(), 3);
+        assert_eq!(state.get_delete_summary(), "3 annotations on this image.");
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::DeleteManualAnnotations
+        );
+
+        untick(&state.get_manual_classes(), &TUMOR);
+        state.invoke_delete_selection_changed(false);
+        assert_eq!(state.get_delete_summary(), "2 annotations on this image.");
+
+        state.invoke_delete_selection_changed(true);
+        assert_eq!(
+            rows(state.get_manual_classes()),
+            vec![
+                (5, "Nuclei".into(), 3),
+                (-1, "Unclassified".into(), 1),
+                (6, "Tumor".into(), 1)
+            ]
+        );
+        let ticks: Vec<bool> = state
+            .get_manual_classes()
+            .iter()
+            .map(|r| r.checked)
+            .collect();
+        assert_eq!(ticks, vec![true, true, false], "Tumor stays unticked");
+        assert_eq!(state.get_delete_count(), 4);
+        assert_eq!(state.get_delete_summary(), "4 annotations on 2 images.");
+
+        ui_state
+            .get_project_runtime_write()
+            .set_selected_object(Some(ObjectId(3)));
+        state.invoke_delete_manual(true);
+        let project = ui_state.get_project();
+        let left: Vec<Vec<ObjectId>> = project
+            .settings
+            .images
+            .list
+            .values()
+            .map(|i| i.series[&0].objects.iter().map(|o| o.id.clone()).collect())
+            .collect();
+        assert_eq!(left, vec![vec![ObjectId(3)], vec![]]);
+        assert_eq!(project.get_selected_object_id(), None);
+        drop(project);
+        assert!(ui_state.is_dirty());
+    }
+
+    /// Nothing ticked: zero to delete, and Delete deletes nothing.
+    #[test]
+    fn deleting_with_nothing_ticked_deletes_nothing() {
+        let (ui, ui_state, _c) = controller(project_with(vec![object(1, &[NUCLEI], 0)], vec![]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_delete_dialog();
+        untick(&state.get_manual_classes(), &NUCLEI);
+        state.invoke_delete_selection_changed(false);
+        assert_eq!(state.get_delete_count(), 0);
+        assert_eq!(state.get_delete_summary(), "0 annotations on this image.");
+        state.invoke_delete_manual(false);
+        assert_eq!(manual_objects(&ui_state).len(), 1);
+        assert!(!ui_state.is_dirty());
+    }
+
+    /// Export and import need an open image: a message says so.
+    #[test]
+    fn geojson_without_an_open_image_says_to_open_one() {
+        let mut project = project_with(vec![object(1, &[NUCLEI], 0)], vec![]);
+        project.rest_current_image_path();
+        let (ui, _ui_state, _c) = controller(project);
+        let state = ui.global::<AnnotationState>();
+        for action in 0..3 {
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::None);
+            match action {
+                0 => state.invoke_open_export_dialog(),
+                1 => state.invoke_export_geojson(),
+                _ => state.invoke_pick_import_file(),
+            }
+            drain_ui_queue();
+            let (title, text, info) = message(&ui).expect("a message");
+            assert_eq!(title, "No image open");
+            assert!(text.starts_with("Open the image"));
+            assert!(info);
+            assert!(!ui.global::<FileBrowserState>().get_visible());
+        }
+    }
+
+    /// The export dialog: the image's name and the classes of its
+    /// annotations and pipeline objects, by class id, unclassified last.
+    #[test]
+    fn the_export_dialog_lists_the_images_classes() {
+        let (ui, _ui_state, _c) = controller(project_with(
+            vec![object(1, &[TUMOR], 0), object(2, &[], 3)],
+            vec![object(3, &[NUCLEI], 6), object(4, &[TUMOR], 9)],
+        ));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_export_dialog();
+        assert_eq!(state.get_geojson_image(), "img.tif");
+        assert_eq!(
+            rows(state.get_export_classes()),
+            vec![
+                (5, "Nuclei".into(), 1),
+                (6, "Tumor".into(), 2),
+                (-1, "Unclassified".into(), 1)
+            ]
+        );
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::ExportAnnotations
+        );
+    }
+
+    /// Nothing ticked: no file dialog, a message.
+    #[test]
+    fn exporting_with_nothing_ticked_asks_for_classes() {
+        let (ui, _ui_state, _c) = controller(project_with(vec![object(1, &[NUCLEI], 0)], vec![]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_export_dialog();
+        untick(&state.get_export_classes(), &NUCLEI);
+        state.invoke_export_geojson();
+        drain_ui_queue();
+        assert!(!ui.global::<FileBrowserState>().get_visible());
+        assert_eq!(
+            message(&ui),
+            Some((
+                "Nothing exported".into(),
+                "Tick the classes to export.".into(),
+                true
+            ))
+        );
+    }
+
+    /// The save dialog starts in the project's folder, named after the
+    /// image; the ticked classes' annotations and pipeline objects are
+    /// written, a message says how many and where.
+    #[test]
+    fn exporting_writes_the_ticked_classes_to_the_chosen_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            vec![object(1, &[NUCLEI], 0), object(2, &[TUMOR], 3)],
+            vec![object(3, &[], 6)],
+        );
+        project.tmp_settings.current_project = Some(dir.path().join("p.evaproj"));
+        let (ui, _ui_state, _c) = controller(project);
+        let state = ui.global::<AnnotationState>();
+        state.invoke_open_export_dialog();
+        untick(&state.get_export_classes(), &TUMOR);
+        state.invoke_export_geojson();
+        drain_ui_queue();
+        let browser = ui.global::<FileBrowserState>();
+        assert!(browser.get_visible());
+        assert_eq!(browser.get_file_name(), "img.geojson");
+        assert_eq!(
+            PathBuf::from(browser.get_current_path().as_str()),
+            dir.path()
+        );
+
+        // Typed without the extension.
+        choose_file(&ui, &dir.path().join("out"));
+        let file = dir.path().join("out.geojson");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("written")).unwrap();
+        let types: Vec<&str> = json["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["properties"]["objectType"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, vec!["annotation", "detection"]);
+        assert_eq!(
+            message(&ui),
+            Some((
+                "Annotations exported".into(),
+                format!("2 objects written to {}.", file.display()),
+                true
+            ))
+        );
+    }
+
+    /// An open image no longer in the project (removed meanwhile): the
+    /// export fails with a warning that says so.
+    #[test]
+    fn exporting_an_image_gone_from_the_project_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = project_with(vec![], vec![]);
+        project.set_current_image_path(&PathBuf::from("gone.tif"));
+        let (ui, _ui_state, _c) = controller(project);
+        let state = ui.global::<AnnotationState>();
+        state.set_export_classes(ModelRc::new(VecModel::from(vec![AnnotationClassRow {
+            id: -1,
+            checked: true,
+            ..Default::default()
+        }])));
+        state.invoke_export_geojson();
+        choose_file(&ui, &dir.path().join("gone.geojson"));
+        assert_eq!(
+            message(&ui),
+            Some((
+                "Export failed".into(),
+                "gone.tif is not an image of the project".into(),
+                false
+            ))
+        );
+        assert!(!dir.path().join("gone.geojson").exists());
+    }
+
+    /// Writes a QuPath-like file: a 4x3 shape per class of `classes`
+    /// (`None`: none), side by side.
+    fn geojson_file(dir: &Path, classes: &[Option<&str>]) -> PathBuf {
+        let shape = |(i, class): (usize, &Option<&str>)| {
+            let x = 1 + 4 * i as i32;
+            let mut properties = serde_json::json!({ "objectType": "annotation" });
+            if let Some(name) = class {
+                properties["classification"] = serde_json::json!({ "name": name });
+            }
+            serde_json::json!({
+                "type": "Feature",
+                "geometry": { "type": "Polygon", "coordinates": [[[x, 1], [x + 3, 1], [x + 3, 3], [x, 3], [x, 1]]] },
+                "properties": properties
+            })
+        };
+        let file = dir.join("qupath.geojson");
+        let features: Vec<_> = classes.iter().enumerate().map(shape).collect();
+        std::fs::write(&file, serde_json::json!(features).to_string()).unwrap();
+        file
+    }
+
+    /// Picking a file shows the import dialog: the file's classes with
+    /// their default targets, the targets; applying adds the shapes with
+    /// the chosen mapping and says what happened.
+    #[test]
+    fn importing_maps_the_files_classes_and_adds_the_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = geojson_file(
+            dir.path(),
+            &[Some("Nuclei"), Some("Nuclei"), Some("Stroma"), None],
+        );
+        let (ui, ui_state, _c) = controller(project_with(vec![object(9, &[TUMOR], 15)], vec![]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_pick_import_file();
+        drain_ui_queue();
+        choose_file(&ui, &file);
+
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::ImportAnnotations
+        );
+        assert_eq!(state.get_geojson_image(), "img.tif");
+        assert_eq!(state.get_import_file(), "qupath.geojson");
+        assert_eq!(state.get_import_shapes(), 4);
+        let targets: Vec<String> = state
+            .get_import_targets()
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["New class", "No class", "Don't import", "Nuclei", "Tumor"]
+        );
+        assert_eq!(state.get_import_target_colors().row_count(), 5);
+        let classes = state.get_import_classes();
+        let mut found: Vec<(String, i32, i32)> = classes
+            .iter()
+            .map(|r| (r.name.to_string(), r.count, r.target))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                (String::new(), 1, TARGET_NONE),
+                ("Nuclei".into(), 2, 3),
+                ("Stroma".into(), 1, TARGET_NEW)
+            ]
+        );
+
+        // Stroma's shapes not imported, the unclassified one to Tumor.
+        for i in 0..classes.row_count() {
+            let mut row = classes.row_data(i).unwrap();
+            row.target = match row.name.as_str() {
+                "Stroma" => TARGET_SKIP,
+                "" => 4,
+                _ => row.target,
+            };
+            classes.set_row_data(i, row);
+        }
+        state.invoke_apply_import(false);
+        drain_ui_queue();
+
+        let objects = manual_objects(&ui_state);
+        let mut classes: Vec<_> = objects.iter().map(|o| o.object_class.clone()).collect();
+        classes.sort();
+        assert_eq!(
+            classes,
+            vec![
+                [NUCLEI].into(),
+                [NUCLEI].into(),
+                [TUMOR].into(),
+                [TUMOR].into()
+            ],
+            "the one there kept, 3 added"
+        );
+        assert!(ui_state.is_dirty());
+        let (title, text, info) = message(&ui).expect("a message");
+        assert_eq!(title, "Annotations imported");
+        assert!(info);
+        assert!(
+            text.starts_with("3 annotations added to the image."),
+            "{text}"
+        );
+        assert!(text.contains("1 shape not imported"), "{text}");
+        assert!(text.contains("Not measured"), "no image file: {text}");
+
+        // Applied once: a second Apply has nothing to apply.
+        state.invoke_apply_import(false);
+        drain_ui_queue();
+        assert_eq!(manual_objects(&ui_state).len(), 4);
+    }
+
+    /// Replacing: the image's manual annotations give way to the file's;
+    /// an unknown class becomes a new project class.
+    #[test]
+    fn importing_with_replace_replaces_the_annotations_and_makes_new_classes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = geojson_file(dir.path(), &[Some("Stroma")]);
+        let (ui, ui_state, _c) = controller(project_with(vec![object(9, &[TUMOR], 15)], vec![]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_pick_import_file();
+        drain_ui_queue();
+        choose_file(&ui, &file);
+        state.invoke_apply_import(true);
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let stroma = project
+            .settings
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.name == "Stroma")
+            .expect("a new class")
+            .global();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].object_class, [stroma].into());
+        drop(project);
+        let (_, text, _) = message(&ui).expect("a message");
+        assert!(text.contains("New classes: Stroma."), "{text}");
+    }
+
+    /// A file that isn't GeoJSON: a warning, no import dialog, nothing to
+    /// apply.
+    #[test]
+    fn importing_a_file_that_is_not_geojson_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("broken.geojson");
+        std::fs::write(&file, "not json").unwrap();
+        let (ui, ui_state, _c) = controller(project_with(vec![object(9, &[TUMOR], 15)], vec![]));
+        let state = ui.global::<AnnotationState>();
+        state.invoke_pick_import_file();
+        drain_ui_queue();
+        choose_file(&ui, &file);
+        let (title, text, info) = message(&ui).expect("a message");
+        assert_eq!(title, "Import failed");
+        assert!(text.contains("not GeoJSON"), "{text}");
+        assert!(!info);
+        state.invoke_apply_import(true);
+        drain_ui_queue();
+        assert_eq!(manual_objects(&ui_state).len(), 1, "nothing replaced");
+    }
+
+    /// The fixture image's project, with `objects` as manual annotations.
+    fn fixture_project_with(objects: Vec<ObjectMetricSettings>) -> ProjectWithRuntime {
+        let mut project = project_with_fixture_image();
+        project.get_selected_image_series_mut().unwrap().objects = objects;
+        project
+    }
+
+    /// Measuring in the background fills in the intensities of the
+    /// annotations asked for, and only theirs.
+    #[test]
+    fn annotations_are_measured_in_the_background() {
+        let (_ui, ui_state, c) = controller(fixture_project_with(vec![
+            object(1, &[], 0),
+            object(2, &[], 3),
+        ]));
+        c.measure_in_background(vec![ObjectId(1)]);
+        drain_ui_queue();
+        let objects = manual_objects(&ui_state);
+        assert!(!objects[0].intensities.is_empty(), "measured");
+        assert!(objects[1].intensities.is_empty(), "not asked for");
+        assert!(!ui_state.is_dirty(), "measured values are no edit");
+    }
+
+    /// No ids, or no open image: nothing measured.
+    #[test]
+    fn measuring_nothing_or_without_an_open_image_does_nothing() {
+        let (_ui, ui_state, c) = controller(fixture_project_with(vec![object(1, &[], 0)]));
+        c.measure_in_background(vec![]);
+        drain_ui_queue();
+        ui_state
+            .get_project_runtime_write()
+            .rest_current_image_path();
+        c.measure_in_background(vec![ObjectId(1)]);
+        drain_ui_queue();
+        assert!(
+            manual_objects_of_fixture(&ui_state)[0]
+                .intensities
+                .is_empty()
+        );
+    }
+
+    /// The fixture image's annotations, open or not.
+    fn manual_objects_of_fixture(ui_state: &UiState) -> Vec<ObjectMetricSettings> {
+        let name = PathBuf::from(fixture_image_path().file_name().unwrap());
+        ui_state
+            .get_project()
+            .settings
+            .images
+            .list
+            .get(&name)
+            .unwrap()
+            .series[&0]
+            .objects
+            .clone()
+    }
+
+    /// Measuring again measures every image's annotations and says how
+    /// many; an image whose file can't be read is named in the message.
+    #[test]
+    fn remeasuring_measures_every_image_and_counts_the_unreadable() {
+        let mut project = fixture_project_with(vec![object(1, &[], 0), object(2, &[], 3)]);
+        let mut missing = project
+            .settings
+            .images
+            .list
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        missing.rel_path = PathBuf::from("missing.tif");
+        missing.series.get_mut(&0).unwrap().objects = vec![object(3, &[], 0)];
+        project
+            .settings
+            .images
+            .list
+            .insert(PathBuf::from("missing.tif"), missing);
+        let (ui, ui_state, _c) = controller(project);
+        ui.global::<AnnotationState>().invoke_remeasure();
+        drain_ui_queue();
+
+        assert!(
+            manual_objects_of_fixture(&ui_state)
+                .iter()
+                .all(|o| !o.intensities.is_empty())
+        );
+        assert_eq!(
+            message(&ui),
+            Some((
+                "Annotations measured".into(),
+                "2 annotations measured on their images.\n\
+                 Not measured (image file not readable): 1 image."
+                    .into(),
+                true
+            ))
+        );
+    }
+
+    /// A project without images (no image folder): nothing to measure, no
+    /// message.
+    #[test]
+    fn remeasuring_a_project_without_images_does_nothing() {
+        let mut project = project_with(vec![object(1, &[], 0)], vec![]);
+        project.settings.images.root = None;
+        let (ui, ui_state, _c) = controller(project);
+        ui.global::<AnnotationState>().invoke_remeasure();
+        drain_ui_queue();
+        assert_eq!(message(&ui), None);
+        assert!(manual_objects(&ui_state)[0].intensities.is_empty());
+    }
+
+    #[test]
+    fn counts_are_spelled_singular_or_plural() {
+        assert_eq!(plural(1, "image", "images"), "1 image");
+        assert_eq!(plural(0, "image", "images"), "0 images");
+        assert_eq!(plural(2, "image", "images"), "2 images");
+    }
+
+    /// A target past the project's classes (gone meanwhile): a new class.
+    #[test]
+    fn an_import_target_past_the_classes_makes_a_new_one() {
+        assert_eq!(target_of(5, &[7, 8]), ClassTarget::New);
+        assert_eq!(target_of(4, &[7, 8]), ClassTarget::Class(8));
+        assert_eq!(target_of(-3, &[7]), ClassTarget::New);
+    }
+
+    #[test]
+    fn the_import_message_notes_unmeasured_images() {
+        let report = ImportReport {
+            objects: 1,
+            duplicates: 2,
+            created_classes: vec![],
+            skipped_features: 1,
+            skipped_by_class: 0,
+            unmeasured_images: vec![PathBuf::from("a.tif")],
+        };
+        assert_eq!(
+            import_message(&report),
+            "1 annotation added to the image.\n2 annotations were already there (the same pixels).\n\
+             1 feature skipped (points, lines or empty shapes).\n\
+             Not measured (the image file can't be read) - their intensities are missing."
+        );
+    }
 }

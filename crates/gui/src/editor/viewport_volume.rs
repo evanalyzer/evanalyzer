@@ -785,6 +785,581 @@ mod tests {
         assert_eq!(reduction(&info), Some((4, 2, 3)));
     }
 
+    /// A stack read through [`ImageSource`]: `channels(z)` channels on
+    /// plane z, channel c's sample at level-pixel (x, y) `value(c, x, y, z)`.
+    struct Planes {
+        meta: ImageMeta,
+        channels: fn(usize) -> usize,
+        value: fn(usize, usize, usize, usize) -> f32,
+    }
+
+    impl Planes {
+        /// Levels `sizes` (level 0 first), `depth` planes of `bits`; the
+        /// samples as an 8-bit reader normalizes them (`q × (1 / 255)`).
+        fn new(sizes: &[(u64, u64)], depth: i32, bits: u16) -> Self {
+            let mut info = ImageInfo {
+                nr_c_stacks: 1,
+                nr_z_stacks: depth,
+                nr_t_stacks: 1,
+                ..Default::default()
+            };
+            for (i, &(width, height)) in sizes.iter().enumerate() {
+                info.resolutions.insert(
+                    i as i32,
+                    PyramidInfo {
+                        nr_bits: bits,
+                        color_channels: 1,
+                        width,
+                        height,
+                        ..Default::default()
+                    },
+                );
+            }
+            Self {
+                meta: ImageMeta {
+                    series: BTreeMap::from([(0, info)]),
+                    ..Default::default()
+                },
+                channels: |_| 1,
+                value: |_, x, y, z| (x + 3 * y + 40 * z) as f32 * (1.0 / 255.0),
+            }
+        }
+
+        fn info(&self) -> ImageInfo {
+            self.meta.series[&0].clone()
+        }
+    }
+
+    impl ImageSource for Planes {
+        fn meta(&self) -> &ImageMeta {
+            &self.meta
+        }
+        fn read_tile(&self, req: &TileRequest) -> Result<Vec<ImageChannel>, InternalErrors> {
+            let z = *req.z_range.as_ref().unwrap().start() as usize;
+            let t = req.tile;
+            Ok((0..(self.channels)(z))
+                .map(|c| {
+                    let values = (0..t.width * t.height)
+                        .map(|i| {
+                            (self.value)(c, t.offset_x + i % t.width, t.offset_y + i / t.width, z)
+                        })
+                        .collect();
+                    ImageChannel {
+                        image: Arc::new(ImageContainer::F32Gray(ManagedImage {
+                            data: Image::new(
+                                ImageSize {
+                                    width: t.width,
+                                    height: t.height,
+                                },
+                                values,
+                            )
+                            .unwrap(),
+                            tile_offset: Default::default(),
+                            plane: None,
+                            dimensionality: ImageDimensionality::Planar,
+                        })),
+                        color: [1.0, 1.0, 1.0],
+                        is_visible: true,
+                        c_stack: c as i32,
+                        name: String::new(),
+                        is_rgb: false,
+                    }
+                })
+                .collect())
+        }
+    }
+
+    fn key(level: i32, xy_step: usize, z_step: usize) -> VolumeKey {
+        VolumeKey {
+            path: PathBuf::new(),
+            series: 0,
+            t: 0,
+            level,
+            xy_step,
+            z_step,
+        }
+    }
+
+    /// 8-bit samples kept as u8; every second plane and pixel of level 1,
+    /// whose pixel is two of the full image's: the planes as thick as
+    /// `aniso` × z_step over the 4 full-image pixels a voxel spans.
+    #[test]
+    fn a_reduced_volume_keeps_every_nth_plane_and_pixel() {
+        let planes = Planes::new(&[(16, 12), (8, 6)], 6, 8);
+        let v = read_volume(&planes, &planes.info(), &key(1, 2, 2), 3.0).unwrap();
+        assert_eq!((v.width, v.height, v.depth), (4, 3, 3));
+        assert_eq!(v.aniso, 3.0 * 2.0 / 4.0);
+        let channel = &v.channels[0];
+        assert!(matches!(channel.samples, Samples::U8 { .. }));
+        assert_eq!(channel.size_in_bytes(), 4 * 3 * 3);
+        for z in 0..3 {
+            for y in 0..3 {
+                for x in 0..4 {
+                    assert_eq!(
+                        channel.value_at(z * 12 + y * 4 + x).unwrap(),
+                        (2 * x + 6 * y + 80 * z) as f32 * (1.0 / 255.0),
+                        "({x}, {y}, {z})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Planes that aren't all compact: the volume is kept as read (f32),
+    /// every value exact.
+    #[test]
+    fn a_volume_with_one_inexact_plane_is_kept_as_read() {
+        let mut planes = Planes::new(&[(3, 2)], 3, 8);
+        planes.value = |_, x, y, z| {
+            let q = (x + 3 * y) as f32 * (1.0 / 255.0);
+            if z == 1 { q + 1e-4 } else { q }
+        };
+        let v = read_volume(&planes, &planes.info(), &key(0, 1, 1), 1.0).unwrap();
+        let channel = &v.channels[0];
+        assert!(matches!(channel.samples, Samples::Image(_)), "f32");
+        assert_eq!((channel.width, channel.height), (3, 6));
+        for z in 0..3 {
+            for i in 0..6 {
+                assert_eq!(
+                    channel.value_at(z * 6 + i).unwrap(),
+                    (planes.value)(0, i % 3, i / 3, z)
+                );
+            }
+        }
+    }
+
+    /// The same for 16-bit planes.
+    #[test]
+    fn a_16_bit_volume_with_one_inexact_plane_is_kept_as_read() {
+        let mut planes = Planes::new(&[(3, 2)], 2, 16);
+        planes.value = |_, x, y, z| {
+            let q = (x + 3 * y) as f32 * (1.0 / 65535.0);
+            if z == 1 { q + 1e-7 } else { q }
+        };
+        let v = read_volume(&planes, &planes.info(), &key(0, 1, 1), 1.0).unwrap();
+        let channel = &v.channels[0];
+        assert!(matches!(channel.samples, Samples::Image(_)), "f32");
+        assert_eq!(channel.value_at(6 + 5).unwrap(), (planes.value)(0, 2, 1, 1));
+        assert_eq!(channel.value_at(4).unwrap(), (planes.value)(0, 1, 1, 0));
+    }
+
+    /// A channel some plane lacks is left out - the others are kept.
+    #[test]
+    fn a_channel_missing_on_a_plane_is_left_out() {
+        let mut planes = Planes::new(&[(2, 2)], 3, 8);
+        planes.channels = |z| if z == 2 { 1 } else { 2 };
+        let v = read_volume(&planes, &planes.info(), &key(0, 1, 1), 1.0).unwrap();
+        assert_eq!(v.channels.len(), 1);
+        assert_eq!(v.channels[0].c_stack, 0);
+    }
+
+    /// Asked for a level the image lacks, or no planes: an error, nothing
+    /// read.
+    #[test]
+    fn a_volume_without_its_level_or_planes_is_an_error() {
+        let planes = Planes::new(&[(4, 4)], 3, 8);
+        assert!(read_volume(&planes, &planes.info(), &key(1, 1, 1), 1.0).is_err());
+        let none = Planes::new(&[(4, 4)], 0, 8);
+        assert!(read_volume(&none, &none.info(), &key(0, 1, 1), 1.0).is_err());
+    }
+
+    /// Every level smaller than the budget: the full image, as it is; no
+    /// levels: no volume.
+    #[test]
+    fn a_small_image_is_read_whole_and_none_without_levels() {
+        let planes = Planes::new(&[(200, 100), (100, 50)], 3, 8);
+        assert_eq!(reduction(&planes.info()), Some((0, 1, 1)));
+        // Only the longer side counts.
+        let wide = Planes::new(&[(600, 10)], 300, 8);
+        assert_eq!(reduction(&wide.info()), Some((0, 3, 2)));
+        assert_eq!(reduction(&ImageInfo::default()), None);
+    }
+
+    /// A 16-bit and an f32 volume project like the 8-bit one: the
+    /// brightest of each column, from the top.
+    #[test]
+    fn u16_and_f32_volumes_project_their_maximum() {
+        let base = volume(4, 4, 3, |_, _, _| 0);
+        let column_max = |x: usize, y: usize| (x + 4 * y) as f32;
+        let value = |x: usize, y: usize, z: usize| column_max(x, y) * (z as f32 + 1.0) / 3.0;
+        let mut u16_data = Vec::new();
+        let mut f32_data = Vec::new();
+        for z in 0..3 {
+            for y in 0..4 {
+                for x in 0..4 {
+                    u16_data.push((value(x, y, z) * 100.0).round() as u16);
+                    f32_data.push(value(x, y, z) / 100.0);
+                }
+            }
+        }
+        let mut v = base;
+        let template = v.channels[0].clone();
+        v.channels = vec![
+            ViewChannel {
+                samples: Samples::U16 {
+                    data: u16_data.into(),
+                    inv: 1.0 / 10000.0,
+                },
+                ..template.clone()
+            },
+            ViewChannel {
+                samples: Samples::Image(Arc::new(ImageContainer::F32Gray(ManagedImage {
+                    data: Image::new(
+                        ImageSize {
+                            width: 4,
+                            height: 12,
+                        },
+                        f32_data,
+                    )
+                    .unwrap(),
+                    tile_offset: Default::default(),
+                    plane: None,
+                    dimensionality: ImageDimensionality::Volume { depth: 3 },
+                }))),
+                c_stack: 1,
+                ..template
+            },
+        ];
+        let (out_w, out_h) = (139, 139);
+        let p = project_channels(&v, &Camera::default(), out_w, out_h);
+        let side = 4.0 / (41f32).sqrt();
+        let f = |i: usize| 0.5 - side / 2.0 + side * (i as f32 + 0.5) / 4.0;
+        for y in 0..4 {
+            for x in 0..4 {
+                let px =
+                    ((f(x) * out_w as f32) as usize) + ((f(y) * out_h as f32) as usize) * out_w;
+                let expected = column_max(x, y) / 100.0;
+                assert!((p[0][px] - expected).abs() < 1e-6, "u16 ({x}, {y})");
+                assert!((p[1][px] - expected).abs() < 1e-6, "f32 ({x}, {y})");
+            }
+        }
+    }
+
+    /// A channel that isn't one value per pixel (RGB) projects to nothing.
+    #[test]
+    fn an_rgb_channel_projects_to_black() {
+        let mut v = volume(2, 2, 2, |_, _, _| 9);
+        v.channels[0].samples = Samples::Image(Arc::new(ImageContainer::F32Rgb(ManagedImage {
+            data: Image::new(
+                ImageSize {
+                    width: 2,
+                    height: 4,
+                },
+                vec![1.0; 2 * 4 * 3],
+            )
+            .unwrap(),
+            tile_offset: Default::default(),
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        })));
+        let p = project_channels(&v, &Camera::default(), 16, 16);
+        assert!(p[0].iter().all(|&v| v == 0.0));
+    }
+
+    /// Zoomed in 1.5 times: the volume covers 1.5 times the pixels across.
+    #[test]
+    fn zooming_in_enlarges_the_volume() {
+        let v = volume(8, 8, 8, |_, _, _| 50);
+        let lit = |zoom: f32| {
+            let camera = Camera {
+                zoom,
+                ..Camera::default()
+            };
+            let p = &project_channels(&v, &camera, 400, 400)[0];
+            (0..400).filter(|&x| p[200 * 400 + x] > 0.0).count() as i32
+        };
+        let (one, zoomed) = (lit(1.0), lit(1.5));
+        assert!(
+            (2 * zoomed - 3 * one).abs() <= 4,
+            "zoom 1: {one}, zoom 1.5: {zoomed}"
+        );
+    }
+
+    fn look(visible: Vec<i32>, histograms: &[(i32, Option<(f32, f32)>)]) -> ChannelLook {
+        ChannelLook {
+            visible,
+            histograms: histograms
+                .iter()
+                .map(|&(c, h)| {
+                    (
+                        c,
+                        h.map(|(min, max)| {
+                            evanalyzer_cfg::settings::images_settings::HistogramSettings {
+                                min,
+                                max,
+                                min_limit: 0.0,
+                                max_limit: 1.0,
+                            }
+                        }),
+                    )
+                })
+                .collect(),
+            colors: [(0, [1.0, 0.0, 0.0]), (1, [0.0, 0.0, 1.0])].into(),
+            grayscale: false,
+        }
+    }
+
+    /// Two channels: the visible one in its colour and range; hidden or
+    /// without a range, a channel adds nothing.
+    #[test]
+    fn a_projection_renders_the_visible_channels_in_their_colours() {
+        let mut v = volume(2, 2, 1, |_, _, _| 0);
+        let mut second = v.channels[0].clone();
+        second.c_stack = 1;
+        v.channels.push(second);
+        let projections = vec![vec![0.5; 4], vec![1.0; 4]];
+
+        let red = render_projection(
+            &v,
+            &projections,
+            &look(vec![0], &[(0, Some((0.0, 0.5))), (1, Some((0.0, 1.0)))]),
+            2,
+            2,
+        );
+        assert_eq!((red.width(), red.height()), (2, 2));
+        assert!(
+            red.as_slice()
+                .iter()
+                .all(|p| (p.r, p.g, p.b) == (255, 0, 0)),
+            "full red, no blue: {:?}",
+            red.as_slice()[0]
+        );
+
+        let both = render_projection(
+            &v,
+            &projections,
+            &look(vec![0, 1], &[(0, None), (1, Some((0.0, 1.0)))]),
+            2,
+            2,
+        );
+        assert!(
+            both.as_slice().iter().all(|p| (p.r, p.b) == (0, 255)),
+            "channel 0 without a range: {:?}",
+            both.as_slice()[0]
+        );
+    }
+
+    /// At rest at most 1024 across, turning 384; never smaller than a
+    /// pixel.
+    #[test]
+    fn the_render_is_capped_and_smaller_while_turning() {
+        assert_eq!(render_size(400.0, 300.0, false), (400, 300));
+        assert_eq!(render_size(2048.0, 1024.0, false), (1024, 512));
+        assert_eq!(render_size(400.0, 300.0, true), (384, 288));
+        assert_eq!(render_size(0.0, -5.0, false), (1, 1));
+    }
+
+    // -- rendering the 3D view for the window -----------------------------------
+
+    use crate::UiState;
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::test_support::{
+        grayscale_image_path, project_with_fixture_image, project_with_image_file, test_ui_window,
+        ui_state_with_window,
+    };
+    use crate::editor::viewport_cache::ViewportCache;
+    use crate::editor::viewport_controller::ViewportController;
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{AppWindow, ViewportState as ViewportSlintState};
+    use evanalyzer_cfg::settings::images_settings::TStackSettings;
+    use slint::ComponentHandle;
+
+    struct Window {
+        ui: AppWindow,
+        app_state: Arc<UiState>,
+        worker: ViewportWorker,
+        kept: Option<Volume>,
+    }
+
+    /// A 400 × 300 view of `project`'s image, the 3D view on (`turning`).
+    fn window_on(project: evanalyzer_app::project::ProjectWithRuntime, turning: bool) -> Window {
+        let ui = test_ui_window();
+        let app_state = ui_state_with_window(&ui, project);
+        let cache = Arc::new(ViewportCache::new(app_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            cache.clone(),
+        ));
+        {
+            let mut vp = viewport.viewport_state.write().unwrap();
+            vp.viewport_width = 400.0;
+            vp.viewport_height = 300.0;
+            vp.zoom = 1.0;
+        }
+        let histogram = Arc::new(HistogramController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            viewport.clone(),
+        ));
+        viewport.set_volume_view(Some((Camera::default(), turning)));
+        ui.global::<ViewportSlintState>().set_volume_view(true);
+        let worker = ViewportWorker::new(app_state.clone(), viewport, histogram, cache);
+        Window {
+            ui,
+            app_state,
+            worker,
+            kept: None,
+        }
+    }
+
+    impl Window {
+        fn render(&mut self) {
+            self.worker.render_volume(&mut self.kept);
+            drain_ui_queue();
+        }
+        fn view(&self) -> ViewportSlintState<'_> {
+            self.ui.global::<ViewportSlintState>()
+        }
+        fn image_size(&self) -> (u32, u32) {
+            let size = self.view().get_volume_image().size();
+            (size.width, size.height)
+        }
+        fn info(&self) -> ImageInfo {
+            let path = self
+                .app_state
+                .get_project()
+                .get_current_image_path_cloned()
+                .unwrap();
+            let source = self.app_state.get_image_source(&path).unwrap();
+            source.meta().series[&0].clone()
+        }
+    }
+
+    /// The fixture's z-stack: read once at its size, rendered for the view,
+    /// with the z spacing known.
+    #[test]
+    fn the_3d_view_reads_the_stack_and_shows_it() {
+        let mut w = window_on(project_with_fixture_image(), false);
+        w.render();
+        let info = w.info();
+        let v = w.kept.as_ref().expect("the volume kept");
+        let (level, xy_step, z_step) = reduction(&info).unwrap();
+        assert_eq!(
+            (v.key.level, v.key.xy_step, v.key.z_step),
+            (level, xy_step, z_step)
+        );
+        assert_eq!(v.depth, (info.nr_z_stacks as usize).div_ceil(z_step));
+        assert_eq!(
+            v.width,
+            (info.resolutions[&level].width as usize).div_ceil(xy_step)
+        );
+        assert!(!v.channels.is_empty());
+        assert!(w.view().get_volume_ready());
+        assert!(w.view().get_volume_z_known());
+        assert_eq!(w.image_size(), (400, 300));
+        let sizes = w.app_state.get_project().get_pixel_sizes();
+        let pixel = xy_step as f32 * info.resolutions[&0].width as f32
+            / info.resolutions[&level].width as f32;
+        assert_eq!(v.aniso, sizes.z.unwrap() / sizes.x * z_step as f32 / pixel);
+    }
+
+    /// Shown with a channel's display range: the volume lights up; without
+    /// one, black.
+    #[test]
+    fn the_3d_view_is_drawn_with_the_display_range() {
+        let mut w = window_on(project_with_fixture_image(), false);
+        let lit = |w: &Window| {
+            let buffer = w.view().get_volume_image().to_rgb8().expect("rgb");
+            buffer
+                .as_slice()
+                .iter()
+                .filter(|p| p.r | p.g | p.b > 0)
+                .count()
+        };
+        w.render();
+        assert_eq!(lit(&w), 0, "no display range yet");
+        w.app_state
+            .get_project_write()
+            .set_image_histogram_settings_for_channel(0, 0.0, 1e-6, 0.0, 1.0);
+        w.render();
+        assert!(lit(&w) > 0);
+    }
+
+    #[test]
+    fn while_turning_the_3d_view_renders_smaller() {
+        let mut w = window_on(project_with_fixture_image(), true);
+        w.render();
+        assert_eq!(w.image_size(), (384, 288));
+    }
+
+    /// The same image and time point: the volume kept is used, only its z
+    /// spacing brought up to date; another time point is read anew.
+    #[test]
+    fn the_volume_is_read_again_only_for_another_time_point() {
+        let mut w = window_on(project_with_fixture_image(), false);
+        w.render();
+        // Emptied behind the worker's back: a read fills it again.
+        w.kept.as_mut().unwrap().channels.clear();
+        let aniso = w.kept.as_ref().unwrap().aniso;
+        w.app_state
+            .get_project_write()
+            .set_global_pixel_size_settings(0.5, 0.5, Some(4.0));
+        w.render();
+        let v = w.kept.as_ref().unwrap();
+        assert!(v.channels.is_empty(), "kept, not read");
+        assert_ne!(v.aniso, aniso, "the new z spacing");
+
+        w.app_state
+            .get_project_write()
+            .set_image_t_stack(&TStackSettings {
+                t_stack: 1,
+                ..Default::default()
+            });
+        w.render();
+        let v = w.kept.as_ref().unwrap();
+        assert_eq!(v.key.t, 1);
+        assert!(!v.channels.is_empty(), "read anew");
+    }
+
+    /// Unknown z spacing: planes as thick as a pixel, and the view says so.
+    #[test]
+    fn without_a_z_spacing_the_3d_view_says_so() {
+        let mut w = window_on(project_with_fixture_image(), false);
+        w.app_state
+            .get_project_write()
+            .set_global_pixel_size_settings(0.5, 0.5, None);
+        w.render();
+        assert!(!w.view().get_volume_z_known());
+        let v = w.kept.as_ref().unwrap();
+        assert_eq!(v.aniso, v.key.z_step as f32 / v.key.xy_step as f32);
+    }
+
+    /// Off, or an image of one plane: no volume kept.
+    #[test]
+    fn off_or_for_one_plane_no_volume_is_kept() {
+        let mut w = window_on(project_with_fixture_image(), false);
+        w.render();
+        w.worker.viewport_controller.set_volume_view(None);
+        w.render();
+        assert!(w.kept.is_none(), "off");
+        assert!(!w.view().get_volume_ready());
+
+        let mut w = window_on(project_with_image_file(grayscale_image_path()), false);
+        w.kept = Some(volume(2, 2, 2, |_, _, _| 1));
+        w.render();
+        assert!(w.kept.is_none(), "one plane");
+        assert!(!w.view().get_volume_ready());
+    }
+
+    /// No image or an unreadable one: nothing drawn, the volume kept.
+    #[test]
+    fn without_an_image_to_read_the_3d_view_is_left_as_it_is() {
+        for (case, project) in [
+            ("no image", Default::default()),
+            (
+                "unreadable",
+                project_with_image_file(PathBuf::from("/nonexistent/stack.tif")),
+            ),
+        ] {
+            let mut w = window_on(project, false);
+            w.kept = Some(volume(2, 2, 2, |_, _, _| 1));
+            w.render();
+            assert!(w.kept.is_some(), "{case}: kept");
+            assert!(!w.view().get_volume_ready(), "{case}: nothing posted");
+        }
+    }
+
     /// For a feel of the speed: a 256³ volume, rendered at 1024² and while
     /// turning (384²). `cargo test --release -p evanalyzer_gui bench_volume
     /// -- --ignored --nocapture`.

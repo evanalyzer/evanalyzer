@@ -174,6 +174,149 @@ mod tests {
         );
     }
 
+    /// The fixture image, with every tile request it gets recorded - and
+    /// failed instead of read if `fail`.
+    struct Recording {
+        inner: evanalyzer_core::ImageReader,
+        requests: std::sync::Mutex<Vec<TileRequest>>,
+        fail: bool,
+    }
+
+    impl Recording {
+        fn new(fail: bool) -> Self {
+            Self {
+                inner: open_image_source(&fixture()).unwrap(),
+                requests: Default::default(),
+                fail,
+            }
+        }
+
+        fn requests(&self) -> Vec<TileRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl ImageSource for Recording {
+        fn meta(&self) -> &crate::api::ImageMeta {
+            self.inner.meta()
+        }
+        fn read_tile(
+            &self,
+            req: &TileRequest,
+        ) -> Result<Vec<crate::api::ImageChannel>, InternalErrors> {
+            self.requests.lock().unwrap().push(req.clone());
+            if self.fail {
+                return Err(InternalErrors::Io("tile unreadable".into()));
+            }
+            self.inner.read_tile(req)
+        }
+    }
+
+    /// A 2x2 annotation at (10, 10) on plane 0 of frame 0.
+    fn square(source: &dyn ImageSource) -> ObjectMetricSettings {
+        let full = &source.meta().series[&0].resolutions[&0];
+        evanalyzer_core::Object::from_mask_geometry(
+            &ImageSize {
+                width: full.width as usize,
+                height: full.height as usize,
+            },
+            bitvec![u64, Lsb0; 1, 1, 1, 1],
+            [10, 10, 11, 11],
+            ImagePlane { z: 0, c: 0, t: 0 },
+            evanalyzer_core::ObjectClasses::new(),
+        )
+        .to_object_settings()
+    }
+
+    /// An object's intensities, comparable.
+    fn json(object: &ObjectMetricSettings) -> serde_json::Value {
+        serde_json::to_value(&object.intensities).unwrap()
+    }
+
+    #[test]
+    fn nothing_to_measure_reads_nothing_even_for_a_missing_series() {
+        let source = Recording::new(false);
+
+        measure_on_source(&source, 7, &mut []).unwrap();
+
+        assert!(source.requests().is_empty());
+    }
+
+    #[test]
+    fn a_plane_annotation_reads_only_its_own_plane_at_full_resolution() {
+        let source = Recording::new(false);
+        let mut objects = vec![square(&source)];
+
+        measure_on_source(&source, 0, &mut objects).unwrap();
+
+        let requests = source.requests();
+        assert!(!requests.is_empty());
+        for req in &requests {
+            assert_eq!(
+                (req.series, req.resolution_idx, req.t_stack),
+                (0, 0, 0),
+                "{req:?}"
+            );
+            assert_eq!(req.z_projection, ZProjection::None);
+            assert_eq!(req.z_range, Some(0..=0));
+            // Only the region around the annotation, not the whole image.
+            let tile = &req.tile;
+            assert!(tile.offset_x <= 10 && tile.offset_x + tile.width > 11);
+            assert!(tile.offset_y <= 10 && tile.offset_y + tile.height > 11);
+        }
+        assert!(!objects[0].intensities.is_empty());
+    }
+
+    #[test]
+    fn an_annotation_drawn_on_a_projection_reads_the_projection_over_every_plane() {
+        let source = Recording::new(false);
+        let mut object = square(&source);
+        object.z_projection = ZProjection::MaxIntensity;
+        let mut objects = vec![object];
+
+        measure_on_source(&source, 0, &mut objects).unwrap();
+
+        let requests = source.requests();
+        assert!(!requests.is_empty());
+        for req in &requests {
+            assert_eq!(req.z_projection, ZProjection::MaxIntensity);
+            assert_eq!(req.z_range, None, "no plane range for a projection");
+        }
+        // One plane only: its maximum projection is the plane itself.
+        let mut on_plane = vec![square(&source)];
+        measure_on_source(&source, 0, &mut on_plane).unwrap();
+        assert_eq!(json(&objects[0]), json(&on_plane[0]));
+    }
+
+    #[test]
+    fn an_unreadable_tile_is_an_error_and_keeps_the_old_intensities() {
+        let source = Recording::new(true);
+        let mut objects = vec![square(&source)];
+        let before = json(&objects[0]);
+
+        let result = measure_on_source(&source, 0, &mut objects);
+
+        assert!(
+            matches!(&result, Err(InternalErrors::Io(text)) if text == "tile unreadable"),
+            "{result:?}"
+        );
+        assert_eq!(json(&objects[0]), before);
+    }
+
+    #[test]
+    fn a_missing_series_is_named_in_the_error() {
+        let source = Recording::new(false);
+        let mut objects = vec![square(&source)];
+
+        let result = measure_on_source(&source, 3, &mut objects);
+
+        assert!(
+            matches!(&result, Err(InternalErrors::Generic(text)) if text == "The image has no series 3"),
+            "{result:?}"
+        );
+        assert!(source.requests().is_empty());
+    }
+
     /// What measuring a drawn annotation costs on a large image: time per
     /// annotation (opened image reused, as the app does) for a small, a
     /// medium and a large shape, and the RAM it takes. Run with:

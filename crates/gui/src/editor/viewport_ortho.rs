@@ -637,4 +637,379 @@ mod tests {
             "deeper planes are brighter here"
         );
     }
+
+    /// A strip of no planes: its size, nothing read.
+    #[test]
+    fn a_strip_of_no_planes_is_empty() {
+        let stack = Stack::new();
+        let mut empty = key(Axis::Yz, 3, 0, 6);
+        empty.depth = 0;
+        let strip = read_strip(&stack, &empty, 16).unwrap();
+        assert!(strip.channels.is_empty());
+        assert_eq!((strip.width, strip.height), (0, 6));
+        assert_eq!(*stack.requests.lock().unwrap(), 0);
+    }
+
+    /// A label map (not one value per pixel to scale) is left out, the
+    /// other channels kept.
+    #[test]
+    fn a_strip_leaves_out_channels_that_are_not_gray() {
+        struct Labels(Stack);
+        impl ImageSource for Labels {
+            fn meta(&self) -> &ImageMeta {
+                &self.0.meta
+            }
+            fn read_tile(&self, req: &TileRequest) -> Result<Vec<ImageChannel>, InternalErrors> {
+                let mut channels = self.0.read_tile(req)?;
+                let t = req.tile;
+                channels[0].image = std::sync::Arc::new(ImageContainer::U32(ManagedImage {
+                    data: Image::new(
+                        ImageSize {
+                            width: t.width,
+                            height: t.height,
+                        },
+                        vec![7u32; t.width * t.height],
+                    )
+                    .unwrap(),
+                    tile_offset: Default::default(),
+                    plane: None,
+                    dimensionality: ImageDimensionality::Planar,
+                }));
+                Ok(channels)
+            }
+        }
+        let strip = read_strip(&Labels(Stack::new()), &key(Axis::Xz, 1, 0, 8), 16).unwrap();
+        assert_eq!(strip.channels.len(), 1);
+        assert_eq!(strip.channels[0].c_stack, 1);
+        assert_eq!(
+            value_at(&strip.channels[0], 8 + 3),
+            Stack::value(1, 3, 1, 1)
+        );
+    }
+
+    /// No zoom or no image: no strips.
+    #[test]
+    fn a_degenerate_view_has_no_strips() {
+        let path = PathBuf::from("stack.tif");
+        let image = shown(&path, (500, 400));
+        let (xz, yz) = strip_keys(&image, &view(0.0, 0.0, 0.0, 500.0, 400.0), 10.0, 10.0);
+        assert!(xz.is_none() && yz.is_none(), "zoom 0");
+        let mut empty = shown(&path, (0, 0));
+        empty.full = (0, 0);
+        let (xz, yz) = strip_keys(&empty, &view(1.0, 0.0, 0.0, 500.0, 400.0), 0.0, 0.0);
+        assert!(xz.is_none() && yz.is_none(), "an empty image");
+    }
+
+    /// The crosshair on the image's last pixel still has its line - on the
+    /// level's last one, never past it.
+    #[test]
+    fn the_crosshair_on_the_last_pixel_takes_the_levels_last_line() {
+        let path = PathBuf::from("stack.tif");
+        let (xz, yz) = strip_keys(
+            &shown(&path, (500, 400)),
+            &view(1.0, 0.0, 0.0, 2000.0, 2000.0),
+            999.9,
+            799.9,
+        );
+        let (xz, yz) = (xz.unwrap(), yz.unwrap());
+        assert_eq!((xz.line, xz.from, xz.to), (399, 0, 500));
+        assert_eq!((yz.line, yz.from, yz.to), (499, 0, 400));
+    }
+
+    /// A channel without a display range (or not visible) stays black.
+    #[test]
+    fn a_strip_channel_without_a_display_range_is_black() {
+        let strip = read_strip(&Stack::new(), &key(Axis::Xz, 0, 0, 8), 16).unwrap();
+        let look = ChannelLook {
+            visible: vec![0, 1],
+            histograms: [(0, None)].into(),
+            colors: Default::default(),
+            grayscale: false,
+        };
+        let buffer = render_strip(&strip, &look);
+        assert!(
+            buffer
+                .as_slice()
+                .iter()
+                .all(|p| (p.r, p.g, p.b) == (0, 0, 0))
+        );
+    }
+
+    // -- rendering the views for the window ------------------------------------
+
+    use crate::UiState;
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::test_support::{
+        grayscale_image_path, project_with_fixture_image, project_with_image_file,
+        project_with_one_image, test_ui_window, ui_state_with_window,
+    };
+    use crate::editor::viewport_cache::{ReadContext, ViewportCache};
+    use crate::editor::viewport_controller::ViewportController;
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{AppWindow, ViewportState as ViewportSlintState};
+    use slint::ComponentHandle;
+    use std::sync::Arc;
+
+    struct Window {
+        ui: AppWindow,
+        app_state: Arc<UiState>,
+        worker: ViewportWorker,
+        strips: OrthoStrips,
+    }
+
+    /// A 400 × 300 view of `project`'s image at zoom 1, its sharp render
+    /// read from level `level`, the views on.
+    fn window_on(project: evanalyzer_app::project::ProjectWithRuntime, level: i32) -> Window {
+        let ui = test_ui_window();
+        let app_state = ui_state_with_window(&ui, project);
+        let cache = Arc::new(ViewportCache::new(app_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            cache.clone(),
+        ));
+        {
+            let mut vp = viewport.viewport_state.write().unwrap();
+            vp.viewport_width = 400.0;
+            vp.viewport_height = 300.0;
+            vp.zoom = 1.0;
+        }
+        *cache.active_high_res_data.write().unwrap() = Some((
+            Arc::new(Vec::new()),
+            ReadContext {
+                res_idx: level,
+                ..Default::default()
+            },
+        ));
+        let histogram = Arc::new(HistogramController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            viewport.clone(),
+        ));
+        viewport.set_ortho(true);
+        let worker = ViewportWorker::new(app_state.clone(), viewport, histogram, cache);
+        Window {
+            ui,
+            app_state,
+            worker,
+            strips: OrthoStrips::default(),
+        }
+    }
+
+    impl Window {
+        fn render(&mut self) {
+            self.worker.render_ortho(&mut self.strips);
+            drain_ui_queue();
+        }
+        fn view(&self) -> ViewportSlintState<'_> {
+            self.ui.global::<ViewportSlintState>()
+        }
+        fn cross(&self, x: f32, y: f32) {
+            self.worker.viewport_controller.set_ortho_cross(x, y);
+        }
+        fn source(&self) -> Arc<dyn ImageSource> {
+            let path = self
+                .app_state
+                .get_project()
+                .get_current_image_path_cloned()
+                .unwrap();
+            self.app_state.get_image_source(&path).unwrap()
+        }
+    }
+
+    /// A strip kept from before, to see whether a render keeps it.
+    fn kept_strip() -> Option<Strip> {
+        Some(read_strip(&Stack::new(), &key(Axis::Xz, 0, 0, 8), 16).unwrap())
+    }
+
+    /// The fixture's z-stack: the crosshair's row across the planes below,
+    /// its column beside - each sample its plane's, placed where the
+    /// visible part lies, drawn with the z spacing.
+    #[test]
+    fn the_views_show_the_crosshairs_row_and_column_on_every_plane() {
+        let mut w = window_on(project_with_fixture_image(), 0);
+        let source = w.source();
+        let info = source.meta().series[&0].clone();
+        let (full_w, full_h) = (
+            info.resolutions[&0].width as usize,
+            info.resolutions[&0].height as usize,
+        );
+        let depth = info.nr_z_stacks as usize;
+        assert!(depth > 1 && full_w > 3 && full_h > 3, "a z-stack");
+        w.cross(1.5, 2.5);
+        w.render();
+
+        let (xz_len, yz_len) = (full_w.min(400), full_h.min(300));
+        let xz = w.strips.xz.as_ref().expect("the XZ strip");
+        assert_eq!((xz.key.line, xz.key.from, xz.key.to), (2, 0, xz_len));
+        assert_eq!((xz.width, xz.height), (xz_len, depth));
+        let yz = w.strips.yz.as_ref().expect("the YZ strip");
+        assert_eq!((yz.key.line, yz.key.from, yz.key.to), (1, 0, yz_len));
+        assert_eq!((yz.width, yz.height), (depth, yz_len));
+        assert!(!xz.channels.is_empty());
+
+        // Every sample as the reader has it at that pixel and plane.
+        let plane = |z: usize| {
+            source
+                .read_tile(&TileRequest {
+                    series: 0,
+                    resolution_idx: 0,
+                    z_projection: ZProjection::None,
+                    z_range: Some(z as i32..=z as i32),
+                    t_stack: 0,
+                    tile: ImageTile {
+                        offset_x: 0,
+                        offset_y: 0,
+                        width: full_w,
+                        height: full_h,
+                    },
+                })
+                .unwrap()
+        };
+        for z in 0..depth {
+            let read = plane(z);
+            for (c, channel) in xz.channels.iter().enumerate() {
+                let ImageContainer::F32Gray(img) = &*read[c].image else {
+                    panic!("gray");
+                };
+                let at = |x: usize, y: usize| img.as_slice()[y * full_w + x];
+                for x in [0, 1, xz_len - 1] {
+                    assert_eq!(value_at(channel, z * xz_len + x), at(x, 2), "xz c{c} z{z}");
+                }
+                for y in [0, 2, yz_len - 1] {
+                    assert_eq!(
+                        value_at(&yz.channels[c], y * depth + z),
+                        at(1, y),
+                        "yz c{c} z{z}"
+                    );
+                }
+            }
+        }
+
+        let view = w.view();
+        assert!(view.get_xz_ready() && view.get_yz_ready());
+        assert_eq!((view.get_ortho_x(), view.get_ortho_y()), (1.5, 2.5));
+        assert_eq!(view.get_ortho_depth(), depth as i32);
+        assert_eq!(
+            (view.get_xz_img_x(), view.get_xz_img_w()),
+            (0.0, xz_len as f32)
+        );
+        assert_eq!(
+            (view.get_yz_img_y(), view.get_yz_img_h()),
+            (0.0, yz_len as f32)
+        );
+        let image = view.get_xz_image().size();
+        assert_eq!((image.width, image.height), (xz_len as u32, depth as u32));
+        let image = view.get_yz_image().size();
+        assert_eq!((image.width, image.height), (depth as u32, yz_len as u32));
+        let sizes = w.app_state.get_project().get_pixel_sizes();
+        let z = sizes.z.expect("the fixture project's z spacing");
+        assert_eq!(view.get_ortho_aniso(), z / sizes.x);
+        assert!(view.get_ortho_z_known());
+    }
+
+    /// Unknown z spacing: planes drawn as thick as a pixel is wide, and
+    /// the view says so.
+    #[test]
+    fn without_a_z_spacing_planes_are_drawn_a_pixel_thick() {
+        let mut w = window_on(project_with_fixture_image(), 0);
+        w.app_state
+            .get_project_write()
+            .set_global_pixel_size_settings(0.5, 0.5, None);
+        w.render();
+        assert_eq!(w.view().get_ortho_aniso(), 1.0);
+        assert!(!w.view().get_ortho_z_known());
+    }
+
+    /// The same crosshair again: nothing read; another row: only the XZ
+    /// view is read again.
+    #[test]
+    fn only_a_view_whose_line_changed_is_read_again() {
+        let mut w = window_on(project_with_fixture_image(), 0);
+        w.cross(1.0, 1.0);
+        w.render();
+        // Emptied behind the worker's back: a read fills them again.
+        let empty = |strips: &mut OrthoStrips| {
+            for strip in [&mut strips.xz, &mut strips.yz] {
+                strip.as_mut().unwrap().channels.clear();
+            }
+        };
+        empty(&mut w.strips);
+
+        w.render();
+        assert!(w.strips.xz.as_ref().unwrap().channels.is_empty(), "kept");
+        assert!(w.strips.yz.as_ref().unwrap().channels.is_empty(), "kept");
+
+        w.cross(1.0, 3.0);
+        w.render();
+        let xz = w.strips.xz.as_ref().unwrap();
+        assert_eq!(xz.key.line, 3);
+        assert!(!xz.channels.is_empty(), "the new row read");
+        assert!(w.strips.yz.as_ref().unwrap().channels.is_empty(), "kept");
+    }
+
+    /// Off: the strips are freed, the images too.
+    #[test]
+    fn switched_off_the_views_free_their_strips() {
+        let mut w = window_on(project_with_fixture_image(), 0);
+        w.render();
+        assert!(w.strips.xz.is_some() && w.strips.yz.is_some());
+
+        w.worker.viewport_controller.set_ortho(false);
+        w.render();
+        assert!(w.strips.xz.is_none() && w.strips.yz.is_none());
+        assert!(!w.view().get_xz_ready() && !w.view().get_yz_ready());
+    }
+
+    /// A crosshair moved off the image: neither view has a line.
+    #[test]
+    fn a_crosshair_off_the_image_shows_no_views() {
+        let mut w = window_on(project_with_fixture_image(), 0);
+        w.render();
+        w.cross(-5.0, -5.0);
+        w.render();
+        assert!(w.strips.xz.is_none() && w.strips.yz.is_none());
+        assert!(!w.view().get_xz_ready() && !w.view().get_yz_ready());
+    }
+
+    /// One plane: no views, nothing kept.
+    #[test]
+    fn a_single_plane_image_keeps_no_strips() {
+        let mut w = window_on(project_with_image_file(grayscale_image_path()), 0);
+        w.strips.xz = kept_strip();
+        w.render();
+        assert!(w.strips.xz.is_none());
+    }
+
+    /// Not drawable yet (no image, no sharp render, a level the image
+    /// lacks, an unreadable file): the views are left as they are.
+    #[test]
+    fn without_what_to_draw_from_the_views_are_left_as_they_are() {
+        let cases = [
+            ("no image", window_on(Default::default(), 0)),
+            ("no such level", window_on(project_with_fixture_image(), 9)),
+            (
+                "unreadable",
+                window_on(
+                    project_with_image_file(PathBuf::from("/nonexistent/stack.tif")),
+                    0,
+                ),
+            ),
+            ("one-image project without a file", {
+                let w = window_on(project_with_one_image(), 0);
+                *w.worker
+                    .viewport_cache
+                    .active_high_res_data
+                    .write()
+                    .unwrap() = None;
+                w
+            }),
+        ];
+        for (case, mut w) in cases {
+            w.strips.xz = kept_strip();
+            w.render();
+            assert!(w.strips.xz.is_some(), "{case}: kept");
+            assert!(!w.view().get_xz_ready(), "{case}: nothing posted");
+        }
+    }
 }

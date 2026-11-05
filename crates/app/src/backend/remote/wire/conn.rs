@@ -126,3 +126,197 @@ pub(crate) fn read_binary<S: Socket>(ws: &mut WebSocket<S>) -> Result<Vec<u8>, S
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread::JoinHandle;
+
+    /// Both ends of a WebSocket over loopback: (server, client).
+    fn pair() -> (WebSocket<TcpStream>, WebSocket<TcpStream>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            tungstenite::accept(stream).unwrap()
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let (client, _) = tungstenite::client(format!("ws://{addr}/"), stream).unwrap();
+        (server.join().unwrap(), client)
+    }
+
+    /// `run_io` on the server end in its own thread; every frame it is
+    /// handed goes to the returned receiver, and it stops after `stop_after`.
+    fn serve(
+        server: WebSocket<TcpStream>,
+        outgoing: Receiver<Vec<u8>>,
+        stop_after: usize,
+    ) -> (JoinHandle<()>, Receiver<Vec<u8>>) {
+        let (frames, frames_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let mut seen = 0;
+            run_io(server, outgoing, |frame| {
+                frames.send(frame).unwrap();
+                seen += 1;
+                seen < stop_after
+            });
+        });
+        (handle, frames_rx)
+    }
+
+    /// The next message the client gets that is not a ping or pong.
+    fn next(client: &mut WebSocket<TcpStream>) -> Result<Message, tungstenite::Error> {
+        loop {
+            match client.read() {
+                Ok(Message::Ping(_) | Message::Pong(_)) => continue,
+                other => return other,
+            }
+        }
+    }
+
+    #[test]
+    fn queued_frames_go_out_and_binary_frames_come_in_until_told_to_stop() {
+        let (server, mut client) = pair();
+        let (tx, rx) = mpsc::channel();
+        tx.send(vec![9, 8]).unwrap();
+        let (io, frames) = serve(server, rx, 1);
+
+        assert_eq!(next(&mut client).unwrap(), Message::binary(vec![9, 8]));
+        // Text is not part of the protocol: skipped.
+        client.send(Message::text("ignored")).unwrap();
+        client.send(Message::binary(vec![1, 2, 3])).unwrap();
+
+        assert_eq!(frames.recv().unwrap(), vec![1, 2, 3]);
+        io.join().unwrap();
+        assert!(frames.try_recv().is_err(), "only the binary frame");
+        drop(tx);
+    }
+
+    #[test]
+    fn an_empty_frame_closes_the_connection() {
+        let (server, mut client) = pair();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Vec::new()).unwrap();
+        let (io, _) = serve(server, rx, usize::MAX);
+
+        io.join().unwrap();
+        assert!(matches!(next(&mut client), Ok(Message::Close(_))));
+        drop(tx);
+    }
+
+    #[test]
+    fn dropping_every_sender_closes_the_connection() {
+        let (server, mut client) = pair();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let (io, _) = serve(server, rx, usize::MAX);
+
+        drop(tx);
+
+        io.join().unwrap();
+        assert!(matches!(next(&mut client), Ok(Message::Close(_))));
+    }
+
+    #[test]
+    fn the_loop_ends_when_the_peer_closes() {
+        let (server, mut client) = pair();
+        let (tx, rx) = mpsc::channel();
+        let (io, frames) = serve(server, rx, usize::MAX);
+
+        client.close(None).unwrap();
+        client.flush().unwrap();
+
+        io.join().unwrap();
+        assert!(frames.try_recv().is_err());
+        drop(tx);
+    }
+
+    #[test]
+    fn a_peer_vanishing_without_a_close_ends_the_loop() {
+        let (server, client) = pair();
+        let (tx, rx) = mpsc::channel();
+        let (io, _) = serve(server, rx, usize::MAX);
+
+        client.get_ref().shutdown(std::net::Shutdown::Both).unwrap();
+        drop(client);
+
+        io.join().unwrap();
+        drop(tx);
+    }
+
+    #[test]
+    fn writing_to_a_vanished_peer_ends_the_loop() {
+        let (server, client) = pair();
+        client.get_ref().shutdown(std::net::Shutdown::Both).unwrap();
+        drop(client);
+        let (tx, rx) = mpsc::channel();
+        // Large enough that writing can't just disappear into socket buffers.
+        for _ in 0..8 {
+            tx.send(vec![7; 4 << 20]).unwrap();
+        }
+        let (io, frames) = serve(server, rx, usize::MAX);
+
+        io.join().unwrap();
+        assert!(frames.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_handshake_read_skips_text_and_returns_the_first_binary_message() {
+        let (mut server, mut client) = pair();
+        client.send(Message::text("hello")).unwrap();
+        client.send(Message::binary(vec![4, 2])).unwrap();
+
+        assert_eq!(read_binary(&mut server).unwrap(), vec![4, 2]);
+    }
+
+    #[test]
+    fn the_handshake_read_reports_a_close_a_timeout_and_a_broken_connection() {
+        let (mut server, mut client) = pair();
+        server
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        assert_eq!(read_binary(&mut server).unwrap_err(), "timed out");
+
+        client.close(None).unwrap();
+        client.flush().unwrap();
+        assert_eq!(read_binary(&mut server).unwrap_err(), "connection closed");
+
+        let (mut server, client) = pair();
+        client.get_ref().shutdown(std::net::Shutdown::Both).unwrap();
+        drop(client);
+        let error = read_binary(&mut server).unwrap_err();
+        assert!(
+            error != "timed out" && error != "connection closed" && !error.is_empty(),
+            "{error}"
+        );
+    }
+
+    /// What the server end, limited to [`HANDSHAKE_MESSAGE_SIZE`], makes of
+    /// a binary message of `len` bytes.
+    fn read_limited(len: usize) -> Result<Vec<u8>, String> {
+        let (mut server, mut client) = pair();
+        set_message_limit(&mut server, HANDSHAKE_MESSAGE_SIZE);
+        // Sent from its own thread: it may not fit into the socket buffers.
+        let sender = std::thread::spawn(move || {
+            let _ = client.send(Message::binary(vec![1; len]));
+            client
+        });
+        let result = read_binary(&mut server);
+        drop(server);
+        let _ = sender.join();
+        result
+    }
+
+    #[test]
+    fn a_message_over_the_limit_is_refused() {
+        let error = read_limited(HANDSHAKE_MESSAGE_SIZE + 1).unwrap_err();
+        assert!(error.to_lowercase().contains("too"), "{error}");
+
+        assert_eq!(
+            read_limited(HANDSHAKE_MESSAGE_SIZE).unwrap().len(),
+            HANDSHAKE_MESSAGE_SIZE
+        );
+    }
+}

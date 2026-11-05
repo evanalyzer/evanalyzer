@@ -298,4 +298,272 @@ mod tests {
         controller.update_histogram_settings_in_project(0.0, 1.0, 0.0, 1.0);
         controller.sync_histogram_settings_to_slint();
     }
+
+    // -- callbacks on a live window ---------------------------------------------
+
+    use crate::editor::test_support::{test_ui_window, ui_state_with_window};
+    use crate::editor::viewport_task::DrawingTask;
+    use crate::helper::ui_thread::drain_ui_queue;
+
+    fn advance(ms: u64) {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(ms));
+    }
+
+    fn attached() -> (AppWindow, Arc<UiState>, Arc<HistogramController>) {
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, project_with_one_image());
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
+        let controller = Arc::new(HistogramController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            viewport_controller,
+        ));
+        controller.attach_callbacks();
+        drain_ui_queue();
+        take_redraw(&controller);
+        (ui, ui_state, controller)
+    }
+
+    /// The image redraw waiting - and takes it.
+    fn take_redraw(controller: &HistogramController) -> Option<DrawingTask> {
+        let tasks = &controller.viewport_controller.drawing_tasks;
+        tasks.low_res_task.task_request.0.lock().unwrap().take();
+        tasks.high_res_task.task_request.0.lock().unwrap().take()
+    }
+
+    fn window(min: f32, max: f32) -> HistogramSettings {
+        HistogramSettings {
+            min,
+            max,
+            min_limit: 0.0,
+            max_limit: 1.0,
+        }
+    }
+
+    fn selected_window(ui_state: &UiState) -> Option<(f32, f32)> {
+        ui_state
+            .get_project()
+            .get_histograms_from_selected_channel()
+            .map(|h| (h.min, h.max))
+    }
+
+    /// Dragging the handles: only the last position is stored, once the
+    /// drag pauses, and the image redrawn.
+    #[test]
+    fn an_adjusted_histogram_is_stored_after_the_debounce_and_redrawn() {
+        let (ui, ui_state, controller) = attached();
+        let state = ui.global::<HistogramState>();
+        state.invoke_histogram_adjusted(0.1, 0.5, 0.0, 1.0);
+        state.invoke_histogram_adjusted(0.2, 0.7, 0.0, 1.0);
+        assert_eq!(selected_window(&ui_state), None, "not before the pause");
+        assert!(take_redraw(&controller).is_none());
+
+        advance(10);
+
+        assert_eq!(selected_window(&ui_state), Some((0.2, 0.7)));
+        let task = take_redraw(&controller).expect("redrawn");
+        assert!(!task.auto_adjust_selected && !task.auto_adjust_all);
+    }
+
+    /// Comparing, the breakpoint's side: the window is the breakpoint
+    /// image's own - the project's stays as it was.
+    #[test]
+    fn on_the_breakpoint_side_an_adjusted_histogram_is_the_breakpoints() {
+        let (ui, ui_state, controller) = attached();
+        ui.global::<HistogramState>().invoke_side_changed(1);
+        ui.global::<HistogramState>()
+            .invoke_histogram_adjusted(0.3, 0.6, 0.0, 1.0);
+        advance(10);
+
+        let breakpoint = controller.viewport_controller.breakpoint_histogram();
+        assert_eq!(
+            breakpoint.map(|h| (h.min, h.max, h.min_limit, h.max_limit)),
+            Some((0.3, 0.6, 0.0, 1.0))
+        );
+        assert_eq!(selected_window(&ui_state), None);
+    }
+
+    #[test]
+    fn auto_adjust_redraws_auto_adjusting_the_selected_channel() {
+        let (ui, _, controller) = attached();
+        ui.global::<HistogramState>().invoke_auto_adjust_clicked();
+        let task = take_redraw(&controller).expect("redrawn");
+        assert!(task.auto_adjust_selected);
+        assert!(!task.auto_adjust_all);
+    }
+
+    /// The breakpoint's side: its window is dropped, to be auto-adjusted at
+    /// its next render; the image's channels are left alone.
+    #[test]
+    fn auto_adjust_on_the_breakpoint_side_drops_the_breakpoints_window() {
+        let (ui, _, controller) = attached();
+        let vc = &controller.viewport_controller;
+        vc.set_histogram_side(1);
+        vc.set_breakpoint_histogram(Some(window(0.1, 0.2)));
+        ui.global::<HistogramState>().invoke_auto_adjust_clicked();
+        assert!(vc.breakpoint_histogram().is_none());
+        assert!(
+            take_redraw(&controller).is_none_or(|t| !t.auto_adjust_selected),
+            "no auto-adjust of the image"
+        );
+    }
+
+    #[test]
+    fn auto_adjust_all_redraws_auto_adjusting_every_channel() {
+        let (ui, _, controller) = attached();
+        ui.global::<HistogramState>()
+            .invoke_auto_adjust_all_clicked();
+        let task = take_redraw(&controller).expect("redrawn");
+        assert!(task.auto_adjust_all);
+    }
+
+    /// The open image's window becomes the project's: the image's own is
+    /// removed, the project marked changed, the image redrawn.
+    #[test]
+    fn apply_to_all_images_moves_the_window_into_the_project() {
+        let (ui, ui_state, controller) = attached();
+        controller.update_histogram_settings_in_project(0.2, 0.4, 0.0, 1.0);
+        ui_state.clear_dirty();
+        ui.global::<HistogramState>().invoke_apply_to_all_images();
+
+        let project = ui_state.get_project();
+        let global = project.images.settings.channels[&0]
+            .histogram
+            .as_ref()
+            .expect("the project's window");
+        assert_eq!((global.min, global.max), (0.2, 0.4));
+        let image_own = project
+            .get_selected_image_series()
+            .and_then(|s| s.channels[&0].histogram.clone());
+        assert!(image_own.is_none(), "the image's own is removed");
+        drop(project);
+        assert!(ui_state.is_dirty());
+        assert!(take_redraw(&controller).is_some());
+    }
+
+    /// The user's log/linear choice is applied at start and kept.
+    #[test]
+    fn the_log_scale_choice_is_applied_at_start_and_saved() {
+        let (ui, ui_state, controller) = attached();
+        let state = ui.global::<HistogramState>();
+        let log = !ui_state.load_app_settings().histogram_linear;
+        assert_eq!(state.get_log_scale(), log);
+        assert_eq!(controller.viewport_controller.histogram_log(), log);
+
+        state.invoke_log_scale_changed(!log);
+        assert_eq!(controller.viewport_controller.histogram_log(), !log);
+        assert_eq!(ui_state.load_app_settings().histogram_linear, log);
+        assert!(take_redraw(&controller).is_some(), "curves drawn anew");
+
+        // A new window starts with the saved choice.
+        let (ui, controller) = attached_on(ui_state);
+        assert_eq!(ui.global::<HistogramState>().get_log_scale(), !log);
+        assert_eq!(controller.viewport_controller.histogram_log(), !log);
+    }
+
+    /// A second controller on `ui_state`'s settings, with a window of its
+    /// own.
+    fn attached_on(ui_state: Arc<UiState>) -> (AppWindow, Arc<HistogramController>) {
+        let ui = test_ui_window();
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
+        let controller = Arc::new(HistogramController::new(
+            ui.as_weak(),
+            ui_state,
+            viewport_controller,
+        ));
+        controller.attach_callbacks();
+        (ui, controller)
+    }
+
+    /// Switching sides shows that side's window on the sliders; a side
+    /// beyond the breakpoint's is the breakpoint's.
+    #[test]
+    fn switching_sides_shows_that_sides_window() {
+        let (ui, _, controller) = attached();
+        controller.update_histogram_settings_in_project(0.1, 0.9, 0.0, 1.0);
+        controller
+            .viewport_controller
+            .set_breakpoint_histogram(Some(window(0.25, 0.5)));
+        let state = ui.global::<HistogramState>();
+
+        state.invoke_side_changed(7);
+        drain_ui_queue();
+        assert_eq!(controller.viewport_controller.histogram_side(), 1);
+        assert_eq!(
+            (
+                state.get_histogram_min_val_abs(),
+                state.get_histogram_max_val_abs()
+            ),
+            (0.25, 0.5)
+        );
+
+        state.invoke_side_changed(-3);
+        drain_ui_queue();
+        assert_eq!(controller.viewport_controller.histogram_side(), 0);
+        assert_eq!(
+            (
+                state.get_histogram_min_val_abs(),
+                state.get_histogram_max_val_abs()
+            ),
+            (0.1, 0.9)
+        );
+    }
+
+    /// The sliders: the track from the limits, the handles relative to it,
+    /// the labels absolute.
+    #[test]
+    fn sync_sets_the_track_handles_and_labels() {
+        let (ui, _, controller) = attached();
+        controller.update_histogram_settings_in_project(30.0, 70.0, 10.0, 110.0);
+        controller.sync_histogram_settings_to_slint();
+        drain_ui_queue();
+        let state = ui.global::<HistogramState>();
+        assert_eq!(state.get_histogram_min_lim(), 10.0);
+        assert_eq!(state.get_histogram_max_lim(), 110.0);
+        assert!((state.get_histogram_min_val() - 0.2).abs() < 1e-6);
+        assert!((state.get_histogram_max_val() - 0.6).abs() < 1e-6);
+        assert_eq!(state.get_histogram_min_val_abs(), 30.0);
+        assert_eq!(state.get_histogram_max_val_abs(), 70.0);
+    }
+
+    /// Limits that are one value: no division by zero - the handles are
+    /// placed as on a tiny track.
+    #[test]
+    fn sync_with_equal_limits_keeps_the_handles_finite() {
+        let (ui, _, controller) = attached();
+        controller.update_histogram_settings_in_project(0.5, 0.5, 0.5, 0.5);
+        controller.sync_histogram_settings_to_slint();
+        drain_ui_queue();
+        let state = ui.global::<HistogramState>();
+        assert_eq!(state.get_histogram_min_val(), 0.0);
+        assert_eq!(state.get_histogram_max_val(), 0.0);
+        assert_eq!(state.get_histogram_min_val_abs(), 0.5);
+    }
+
+    /// Nothing to show (the breakpoint not rendered yet): the sliders keep
+    /// what they show.
+    #[test]
+    fn sync_without_a_window_leaves_the_sliders_alone() {
+        let (ui, _, controller) = attached();
+        let state = ui.global::<HistogramState>();
+        state.set_histogram_min_val_abs(0.125);
+        state.set_histogram_max_lim(42.0);
+        controller.viewport_controller.set_histogram_side(1);
+        controller.sync_histogram_settings_to_slint();
+        drain_ui_queue();
+        assert_eq!(state.get_histogram_min_val_abs(), 0.125);
+        assert_eq!(state.get_histogram_max_lim(), 42.0);
+    }
 }

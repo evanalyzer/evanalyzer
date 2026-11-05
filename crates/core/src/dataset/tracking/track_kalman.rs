@@ -408,4 +408,277 @@ mod tests {
         assert_eq!(ids(&objects, 2), [1, 1, 1, 1, 1]);
         assert_eq!(ids(&objects, 1), [1, 1, 1, 2, 2]);
     }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-12
+    }
+
+    /// One predict and update by hand: variances 1 (position) and 4
+    /// (velocity), velocity noise 1, a measurement at 10.
+    #[test]
+    fn one_predict_and_update_step_matches_the_hand_computation() {
+        let mut axis = Axis::new(0.0, 1.0, 4.0);
+        assert_eq!(
+            axis,
+            Axis {
+                p: 0.0,
+                v: 0.0,
+                pp: 1.0,
+                pv: 0.0,
+                vv: 4.0
+            }
+        );
+        axis.predict(1.0);
+        assert_eq!(
+            axis,
+            Axis {
+                p: 0.0,
+                v: 0.0,
+                pp: 5.0,
+                pv: 4.0,
+                vv: 5.0
+            }
+        );
+        // s = 6, gains 5/6 and 4/6.
+        axis.update(10.0, 1.0);
+        assert!(close(axis.p, 50.0 / 6.0), "{axis:?}");
+        assert!(close(axis.v, 40.0 / 6.0), "{axis:?}");
+        assert!(close(axis.pp, 5.0 / 6.0), "{axis:?}");
+        assert!(close(axis.pv, 4.0 / 6.0), "{axis:?}");
+        assert!(close(axis.vv, 14.0 / 6.0), "{axis:?}");
+        // Now with a velocity: the position moves on by it.
+        axis.predict(0.0);
+        assert!(close(axis.p, 90.0 / 6.0), "{axis:?}");
+    }
+
+    /// A new segment's velocity is as uncertain as the initial search
+    /// allows: (12 / 2)² = 36.
+    #[test]
+    fn a_new_segment_starts_at_its_object_without_velocity() {
+        let filter = linker().start(&object(1, 0, 3.0, -4.0));
+        assert_eq!(filter.seen, 1);
+        assert_eq!(filter.x, Axis::new(3.0, 0.25, 36.0));
+        assert_eq!(filter.y, Axis::new(-4.0, 0.25, 36.0));
+    }
+
+    /// The search radius: after a gap the gap distance, a new segment the
+    /// initial distance around its last object, else the distance around
+    /// the prediction.
+    #[test]
+    fn the_search_radius_follows_the_segment_and_the_gap() {
+        let linker = linker();
+        let first = object(1, 0, 0.0, 0.0);
+        let mut filter = linker.start(&first);
+        assert_eq!(linker.search(&filter, &first, 1, false), ((0.0, 0.0), 12.0));
+        assert_eq!(linker.search(&filter, &first, 3, true), ((0.0, 0.0), 5.0));
+
+        let second = object(2, 1, 4.0, 0.0);
+        linker.extend(&mut filter, &second);
+        assert_eq!(filter.seen, 2);
+        let ((x, y), radius) = linker.search(&filter, &second, 1, false);
+        assert_eq!(radius, 3.0);
+        assert!(x > 4.0 && y == 0.0, "ahead in its direction: {x}, {y}");
+        assert_eq!(linker.search(&filter, &second, 2, true).1, 5.0);
+    }
+
+    /// A link costs the squared distance to the predicted position, up to
+    /// and including the radius.
+    #[test]
+    fn a_link_costs_the_squared_distance_within_the_radius() {
+        let linker = linker();
+        let first = object(1, 0, 0.0, 0.0);
+        let filter = linker.start(&first);
+        // New segment: around the object itself, radius 12.
+        assert_eq!(
+            linker.cost(&filter, &first, 1, &object(2, 1, 3.0, 4.0), false),
+            Some(25.0)
+        );
+        assert_eq!(
+            linker.cost(&filter, &first, 1, &object(2, 1, 12.0, 0.0), false),
+            Some(144.0),
+            "on the radius"
+        );
+        assert_eq!(
+            linker.cost(&filter, &first, 1, &object(2, 1, 12.0, 0.1), false),
+            None
+        );
+        // Closing a gap: radius 5.
+        assert_eq!(
+            linker.cost(&filter, &first, 2, &object(2, 2, 3.0, 4.0), true),
+            Some(25.0)
+        );
+        assert_eq!(
+            linker.cost(&filter, &first, 2, &object(2, 2, 6.0, 0.0), true),
+            None
+        );
+    }
+
+    #[test]
+    fn the_largest_cost_and_the_pair_costs_use_the_distances() {
+        let linker = linker();
+        assert_eq!(linker.max_cost(false), 144.0, "the larger of 12 and 3");
+        assert_eq!(linker.max_cost(true), 25.0);
+        let a = object(1, 0, 0.0, 0.0);
+        assert_eq!(linker.pair_cost(&a, &object(2, 0, 0.0, 3.0)), Some(9.0));
+        assert_eq!(linker.pair_cost(&a, &object(2, 0, 1.0, 1.0)), Some(2.0));
+        assert_eq!(linker.pair_cost(&a, &object(2, 0, 0.0, 3.01)), None);
+        assert_eq!(linker.pair_radius(&a), 3.0);
+    }
+
+    fn command() -> TrackKalman {
+        TrackKalman {
+            object_class: ObjectClass::Global(1),
+            unit: SizeUnits::Pixels,
+            initial_max_distance: 5.0,
+            max_distance: 3.0,
+            max_gap_frames: 1,
+            max_gap_distance: 8.0,
+            position_noise: 0.5,
+            velocity_noise: 0.5,
+            merging: false,
+            splitting: false,
+            merge_split_amount: MergeSplitAmount::Area,
+            channel: ImageChannelIdx(0),
+        }
+    }
+
+    fn empty_context(exporter: &crate::MemoryExporter) -> DatasetContext<'_> {
+        use crate::PipelineResultExporter;
+        DatasetContext {
+            store: exporter.dataset_store().unwrap(),
+            progress: None,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn invalid_distances_and_noises_are_refused() {
+        let exporter = crate::MemoryExporter::default();
+        let cases: [(&str, fn(&mut TrackKalman)); 7] = [
+            ("greater than 0", |c| c.initial_max_distance = 0.0),
+            ("greater than 0", |c| c.max_distance = -1.0),
+            ("greater than 0", |c| c.max_distance = f32::NAN),
+            ("greater than 0", |c| c.max_gap_distance = 0.0),
+            ("position noise", |c| c.position_noise = 0.0),
+            ("position noise", |c| c.position_noise = f32::NAN),
+            ("velocity noise", |c| c.velocity_noise = -0.1),
+        ];
+        for (i, (message, change)) in cases.into_iter().enumerate() {
+            let mut tracker = command();
+            change(&mut tracker);
+            let err = tracker.execute(&mut empty_context(&exporter)).unwrap_err();
+            assert!(
+                matches!(err, InternalErrors::InvalidArgument(_)),
+                "case {i}"
+            );
+            assert!(err.to_string().contains(message), "case {i}: {err}");
+        }
+    }
+
+    /// Without gap closing the gap distance doesn't matter, and a velocity
+    /// that never changes is allowed.
+    #[test]
+    fn no_gap_closing_needs_no_gap_distance_and_the_velocity_noise_may_be_0() {
+        let exporter = crate::MemoryExporter::default();
+        let mut tracker = command();
+        tracker.max_gap_frames = 0;
+        tracker.max_gap_distance = 0.0;
+        tracker.velocity_noise = 0.0;
+        tracker.execute(&mut empty_context(&exporter)).unwrap();
+    }
+
+    #[test]
+    fn the_command_cites_jaqaman_kalman_and_jonker() {
+        let tracker = command();
+        assert_eq!(tracker.name(), "Track Kalman");
+        let keys: Vec<_> = tracker.cite().iter().map(|c| c.cite_key).collect();
+        assert_eq!(
+            keys,
+            [JAQAMAN_2008.cite_key, "kalman1960new", JONKER_1987.cite_key]
+        );
+    }
+
+    fn stored_cell(id: u128, class: u32, t: i32, x: u32, track: u64) -> crate::object::Object {
+        use crate::object::{Object, ObjectInit, Track};
+        use evanalyzer_cfg::core_types::{ImagePlane, TrackId};
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(id),
+            object_class: crate::object::ObjectClasses::from([ObjectClass::Global(class)]),
+            area: 1,
+            bbox: [x, 10, x + 1, 11],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 1],
+            plane: ImagePlane { z: 0, c: 0, t },
+            ..Default::default()
+        });
+        object.track = Track {
+            id: TrackId(track),
+            ..Default::default()
+        };
+        object
+    }
+
+    /// The whole command on a results database: an object moving 2 px per
+    /// frame is one track (its gap in frame 3 bridged), after the other
+    /// class's track 7; a far object is a track of its own.
+    #[test]
+    fn the_command_tracks_the_stored_objects_and_writes_their_tracks() {
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use crate::storage::stored_object::ObjectFilter;
+        use crate::{DuckDbExporter, PipelineResultExporter};
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = DuckDbExporter::new(
+            dir.path().join("results.evadb"),
+            Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = "a.tif".into();
+        cache.image_meta.nr_of_bits = 8;
+        for object in [
+            stored_cell(1, 1, 0, 10, 0),
+            stored_cell(2, 1, 1, 12, 0),
+            stored_cell(3, 1, 2, 14, 0),
+            stored_cell(4, 1, 4, 18, 0),
+            stored_cell(5, 1, 0, 60, 0),
+            stored_cell(6, 2, 0, 10, 7),
+        ] {
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        exporter.export(&cache).unwrap();
+        let store = exporter.dataset_store().unwrap();
+        let mut ctx = DatasetContext {
+            store,
+            progress: None,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        command().execute(&mut ctx).unwrap();
+
+        let mut tracks: Vec<_> = store
+            .get_objects(&ObjectFilter::default())
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.0, o.track_id))
+            .collect();
+        tracks.sort();
+        let moving = tracks[0].1;
+        assert!(moving == Some(8) || moving == Some(9), "{tracks:?}");
+        assert_eq!(
+            tracks,
+            [
+                (1, moving),
+                (2, moving),
+                (3, moving),
+                (4, moving),
+                (5, Some(if moving == Some(8) { 9 } else { 8 })),
+                (6, Some(7)),
+            ]
+        );
+
+        // Distances in nm need the image's pixel size.
+        let mut in_nm = command();
+        in_nm.unit = SizeUnits::NanoMeter;
+        let err = in_nm.execute(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("has no pixel size"), "{err}");
+    }
 }
