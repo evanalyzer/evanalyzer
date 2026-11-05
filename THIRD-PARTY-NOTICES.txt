@@ -4493,7 +4493,7 @@ Used by: moxcms 0.8.1, pxfm 0.1.30
 
 ==============================================================================
 Apache License 2.0
-Used by: codespan-reporting 0.13.1, imgref 1.12.2, sys-locale 0.3.2, tch 0.26.0, unicode-linebreak 0.1.5, ureq 3.3.0, zune-core 0.5.3, zune-jpeg 0.5.15
+Used by: bzip2-rs 0.1.2, codespan-reporting 0.13.1, imgref 1.12.2, sys-locale 0.3.2, tch 0.26.0, unicode-linebreak 0.1.5, ureq 3.3.0, zune-core 0.5.3, zune-jpeg 0.5.15
 ==============================================================================
 
                                  Apache License
