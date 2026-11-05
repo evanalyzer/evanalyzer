@@ -796,6 +796,7 @@ impl ViewportImageController {
         };
 
         let plane_before = project.get_shown_plane();
+        let analyzed_before = analyzed_plane(&*project);
 
         // Between planes (2D) and volumes (3D) the size settings change
         // meaning (an area, a volume): the ones set need a look.
@@ -838,6 +839,7 @@ impl ViewportImageController {
         let redraw_objects = project.get_shown_plane() != plane_before
             && (!project.get_objects().unwrap_or(&[]).is_empty()
                 || !project.get_preview_objects().is_empty());
+        let analyzed_changed = analyzed_plane(&*project) != analyzed_before;
         drop(project);
 
         self.viewport_controller
@@ -856,6 +858,18 @@ impl ViewportImageController {
         )
         .then(|| z_stack.max(0) as u32);
         self.app_state.plane_changed(z, t_stack.max(0) as u32);
+        // E.g. the auto preview, of this plane - while the frames play
+        // not of each one: of the one shown once they stop (see
+        // `handle_play_button_toggled`).
+        if analyzed_changed && !self.is_playing() {
+            self.app_state.analyzed_plane_changed();
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.global::<ChannelState>().get_is_play_active())
     }
 
     /// The warning after switching the z-stacks between planes and volumes
@@ -995,6 +1009,10 @@ impl ViewportImageController {
 
         // Always stop the old timer first to clear previous intervals
         self.playback_timer.stop();
+        if !is_playing {
+            // The frame it stopped at, e.g. for the auto preview.
+            self.app_state.analyzed_plane_changed();
+        }
 
         if is_playing {
             let inner_handle = self.ui.clone();
@@ -1029,6 +1047,25 @@ impl ViewportImageController {
             );
         }
     }
+}
+
+/// What an analysis of the image shown takes of its planes: the z-handling,
+/// the slice for one slice only (the others read every slice or project
+/// them) and the frame.
+fn analyzed_plane(
+    project: &impl ProjectExt,
+) -> (
+    Option<ZStackHandling>,
+    Option<std::ops::RangeInclusive<i32>>,
+    i32,
+) {
+    let z = project.get_z_stack();
+    let handling = z.map(|z| z.z_projection.clone());
+    let range = z
+        .filter(|z| z.z_projection == ZStackHandling::SingleStack)
+        .and_then(|z| z.z_range.clone());
+    let t = project.get_t_stack().map_or(0, |t| t.t_stack);
+    (handling, range, t)
 }
 
 /// The object classifier's prediction for the object under image point
@@ -2093,6 +2130,64 @@ mod tests {
         assert_eq!(state.get_selected_t_stack(), 2);
         advance(100);
         assert_eq!(state.get_selected_t_stack(), 0, "wraps around");
+    }
+
+    /// How often the analyzed plane is told changed - from now on.
+    fn count_analyzed_plane_changes(ui_state: &UiState) -> Arc<Mutex<u32>> {
+        let count = Arc::new(Mutex::new(0));
+        let counter = count.clone();
+        ui_state.on_analyzed_plane_changed(move || *counter.lock().unwrap() += 1);
+        count
+    }
+
+    /// The auto preview's cue: another frame, z-slice or z-projection - not
+    /// a channel shown or hidden, not a slice no analysis reads alone.
+    #[test]
+    fn another_analyzed_plane_is_told_only_when_the_analysis_changes() {
+        let (ui_state, controller) = make_controller();
+        let update = |z, t, projection| {
+            controller.update_channel_options_in_project(vec![], z, t, projection, 1.0)
+        };
+        update(0, 0, IntensityProjection::SingleStack);
+        let told = count_analyzed_plane_changes(&ui_state);
+        let told = || *told.lock().unwrap();
+
+        update(0, 0, IntensityProjection::SingleStack);
+        assert_eq!(told(), 0, "the same plane (e.g. a channel hidden)");
+        update(0, 1, IntensityProjection::SingleStack);
+        assert_eq!(told(), 1, "another frame");
+        update(2, 1, IntensityProjection::SingleStack);
+        assert_eq!(told(), 2, "another slice");
+        update(2, 1, IntensityProjection::Max);
+        assert_eq!(told(), 3, "a projection");
+        update(4, 1, IntensityProjection::Max);
+        assert_eq!(told(), 3, "a projection reads every slice");
+        update(4, 1, IntensityProjection::Avg);
+        assert_eq!(told(), 4, "another projection");
+        update(4, 1, IntensityProjection::Volume);
+        update(1, 1, IntensityProjection::Volume);
+        assert_eq!(told(), 5, "a volume reads every slice");
+    }
+
+    /// Playing frames: no preview of each, one of the frame it stops at.
+    #[test]
+    fn while_playing_the_analyzed_plane_is_told_once_stopped() {
+        let (ui, ui_state, _controller) = attached();
+        let state = ui.global::<ChannelState>();
+        ui.global::<ImageMetaData>().set_nr_t_stacks(3);
+        state.set_play_back_speed_hz(10);
+        let told = count_analyzed_plane_changes(&ui_state);
+        state.set_is_play_active(true);
+        state.invoke_toggle_play(true);
+
+        advance(100);
+        advance(100);
+        assert_eq!(state.get_selected_t_stack(), 2);
+        assert_eq!(*told.lock().unwrap(), 0, "not while playing");
+
+        state.set_is_play_active(false);
+        state.invoke_toggle_play(false);
+        assert_eq!(*told.lock().unwrap(), 1, "the frame it stopped at");
     }
 
     #[test]

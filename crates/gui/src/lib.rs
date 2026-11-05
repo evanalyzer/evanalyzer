@@ -106,6 +106,9 @@ pub struct UiState {
     /// pipelines panel (the AI training panel) - see `pipeline_added`.
     pipeline_added_listeners: Mutex<Vec<Box<dyn Fn(u32) + Send + Sync>>>,
     plane_listeners: Mutex<Vec<Box<dyn Fn(Option<u32>, u32) + Send + Sync>>>,
+    /// Called once the analysis would take another plane - see
+    /// `analyzed_plane_changed`.
+    analyzed_plane_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
 }
 
 /// The undo history's RAM in effect on this computer.
@@ -147,6 +150,7 @@ impl UiState {
             model_saved_listeners: Mutex::new(Vec::new()),
             pipeline_added_listeners: Mutex::new(Vec::new()),
             plane_listeners: Mutex::new(Vec::new()),
+            analyzed_plane_listeners: Mutex::new(Vec::new()),
         }
     }
 
@@ -297,6 +301,26 @@ impl UiState {
     /// for it.
     pub fn image_opened(&self) {
         for listener in self.image_opened_listeners.lock().expect("Poisoned").iter() {
+            listener();
+        }
+    }
+
+    pub fn on_analyzed_plane_changed(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.analyzed_plane_listeners
+            .lock()
+            .expect("Poisoned")
+            .push(Box::new(f));
+    }
+
+    /// An analysis of the image shown now analyzes another plane: another
+    /// frame, z-slice or z-projection - e.g. the auto preview runs again.
+    pub fn analyzed_plane_changed(&self) {
+        for listener in self
+            .analyzed_plane_listeners
+            .lock()
+            .expect("Poisoned")
+            .iter()
+        {
             listener();
         }
     }

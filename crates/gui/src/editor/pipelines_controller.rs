@@ -219,6 +219,20 @@ impl PipelinesController {
             .ok();
         });
 
+        // Another frame, z-slice or z-projection: the auto preview runs for
+        // it, a whole-image preview is outdated.
+        let weak = Arc::downgrade(self);
+        self.app_state.on_analyzed_plane_changed(move || {
+            let weak = weak.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(manager) = weak.upgrade() {
+                    manager.whole_image_preview_outdated(false);
+                    manager.schedule_auto_preview();
+                }
+            })
+            .ok();
+        });
+
         // A pipeline added elsewhere (the AI training panel's "Add to
         // pipeline"): shown, selected, previewed.
         let weak = Arc::downgrade(self);
@@ -12302,6 +12316,29 @@ mod tests {
 
         ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
         ui_state.image_opened();
+        drain_ui_queue();
+        assert!(armed());
+        assert!(
+            controller.task_request.0.lock().unwrap().is_none(),
+            "waits for the debounce timer"
+        );
+        PREVIEW_DEBOUNCE.with(|timer| timer.stop());
+    }
+
+    /// Another frame, z-slice or z-projection shown with auto preview on:
+    /// its preview is armed like after a change - and not without auto
+    /// preview.
+    #[test]
+    fn another_analyzed_plane_arms_the_auto_preview() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        let armed = || PREVIEW_DEBOUNCE.with(|timer| timer.running());
+
+        ui_state.analyzed_plane_changed();
+        drain_ui_queue();
+        assert!(!armed(), "auto preview is off");
+
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
+        ui_state.analyzed_plane_changed();
         drain_ui_queue();
         assert!(armed());
         assert!(
