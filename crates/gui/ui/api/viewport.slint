@@ -11,6 +11,8 @@ export enum ToolState {
     PaintOval,
     PaintPolygon,
     PaintMarker,
+    // A line dragged on the image, with its length - see `ruler-shown`.
+    Ruler,
     // Paints a new object / erases pixels of the hand-drawn objects, along
     // the dragged stroke (`ViewportObjectState.brush-stroke`). The wand
     // paints like the brush but keeps to edges.
@@ -180,6 +182,16 @@ export global ViewportObjectState {
     callback marker-remove-at(length, length);
 
     in-out property <[MarkerData]> markers: [];
+    // The Ruler tool's line, from (x0, y0) to (x1, y1) in image pixels,
+    // shown while the tool is on; each change is told Rust
+    // (`ruler-changed`), which sets its length as `ruler-label`.
+    in-out property <bool> ruler-shown: false;
+    in-out property <float> ruler-x0;
+    in-out property <float> ruler-y0;
+    in-out property <float> ruler-x1;
+    in-out property <float> ruler-y1;
+    in-out property <string> ruler-label;
+    callback ruler-changed(float, float, float, float);
     in-out property <ObjectHighlightBox> object_highlight: { active: false };
     // Compare (only with a breakpoint image): the breakpoint image left of
     // `compare-at` (a fraction of the width), the original right of it -
@@ -223,5 +235,7 @@ export global ViewportObjectState {
     changed act_tool_state => {
         self.is_drawing = false;
         self.poly_idx = 0;
+        // Measured once, not kept: another tool ends the ruler.
+        self.ruler-shown = false;
     }
 }

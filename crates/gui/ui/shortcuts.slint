@@ -269,8 +269,9 @@ export component GlobalShortcuts inherits FocusScope {
         // a remote-desktop client eating Ctrl+digit, etc.) since Ctrl+1..4
         // already means "switch sidebar tab" below - letters share no keys
         // with that at all. K (not M) for PaintMarker since M is already
-        // Move, E (Ellipse) for PaintOval since O shows / hides the objects;
-        // every other letter is the tool's own first letter.
+        // Move, E (Ellipse) for PaintOval since O shows / hides the objects,
+        // L (line) for the Ruler since R is the rectangle; every other
+        // letter is the tool's own first letter.
         if (!e.modifiers.control && (e.text == "m" || e.text == Key.Escape)) {
             ViewportObjectState.act_tool_state = ToolState.Move;
             return accept;
@@ -281,6 +282,10 @@ export component GlobalShortcuts inherits FocusScope {
         }
         if (!e.modifiers.control && e.text == "k") {
             ViewportObjectState.act_tool_state = ToolState.PaintMarker;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "l") {
+            ViewportObjectState.act_tool_state = ToolState.Ruler;
             return accept;
         }
         if (!e.modifiers.control && e.text == "r") {

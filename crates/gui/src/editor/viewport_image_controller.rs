@@ -1824,6 +1824,72 @@ mod tests {
         assert_eq!(view.get_offset_x() - start, 100.0);
     }
 
+    /// The ruler: a drag draws a line in image pixels (Shift: straight),
+    /// told Rust for its length; the next drag starts a new one; another
+    /// tool ends it.
+    #[test]
+    fn a_ruler_drag_draws_a_line_in_image_pixels() {
+        use crate::{ToolState, ViewportObjectState};
+        use slint::LogicalPosition;
+        use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+        let (ui, _, _controller) = attached();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        let view = ui.global::<ViewportSlintState>();
+        view.set_zoom_factor(2.0);
+        let state = ui.global::<ViewportObjectState>();
+        let told = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = told.clone();
+        state.on_ruler_changed(move |x0, y0, x1, y1| sink.borrow_mut().push((x0, y0, x1, y1)));
+        state.set_act_tool_state(ToolState::Ruler);
+        slint::platform::update_timers_and_animations();
+
+        let drag = |from: (f32, f32), to: (f32, f32)| {
+            let window = ui.window();
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: LogicalPosition::new(from.0, from.1),
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(to.0, to.1),
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position: LogicalPosition::new(to.0, to.1),
+                button: PointerEventButton::Left,
+            });
+        };
+        let line = || {
+            (
+                state.get_ruler_x1() - state.get_ruler_x0(),
+                state.get_ruler_y1() - state.get_ruler_y0(),
+            )
+        };
+
+        // 100 x 60 screen pixels at zoom 2: 50 x 30 image pixels.
+        drag((600.0, 400.0), (700.0, 460.0));
+        assert!(state.get_ruler_shown());
+        assert_eq!(line(), (50.0, 30.0));
+        let (x0, y0, x1, y1) = *told.borrow().last().expect("told Rust");
+        assert_eq!((x1 - x0, y1 - y0), (50.0, 30.0));
+        assert!(!state.get_is_drawing(), "done on release");
+
+        // Shift held: straight - across, the longer way here.
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Shift.into(),
+        });
+        drag((600.0, 400.0), (700.0, 420.0));
+        assert_eq!(line(), (50.0, 0.0));
+        drag((600.0, 400.0), (620.0, 500.0));
+        assert_eq!(line(), (0.0, 50.0), "and down");
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Shift.into(),
+        });
+
+        state.set_act_tool_state(ToolState::Move);
+        slint::platform::update_timers_and_animations();
+        assert!(!state.get_ruler_shown(), "another tool ends it");
+    }
+
     #[test]
     fn the_navigator_is_hidden_while_the_whole_image_is_in_view() {
         use i_slint_backend_testing::ElementHandle;

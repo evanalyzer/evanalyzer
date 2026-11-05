@@ -47,6 +47,7 @@ pub mod project_settings_controller;
 pub mod results_list_controller;
 pub mod results_overlay;
 pub mod results_state_controller;
+pub(crate) mod ruler;
 pub mod script_editor_controller;
 pub mod start_page_controller;
 pub(crate) mod step_model_patch;

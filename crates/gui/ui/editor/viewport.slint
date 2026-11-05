@@ -86,6 +86,28 @@ export component Viewport inherits Rectangle {
         img_len * ViewportState.zoom_factor * 1px
     }
 
+    // Viewport coordinates -> image pixel coordinates.
+    pure function image_x(x: length) -> float {
+        (x - ViewportState.offset_x) / ViewportState.zoom_factor / 1px
+    }
+
+    pure function image_y(y: length) -> float {
+        (y - ViewportState.offset_y) / ViewportState.zoom_factor / 1px
+    }
+
+    // The ruler's end to the mouse at (x, y) - `straight`: horizontal or
+    // vertical, whichever is nearer.
+    function ruler-to(x: length, y: length, straight: bool) {
+        let mx = root.image_x(x);
+        let my = root.image_y(y);
+        let across = abs(mx - ViewportObjectState.ruler-x0) >= abs(my - ViewportObjectState.ruler-y0);
+        let ix = straight && !across ? ViewportObjectState.ruler-x0 : mx;
+        let iy = straight && across ? ViewportObjectState.ruler-y0 : my;
+        ViewportObjectState.ruler-x1 = ix;
+        ViewportObjectState.ruler-y1 = iy;
+        ViewportObjectState.ruler-changed(ViewportObjectState.ruler-x0, ViewportObjectState.ruler-y0, ix, iy);
+    }
+
     // See `ViewportState.max_layer_extent`.
     pure function fits(x: length, y: length, w: length, h: length) -> bool {
         abs(x) < ViewportState.max_layer_extent && abs(y) < ViewportState.max_layer_extent && abs(x + w) < ViewportState.max_layer_extent && abs(y + h) < ViewportState.max_layer_extent
@@ -354,6 +376,71 @@ export component Viewport inherits Rectangle {
             border-color: #ffee00;
         }
 
+        // Layer 4d: The ruler - a line on the image, its length beside its
+        // end. Dark under the yellow: seen on bright and dark images.
+        if ViewportObjectState.ruler-shown && ViewportObjectState.act_tool_state == ToolState.Ruler: Rectangle {
+            property <length> sx0: root.screen_x(ViewportObjectState.ruler-x0);
+            property <length> sy0: root.screen_y(ViewportObjectState.ruler-y0);
+            property <length> sx1: root.screen_x(ViewportObjectState.ruler-x1);
+            property <length> sy1: root.screen_y(ViewportObjectState.ruler-y1);
+            property <string> line: "M \{self.sx0 / 1px} \{self.sy0 / 1px} L \{self.sx1 / 1px} \{self.sy1 / 1px}";
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            Path {
+                viewbox-width: parent.width / 1px;
+                viewbox-height: parent.height / 1px;
+                stroke: #000000aa;
+                stroke-width: 4px;
+                stroke-line-cap: round;
+                commands: parent.line;
+            }
+            Path {
+                viewbox-width: parent.width / 1px;
+                viewbox-height: parent.height / 1px;
+                stroke: #ffee00;
+                stroke-width: 2px;
+                stroke-line-cap: round;
+                commands: parent.line;
+            }
+            Rectangle {
+                x: parent.sx0 - 4px;
+                y: parent.sy0 - 4px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: #ffee00;
+                border-width: 1px;
+                border-color: #000000aa;
+            }
+            Rectangle {
+                x: parent.sx1 - 4px;
+                y: parent.sy1 - 4px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: #ffee00;
+                border-width: 1px;
+                border-color: #000000aa;
+            }
+            Rectangle {
+                x: parent.sx1 + 10px;
+                y: parent.sy1 + 10px;
+                width: label.preferred-width + 12px;
+                height: label.preferred-height + 6px;
+                border-radius: 4px;
+                background: #000000c0;
+                accessible-role: text;
+                accessible-label: "Ruler " + ViewportObjectState.ruler-label;
+                label := Text {
+                    text: ViewportObjectState.ruler-label;
+                    color: #ffffff;
+                    font-size: 12px;
+                }
+            }
+        }
+
         // Layer 5: Drawing layer
         // The shape's points are viewport coordinates, so it is drawn in a
         // frame covering the viewport.
@@ -413,7 +500,7 @@ export component Viewport inherits Rectangle {
         y: 0;
         width: root.xy-w;
         height: root.xy-h;
-        mouse-cursor: root.brush-tool ? MouseCursor.crosshair : MouseCursor.default;
+        mouse-cursor: root.brush-tool || ViewportObjectState.act_tool_state == ToolState.Ruler ? MouseCursor.crosshair : MouseCursor.default;
         pointer-event(evt) => {
             if (evt.kind == PointerEventKind.down) {
                 root.last_mouse_x = self.mouse-x;
@@ -442,6 +529,15 @@ export component Viewport inherits Rectangle {
                 // Object selection
                  if (ViewportObjectState.act_tool_state == ToolState.Select) {
                     ViewportObjectState.viewport_clicked(root.last_mouse_x, root.last_mouse_y);
+                }
+
+                // Ruler: a new line from here (the last one goes).
+                if ViewportObjectState.act_tool_state == ToolState.Ruler && evt.button == PointerEventButton.left {
+                    ViewportObjectState.ruler-x0 = root.image_x(self.mouse-x);
+                    ViewportObjectState.ruler-y0 = root.image_y(self.mouse-y);
+                    ViewportObjectState.ruler-shown = true;
+                    ViewportObjectState.is_drawing = true;
+                    root.ruler-to(self.mouse-x, self.mouse-y, false);
                 }
 
                     // Marker tool
@@ -494,6 +590,9 @@ export component Viewport inherits Rectangle {
                 if root.brush-tool && ViewportObjectState.is_drawing {
                     ViewportObjectState.brush-path += " L \{self.mouse-x / 1px} \{self.mouse-y / 1px}";
                     ViewportObjectState.brush-stroke(self.mouse-x, self.mouse-y, 1);
+                } else if ViewportObjectState.act_tool_state == ToolState.Ruler && ViewportObjectState.is_drawing {
+                    root.ruler-to(self.mouse-x, self.mouse-y, evt.modifiers.shift);
+                    ViewportState.report_mouse_moved(self.mouse-x, self.mouse-y);
                 } else if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.is_drawing) {
                     ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
                 } else {
@@ -506,6 +605,9 @@ export component Viewport inherits Rectangle {
                 ViewportState.ortho_cross_moved((self.mouse-x - ViewportState.offset_x) / ViewportState.zoom_factor / 1px, (self.mouse-y - ViewportState.offset_y) / ViewportState.zoom_factor / 1px);
             }
             if (evt.kind == PointerEventKind.up) {
+                if ViewportObjectState.act_tool_state == ToolState.Ruler {
+                    ViewportObjectState.is_drawing = false;
+                }
                 if root.brush-tool && ViewportObjectState.is_drawing {
                     ViewportObjectState.brush-stroke(self.mouse-x, self.mouse-y, 2);
                     ViewportObjectState.is_drawing = false;

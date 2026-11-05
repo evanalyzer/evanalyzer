@@ -86,6 +86,15 @@ export component AnnotateBar inherits Rectangle {
                         }
                     }
                     InkToolButton {
+                        icon: InkIcons.ruler;
+                        label: "Ruler - drag a line to see its length (Shift: straight)";
+                        keys: ["L"];
+                        active: root.tool == ToolState.Ruler;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.Ruler;
+                        }
+                    }
+                    InkToolButton {
                         icon: InkIcons.rectangle;
                         label: "Rectangle";
                         keys: ["R"];

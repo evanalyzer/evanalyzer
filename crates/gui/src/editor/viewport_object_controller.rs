@@ -86,6 +86,19 @@ impl ViewPortObjectController {
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
+        // Another image: the ruler, measured on the last one, goes. Weak:
+        // `UiState` keeps the listener.
+        let ui_weak = self.ui.clone();
+        self.app_state.on_image_opened(move || {
+            let ui_weak = ui_weak.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.global::<ViewportObjectState>().set_ruler_shown(false);
+                }
+            })
+            .ok();
+        });
+
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             // object painting finished
@@ -95,7 +108,7 @@ impl ViewPortObjectController {
                     match tool_state {
                         ToolState::Move => return,
                         ToolState::Select => return,
-                        ToolState::PaintMarker => return,
+                        ToolState::PaintMarker | ToolState::Ruler => return,
                         // Strokes come through `brush_stroke`.
                         ToolState::Brush | ToolState::Wand | ToolState::Eraser => return,
                         ToolState::PaintRectangle => manager.add_object_from_rect(&points),
@@ -170,6 +183,18 @@ impl ViewPortObjectController {
                                 .trigger_image_redraw_objects();
                         },
                     );
+                });
+
+            // The ruler drawn or moved: its length.
+            let manager = self.clone();
+            ui.global::<ViewportObjectState>()
+                .on_ruler_changed(move |x0, y0, x1, y1| {
+                    let pixel = manager.app_state.get_project().get_pixel_sizes();
+                    let label = crate::editor::ruler::ruler_label(x1 - x0, y1 - y0, &pixel);
+                    if let Some(ui) = manager.ui.upgrade() {
+                        ui.global::<ViewportObjectState>()
+                            .set_ruler_label(label.into());
+                    }
                 });
 
             // Marker placed (left-click in PaintMarker mode)
@@ -1540,6 +1565,7 @@ mod tests {
             ToolState::Move,
             ToolState::Select,
             ToolState::PaintMarker,
+            ToolState::Ruler,
             ToolState::Brush,
             ToolState::Eraser,
         ] {
@@ -1717,6 +1743,37 @@ mod tests {
         assert_eq!((markers[0].image_x, markers[0].image_y), (3.0, 4.0));
         // 0.5 of an 8-bit range (0..255): 127.5.
         assert_eq!(markers[0].label, "ch0: 128");
+    }
+
+    /// The ruler's length in the image's pixel size; drawn again with
+    /// another pixel size, in that one.
+    #[test]
+    fn the_rulers_length_is_in_pixels_and_the_images_pixel_size() {
+        let live = live_controller(false);
+        live.ui_state
+            .get_project_write()
+            .set_global_pixel_size_settings(50.0, 50.0, None);
+        live.object_state()
+            .invoke_ruler_changed(2.0, 3.0, 414.0, 3.0);
+        assert_eq!(live.object_state().get_ruler_label(), "412 px · 20.6 µm");
+
+        live.ui_state
+            .get_project_write()
+            .set_global_pixel_size_settings(100.0, 200.0, None);
+        live.object_state()
+            .invoke_ruler_changed(0.0, 0.0, 30.0, 20.0);
+        assert_eq!(live.object_state().get_ruler_label(), "36.1 px · 5.00 µm");
+    }
+
+    /// Measured on one image only: another image ends the ruler.
+    #[test]
+    fn another_image_ends_the_ruler() {
+        let live = live_controller(false);
+        let state = live.object_state();
+        state.set_ruler_shown(true);
+        live.ui_state.image_opened();
+        crate::helper::ui_thread::drain_ui_queue();
+        assert!(!state.get_ruler_shown());
     }
 
     #[test]
