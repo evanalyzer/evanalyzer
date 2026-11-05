@@ -326,6 +326,10 @@ export global ResultsState {
     // (descending but the track).
     in-out property <int> tracks-all-sort: 0;
     in-out property <string> tracks-length-unit: "px";
+    // `tracks-um` / `tracks-speed-unit` of the table of every track: a unit
+    // picked fills both tables, whichever one is shown.
+    in-out property <bool> tracks-all-um: false;
+    in-out property <string> tracks-all-speed-unit: "px/frame";
     in-out property <TrackDetail> track-detail;
     in-out property <[TrackFrame]> track-frames;
     callback tracks-all-filter-changed();

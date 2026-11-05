@@ -350,8 +350,8 @@ impl ResultsStateController {
             let state = ui.global::<ResultsState>();
             state.set_tracks_all_summary(summary.into());
             state.set_tracks_length_unit(shown.length_unit().into());
-            state.set_tracks_speed_unit(shown.speed_unit().into());
-            state.set_tracks_um(shown.um);
+            state.set_tracks_all_speed_unit(shown.speed_unit().into());
+            state.set_tracks_all_um(shown.um);
             let model = Rc::new(TracksAllModel {
                 rows,
                 order,

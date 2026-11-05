@@ -10903,6 +10903,10 @@ pub(crate) mod tests {
         s.invoke_tracks_unit_changed(1);
         s.invoke_track_row_clicked(0);
         drain_ui_queue();
+        // The table of every track (never opened, no rows) has a unit of
+        // its own: the one beside the image stays µm, its picker enabled.
+        assert_eq!(s.get_tracks_speed_unit(), "µm/min");
+        assert!(s.get_tracks_um());
         let card = s.get_track_card();
         assert!(card.active);
         assert_eq!(card.id, "#1");
@@ -11179,6 +11183,10 @@ pub(crate) mod tests {
         s.invoke_split_changed(false);
         drain_ui_queue();
         assert_eq!(s.get_tracks_all_rows().row_count(), 5, "every image's");
+        s.invoke_tracks_unit_changed(1);
+        drain_ui_queue();
+        assert!(s.get_tracks_all_um(), "pixel size and frame interval known");
+        assert_eq!(s.get_tracks_all_speed_unit(), "µm/min");
 
         s.set_split(true);
         s.invoke_split_changed(true);

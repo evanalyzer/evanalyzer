@@ -161,7 +161,7 @@ export component ResultsTracksAllView inherits Rectangle {
                         label: "Speed unit";
                         model: ["px/frame", "µm/min", "µm/s"];
                         selected: ResultsState.tracks-unit;
-                        enabled: ResultsState.tracks-um;
+                        enabled: ResultsState.tracks-all-um;
                         picked(i) => {
                             ResultsState.tracks-unit = i;
                             ResultsState.tracks-unit-changed(i);
@@ -225,7 +225,7 @@ export component ResultsTracksAllView inherits Rectangle {
                             }
                             SortHead {
                                 width: root.num-w + 30px;
-                                text: "Speed " + ResultsState.tracks-speed-unit;
+                                text: "Speed " + ResultsState.tracks-all-speed-unit;
                                 key: 3;
                                 align: TextHorizontalAlignment.right;
                             }
