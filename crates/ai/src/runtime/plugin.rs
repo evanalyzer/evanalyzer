@@ -492,10 +492,7 @@ mod tests {
             eprintln!("skipped: the libtorch here is the CPU build");
             return;
         }
-        let folder = tempfile::tempdir().unwrap();
-        let plugin = folder.path().join(library_name());
-        std::fs::copy(build_plugin(), &plugin).unwrap();
-        std::os::unix::fs::symlink(&cuda, folder.path().join(TORCH_CUDA)).unwrap();
+        let (_folder, plugin) = installed_plugin(true);
 
         let engine = PluginEngine::load(&plugin, &config()).unwrap();
         assert!(engine._torch_cuda.is_some());
@@ -517,6 +514,9 @@ mod tests {
     /// the C interface.
     #[test]
     fn the_built_plugin_loads_and_runs_a_model() {
+        #[cfg(target_os = "linux")]
+        let (_folder, plugin) = installed_plugin(false);
+        #[cfg(not(target_os = "linux"))]
         let plugin = build_plugin();
         let engine = PluginEngine::load(&plugin, &config()).unwrap();
         assert!(
@@ -545,13 +545,54 @@ mod tests {
         assert!(err.contains("Failed to load StarDist model"), "{err}");
     }
 
+    /// The built plugin in a folder laid out as the release's `ai/cpu`
+    /// (`ai/cuda` with `cuda`): libtorch's libraries (and NVIDIA's, if
+    /// downloaded) beside it, found through its `$ORIGIN` run path - no
+    /// `LD_LIBRARY_PATH` needed, e.g. under `cargo llvm-cov`. Without `cuda`
+    /// libtorch's CUDA library stays out, so the plugin runs as CPU build.
+    #[cfg(target_os = "linux")]
+    fn installed_plugin(cuda: bool) -> (tempfile::TempDir, PathBuf) {
+        let libs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../libs");
+        let folder = tempfile::tempdir().unwrap();
+        let plugin = folder.path().join(library_name());
+        std::fs::copy(build_plugin(), &plugin).unwrap();
+        // NVIDIA's libraries whenever they are there: the CUDA libtorch's
+        // CPU library needs them too.
+        for source in [libs.join("libtorch/lib"), libs.join("nvidia-cu13/lib")] {
+            let Ok(entries) = std::fs::read_dir(&source) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if name.contains(".so") && (cuda || name != TORCH_CUDA) {
+                    std::os::unix::fs::symlink(&path, folder.path().join(&name)).unwrap();
+                }
+            }
+        }
+        (folder, plugin)
+    }
+
     /// `cargo build-ai-plugin` (a no-op when it is current), in the
     /// profile of this test; the library's path.
     fn build_plugin() -> PathBuf {
         let release = !cfg!(debug_assertions);
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let cargo = std::env::var_os("CARGO").unwrap_or("cargo".into());
-        let status = std::process::Command::new(cargo)
+        let mut command = std::process::Command::new(cargo);
+        // Under `cargo llvm-cov` not through its instrumenting rustc wrapper:
+        // the plugin lands in the plain target folder, where an instrumented
+        // build would leave `default_*.profraw` files behind every later
+        // plain test run.
+        if std::env::var_os("CARGO_LLVM_COV").is_some() {
+            command.env_remove("RUSTC_WRAPPER");
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("__CARGO_LLVM_COV") {
+                    command.env_remove(key);
+                }
+            }
+        }
+        let status = command
             .current_dir(&workspace)
             .args([
                 "rustc",

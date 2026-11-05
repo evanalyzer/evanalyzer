@@ -1292,6 +1292,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bzip2-rs"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "beeb59e7e4c811ab37cc73680c798c7a5da77fc9989c62b09138e31ee740f735"
+dependencies = [
+ "crc32fast",
+ "tinyvec",
+]
+
+[[package]]
 name = "bzip2-sys"
 version = "0.1.13+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6720,8 +6730,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scopeio"
 version = "0.1.0"
-source = "git+https://github.com/evanalyzer/scopeio?tag=0.0.0-alpha.3#d9ad3206a305654160dc79fb806229bb2b619015"
+source = "git+https://github.com/evanalyzer/scopeio?tag=0.0.0-alpha.4#185b8114b1f71dbdcc89590c36f076005917d6c7"
 dependencies = [
+ "bzip2-rs",
  "flate2",
  "hayro-jpeg2000",
  "lz4_flex",
