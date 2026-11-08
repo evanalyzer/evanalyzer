@@ -243,6 +243,15 @@ impl From<MorphologyMorphologicalTransformationKernelShapesSettings> for KernelS
     }
 }
 
+impl From<FiltersVesselnessLinePolaritySettings> for LinePolarity {
+    fn from(_s: FiltersVesselnessLinePolaritySettings) -> Self {
+        match _s {
+            FiltersVesselnessLinePolaritySettings::Bright => LinePolarity::Bright,
+            FiltersVesselnessLinePolaritySettings::Dark => LinePolarity::Dark,
+        }
+    }
+}
+
 impl From<SegmentationFindMaximaMaximaCutoffSettings> for MaximaCutoff {
     fn from(_s: SegmentationFindMaximaMaximaCutoffSettings) -> Self {
         match _s {
@@ -1318,6 +1327,20 @@ impl From<UNetSettings> for UNet {
     }
 }
 
+impl From<VesselnessSettings> for Vesselness {
+    fn from(_s: VesselnessSettings) -> Self {
+        Vesselness {
+            min_width: _s.min_width.clamp(0.5, 1000.0),
+            max_width: _s.max_width.clamp(0.5, 1000.0),
+            width_steps: _s.width_steps,
+            width_unit: _s.width_unit,
+            polarity: LinePolarity::from(_s.polarity),
+            blob_suppression: _s.blob_suppression.clamp(0.05, 5.0),
+            noise_level: _s.noise_level.clamp(0.0, 1.0),
+        }
+    }
+}
+
 impl From<VoronoiSettings> for Voronoi {
     fn from(_s: VoronoiSettings) -> Self {
         Voronoi {
@@ -1565,6 +1588,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::UNet(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::UNet::from(settings),
+        ))),
+        PipelineCommand::Vesselness(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Vesselness::from(settings),
         ))),
         PipelineCommand::Voronoi(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Voronoi::from(settings),

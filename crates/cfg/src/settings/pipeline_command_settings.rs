@@ -424,6 +424,17 @@ pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
     Cross,
 }
 
+/// Whether [`Vesselness`] looks for bright or dark lines.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersVesselnessLinePolaritySettings {
+    #[default]
+    #[serde(alias = "bright")]
+    Bright,
+    #[serde(alias = "dark")]
+    Dark,
+}
+
 /// How [`FindMaxima`] chooses its quality cut-off.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -1742,6 +1753,59 @@ pub struct StructureTensorSettings {
     ///
     /// Controls the spatial "reach" of the neighborhood analysis.
     pub sigma: f32,
+}
+
+/// Highlights lines (fibres, neurites, vessels) of the given widths, so a
+/// threshold segments them (Frangi vesselness).
+///
+/// [Vesselness] -> [Threshold] -> [Connected Components] -> [Extract Objects] -> [Skeletonize Objects]
+///
+/// The result is 0..1: high in the middle of a line, low for the
+/// background, blobs and flat areas.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct VesselnessSettings {
+    /// The width of the thinnest lines to find.
+    #[schemars(range(min = 0.5, max = 1000))]
+    pub min_width: f32,
+    /// The width of the widest lines to find.
+    #[schemars(range(min = 0.5, max = 1000))]
+    pub max_width: f32,
+    /// How many widths between the thinnest and the widest are tried
+    /// (spaced evenly on a log scale). More: steadier response over the
+    /// widths, slower.
+    #[schemars(range(min = 1, max = 10))]
+    pub width_steps: usize,
+    /// Unit the widths are expressed in.
+    pub width_unit: SizeUnits,
+    /// Bright lines on a dark background (fluorescence) or dark lines on a
+    /// bright one (brightfield).
+    pub polarity: FiltersVesselnessLinePolaritySettings,
+    /// How strongly blobs are suppressed (Frangi's β): lower suppresses
+    /// more, so only clearly elongated structures stay.
+    #[schemars(range(min = 0.05, max = 5))]
+    pub blob_suppression: f32,
+    /// Structures much weaker than this count as noise (Frangi's c, on the
+    /// relative 0..1 scale of the image's second derivatives). 0:
+    /// automatic - half the strongest structure in the image (on a whole
+    /// slide: in each tile).
+    #[schemars(range(min = 0, max = 1))]
+    pub noise_level: f32,
+}
+
+impl Default for VesselnessSettings {
+    fn default() -> Self {
+        Self {
+            min_width: 2.0f32,
+            max_width: 6.0f32,
+            width_steps: 3usize,
+            width_unit: SizeUnits::Pixels,
+            polarity: FiltersVesselnessLinePolaritySettings::Bright,
+            blob_suppression: 0.5f32,
+            noise_level: 0.0f32,
+        }
+    }
 }
 
 /// A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.

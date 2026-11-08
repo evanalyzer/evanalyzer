@@ -55,6 +55,8 @@ pub use self::filters::rolling_ball::BallType;
 pub use self::filters::rolling_ball::RollingBall;
 pub use self::filters::structure_tensor::StructureTensor;
 pub use self::filters::structure_tensor::TensorMode;
+pub use self::filters::vesselness::LinePolarity;
+pub use self::filters::vesselness::Vesselness;
 pub use self::filters::weighted_deviation::WeightedDeviation;
 pub(crate) use self::flow_control::end_scope::EndScope;
 pub use self::math::image_cache::ImageCache;

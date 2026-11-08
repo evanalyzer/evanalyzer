@@ -1116,6 +1116,14 @@
         }
       ]
     },
+    "FiltersVesselnessLinePolaritySettings": {
+      "description": "Whether [`Vesselness`] looks for bright or dark lines.",
+      "type": "string",
+      "enum": [
+        "BRIGHT",
+        "DARK"
+      ]
+    },
     "FindMaximaSettings": {
       "description": "Finds spots as local maxima: each pixel that is the brightest within the\nradius becomes one 1-pixel object.\n\n[Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
       "type": "object",
@@ -3622,6 +3630,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "VESSELNESS"
+            }
+          },
+          "$ref": "#/$defs/VesselnessSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "VORONOI"
             }
           },
@@ -4868,6 +4889,62 @@
           "description": "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
           "$ref": "#/$defs/SegmentationClass",
           "default": 1
+        }
+      }
+    },
+    "VesselnessSettings": {
+      "description": "Highlights lines (fibres, neurites, vessels) of the given widths, so a\nthreshold segments them (Frangi vesselness).\n\n[Vesselness] -> [Threshold] -> [Connected Components] -> [Extract Objects] -> [Skeletonize Objects]\n\nThe result is 0..1: high in the middle of a line, low for the\nbackground, blobs and flat areas.",
+      "type": "object",
+      "properties": {
+        "blobSuppression": {
+          "description": "How strongly blobs are suppressed (Frangi's β): lower suppresses\nmore, so only clearly elongated structures stay.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 5,
+          "minimum": 0.05
+        },
+        "maxWidth": {
+          "description": "The width of the widest lines to find.",
+          "type": "number",
+          "format": "float",
+          "default": 6.0,
+          "maximum": 1000,
+          "minimum": 0.5
+        },
+        "minWidth": {
+          "description": "The width of the thinnest lines to find.",
+          "type": "number",
+          "format": "float",
+          "default": 2.0,
+          "maximum": 1000,
+          "minimum": 0.5
+        },
+        "noiseLevel": {
+          "description": "Structures much weaker than this count as noise (Frangi's c, on the\nrelative 0..1 scale of the image's second derivatives). 0:\nautomatic - half the strongest structure in the image (on a whole\nslide: in each tile).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "polarity": {
+          "description": "Bright lines on a dark background (fluorescence) or dark lines on a\nbright one (brightfield).",
+          "$ref": "#/$defs/FiltersVesselnessLinePolaritySettings",
+          "default": "BRIGHT"
+        },
+        "widthSteps": {
+          "description": "How many widths between the thinnest and the widest are tried\n(spaced evenly on a log scale). More: steadier response over the\nwidths, slower.",
+          "type": "integer",
+          "format": "uint",
+          "default": 3,
+          "maximum": 10,
+          "minimum": 1
+        },
+        "widthUnit": {
+          "description": "Unit the widths are expressed in.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
         }
       }
     },

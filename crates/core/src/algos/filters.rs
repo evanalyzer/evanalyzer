@@ -21,4 +21,5 @@ pub mod laplacian;
 pub mod rank_filter;
 pub mod rolling_ball;
 pub mod structure_tensor;
+pub mod vesselness;
 pub mod weighted_deviation;
