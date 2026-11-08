@@ -19,6 +19,19 @@ pub(crate) fn attach(ui: &AppWindow) {
     let markdown = ui.global::<InkMarkdown>();
     markdown.on_render(|text| render(&text));
     markdown.on_plain(|text| plain(&text).into());
+    markdown.on_is_web_link(|url| is_web_link(&url));
+}
+
+/// Whether a link may be opened: `http://` or `https://` with something
+/// after it. Anything else - `file://`, a UNC path (Windows sends the
+/// user's login hash to the share), `mailto:`, an app's own scheme - is
+/// not opened.
+pub(crate) fn is_web_link(url: &str) -> bool {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    ["https://", "http://"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme) && url.len() > scheme.len())
 }
 
 /// `text` styled; as plain text if it isn't markdown Slint can draw.
@@ -103,6 +116,45 @@ mod tests {
     use super::*;
     use evanalyzer_cfg::settings::parameter_def::ParameterDef;
     use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};
+
+    /// Web addresses open; a shared module's link to a file, a network
+    /// share (Windows would log in there with the user's hash) or an
+    /// app's own scheme does not.
+    #[test]
+    fn only_web_links_are_opened() {
+        for url in [
+            "https://evanalyzer.org",
+            "http://example.org/paper.pdf",
+            "HTTPS://Example.org",
+            "  https://example.org  ",
+        ] {
+            assert!(is_web_link(url), "{url}");
+        }
+        for url in [
+            "file:///etc/passwd",
+            "file://\\\\attacker\\share\\x",
+            "\\\\attacker\\share\\x",
+            "//attacker/share",
+            "smb://attacker/share",
+            "mailto:a@b.c",
+            "javascript:alert(1)",
+            "ms-settings:",
+            "C:\\Windows\\System32\\calc.exe",
+            "https://",
+            "",
+        ] {
+            assert!(!is_web_link(url), "{url}");
+        }
+    }
+
+    /// The window asks Rust before it opens a link.
+    #[test]
+    fn the_window_opens_web_links_only() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let markdown = ui.global::<InkMarkdown>();
+        assert!(markdown.invoke_is_web_link("https://evanalyzer.org".into()));
+        assert!(!markdown.invoke_is_web_link("file://\\\\attacker\\share\\x".into()));
+    }
 
     #[test]
     fn a_paragraphs_lines_are_one_line_a_list_items_its_own() {

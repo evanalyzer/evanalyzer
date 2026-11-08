@@ -13,6 +13,10 @@ export global InkMarkdown {
     pure callback render(text: string) -> styled-text;
     /// The markdown `text` without its marks - for one line of plain text.
     pure callback plain(text: string) -> string;
+    /// Whether `url` may be opened: a web address (http / https) only - a
+    /// shared module's text could link `file://`, a network share or an
+    /// app's own scheme.
+    pure callback is-web-link(url: string) -> bool;
 }
 
 /// A help text in markdown; links open in the browser. Wraps at its width.
@@ -26,6 +30,8 @@ export component InkMarkdownText inherits StyledText {
     accessible-role: text;
     accessible-label: InkMarkdown.plain(root.markdown);
     link-clicked(url) => {
-        Platform.open-url(url);
+        if InkMarkdown.is-web-link(url) {
+            Platform.open-url(url);
+        }
     }
 }

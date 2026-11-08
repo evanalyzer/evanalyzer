@@ -8,7 +8,7 @@ import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 import { InkIconButton } from "button.slint";
 import { InkTipZone } from "tooltip.slint";
-import { InkMarkdownText } from "markdown.slint";
+import { InkMarkdown, InkMarkdownText } from "markdown.slint";
 
 /// The card itself, for a popup of one's own (e.g. opened from a menu):
 /// the name, what it does, a sketch, a docs link, ✕.
@@ -74,7 +74,9 @@ export component InkInfoCard inherits Rectangle {
                     TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            Platform.open-url(root.docs-url);
+                            if InkMarkdown.is-web-link(root.docs-url) {
+                                Platform.open-url(root.docs-url);
+                            }
                         }
                     }
                 }
