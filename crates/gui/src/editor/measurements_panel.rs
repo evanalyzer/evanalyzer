@@ -64,6 +64,18 @@ pub(crate) fn rows(planes: &[PipelineMeasurements]) -> Vec<MeasurementRow> {
                         None => ("–".to_string(), "no value".to_string()),
                     }
                 }
+                // A profile: several values per object - no single number.
+                MeasurementValues::Objects(values) if m.info.profile => {
+                    let objects: std::collections::HashSet<_> =
+                        values.iter().map(|v| &v.object).collect();
+                    let mut radii: Vec<f64> = values.iter().filter_map(|v| v.position).collect();
+                    radii.sort_by(f64::total_cmp);
+                    radii.dedup();
+                    (
+                        format!("{} radii", radii.len()),
+                        format!("profile of {} objects", objects.len()),
+                    )
+                }
                 MeasurementValues::Objects(values) => {
                     let mut numbers: Vec<f64> = values
                         .iter()
@@ -201,5 +213,32 @@ mod tests {
                 row("pearson_03", "–", "no value"),
             ]
         );
+    }
+
+    /// A profile (several values per object): its radii and objects, not a
+    /// median over all its rows.
+    #[test]
+    fn a_profile_shows_its_radii_and_objects() {
+        let value = |object: u128, position: f64| evanalyzer_cfg::core_types::ObjectValue {
+            object: ObjectId(object),
+            value: 2.0,
+            related: None,
+            position: Some(position),
+        };
+        let mut profile = measurement(
+            "sholl_01",
+            "Intersections",
+            MeasurementValues::Objects(vec![value(1, 10.0), value(1, 20.0), value(2, 10.0)]),
+        );
+        profile.info.profile = true;
+        let plane = PipelineMeasurements {
+            measurements: vec![profile],
+            ..Default::default()
+        };
+        let rows: Vec<(String, String)> = rows(&[plane])
+            .into_iter()
+            .map(|r| (r.value.into(), r.of.into()))
+            .collect();
+        assert_eq!(rows, [("2 radii".into(), "profile of 2 objects".into())]);
     }
 }

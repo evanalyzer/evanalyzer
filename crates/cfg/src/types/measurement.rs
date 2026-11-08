@@ -63,7 +63,7 @@ pub struct MeasurementInfo {
     #[serde(default)]
     pub related_objects: bool,
     /// A profile: several values per object, each at a position
-    /// (`ObjectValue::position`, e.g. the radius of a Sholl ring) - a curve
+    /// (`ObjectValue::position`, e.g. the radius of a Sholl ring in pixels) - a curve
     /// per object, not one number. Not one of the objects' values
     /// (`objects.measurement_values`) nor offered where one number is.
     #[serde(default)]
@@ -128,7 +128,7 @@ pub struct ObjectValue {
     pub value: f64,
     pub related: Option<ObjectId>,
     /// Where on the object's profile the value is (e.g. a Sholl ring's
-    /// radius in nm) - only for a profile measurement
+    /// radius in pixels) - only for a profile measurement
     /// (`MeasurementInfo::profile`).
     #[serde(default)]
     pub position: Option<f64>,

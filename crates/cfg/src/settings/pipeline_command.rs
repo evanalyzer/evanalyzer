@@ -253,6 +253,12 @@ pub enum PipelineCommand {
     )]
     MeasureObjectShape(MeasureObjectShapeSettings),
     #[serde(
+        alias = "measure-object-sholl",
+        alias = "measureObjectSholl",
+        alias = "measure_object_sholl"
+    )]
+    MeasureObjectSholl(MeasureObjectShollSettings),
+    #[serde(
         alias = "measure-object-skeleton",
         alias = "measureObjectSkeleton",
         alias = "measure_object_skeleton"
@@ -615,188 +621,195 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 35,
+            name: "Measure Object Sholl",
+            category: CommandCategory::Measure,
+            summary: "Sholl analysis of skeletons: circles around a centre (the soma) at a fixed step, the skeleton's crossings per circle (a profile - the curve over the radius) and its summary: the most crossings, the critical and the enclosing radius, the mean crossings and the Sholl regression coefficient.",
+            description: "Radii in pixels.\n\n[Skeletonize Objects] -> [Relate Objects (skeletons to somata)] -> [Measure Object Sholl]",
+        },
+        CommandMeta {
+            id: 36,
             name: "Measure Object Skeleton",
             category: CommandCategory::Measure,
             summary: "For each skeleton (Skeletonize Objects): its total length, the longest path through it, its end points, branch points and segments (the lines between them), their mean length and straightness (the straight distance between a segment's ends / its length; loops don't count) and, with \"Diameter from\", the mean diameter of the object it was made of along it.",
             description: "Lengths in pixels.\n\n[Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]",
         },
         CommandMeta {
-            id: 36,
+            id: 37,
             name: "Measure Object Texture",
             category: CommandCategory::Measure,
             summary: "Measures the texture of a channel in each object of a class - Haralick's features of the gray-level co-occurrence matrix, per object.",
             description: "The same values as Measure Image Texture, of the object's pixels only.",
         },
         CommandMeta {
-            id: 37,
+            id: 38,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
         },
         CommandMeta {
-            id: 38,
+            id: 39,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.",
         },
         CommandMeta {
-            id: 39,
+            id: 40,
             name: "ObjectMath",
             category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by object pair.",
             description: "When more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 40,
+            id: 41,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "Segments the image with a pixel classifier trained in the AI training dialog.",
             description: "[Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nTrain a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.\nThe classifier assigns every pixel of the image to a class, producing a segmented image.\nThe segmentation mapping translates the model's classes into this project's segmentation classes.\n\nUse a pixel classifier in place of a threshold step.\nLike a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.",
         },
         CommandMeta {
-            id: 41,
+            id: 42,
             name: "Propagation",
             category: CommandCategory::Object,
             summary: "Grows a region around each seed object through a channel.",
             description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
         },
         CommandMeta {
-            id: 42,
+            id: 43,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 43,
+            id: 44,
             name: "Relate Objects",
             category: CommandCategory::Object,
             summary: "Links objects to the objects they belong to: each child (e.g.",
             description: "a spot) gets at most one parent of each parent class (e.g. its cell).\n\nThe results then give per parent the number of its children and the\nmean, median, ... of their measurements, and the parent's values next to\neach child. A child already linked to a parent of one of these classes\nis linked anew - or unlinked when no parent matches.",
         },
         CommandMeta {
-            id: 44,
+            id: 45,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 45,
+            id: 46,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 46,
+            id: 47,
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 47,
+            id: 48,
             name: "Skeletonize Objects",
             category: CommandCategory::Object,
             summary: "Reduces each object to its 1-pixel-wide centre line (skeleton), for filament analysis (neurites, vessels, fibres).",
             description: "[Threshold] -> [Extract Objects] -> [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]\n\nEach object of the input class gets one skeleton object; branch points\nand end points can become 1-pixel objects of their own classes. Spurs\nshorter than the minimum branch length are pruned. The input objects\nstay as they are; link skeletons and points to them with Relate Objects.",
         },
         CommandMeta {
-            id: 48,
+            id: 49,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 49,
+            id: 50,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 50,
+            id: 51,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 51,
+            id: 52,
             name: "Track Kalman",
             category: CommandCategory::Dataset,
             summary: "Links objects into tracks by the globally best assignment, predicting each track's next position from its velocity (directed motion).",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances to the\npredicted positions is smallest, each object once. Each track's velocity\nis followed by a Kalman filter. Then track ends are linked to starts up\nto `max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split), as in Track LAP.",
         },
         CommandMeta {
-            id: 52,
+            id: 53,
             name: "Track LAP",
             category: CommandCategory::Dataset,
             summary: "Links objects into tracks by the globally best assignment, for objects moving at random (Brownian motion).",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances is smallest,\neach object once (Jaqaman et al., 2008). Then track ends are linked to\nstarts up to `max_gap_frames` later (an object missed by the\nsegmentation), and - if switched on - track ends into other tracks\n(merge) and starts out of them (split). A merge or split starts new\ntracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 53,
+            id: 54,
             name: "TrackNearestNeighbor",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 54,
+            id: 55,
             name: "Track Overlap",
             category: CommandCategory::Dataset,
             summary: "Links objects into tracks by the globally best assignment of overlapping masks.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that they overlap the most in total, each object\nonce - two objects can be linked if their intersection over union is\nat least `min_overlap`. Then track ends are linked to starts up to\n`max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split). A merge or split starts\nnew tracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 55,
+            id: 56,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.\n\nA transformed shape with no pixels left (e.g. `Shrink` by more than the object's own\nsize) is not an object: no new object is created, and in place the input object is removed.",
         },
         CommandMeta {
-            id: 56,
+            id: 57,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 57,
+            id: 58,
             name: "Vesselness",
             category: CommandCategory::Preprocess,
             summary: "Highlights lines (fibres, neurites, vessels) of the given widths, so a threshold segments them (Frangi vesselness).",
             description: "[Vesselness] -> [Threshold] -> [Connected Components] -> [Extract Objects] -> [Skeletonize Objects]\n\nThe result is 0..1: high in the middle of a line, low for the\nbackground, blobs and flat areas.",
         },
         CommandMeta {
-            id: 58,
+            id: 59,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 59,
+            id: 60,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 60,
+            id: 61,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 61,
+            id: 62,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -895,57 +908,60 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         34 => Some(PipelineCommand::MeasureObjectShape(
             MeasureObjectShapeSettings::default(),
         )),
-        35 => Some(PipelineCommand::MeasureObjectSkeleton(
+        35 => Some(PipelineCommand::MeasureObjectSholl(
+            MeasureObjectShollSettings::default(),
+        )),
+        36 => Some(PipelineCommand::MeasureObjectSkeleton(
             MeasureObjectSkeletonSettings::default(),
         )),
-        36 => Some(PipelineCommand::MeasureObjectTexture(
+        37 => Some(PipelineCommand::MeasureObjectTexture(
             MeasureObjectTextureSettings::default(),
         )),
-        37 => Some(PipelineCommand::MedianSubtract(
+        38 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        38 => Some(PipelineCommand::MorphologicalCommand(
+        39 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        39 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        40 => Some(PipelineCommand::PixelClassifier(
+        40 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        41 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        41 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
-        42 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        43 => Some(PipelineCommand::RelateObjects(
+        42 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
+        43 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        44 => Some(PipelineCommand::RelateObjects(
             RelateObjectsSettings::default(),
         )),
-        44 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        45 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        46 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        47 => Some(PipelineCommand::SkeletonizeObjects(
+        45 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        46 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        47 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        48 => Some(PipelineCommand::SkeletonizeObjects(
             SkeletonizeObjectsSettings::default(),
         )),
-        48 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        49 => Some(PipelineCommand::StructureTensor(
+        49 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        50 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        50 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        51 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
-        52 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
-        53 => Some(PipelineCommand::TrackNearestNeighbor(
+        51 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        52 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
+        53 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
+        54 => Some(PipelineCommand::TrackNearestNeighbor(
             TrackNearestNeighborSettings::default(),
         )),
-        54 => Some(PipelineCommand::TrackOverlap(
+        55 => Some(PipelineCommand::TrackOverlap(
             TrackOverlapSettings::default(),
         )),
-        55 => Some(PipelineCommand::TransformObjects(
+        56 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        56 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        57 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
-        58 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        59 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        60 => Some(PipelineCommand::WeightedDeviation(
+        57 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        58 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
+        59 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        60 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        61 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        61 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        62 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -990,6 +1006,7 @@ impl PipelineCommand {
         "measure_object_distance_to_parent",
         "measure_object_neighbors",
         "measure_object_shape",
+        "measure_object_sholl",
         "measure_object_skeleton",
         "measure_object_texture",
         "median_subtract",
@@ -1057,6 +1074,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_) => "measure_object_distance_to_parent",
             Self::MeasureObjectNeighbors(_) => "measure_object_neighbors",
             Self::MeasureObjectShape(_) => "measure_object_shape",
+            Self::MeasureObjectSholl(_) => "measure_object_sholl",
             Self::MeasureObjectSkeleton(_) => "measure_object_skeleton",
             Self::MeasureObjectTexture(_) => "measure_object_texture",
             Self::MedianSubtract(_) => "median_subtract",
@@ -1165,6 +1183,9 @@ impl PipelineCommand {
             "measure_object_shape" => Some(Self::MeasureObjectShape(
                 MeasureObjectShapeSettings::default(),
             )),
+            "measure_object_sholl" => Some(Self::MeasureObjectSholl(
+                MeasureObjectShollSettings::default(),
+            )),
             "measure_object_skeleton" => Some(Self::MeasureObjectSkeleton(
                 MeasureObjectSkeletonSettings::default(),
             )),
@@ -1247,6 +1268,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_) => "Measure Object Distance To Parent",
             Self::MeasureObjectNeighbors(_) => "Measure Object Neighbors",
             Self::MeasureObjectShape(_) => "Measure Object Shape",
+            Self::MeasureObjectSholl(_) => "Measure Object Sholl",
             Self::MeasureObjectSkeleton(_) => "Measure Object Skeleton",
             Self::MeasureObjectTexture(_) => "Measure Object Texture",
             Self::MedianSubtract(_) => "MedianSubtract",
@@ -1320,6 +1342,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_) => &CommandCategory::Measure,
             Self::MeasureObjectNeighbors(_) => &CommandCategory::Measure,
             Self::MeasureObjectShape(_) => &CommandCategory::Measure,
+            Self::MeasureObjectSholl(_) => &CommandCategory::Measure,
             Self::MeasureObjectSkeleton(_) => &CommandCategory::Measure,
             Self::MeasureObjectTexture(_) => &CommandCategory::Measure,
             Self::MedianSubtract(_) => &CommandCategory::Preprocess,
@@ -1425,6 +1448,7 @@ impl PipelineCommand {
                 &[CommandCategory::Measure, CommandCategory::Dataset]
             }
             Self::MeasureObjectShape(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
+            Self::MeasureObjectSholl(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::MeasureObjectSkeleton(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::MeasureObjectTexture(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::MedianSubtract(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
@@ -1526,6 +1550,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"parent_distance_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "children".to_string(), display_name: "Children".to_string(), description: "The children measured (e.g. spots).".to_string(), value: _s.children.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "parent_class".to_string(), display_name: "Parent".to_string(), description: "The class of their parent (as linked by Relate Objects, e.g. Cell).".to_string(), value: _s.parent_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureObjectNeighbors(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"neighbors_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "neighbors".to_string(), display_name: "Neighbors".to_string(), description: "The objects that count as neighbours (unset: the measured objects\nthemselves).".to_string(), value: _s.neighbors.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "method".to_string(), display_name: "Neighbors are".to_string(), description: "Which objects count as neighbours.".to_string(), value: match _s.method { MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent => "Expand until adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::Adjacent => "Adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::WithinDistance => "Within a distance".to_string() }, param_type: ParamType::Dropdown, options: vec!["Expand until adjacent".to_string(), "Adjacent".to_string(), "Within a distance".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureObjectNeighborsNeighborMethodSettings :: ExpandUntilAdjacent) { MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent => "Expand until adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::Adjacent => "Adjacent".to_string(), MeasureObjectNeighborsNeighborMethodSettings::WithinDistance => "Within a distance".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "distance".to_string(), display_name: "Distance [px]".to_string(), description: "With \"Within a distance\": how far, in pixels.".to_string(), value: format!("{}", _s.distance), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (5u32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureObjectShape(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"shape_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureObjectSholl(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"sholl_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The skeletons measured (the skeleton class of Skeletonize Objects).".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "centre_from".to_string(), display_name: "Centre From".to_string(), description: "The class of the centres (e.g. the somata), linked to the skeletons\nas their parents by Relate Objects: the circles are around its\ncentroid. Unset: around the skeleton's own centroid.".to_string(), value: _s.centre_from.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "ring_step".to_string(), display_name: "Ring Step".to_string(), description: "The distance between two circles.".to_string(), value: format!("{}", _s.ring_step), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (10.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "first_radius".to_string(), display_name: "First Radius".to_string(), description: "The radius of the first circle. 0: one step.".to_string(), value: format!("{}", _s.first_radius), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "last_radius".to_string(), display_name: "Last Radius".to_string(), description: "The radius of the last circle. 0: up to the farthest skeleton pixel.\nSet it to compare neurons at the same radii.".to_string(), value: format!("{}", _s.last_radius), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of the radii and the step.".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureObjectSkeleton(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"skeleton_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The skeletons measured (the skeleton class of Skeletonize Objects).".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "diameter_from".to_string(), display_name: "Diameter From".to_string(), description: "The class of the objects the skeletons were made of (e.g. the\nneurites), linked to them as their parents by Relate Objects: the\ndiameter is twice the distance from the skeleton to their outline.\nUnset: no diameter.".to_string(), value: _s.diameter_from.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureObjectTexture(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"object_texture_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "objects".to_string(), display_name: "Objects".to_string(), description: "The objects measured.".to_string(), value: _s.objects.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel measured.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "scale".to_string(), display_name: "Scale [px]".to_string(), description: "How far apart the two pixels of a pair are, in pixels - about the\nsize of the texture's grain.".to_string(), value: format!("{}", _s.scale), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "gray_levels".to_string(), display_name: "Gray levels".to_string(), description: "The gray levels the 8-bit values are rescaled to (2 to 256): fewer\nare faster and less noisy, more see finer differences.".to_string(), value: format!("{}", _s.gray_levels), param_type: ParamType::Spinner, options: vec![], min: 2.0f32, max: 256.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (256u32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "directions".to_string(), display_name: "Directions".to_string(), description: "One value per feature (the mean of the directions) or one per\ndirection.".to_string(), value: match _s.directions { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean of the directions".to_string(), "Each direction".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureTextureTextureDirectionsSettings :: Mean) { MeasureTextureTextureDirectionsSettings::Mean => "Mean of the directions".to_string(), MeasureTextureTextureDirectionsSettings::Each => "Each direction".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }]].concat(),
             Self::MedianSubtract(_s) => vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the neighborhood used to estimate the background.\n\nFeatures smaller than this radius will be preserved, while\nlarger structures will be treated as background and removed.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![], section: String::new() }],
@@ -1640,6 +1665,11 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureObjectNeighbors(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureObjectShape(s) => format!("ID: {}", s.id.clone()),
+            Self::MeasureObjectSholl(s) => format!(
+                "ID: {} · Ring Step: {}",
+                s.id.clone(),
+                format!("{:.3}", s.ring_step)
+            ),
             Self::MeasureObjectSkeleton(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureObjectTexture(s) => format!(
                 "ID: {} · Scale [px]: {}",
@@ -1741,6 +1771,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(s) => Some(s.id.as_str()),
             Self::MeasureObjectNeighbors(s) => Some(s.id.as_str()),
             Self::MeasureObjectShape(s) => Some(s.id.as_str()),
+            Self::MeasureObjectSholl(s) => Some(s.id.as_str()),
             Self::MeasureObjectSkeleton(s) => Some(s.id.as_str()),
             Self::MeasureObjectTexture(s) => Some(s.id.as_str()),
             _ => None,
@@ -1759,6 +1790,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(s) => Some(&mut s.id),
             Self::MeasureObjectNeighbors(s) => Some(&mut s.id),
             Self::MeasureObjectShape(s) => Some(&mut s.id),
+            Self::MeasureObjectSholl(s) => Some(&mut s.id),
             Self::MeasureObjectSkeleton(s) => Some(&mut s.id),
             Self::MeasureObjectTexture(s) => Some(&mut s.id),
             _ => None,
@@ -1778,6 +1810,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_) => Some("parent_distance"),
             Self::MeasureObjectNeighbors(_) => Some("neighbors"),
             Self::MeasureObjectShape(_) => Some("shape"),
+            Self::MeasureObjectSholl(_) => Some("sholl"),
             Self::MeasureObjectSkeleton(_) => Some("skeleton"),
             Self::MeasureObjectTexture(_) => Some("object_texture"),
             _ => None,
@@ -1890,6 +1923,10 @@ impl PipelineCommand {
             }
             Self::MeasureObjectShape(s) => {
                 classes.push(s.objects);
+            }
+            Self::MeasureObjectSholl(s) => {
+                classes.push(s.objects);
+                classes.push(s.centre_from);
             }
             Self::MeasureObjectSkeleton(s) => {
                 classes.push(s.objects);
@@ -3064,6 +3101,42 @@ impl PipelineCommand {
                     if let Some(v) = ObjectClass::from_text(value) {
                         s.objects = v;
                     }
+                }
+            }
+            Self::MeasureObjectSholl(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "objects" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.objects = v;
+                    }
+                }
+                if param_name == "centre_from" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.centre_from = v;
+                    }
+                }
+                if param_name == "ring_step" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.ring_step = v;
+                    }
+                }
+                if param_name == "first_radius" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.first_radius = v;
+                    }
+                }
+                if param_name == "last_radius" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.last_radius = v;
+                    }
+                }
+                if param_name == "unit" {
+                    s.unit = match value {
+                        "nm" => SizeUnits::NanoMeter,
+                        _ => SizeUnits::Pixels,
+                    };
                 }
             }
             Self::MeasureObjectSkeleton(s) => {
@@ -4247,6 +4320,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_) => {}
             Self::MeasureObjectNeighbors(_) => {}
             Self::MeasureObjectShape(_) => {}
+            Self::MeasureObjectSholl(_) => {}
             Self::MeasureObjectSkeleton(_) => {}
             Self::MeasureObjectTexture(_) => {}
             Self::MedianSubtract(_) => {}
@@ -4355,6 +4429,7 @@ impl PipelineCommand {
             Self::MeasureObjectDistanceToParent(_) => {}
             Self::MeasureObjectNeighbors(_) => {}
             Self::MeasureObjectShape(_) => {}
+            Self::MeasureObjectSholl(_) => {}
             Self::MeasureObjectSkeleton(_) => {}
             Self::MeasureObjectTexture(_) => {}
             Self::MedianSubtract(_) => {}

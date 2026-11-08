@@ -79,6 +79,7 @@ pub use self::measure::object_colocalization::MeasureObjectColocalization;
 pub use self::measure::object_distance_to_parent::MeasureObjectDistanceToParent;
 pub use self::measure::object_neighbors::{MeasureObjectNeighbors, NeighborMethod};
 pub use self::measure::object_shape::MeasureObjectShape;
+pub use self::measure::object_sholl::MeasureObjectSholl;
 pub use self::measure::object_skeleton::MeasureObjectSkeleton;
 pub use self::measure::object_texture::MeasureObjectTexture;
 pub use self::measure::texture::TextureDirections;

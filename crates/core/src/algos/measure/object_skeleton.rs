@@ -249,7 +249,7 @@ struct SkeletonGraph {
 }
 
 /// The length of the step from `p` to its neighbour `k` ([`RING`] order).
-fn step_length(k: usize) -> f64 {
+pub(crate) fn step_length(k: usize) -> f64 {
     if k % 2 == 0 {
         1.0
     } else {
@@ -259,7 +259,7 @@ fn step_length(k: usize) -> f64 {
 
 /// Whether the diagonal step from `p` to its neighbour `k` is bridged by a
 /// set 4-neighbour of both (then it isn't a step of its own).
-fn bridged(grid: &Grid, p: usize, k: usize) -> bool {
+pub(crate) fn bridged(grid: &Grid, p: usize, k: usize) -> bool {
     // The two 4-neighbours next to a diagonal in RING order.
     k % 2 == 1 && (grid.get(grid.neighbour(p, k - 1)) || grid.get(grid.neighbour(p, (k + 1) % 8)))
 }

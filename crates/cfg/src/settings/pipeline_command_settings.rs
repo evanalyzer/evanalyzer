@@ -3552,6 +3552,54 @@ pub struct MeasureObjectShapeSettings {
     pub objects: ObjectClass,
 }
 
+/// Sholl analysis of skeletons: circles around a centre (the soma) at a
+/// fixed step, the skeleton's crossings per circle (a profile - the curve
+/// over the radius) and its summary: the most crossings, the critical and
+/// the enclosing radius, the mean crossings and the Sholl regression
+/// coefficient. Radii in pixels.
+///
+/// [Skeletonize Objects] -> [Relate Objects (skeletons to somata)] -> [Measure Object Sholl]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureObjectShollSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("sholl_01/...").
+    pub id: String,
+    /// The skeletons measured (the skeleton class of Skeletonize Objects).
+    pub objects: ObjectClass,
+    /// The class of the centres (e.g. the somata), linked to the skeletons
+    /// as their parents by Relate Objects: the circles are around its
+    /// centroid. Unset: around the skeleton's own centroid.
+    pub centre_from: ObjectClass,
+    /// The distance between two circles.
+    #[schemars(range(min = 0.1, max = 100000))]
+    pub ring_step: f32,
+    /// The radius of the first circle. 0: one step.
+    #[schemars(range(min = 0, max = 100000))]
+    pub first_radius: f32,
+    /// The radius of the last circle. 0: up to the farthest skeleton pixel.
+    /// Set it to compare neurons at the same radii.
+    #[schemars(range(min = 0, max = 100000))]
+    pub last_radius: f32,
+    /// Unit of the radii and the step.
+    pub unit: SizeUnits,
+}
+
+impl Default for MeasureObjectShollSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            objects: ObjectClass::default(),
+            centre_from: ObjectClass::Unset,
+            ring_step: 10.0f32,
+            first_radius: 0.0f32,
+            last_radius: 0.0f32,
+            unit: SizeUnits::Pixels,
+        }
+    }
+}
+
 /// For each skeleton (Skeletonize Objects): its total length, the longest
 /// path through it, its end points, branch points and segments (the lines
 /// between them), their mean length and straightness (the straight

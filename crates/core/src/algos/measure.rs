@@ -18,6 +18,7 @@ pub mod object_colocalization;
 pub mod object_distance_to_parent;
 pub mod object_neighbors;
 pub mod object_shape;
+pub mod object_sholl;
 pub mod object_skeleton;
 pub mod object_texture;
 pub mod texture;

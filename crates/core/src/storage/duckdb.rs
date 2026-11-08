@@ -1556,7 +1556,7 @@ CREATE TABLE IF NOT EXISTS measurements (
     key                VARCHAR NOT NULL,
     value              DOUBLE,
     -- Where on the object's profile the value is (e.g. a Sholl ring's
-    -- radius in nm); NULL but for a profile measurement (since format 2).
+    -- radius in pixels); NULL but for a profile measurement (since format 2).
     position           DOUBLE
 );
 

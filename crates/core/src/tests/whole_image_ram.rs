@@ -143,6 +143,13 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
             objects: SPOT,
             diameter_from: CELL,
         }),
+        // The spots as skeletons, circles around their cells' centroids.
+        C::MeasureObjectSholl(_) => C::MeasureObjectSholl(MeasureObjectShollSettings {
+            id,
+            objects: SPOT,
+            centre_from: CELL,
+            ..Default::default()
+        }),
         C::MeasureObjectShape(_) => {
             C::MeasureObjectShape(MeasureObjectShapeSettings { id, objects: CELL })
         }

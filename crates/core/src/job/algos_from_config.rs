@@ -1041,6 +1041,20 @@ impl From<MeasureObjectShapeSettings> for MeasureObjectShape {
     }
 }
 
+impl From<MeasureObjectShollSettings> for MeasureObjectSholl {
+    fn from(_s: MeasureObjectShollSettings) -> Self {
+        MeasureObjectSholl {
+            id: _s.id,
+            objects: _s.objects,
+            centre_from: _s.centre_from,
+            ring_step: _s.ring_step.clamp(0.1, 100000.0),
+            first_radius: _s.first_radius.clamp(0.0, 100000.0),
+            last_radius: _s.last_radius.clamp(0.0, 100000.0),
+            unit: _s.unit,
+        }
+    }
+}
+
 impl From<MeasureObjectSkeletonSettings> for MeasureObjectSkeleton {
     fn from(_s: MeasureObjectSkeletonSettings) -> Self {
         MeasureObjectSkeleton {
@@ -1522,6 +1536,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::MeasureObjectShape(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectShape::from(settings),
+        ))),
+        PipelineCommand::MeasureObjectSholl(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureObjectSholl::from(settings),
         ))),
         PipelineCommand::MeasureObjectSkeleton(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectSkeleton::from(settings),

@@ -1967,6 +1967,56 @@
         "objects"
       ]
     },
+    "MeasureObjectShollSettings": {
+      "description": "Sholl analysis of skeletons: circles around a centre (the soma) at a\nfixed step, the skeleton's crossings per circle (a profile - the curve\nover the radius) and its summary: the most crossings, the critical and\nthe enclosing radius, the mean crossings and the Sholl regression\ncoefficient. Radii in pixels.\n\n[Skeletonize Objects] -> [Relate Objects (skeletons to somata)] -> [Measure Object Sholl]",
+      "type": "object",
+      "properties": {
+        "centreFrom": {
+          "description": "The class of the centres (e.g. the somata), linked to the skeletons\nas their parents by Relate Objects: the circles are around its\ncentroid. Unset: around the skeleton's own centroid.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "firstRadius": {
+          "description": "The radius of the first circle. 0: one step.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"sholl_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "lastRadius": {
+          "description": "The radius of the last circle. 0: up to the farthest skeleton pixel.\nSet it to compare neurons at the same radii.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "objects": {
+          "description": "The skeletons measured (the skeleton class of Skeletonize Objects).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "ringStep": {
+          "description": "The distance between two circles.",
+          "type": "number",
+          "format": "float",
+          "default": 10.0,
+          "maximum": 100000,
+          "minimum": 0.1
+        },
+        "unit": {
+          "description": "Unit of the radii and the step.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        }
+      }
+    },
     "MeasureObjectSkeletonSettings": {
       "description": "For each skeleton (Skeletonize Objects): its total length, the longest\npath through it, its end points, branch points and segments (the lines\nbetween them), their mean length and straightness (the straight\ndistance between a segment's ends / its length; loops don't count) and,\nwith \"Diameter from\", the mean diameter of the object it was made of\nalong it. Lengths in pixels.\n\n[Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]",
       "type": "object",
@@ -3335,6 +3385,19 @@
             }
           },
           "$ref": "#/$defs/MeasureObjectShapeSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_OBJECT_SHOLL"
+            }
+          },
+          "$ref": "#/$defs/MeasureObjectShollSettings",
           "required": [
             "type"
           ]
