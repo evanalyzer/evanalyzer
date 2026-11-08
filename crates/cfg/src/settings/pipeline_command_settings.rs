@@ -424,6 +424,17 @@ pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
     Cross,
 }
 
+/// How [`FindMaxima`] chooses its quality cut-off.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SegmentationFindMaximaMaximaCutoffSettings {
+    #[default]
+    #[serde(alias = "manual")]
+    Manual,
+    #[serde(alias = "otsu")]
+    Otsu,
+}
+
 /// What a merge adds up and a split divides - telling a true merge or
 /// split from objects that only pass close by.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
@@ -1864,6 +1875,71 @@ impl Default for CellposeSettings {
             flow_threshold: 0.4f32,
             cellpose_postprocessing: true,
             replicate_gray_channel: true,
+        }
+    }
+}
+
+/// Finds spots as local maxima: each pixel that is the brightest within the
+/// radius becomes one 1-pixel object.
+///
+/// [Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]
+///
+/// Writes the segmentation and the instance map (both replaced): the maxima
+/// get the segmentation class and one instance each; the image stays as it
+/// is. A plateau (equal neighbouring pixels) gives one maximum, its pixel
+/// nearest the plateau's centre; of equal maxima within the radius the one
+/// found first (row order) is kept. Flat regions (a background of 0) are
+/// never maxima.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct FindMaximaSettings {
+    /// A pixel is a maximum only if no pixel within this radius is brighter.
+    /// About half the spot diameter: smaller finds several maxima per spot,
+    /// larger merges neighbouring spots into one.
+    #[schemars(range(min = 1, max = 1000))]
+    pub radius: f32,
+    /// Unit `radius` is expressed in.
+    pub radius_unit: SizeUnits,
+    /// How the quality cut-off is chosen. A maximum's quality is the image's
+    /// value at it.
+    ///
+    /// Manual: maxima above `min_quality` are kept.
+    /// Otsu: Otsu's method on the qualities of all maxima of the image
+    /// splits spots from noise peaks; `min_quality` stays the lowest cut-off,
+    /// so an image without spots doesn't turn its noise into spots.
+    pub cutoff: SegmentationFindMaximaMaximaCutoffSettings,
+    /// Maxima with a quality at or below this value are dropped (with Otsu:
+    /// the lowest cut-off).
+    #[schemars(range(min = 0, max = 65535))]
+    pub min_quality: f32,
+    /// Unit used for `min_quality`.
+    ///
+    /// bit: 0 - 255/65535
+    /// %: 0 - 100.0
+    /// rel: 0 - 1.0
+    pub quality_unit: PixelUnits,
+    /// Only maxima on pixels of the current segmentation (any class, e.g.
+    /// from a Threshold before) count. Brighter pixels outside it still
+    /// suppress maxima within the radius.
+    pub inside_segmentation: bool,
+    /// Drop maxima closer to the image border than the radius.
+    pub exclude_at_edges: bool,
+    /// The segmentation class the maxima get.
+    pub segmentation_class: SegmentationClass,
+}
+
+impl Default for FindMaximaSettings {
+    fn default() -> Self {
+        Self {
+            radius: 2.0f32,
+            radius_unit: SizeUnits::Pixels,
+            cutoff: SegmentationFindMaximaMaximaCutoffSettings::Manual,
+            min_quality: 0.0f32,
+            quality_unit: PixelUnits::Bit,
+            inside_segmentation: bool::default(),
+            exclude_at_edges: bool::default(),
+            segmentation_class: SegmentationClass::default(),
         }
     }
 }

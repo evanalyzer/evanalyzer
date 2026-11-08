@@ -110,6 +110,8 @@ pub use self::script::script_executor::{
 };
 pub use self::script::script_params::{ParamDecl, ParamKind, ScriptValue};
 pub use self::segmentation::connected_components::ConnectedComponents;
+pub use self::segmentation::find_maxima::FindMaxima;
+pub use self::segmentation::find_maxima::MaximaCutoff;
 pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;
 pub use self::segmentation::threshold::OtsuMiddleClass;

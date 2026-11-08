@@ -243,6 +243,15 @@ impl From<MorphologyMorphologicalTransformationKernelShapesSettings> for KernelS
     }
 }
 
+impl From<SegmentationFindMaximaMaximaCutoffSettings> for MaximaCutoff {
+    fn from(_s: SegmentationFindMaximaMaximaCutoffSettings) -> Self {
+        match _s {
+            SegmentationFindMaximaMaximaCutoffSettings::Manual => MaximaCutoff::Manual,
+            SegmentationFindMaximaMaximaCutoffSettings::Otsu => MaximaCutoff::Otsu,
+        }
+    }
+}
+
 impl From<LibsLinkingMergeSplitAmountSettings> for MergeSplitAmount {
     fn from(_s: LibsLinkingMergeSplitAmountSettings) -> Self {
         match _s {
@@ -798,6 +807,21 @@ impl From<FillHolesSettings> for FillHoles {
 impl From<FillObjectHolesSettings> for FillObjectHoles {
     fn from(_s: FillObjectHolesSettings) -> Self {
         FillObjectHoles {}
+    }
+}
+
+impl From<FindMaximaSettings> for FindMaxima {
+    fn from(_s: FindMaximaSettings) -> Self {
+        FindMaxima {
+            radius: _s.radius.clamp(1.0, 1000.0),
+            radius_unit: _s.radius_unit,
+            cutoff: MaximaCutoff::from(_s.cutoff),
+            min_quality: _s.min_quality.clamp(0.0, 65535.0),
+            quality_unit: _s.quality_unit,
+            inside_segmentation: _s.inside_segmentation,
+            exclude_at_edges: _s.exclude_at_edges,
+            segmentation_class: _s.segmentation_class,
+        }
     }
 }
 
@@ -1395,6 +1419,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::FillObjectHoles(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::FillObjectHoles::from(settings),
+        ))),
+        PipelineCommand::FindMaxima(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::FindMaxima::from(settings),
         ))),
         PipelineCommand::GaussianBlur(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::GaussianBlur::from(settings),

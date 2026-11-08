@@ -8,6 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod connected_components;
+pub mod find_maxima;
 pub mod maximum_finder;
 pub mod threshold;
 pub mod watershed;

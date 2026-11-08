@@ -393,7 +393,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 58] = [
+    let expected: [(&str, &[CommandCategory]); 59] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -413,6 +413,9 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         // ExtractObjects expect instance IDs from ConnectedComponents/
         // Watershed, which haven't run yet right after FillHoles.
         ("FillHoles", &[InstanceSegmentation]),
+        // Writes the segmentation and instance map itself (one instance per
+        // maximum): Extract Objects comes right after, no labeling step.
+        ("Find Maxima", &[Extract]),
         // After filling, only Extract Objects (Extract) makes sense - object
         // commands need extracted objects.
         ("FillObjectHoles", &[Extract]),

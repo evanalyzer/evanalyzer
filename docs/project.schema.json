@@ -1246,6 +1246,58 @@
         }
       ]
     },
+    "FindMaximaSettings": {
+      "description": "Finds spots as local maxima: each pixel that is the brightest within the\nradius becomes one 1-pixel object.\n\n[Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "How the quality cut-off is chosen. A maximum's quality is the image's\nvalue at it.\n\nManual: maxima above `min_quality` are kept.\nOtsu: Otsu's method on the qualities of all maxima of the image\nsplits spots from noise peaks; `min_quality` stays the lowest cut-off,\nso an image without spots doesn't turn its noise into spots.",
+          "$ref": "#/$defs/SegmentationFindMaximaMaximaCutoffSettings",
+          "default": "MANUAL"
+        },
+        "excludeAtEdges": {
+          "description": "Drop maxima closer to the image border than the radius.",
+          "type": "boolean",
+          "default": false
+        },
+        "insideSegmentation": {
+          "description": "Only maxima on pixels of the current segmentation (any class, e.g.\nfrom a Threshold before) count. Brighter pixels outside it still\nsuppress maxima within the radius.",
+          "type": "boolean",
+          "default": false
+        },
+        "minQuality": {
+          "description": "Maxima with a quality at or below this value are dropped (with Otsu:\nthe lowest cut-off).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "qualityUnit": {
+          "description": "Unit used for `min_quality`.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0",
+          "$ref": "#/$defs/PixelUnits",
+          "default": "BIT"
+        },
+        "radius": {
+          "description": "A pixel is a maximum only if no pixel within this radius is brighter.\nAbout half the spot diameter: smaller finds several maxima per spot,\nlarger merges neighbouring spots into one.",
+          "type": "number",
+          "format": "float",
+          "default": 2.0,
+          "maximum": 1000,
+          "minimum": 1
+        },
+        "radiusUnit": {
+          "description": "Unit `radius` is expressed in.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        },
+        "segmentationClass": {
+          "description": "The segmentation class the maxima get.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 0
+        }
+      }
+    },
     "GaussianBlurSettings": {
       "description": "Smooths an image and reduces background noise using a Gaussian kernel.\n\nThis algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.",
       "type": "object",
@@ -3590,6 +3642,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "FIND_MAXIMA"
+            }
+          },
+          "$ref": "#/$defs/FindMaximaSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "GAUSSIAN_BLUR"
             }
           },
@@ -4602,6 +4667,14 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "SegmentationFindMaximaMaximaCutoffSettings": {
+      "description": "How [`FindMaxima`] chooses its quality cut-off.",
+      "type": "string",
+      "enum": [
+        "MANUAL",
+        "OTSU"
+      ]
     },
     "SegmentationMappingSettings": {
       "description": "Maps one class the model was trained to predict to a class ID meaningful\nin this project. Model class IDs are a snapshot taken at training time\n(see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't\nguaranteed to line up with this project's own `SegmentationClass` IDs -\nthis is the bridge between the two.",
