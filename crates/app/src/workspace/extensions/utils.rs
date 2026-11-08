@@ -41,6 +41,30 @@ pub fn get_relative_key(image_path: &Path, images_root: Option<&PathBuf>) -> Opt
 /// a `Vec` first (rather than calling `apply_param_change` inline) sidesteps
 /// borrowing `to_parameters()`'s `&self` and `apply_param_change`'s `&mut
 /// self` at the same time.
+/// Every file a project's commands name (`FilePath` settings: the AI
+/// models, the trained classifiers - and any such setting a command adds
+/// later), in its pipelines and its modules' steps, in groups too.
+pub fn command_file_paths(project: &ProjectSettings) -> Vec<PathBuf> {
+    fn collect(
+        params: Vec<evanalyzer_cfg::settings::parameter_def::ParameterDef>,
+        out: &mut Vec<PathBuf>,
+    ) {
+        for param in params {
+            if param.param_type == ParamType::FilePath && !param.value.is_empty() {
+                out.push(PathBuf::from(&param.value));
+            }
+            for group in param.groups {
+                collect(group, out);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    for command in crate::workspace::class_ids::all_commands(project) {
+        collect(command.to_parameters(), &mut paths);
+    }
+    paths
+}
+
 fn file_path_changes(
     command: &PipelineCommand,
     keep: impl Fn(&Path) -> bool,

@@ -49,6 +49,13 @@ pub(super) fn export_drawn_images(
         }
         on_progress("Drawing the objects on the images", i, images.len());
         let boxes = object_boxes(database, rel_path, z_stack, t_stack)?;
+        // From the results file - anyone's: it stays below the root (an
+        // absolute path would replace it, `..` leave it).
+        if !evanalyzer_cfg::core_types::is_contained_rel_path(rel_path) {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "the image path {rel_path:?} in the results leaves the images folder - not drawn"
+            )));
+        }
         let path = settings.image_root.join(rel_path);
         let picture = render(
             &path,

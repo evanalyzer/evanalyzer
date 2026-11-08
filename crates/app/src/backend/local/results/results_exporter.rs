@@ -3711,6 +3711,45 @@ mod tests {
         assert!(picture.width() > 0 && picture.height() > 0);
     }
 
+    /// The image paths come from the results file - anyone's: one that
+    /// leaves the images folder (`..`, absolute) isn't drawn, though the
+    /// file is there.
+    #[test]
+    fn images_outside_the_images_folder_are_not_drawn() {
+        let core = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core");
+        for rel_path in [
+            "../tests/multi-channel-4D-series.ome.tif",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../core/tests/multi-channel-4D-series.ome.tif"
+            ),
+        ] {
+            assert!(core.join("src").join(rel_path).is_file(), "{rel_path}");
+            let (database, out_dir) = open(&[ObjectSpec::new(rel_path, "ClassA", 1, 100)]);
+            let (z_stacks, t_stacks) = full_range();
+            let export = ResultExport {
+                output_dir: out_dir.clone(),
+                format: ExportFormat::XLSX,
+                z_stacks,
+                t_stacks,
+                drawn_images: Some(crate::api::DrawnImages {
+                    image_root: core.join("src"),
+                    series: 0,
+                    max_side: 4096,
+                    colors: [(0, [1.0, 0.0, 0.0])].into(),
+                }),
+                ..Default::default()
+            };
+            let err = export
+                .start_export(&database, &no_cancel(), &mut no_progress())
+                .expect_err("refused")
+                .to_string();
+            assert!(err.contains("leaves the images folder"), "{err}");
+            let drawn = std::fs::read_dir(out_dir.join("images")).map_or(0, |d| d.count());
+            assert_eq!(drawn, 0, "{rel_path}");
+        }
+    }
+
     #[test]
     fn calamine_can_read_back_a_real_exported_xlsx() {
         use calamine::{Data, Reader, Xlsx, open_workbook};

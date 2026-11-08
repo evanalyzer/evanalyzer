@@ -93,6 +93,11 @@ impl LocalBackend {
         if let Some(root) = &settings.images.root {
             self.files.check(root)?;
         }
+        // The model files the steps load (absolute: the client resolved
+        // them from its project folder).
+        for path in crate::workspace::extensions::utils::command_file_paths(settings) {
+            self.files.check(&path)?;
+        }
         // Each image joined onto that root stays in it.
         evanalyzer_core::check_image_paths(settings)
     }
@@ -155,7 +160,7 @@ impl Backend for LocalBackend {
 
     fn open_results(&self, path: &Path) -> Result<Arc<dyn ResultsSource>, InternalErrors> {
         let path = self.files.check(path)?;
-        Ok(Arc::new(LocalResults::open(path)?))
+        Ok(Arc::new(LocalResults::open(path, self.files.clone())?))
     }
 
     fn read_image_meta(&self, path: &Path) -> Result<ImageMeta, InternalErrors> {
@@ -287,6 +292,91 @@ mod home_tests {
                 "{outside}"
             );
         }
+    }
+
+    /// A client's pipeline names the model files a job loads: outside the
+    /// allowed folders (or relative - resolved against the worker's own
+    /// folder) they are refused, in a pipeline's steps and a module's.
+    #[test]
+    fn a_restricted_worker_refuses_model_files_outside_its_folders() {
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, StepId};
+        use evanalyzer_cfg::settings::modules::ModuleDefinition;
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::StardistSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+
+        let data = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::restricted_to(&[data.path().to_path_buf()]).unwrap();
+        let steps = |model: &std::path::Path| {
+            vec![PipelineStepSettings {
+                id: StepId(1),
+                enabled: true,
+                content: StepContent::Command(PipelineCommand::Stardist(StardistSettings {
+                    model_path: model.to_path_buf(),
+                    ..Default::default()
+                })),
+            }]
+        };
+        let in_pipeline = |model: &std::path::Path| {
+            let mut project = ProjectSettings::default();
+            project.pipelines.push(PipelineSettings {
+                id: PipelineId(0),
+                name: "".into(),
+                image_source: ImageAddress::Channel(0),
+                enabled: true,
+                steps: steps(model),
+                description: None,
+            });
+            project
+        };
+        let in_module = |model: &std::path::Path| {
+            let mut project = ProjectSettings::default();
+            project.modules.push(ModuleDefinition {
+                key: "NUCLEI".into(),
+                meta: Default::default(),
+                classes: vec![],
+                steps: steps(model),
+                parameters: vec![],
+                origin: None,
+            });
+            project
+        };
+
+        let inside = data.path().join("models/stardist.pt");
+        assert!(
+            backend
+                .check_project_paths(None, &in_pipeline(&inside))
+                .is_ok()
+        );
+        assert!(
+            backend
+                .check_project_paths(None, &in_module(&inside))
+                .is_ok()
+        );
+        let outside = tempfile::tempdir().unwrap();
+        for model in [
+            outside.path().join("stardist.pt"),
+            data.path().join("../stardist.pt"),
+            PathBuf::from("models/stardist.pt"),
+        ] {
+            for project in [in_pipeline(&model), in_module(&model)] {
+                assert!(
+                    backend.check_project_paths(None, &project).is_err(),
+                    "{}",
+                    model.display()
+                );
+            }
+        }
+        // The desktop loads them wherever they are.
+        let desktop = LocalBackend::default();
+        assert!(
+            desktop
+                .check_project_paths(None, &in_pipeline(&outside.path().join("m.pt")))
+                .is_ok()
+        );
     }
 }
 

@@ -45,12 +45,20 @@ use std::sync::atomic::AtomicBool;
 /// alongside them.
 pub struct LocalResults {
     database: Mutex<ResultsGenerator>,
+    /// The folders an export may write to and read images from - a
+    /// server's `--root`s (unrestricted on the desktop).
+    files: super::filesystem::LocalFileSystem,
 }
 
 impl LocalResults {
-    pub fn open(path: std::path::PathBuf) -> Result<Self, InternalErrors> {
+    /// Exports write and read only within `files` (see `export`).
+    pub fn open(
+        path: std::path::PathBuf,
+        files: super::filesystem::LocalFileSystem,
+    ) -> Result<Self, InternalErrors> {
         Ok(Self {
             database: Mutex::new(ResultsGenerator::open_database(path)?),
+            files,
         })
     }
 
@@ -182,6 +190,13 @@ impl ResultsSource for LocalResults {
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
+        // Within what this backend may reach (a server: its `--root`s) -
+        // the folder written to and the one the drawn images are read from
+        // are the client's to choose.
+        self.files.check(&export.output_dir)?;
+        if let Some(drawn) = &export.drawn_images {
+            self.files.check(&drawn.image_root)?;
+        }
         // Its own connection, so the (possibly long) export doesn't block
         // the results window's queries. Cloned from the open one rather than
         // opening the path again: on Windows the OS locks the file
@@ -189,5 +204,54 @@ impl ResultsSource for LocalResults {
         // a second open locked the app out of its own database on every export.
         let database = self.with(|db| db.try_clone())?;
         export.start_export(&database, cancel, on_progress)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{ObjectSpec, seed_db};
+    use super::*;
+    use crate::api::{DrawnImages, ExportFormat};
+    use crate::backend::local::filesystem::LocalFileSystem;
+
+    fn export(results: &LocalResults, export: ResultExport) -> Result<(), InternalErrors> {
+        results.export(&export, &AtomicBool::new(false), &mut |_, _, _| {})
+    }
+
+    /// A server's export (`--root`): written only within its folders, the
+    /// drawn images read only from there - a client chooses both.
+    #[test]
+    fn a_restricted_export_writes_and_reads_only_within_its_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let db = root.path().join("results.evadb");
+        seed_db(&db, &[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let files = LocalFileSystem::restricted_to(&[root.path().to_path_buf()]).unwrap();
+        let results = LocalResults::open(db, files).unwrap();
+        let list = |output_dir: std::path::PathBuf| ResultExport {
+            output_dir,
+            format: ExportFormat::CSV,
+            with_list_view: true,
+            ..Default::default()
+        };
+
+        for escape in [outside.path().join("out"), root.path().join("../out")] {
+            assert!(
+                export(&results, list(escape.clone())).is_err(),
+                "{}",
+                escape.display()
+            );
+            assert!(!escape.exists(), "{} written", escape.display());
+        }
+        let mut drawn = list(root.path().join("drawn"));
+        drawn.drawn_images = Some(DrawnImages {
+            image_root: outside.path().to_path_buf(),
+            ..Default::default()
+        });
+        assert!(export(&results, drawn).is_err(), "images read from outside");
+        assert!(!root.path().join("drawn").exists());
+
+        export(&results, list(root.path().join("out"))).expect("within the root");
+        assert!(root.path().join("out").read_dir().unwrap().next().is_some());
     }
 }
