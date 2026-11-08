@@ -9,6 +9,7 @@
 
 mod api;
 mod config;
+mod login_throttle;
 mod server;
 mod session_management;
 mod tls;

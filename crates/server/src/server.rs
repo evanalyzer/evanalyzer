@@ -10,6 +10,7 @@
 use crate::{
     api::{Request, Response},
     config::ServerConfig,
+    login_throttle::LoginThrottle,
     session_management::SessionManagement,
     tls,
     user_management::{AuthenticationStatus, UserManagement},
@@ -22,12 +23,22 @@ use std::{
     net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread,
-    time::SystemTime,
+    time::{Duration, Instant, SystemTime},
 };
-use tungstenite::{Message, WebSocket};
+use tungstenite::{Message, WebSocket, protocol::WebSocketConfig};
+
+/// Time a client has from connecting (TLS and WebSocket handshakes
+/// included) until it is logged in; after that the connection is closed.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Largest message the server takes: logins and the worker's `Hello` are
+/// small (the worker takes no more either), everything after `Hello` is
+/// copied to the worker without being read as messages.
+const MESSAGE_LIMIT: usize = 64 * 1024;
+/// Connections being told "busy" at once; beyond, they're just closed.
+const MAX_REFUSING: usize = 16;
 
 enum State {
     WaitingForLogin,
@@ -48,10 +59,96 @@ pub struct SessionInfo {
 /// All open connections, shared between the connection threads.
 pub type Sessions = Arc<Mutex<HashMap<SessionId, SessionInfo>>>;
 
+/// A client's socket, until it is logged in with a deadline: every read
+/// and write waits at most until then, so a client sending (or receiving)
+/// one byte at a time can't hold its connection open either.
+struct DeadlineStream {
+    tcp: TcpStream,
+    deadline: Option<Instant>,
+}
+
+impl DeadlineStream {
+    fn new(tcp: TcpStream, deadline: Option<Instant>) -> Self {
+        Self { tcp, deadline }
+    }
+
+    /// Time left until the deadline; an error once it has passed.
+    fn time_left(&self) -> io::Result<Option<Duration>> {
+        let Some(deadline) = self.deadline else {
+            return Ok(None);
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "not logged in in time",
+            ));
+        }
+        Ok(Some(left))
+    }
+
+    fn set_deadline(&mut self, deadline: Option<Instant>) -> io::Result<()> {
+        self.deadline = deadline;
+        if deadline.is_none() {
+            self.tcp.set_read_timeout(None)?;
+            self.tcp.set_write_timeout(None)?;
+        }
+        Ok(())
+    }
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(left) = self.time_left()? {
+            self.tcp.set_read_timeout(Some(left))?;
+        }
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for DeadlineStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(left) = self.time_left()? {
+            self.tcp.set_write_timeout(Some(left))?;
+        }
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 /// A client's connection: TLS-encrypted (`wss://`) or plain (`ws://`).
 enum ClientStream {
-    Plain(TcpStream),
-    Tls(Box<StreamOwned<ServerConnection, TcpStream>>),
+    Plain(DeadlineStream),
+    Tls(Box<StreamOwned<ServerConnection, DeadlineStream>>),
+}
+
+impl ClientStream {
+    /// `tcp`, encrypted with `tls` if given, with `deadline` for every read
+    /// and write.
+    fn new(
+        tcp: TcpStream,
+        tls: Option<&Arc<rustls::ServerConfig>>,
+        deadline: Instant,
+    ) -> Result<Self, rustls::Error> {
+        let stream = DeadlineStream::new(tcp, Some(deadline));
+        Ok(match tls {
+            None => Self::Plain(stream),
+            Some(config) => Self::Tls(Box::new(StreamOwned::new(
+                ServerConnection::new(Arc::clone(config))?,
+                stream,
+            ))),
+        })
+    }
+
+    fn set_deadline(&mut self, deadline: Option<Instant>) -> io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.set_deadline(deadline),
+            Self::Tls(stream) => stream.sock.set_deadline(deadline),
+        }
+    }
 }
 
 impl Read for ClientStream {
@@ -82,8 +179,14 @@ impl Write for ClientStream {
 struct Server {
     /// `None`: clients connect without encryption (`tls.enabled = false`).
     tls: Option<Arc<rustls::ServerConfig>>,
-    /// `limits.max_connections`.
+    /// `limits.max_connections`: logged-in connections.
     max_connections: Option<usize>,
+    /// `limits.max_pending_logins`: connections not logged in (yet).
+    max_pending_logins: usize,
+    /// Failed logins per client address.
+    throttle: Arc<LoginThrottle>,
+    /// Connections being told "busy" right now.
+    refusing: Arc<AtomicUsize>,
     user_management: Arc<dyn UserManagement>,
     session_management: Arc<SessionManagement>,
     sessions: Sessions,
@@ -93,6 +196,13 @@ struct Server {
 /// One per client: owned by the connection's thread.
 struct Connection {
     session_id: SessionId,
+    /// The client's address, for the login throttle.
+    peer: IpAddr,
+    /// When the client has to be logged in by; `None` once it is.
+    login_deadline: Option<Instant>,
+    /// `limits.max_connections`, checked again at login.
+    max_connections: Option<usize>,
+    throttle: Arc<LoginThrottle>,
     sessions: Sessions,
     user_management: Arc<dyn UserManagement>,
     session_management: Arc<SessionManagement>,
@@ -137,6 +247,9 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
     Server {
         tls: tls.map(|tls| tls.config),
         max_connections: config.limits.max_connections,
+        max_pending_logins: config.limits.max_pending_logins,
+        throttle: Arc::default(),
+        refusing: Arc::default(),
         user_management: config.user_management()?,
         session_management: Arc::new(session_management),
         sessions: Arc::default(),
@@ -146,31 +259,30 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
 }
 
 impl Server {
-    /// Tells a client over `limits.max_connections` why it can't come in -
-    /// in the WebSocket it expects, as the answer to its first command.
-    fn refuse(&self, stream: TcpStream, max: usize) {
+    /// Tells a client over the limits why it can't come in - in the
+    /// WebSocket it expects, as the answer to its first command. Beyond
+    /// [`MAX_REFUSING`] at once (a flood) the connection is just closed.
+    fn refuse(&self, stream: TcpStream, reason: String) {
+        if self.refusing.fetch_add(1, Ordering::Relaxed) >= MAX_REFUSING {
+            self.refusing.fetch_sub(1, Ordering::Relaxed);
+            return;
+        }
+        let refusing = Arc::clone(&self.refusing);
         let tls = self.tls.clone();
         thread::spawn(move || {
-            // Don't let a client that never speaks hold the thread.
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
-            let stream = match tls {
-                None => ClientStream::Plain(stream),
-                Some(config) => match ServerConnection::new(config) {
-                    Ok(tls) => ClientStream::Tls(Box::new(StreamOwned::new(tls, stream))),
-                    Err(_) => return,
-                },
-            };
-            let Ok(mut socket) = tungstenite::accept(stream) else {
-                return;
-            };
-            let answer = Response::error(format!(
-                "The server is busy ({max} connections open) - try again later"
-            ));
-            let json = serde_json::to_string(&answer).expect("Response serializes");
-            let _ = socket.read();
-            let _ = socket.send(Message::text(json));
-            let _ = socket.close(None);
-            let _ = socket.flush();
+            // A client that never speaks holds the thread for no longer.
+            let deadline = Instant::now() + LOGIN_TIMEOUT;
+            if let Ok(stream) = ClientStream::new(stream, tls.as_ref(), deadline)
+                && let Ok(mut socket) = accept(stream)
+            {
+                let json =
+                    serde_json::to_string(&Response::error(reason)).expect("Response serializes");
+                let _ = socket.read();
+                let _ = socket.send(Message::text(json));
+                let _ = socket.close(None);
+                let _ = socket.flush();
+            }
+            refusing.fetch_sub(1, Ordering::Relaxed);
         });
     }
 
@@ -185,10 +297,24 @@ impl Server {
                 continue;
             };
             let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-            let open = self.sessions.lock().unwrap().len();
-            if let Some(max) = self.max_connections.filter(|max| open >= *max) {
+            let (logged_in, pending) = count_sessions(&self.sessions, None);
+            if let Some(max) = self.max_connections.filter(|max| logged_in >= *max) {
                 warn!("Session {session_id}: {peer} refused, {max} connections open already");
-                self.refuse(stream, max);
+                self.refuse(
+                    stream,
+                    format!("The server is busy ({max} connections open) - try again later"),
+                );
+                continue;
+            }
+            if pending >= self.max_pending_logins {
+                warn!(
+                    "Session {session_id}: {peer} refused, {pending} connections are \
+                     logging in already"
+                );
+                self.refuse(
+                    stream,
+                    "The server is busy (too many logins at once) - try again later".into(),
+                );
                 continue;
             }
             self.sessions.lock().unwrap().insert(
@@ -208,8 +334,13 @@ impl Server {
                 }
             );
             // Dropping `connection` removes the session again (see `Drop`).
+            let login_deadline = Instant::now() + LOGIN_TIMEOUT;
             let mut connection = Connection {
                 session_id,
+                peer: peer.ip(),
+                login_deadline: Some(login_deadline),
+                max_connections: self.max_connections,
+                throttle: Arc::clone(&self.throttle),
                 sessions: Arc::clone(&self.sessions),
                 user_management: Arc::clone(&self.user_management),
                 session_management: Arc::clone(&self.session_management),
@@ -218,19 +349,16 @@ impl Server {
                 session_token: None,
                 worker_port: None,
             };
-            let stream = match &self.tls {
-                None => ClientStream::Plain(stream),
-                Some(config) => match ServerConnection::new(Arc::clone(config)) {
-                    Ok(tls) => ClientStream::Tls(Box::new(StreamOwned::new(tls, stream))),
-                    Err(err) => {
-                        warn!("Session {session_id}: cannot start TLS: {err}");
-                        continue;
-                    }
-                },
+            let stream = match ClientStream::new(stream, self.tls.as_ref(), login_deadline) {
+                Ok(stream) => stream,
+                Err(err) => {
+                    warn!("Session {session_id}: cannot start TLS: {err}");
+                    continue;
+                }
             };
             thread::spawn(move || {
                 // The TLS handshake runs inside the WebSocket handshake.
-                let mut socket = match tungstenite::accept(stream) {
+                let mut socket = match accept(stream) {
                     Ok(socket) => socket,
                     Err(err) => return warn!("Session {session_id}: handshake failed: {err}"),
                 };
@@ -278,6 +406,14 @@ impl Server {
                     if socket.send(Message::text(json)).is_err() {
                         break;
                     }
+                    // Logged in: no deadline; logged out: a new one.
+                    if socket
+                        .get_mut()
+                        .set_deadline(connection.login_deadline)
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             });
         }
@@ -305,9 +441,25 @@ impl Connection {
             Err(err) => return Response::error(format!("Invalid request: {err}")),
         };
         match (&self.state, request) {
+            (State::WaitingForLogin, Request::Login { .. } | Request::Resume { .. })
+                if let Some(wait) = self.throttle.wait(self.peer, Instant::now()) =>
+            {
+                warn!(
+                    "Session {}: login refused, too many failed tries from {}",
+                    self.session_id, self.peer
+                );
+                Response::error(format!(
+                    "Too many failed logins - try again in {} s",
+                    wait.as_secs().max(1)
+                ))
+            }
             (State::WaitingForLogin, Request::Login { username, password }) => {
                 match self.user_management.login(username.clone(), password) {
                     AuthenticationStatus::Authenticated(user) => {
+                        self.throttle.succeeded(self.peer);
+                        if let Some(busy) = self.over_connection_limit() {
+                            return busy;
+                        }
                         info!(
                             "Session {}: logged in as {} (id {})",
                             self.session_id, user.username, user.user_id
@@ -330,6 +482,7 @@ impl Connection {
                         self.worker_port = Some(session.port);
                         self.session_token = Some(session.session_token.clone());
                         self.state = State::WaitingForCommands;
+                        self.login_deadline = None;
                         Response {
                             session_token: Some(session.session_token),
                             ..Response::accepted("Logged in")
@@ -338,7 +491,13 @@ impl Connection {
                     // Same answer for both, so clients can't probe which
                     // usernames exist.
                     AuthenticationStatus::PasswordWrong => {
-                        warn!("Session {}: failed login for '{username}'", self.session_id);
+                        self.throttle.failed(self.peer, Instant::now());
+                        warn!(
+                            "Session {}: failed login for {} from {}",
+                            self.session_id,
+                            loggable(&username),
+                            self.peer
+                        );
                         Response::error("Invalid username or password")
                     }
                 }
@@ -346,6 +505,10 @@ impl Connection {
             (State::WaitingForLogin, Request::Resume { session_token }) => {
                 match self.session_management.resume_session(&session_token) {
                     Some(session) => {
+                        self.throttle.succeeded(self.peer);
+                        if let Some(busy) = self.over_connection_limit() {
+                            return busy;
+                        }
                         info!(
                             "Session {}: resumed the session of user {}",
                             self.session_id, session.user_id
@@ -358,15 +521,17 @@ impl Connection {
                         self.worker_port = Some(session.port);
                         self.session_token = Some(session.session_token.clone());
                         self.state = State::WaitingForCommands;
+                        self.login_deadline = None;
                         Response {
                             session_token: Some(session.session_token),
                             ..Response::accepted("Resumed")
                         }
                     }
                     None => {
+                        self.throttle.failed(self.peer, Instant::now());
                         warn!(
-                            "Session {}: resume with an unknown session",
-                            self.session_id
+                            "Session {}: resume with an unknown session from {}",
+                            self.session_id, self.peer
                         );
                         Response::error("The session has ended - log in again")
                     }
@@ -399,8 +564,52 @@ impl Connection {
         self.user_id = None;
         self.worker_port = None;
         self.state = State::WaitingForLogin;
+        self.login_deadline = Some(Instant::now() + LOGIN_TIMEOUT);
         Response::accepted("Logged out")
     }
+
+    /// The answer for a login beyond `limits.max_connections` - checked
+    /// again here, as clients that connected together may log in together.
+    fn over_connection_limit(&self) -> Option<Response> {
+        let max = self.max_connections?;
+        let (logged_in, _) = count_sessions(&self.sessions, Some(self.session_id));
+        (logged_in >= max).then(|| {
+            warn!(
+                "Session {}: login refused, {max} connections open already",
+                self.session_id
+            );
+            Response::error(format!(
+                "The server is busy ({max} connections open) - try again later"
+            ))
+        })
+    }
+}
+
+/// Logged-in and not (yet) logged-in connections, without `except`.
+fn count_sessions(sessions: &Sessions, except: Option<SessionId>) -> (usize, usize) {
+    let sessions = sessions.lock().unwrap();
+    let logged_in = sessions
+        .iter()
+        .filter(|(id, info)| Some(**id) != except && info.user_id.is_some())
+        .count();
+    (logged_in, sessions.len() - logged_in)
+}
+
+/// The WebSocket handshake with a new client (TLS first, if encrypted),
+/// taking messages up to [`MESSAGE_LIMIT`].
+fn accept(stream: ClientStream) -> Result<WebSocket<ClientStream>, String> {
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MESSAGE_LIMIT))
+        .max_frame_size(Some(MESSAGE_LIMIT));
+    tungstenite::accept_with_config(stream, Some(config)).map_err(|err| err.to_string())
+}
+
+/// A name a client sent, safe to log: at most 64 characters, control
+/// characters (a forged log line) escaped.
+fn loggable(name: &str) -> String {
+    let short: String = name.chars().take(64).collect();
+    let cut = if short.len() < name.len() { "…" } else { "" };
+    format!("{:?}{cut}", short)
 }
 
 /// Hands the client's connection over to its worker: opens a WebSocket to
@@ -422,8 +631,11 @@ fn forward_to_worker(client: WebSocket<ClientStream>, port: u16, hello: Message)
     worker.send(hello).map_err(io::Error::other)?;
     let worker = worker.get_ref().try_clone()?;
     match client.into_inner() {
-        ClientStream::Plain(client) => pipe(client, worker),
-        ClientStream::Tls(client) => pipe_tls(*client, worker),
+        ClientStream::Plain(client) => pipe(client.tcp, worker),
+        ClientStream::Tls(client) => {
+            let StreamOwned { conn, sock } = *client;
+            pipe_tls(conn, sock.tcp, worker)
+        }
     }
 }
 
@@ -505,6 +717,7 @@ fn is_loopback(listen: &str) -> bool {
 /// closes, then closes the other one too.
 fn pipe(client: TcpStream, worker: TcpStream) -> io::Result<()> {
     client.set_read_timeout(None)?;
+    client.set_write_timeout(None)?;
     worker.set_read_timeout(None)?;
     let (mut client_read, mut worker_write) = (client.try_clone()?, worker.try_clone()?);
     let upstream = thread::spawn(move || {
@@ -528,12 +741,9 @@ fn pipe(client: TcpStream, worker: TcpStream) -> io::Result<()> {
 /// while waiting on a socket. `client_writer` serializes writes to the
 /// client socket: encrypted records must go out in the order they were
 /// encrypted, so it is taken before `tls` and held until they're sent.
-fn pipe_tls(client: StreamOwned<ServerConnection, TcpStream>, worker: TcpStream) -> io::Result<()> {
-    let StreamOwned {
-        conn: tls,
-        sock: client,
-    } = client;
+fn pipe_tls(tls: ServerConnection, client: TcpStream, worker: TcpStream) -> io::Result<()> {
     client.set_read_timeout(None)?;
+    client.set_write_timeout(None)?;
     worker.set_read_timeout(None)?;
     let tls = Arc::new(Mutex::new(tls));
     let client_writer = Arc::new(Mutex::new(client.try_clone()?));
@@ -837,7 +1047,11 @@ mod tests {
     /// The server side of [`connect_tls`]'s connection.
     fn accept_tls(stream: TcpStream, tls: &tls::Tls) -> WebSocket<ClientStream> {
         let conn = ServerConnection::new(Arc::clone(&tls.config)).unwrap();
-        tungstenite::accept(ClientStream::Tls(Box::new(StreamOwned::new(conn, stream)))).unwrap()
+        tungstenite::accept(ClientStream::Tls(Box::new(StreamOwned::new(
+            conn,
+            DeadlineStream::new(stream, None),
+        ))))
+        .unwrap()
     }
 
     /// A worker that answers every binary message with its bytes reversed.
@@ -862,7 +1076,9 @@ mod tests {
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            let mut socket = tungstenite::accept(ClientStream::Plain(stream)).unwrap();
+            let mut socket =
+                tungstenite::accept(ClientStream::Plain(DeadlineStream::new(stream, None)))
+                    .unwrap();
             let hello = socket.read().unwrap();
             forward_to_worker(socket, worker_port, hello).unwrap();
         });
@@ -925,7 +1141,9 @@ mod tests {
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            let socket = tungstenite::accept(ClientStream::Plain(stream)).unwrap();
+            let socket =
+                tungstenite::accept(ClientStream::Plain(DeadlineStream::new(stream, None)))
+                    .unwrap();
             forward_to_worker(socket, port, Message::binary(vec![0]))
         });
         let (_client, _) = tungstenite::connect(url).unwrap();
@@ -969,6 +1187,16 @@ mod tests {
             tls: Option<&tls::Tls>,
             max_connections: Option<usize>,
         ) -> (String, SocketAddr) {
+            start_server_limited(dir, tls, max_connections, 32)
+        }
+
+        /// A server with both connection limits.
+        fn start_server_limited(
+            dir: &std::path::Path,
+            tls: Option<&tls::Tls>,
+            max_connections: Option<usize>,
+            max_pending_logins: usize,
+        ) -> (String, SocketAddr) {
             let port = TcpListener::bind("127.0.0.1:0")
                 .unwrap()
                 .local_addr()
@@ -977,6 +1205,9 @@ mod tests {
             let server = Server {
                 tls: tls.map(|tls| Arc::clone(&tls.config)),
                 max_connections,
+                max_pending_logins,
+                throttle: Arc::default(),
+                refusing: Arc::default(),
                 user_management: Arc::new(SingleUser::for_tests()),
                 session_management: Arc::new(
                     SessionManagement::with_store(dir.join("sessions.json"), fake_worker(dir))
@@ -1003,6 +1234,11 @@ mod tests {
             let greeting = client.read().unwrap().into_text().unwrap();
             assert!(greeting.starts_with("Welcome"), "{greeting}");
             client
+        }
+
+        /// A WebSocket connection without reading the greeting.
+        fn connect_any(url: &str) -> Client {
+            tungstenite::connect(url).unwrap().0
         }
 
         fn ask<S: Read + Write>(client: &mut WebSocket<S>, message: Message) -> serde_json::Value {
@@ -1069,45 +1305,162 @@ mod tests {
             client.close(None).unwrap();
         }
 
+        /// `max_connections` counts logged-in connections: the next client
+        /// gets the refusal as the answer to its first command; a client
+        /// connected before the limit was reached can't log in past it.
         #[test]
         fn connections_beyond_the_limit_are_refused_with_a_reason() {
             let dir = tempfile::tempdir().unwrap();
             let url = start_limited_server(dir.path(), 1);
-            // The start-up probe counts as a connection until it's gone. An
-            // accepted client is greeted first; a refused one gets the
-            // refusal as the answer to its first command.
-            let mut first = (0..200)
-                .find_map(|_| {
-                    let (mut client, _) = tungstenite::connect(url.as_str()).ok()?;
-                    client.send(text(r#"{"cmd":"exit"}"#)).ok()?;
-                    let first_text = client.read().ok()?.into_text().ok()?;
-                    if first_text.starts_with("Welcome") {
-                        client.read().ok()?; // the answer to `exit`
-                        Some(client)
-                    } else {
-                        thread::sleep(std::time::Duration::from_millis(10));
-                        None
-                    }
-                })
-                .expect("a connection once the probe is gone");
+            let mut first = connect(&url);
+            let mut waiting = connect(&url);
+            let reply = ask(&mut first, text(LOGIN));
+            assert_eq!(reply["response"], "Accepted");
 
-            let (mut second, _) = tungstenite::connect(url.as_str()).unwrap();
-            let reply = ask(
-                &mut second,
-                text(r#"{"cmd":"login","username":"admin","password":"1234"}"#),
-            );
+            let (mut refused, _) = tungstenite::connect(url.as_str()).unwrap();
+            let reply = ask(&mut refused, text(LOGIN));
             assert_eq!(reply["response"], "Error");
             assert!(
                 reply["msg"].as_str().unwrap().contains("try again later"),
                 "{reply}"
             );
-
-            // The first one is unaffected.
-            let reply = ask(
-                &mut first,
-                text(r#"{"cmd":"login","username":"admin","password":"nope"}"#),
+            let reply = ask(&mut waiting, text(LOGIN));
+            assert!(
+                reply["msg"].as_str().unwrap().contains("try again later"),
+                "{reply}"
             );
-            assert_eq!(reply["msg"], "Invalid username or password");
+
+            // Logged out, the slot is free again.
+            let reply = ask(&mut first, text(r#"{"cmd":"exit"}"#));
+            assert_eq!(reply["msg"], "Logged out");
+            let reply = ask(&mut waiting, text(LOGIN));
+            assert_eq!(reply["response"], "Accepted");
+        }
+
+        /// Connections that don't log in can't use up the server: beyond
+        /// `max_pending_logins` new ones are refused, logged-in ones don't
+        /// count.
+        #[test]
+        fn connections_that_never_log_in_are_capped() {
+            let dir = tempfile::tempdir().unwrap();
+            let (url, _) = start_server_limited(dir.path(), None, None, 2);
+            // The start-up probe may still count for a moment.
+            let mut idle = Vec::new();
+            for _ in 0..200 {
+                let mut client = connect_any(&url);
+                if client
+                    .read()
+                    .unwrap()
+                    .into_text()
+                    .unwrap()
+                    .starts_with("Welcome")
+                {
+                    idle.push(client);
+                    if idle.len() == 2 {
+                        break;
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+            let mut refused = connect_any(&url);
+            refused.send(text(LOGIN)).unwrap();
+            let reply = refused.read().unwrap().into_text().unwrap();
+            assert!(reply.contains("too many logins at once"), "{reply}");
+
+            // Logging in frees a place for the next one.
+            let reply = ask(&mut idle[0], text(LOGIN));
+            assert_eq!(reply["response"], "Accepted");
+            let mut next = connect(&url);
+            let reply = ask(&mut next, text(LOGIN));
+            assert_eq!(reply["response"], "Accepted");
+        }
+
+        /// A client that doesn't log in within the login timeout is
+        /// disconnected, even one that keeps sending a byte now and then;
+        /// a logged-in one stays.
+        #[test]
+        fn a_client_that_does_not_log_in_in_time_is_disconnected() {
+            let dir = tempfile::tempdir().unwrap();
+            let (_, addr) = start_server_with(dir.path(), None);
+            let started = Instant::now();
+            // Half an HTTP request, then a byte a second.
+            let mut slow = TcpStream::connect(addr).unwrap();
+            slow.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").unwrap();
+            let mut logged_in = connect(&format!("ws://{addr}"));
+            assert_eq!(ask(&mut logged_in, text(LOGIN))["response"], "Accepted");
+            let mut closed = false;
+            while started.elapsed() < LOGIN_TIMEOUT + Duration::from_secs(5) {
+                thread::sleep(Duration::from_secs(1));
+                if slow.write_all(b"X").is_err() {
+                    closed = true;
+                    break;
+                }
+                let mut probe = [0u8; 1];
+                slow.set_read_timeout(Some(Duration::from_millis(10)))
+                    .unwrap();
+                if matches!(slow.read(&mut probe), Ok(0)) {
+                    closed = true;
+                    break;
+                }
+            }
+            assert!(closed, "still open after {:?}", started.elapsed());
+            assert!(started.elapsed() >= LOGIN_TIMEOUT - Duration::from_secs(1));
+            // The logged-in client outlived the timeout.
+            let reply = ask(&mut logged_in, text(LOGIN));
+            assert_eq!(reply["msg"], "Already logged in");
+        }
+
+        /// Before a client is logged in, a message over 64 KiB ends its
+        /// connection instead of being buffered.
+        #[test]
+        fn a_huge_message_before_login_ends_the_connection() {
+            let dir = tempfile::tempdir().unwrap();
+            let url = start_server(dir.path());
+            let mut client = connect(&url);
+            let huge = format!(
+                r#"{{"cmd":"login","username":"{}","password":"x"}}"#,
+                "a".repeat(MESSAGE_LIMIT)
+            );
+            let _ = client.send(text(&huge));
+            assert!(client.read().is_err(), "closed");
+            // A normal client is unaffected.
+            let mut normal = connect(&url);
+            assert_eq!(ask(&mut normal, text(LOGIN))["response"], "Accepted");
+        }
+
+        /// After five wrong passwords from one address, its next tries are
+        /// refused without checking the password - the right one too.
+        #[test]
+        fn repeated_wrong_passwords_have_to_wait() {
+            let dir = tempfile::tempdir().unwrap();
+            let url = start_server(dir.path());
+            let mut client = connect(&url);
+            let wrong = text(r#"{"cmd":"login","username":"admin","password":"nope"}"#);
+            for _ in 0..5 {
+                let reply = ask(&mut client, wrong.clone());
+                assert_eq!(reply["msg"], "Invalid username or password");
+            }
+            let reply = ask(&mut client, text(LOGIN));
+            assert!(
+                reply["msg"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Too many failed logins"),
+                "{reply}"
+            );
+            // A new connection from the same address waits too.
+            let mut again = connect(&url);
+            let reply = ask(&mut again, text(LOGIN));
+            assert!(
+                reply["msg"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Too many failed logins"),
+                "{reply}"
+            );
+            thread::sleep(Duration::from_millis(1100));
+            assert_eq!(ask(&mut again, text(LOGIN))["response"], "Accepted");
         }
 
         #[test]
@@ -1168,6 +1521,10 @@ mod tests {
         fn connection(session_management: SessionManagement) -> Connection {
             Connection {
                 session_id: 1,
+                peer: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                login_deadline: None,
+                max_connections: None,
+                throttle: Arc::default(),
                 sessions: Arc::default(),
                 user_management: Arc::new(SingleUser::for_tests()),
                 session_management: Arc::new(session_management),

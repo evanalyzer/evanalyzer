@@ -125,18 +125,33 @@ impl Default for WorkersConfig {
     }
 }
 
-/// `[limits]`: protects the machine from more work than it can do. Not set:
-/// no limit.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+/// `[limits]`: protects the machine from more work than it can do.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct LimitsConfig {
     /// At most this many workers (= users working at the same time). A
     /// login that would start one more is refused with "try again later";
-    /// users whose worker already runs can always log in.
+    /// users whose worker already runs can always log in. Default: no
+    /// limit.
     pub max_workers: Option<usize>,
-    /// At most this many client connections at once, all users together
-    /// (one GUI or CLI is one connection). Further ones are refused.
+    /// At most this many logged-in client connections at once, all users
+    /// together (one GUI or CLI is one connection). Further ones are
+    /// refused. Default: no limit.
     pub max_connections: Option<usize>,
+    /// At most this many connections that aren't logged in yet, at once -
+    /// each has 10 s to log in. Further ones are refused, so connections
+    /// that never log in can't use up the server. Default 32.
+    pub max_pending_logins: usize,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_workers: None,
+            max_connections: None,
+            max_pending_logins: 32,
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -443,6 +458,9 @@ impl ServerConfig {
                  (leave them out for no limit)"
                     .into(),
             );
+        }
+        if self.limits.max_pending_logins == 0 {
+            return invalid("limits.max_pending_logins must be at least 1".into());
         }
         if self.tls.cert.is_some() != self.tls.key.is_some() {
             return invalid("tls.cert and tls.key go together - set both or neither".into());
