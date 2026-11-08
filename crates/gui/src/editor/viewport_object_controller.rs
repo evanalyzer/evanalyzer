@@ -17,7 +17,7 @@ use crate::editor::annotations_controller::AnnotationController;
 use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
-use crate::editor::object_render::{ZOrder, pick};
+use crate::editor::object_render::{ZOrder, is_point, pick, point_hit};
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
 use crate::editor::viewport_controller::is_object_drawn;
@@ -340,7 +340,19 @@ impl ViewPortObjectController {
                 .filter(|o| is_object_drawn(&*project, hide_unclassified, &o.object_class))
                 .collect();
             pick(objects.iter().map(|o| {
-                let holds = o.is_part_of_on_plane(x1, y1, shown);
+                // A point object is hit where its dot is drawn.
+                let holds = o.is_part_of_on_plane(x1, y1, shown)
+                    || o.mask_on_plane(shown).is_some_and(|mask| {
+                        is_point(o.bbox, mask)
+                            && point_hit(
+                                o.bbox,
+                                click_x,
+                                click_y,
+                                vp.zoom,
+                                vp.offset_x,
+                                vp.offset_y,
+                            )
+                    });
                 (z.key(&o.object_class, false), holds)
             }))
             .map(|i| objects[i].id.clone())

@@ -18,7 +18,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::editor::object_render::{
-    Canvas, Link, ObjectDrawInstance, draw_objects, mask_holds, pick,
+    Canvas, Link, ObjectDrawInstance, draw_objects, is_point, mask_holds, pick, point_hit,
 };
 use bitvec::prelude::*;
 use evanalyzer_app::results::ImageTracks;
@@ -286,12 +286,12 @@ pub fn object_at(
         return None;
     }
     let (ix, iy) = (ix as u32, iy as u32);
-    pick(
-        overlay
-            .objects
-            .iter()
-            .map(|o| (o.pick, mask_holds(o.bbox, &o.mask, ix, iy))),
-    )
+    pick(overlay.objects.iter().map(|o| {
+        // A point object is hit where its dot is drawn.
+        let holds = mask_holds(o.bbox, &o.mask, ix, iy)
+            || (is_point(o.bbox, &o.mask) && point_hit(o.bbox, x, y, zoom, off_x, off_y));
+        (o.pick, holds)
+    }))
 }
 
 #[cfg(test)]

@@ -62,6 +62,35 @@ pub(crate) fn pick(objects: impl IntoIterator<Item = (u32, bool)>) -> Option<usi
     best.map(|(i, _)| i)
 }
 
+/// The smallest a point object (one pixel: a Find Maxima spot, a branch or
+/// end point) is drawn, in screen pixels: a dot of this diameter - else it
+/// is a single screen pixel at every zoom up to 1. Display only.
+pub(crate) const POINT_MARKER_DIAMETER: f32 = 5.0;
+
+/// A point object: one set pixel (larger objects keep their shape).
+pub(crate) fn is_point(bbox: [u32; 4], mask: &BitSlice<u64, Lsb0>) -> bool {
+    bbox[0] == bbox[2] && bbox[1] == bbox[3] && mask.count_ones() == 1
+}
+
+/// Whether the screen point (`sx`, `sy`) hits the point object at `bbox`
+/// drawn at `zoom` / `off`: within its dot ([`POINT_MARKER_DIAMETER`]) or
+/// its pixel, whichever is larger - so it can be clicked as it is drawn.
+pub(crate) fn point_hit(
+    bbox: [u32; 4],
+    sx: f32,
+    sy: f32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) -> bool {
+    let cx = (bbox[0] as f32 + 0.5) * zoom + off_x;
+    let cy = (bbox[1] as f32 + 0.5) * zoom + off_y;
+    let r = (POINT_MARKER_DIAMETER / 2.0).max(zoom / 2.0);
+    (sx - cx).abs() <= r
+        && (sy - cy).abs() <= r
+        && (sx - cx).powi(2) + (sy - cy).powi(2) <= r * r * 2.0
+}
+
 /// `mask` (a bit per pixel of the inclusive `bbox`, row by row) holds the
 /// image pixel `(x, y)`.
 pub(crate) fn mask_holds(bbox: [u32; 4], mask: &BitSlice<u64, Lsb0>, x: u32, y: u32) -> bool {
@@ -219,6 +248,35 @@ pub(crate) fn composite_object_instances_into(
 
         // Viewport culling.
         if sx1 <= 0.0 || sy1 <= 0.0 || sx0 >= buf_w as f32 || sy0 >= buf_h as f32 {
+            continue;
+        }
+
+        // A point object smaller on screen than its dot: the dot (a fill
+        // with an outline, like every object).
+        if sx1 - sx0 < POINT_MARKER_DIAMETER && is_point(bbox, inst.mask) {
+            let (cx, cy) = ((sx0 + sx1) * 0.5, (sy0 + sy1) * 0.5);
+            let r = POINT_MARKER_DIAMETER / 2.0;
+            let inside = |px: i32, py: i32| {
+                let (dx, dy) = (px as f32 + 0.5 - cx, py as f32 + 0.5 - cy);
+                dx * dx + dy * dy <= r * r
+            };
+            for py in (cy - r).floor() as i32..=(cy + r).ceil() as i32 {
+                for px in (cx - r).floor() as i32..=(cx + r).ceil() as i32 {
+                    if px < 0 || py < 0 || px >= bw || py >= bh || !inside(px, py) {
+                        continue;
+                    }
+                    let i = py as usize * stride + px as usize;
+                    blend_pixel_over(&mut pixels[i], inst.color);
+                    let border = !inside(px - 1, py)
+                        || !inside(px + 1, py)
+                        || !inside(px, py - 1)
+                        || !inside(px, py + 1);
+                    if border {
+                        outline_idx.push(i as u32);
+                    }
+                }
+            }
+            outline_runs.push((outline_idx.len(), inst.color));
             continue;
         }
 
@@ -705,7 +763,8 @@ mod tests {
 
     #[test]
     fn overlapping_objects_blend_with_porter_duff_over() {
-        let bbox = [0u32, 0, 0, 0]; // single-pixel bbox
+        // Two pixels: one would be a point object, drawn as a dot.
+        let bbox = [0u32, 0, 1, 0];
         let mask = full_mask(bbox);
         let bottom = rgba(255, 0, 0, 128);
         let top = rgba(0, 0, 255, 128);
@@ -724,8 +783,8 @@ mod tests {
 
         let pixels = composite_object_instances(&instances, 3, 3, 1.0, 0.0, 0.0);
 
-        // A single pixel is all outline: outlines are painted opaque in
-        // z-order after every fill, so the top object's outline wins.
+        // A 1-pixel-high object is all outline: outlines are painted opaque
+        // in z-order after every fill, so the top object's outline wins.
         assert_eq!(pixels[0], rgba(0, 0, 255, 255));
     }
 
@@ -891,5 +950,60 @@ mod tests {
                 first.unwrap_or(0.0)
             );
         }
+    }
+
+    /// A one-pixel object (a spot, a branch point) is a dot of
+    /// POINT_MARKER_DIAMETER on screen when zoomed out, and at zoom 1 -
+    /// not a single pixel.
+    #[test]
+    fn a_point_object_is_drawn_as_a_dot() {
+        let bbox = [40u32, 40, 40, 40];
+        let mask = full_mask(bbox);
+        let color = rgba(9, 8, 7, 128);
+        let instances = [ObjectDrawInstance {
+            bbox,
+            mask: &mask,
+            color,
+        }];
+        for zoom in [0.1f32, 1.0] {
+            let pixels = composite_object_instances(&instances, 100, 100, zoom, 0.0, 0.0);
+            let painted = pixels.iter().filter(|p| p.a != 0).count();
+            assert!(
+                (13..=25).contains(&painted),
+                "zoom {zoom}: {painted} pixels"
+            );
+        }
+        // Zoomed in further than the dot: the pixel's own square.
+        let pixels = composite_object_instances(&instances, 500, 500, 8.0, 0.0, 0.0);
+        assert_eq!(pixels.iter().filter(|p| p.a != 0).count(), 64);
+    }
+
+    #[test]
+    fn a_point_object_is_hit_within_its_dot() {
+        let bbox = [40u32, 40, 40, 40];
+        // Zoom 0.1: the pixel's centre at (4.05, 4.05) on screen.
+        assert!(point_hit(bbox, 4.0, 4.0, 0.1, 0.0, 0.0));
+        assert!(point_hit(bbox, 5.5, 4.0, 0.1, 0.0, 0.0));
+        assert!(!point_hit(bbox, 8.0, 4.0, 0.1, 0.0, 0.0));
+        let two = full_mask([0, 0, 1, 0]);
+        assert!(!is_point([0, 0, 1, 0], &two));
+        assert!(is_point(bbox, &full_mask(bbox)));
+    }
+
+    /// A 1-pixel-wide line (a skeleton) stays unbroken zoomed out: every
+    /// image pixel covers at least one screen pixel.
+    #[test]
+    fn a_thin_line_stays_unbroken_when_zoomed_out() {
+        let bbox = [0u32, 50, 999, 50];
+        let mask = full_mask(bbox);
+        let instances = [ObjectDrawInstance {
+            bbox,
+            mask: &mask,
+            color: rgba(1, 1, 1, 255),
+        }];
+        let pixels = composite_object_instances(&instances, 200, 20, 0.1, 0.0, 0.0);
+        let row = 5usize; // 50 * 0.1
+        let painted: Vec<usize> = (0..200).filter(|&x| pixels[row * 200 + x].a != 0).collect();
+        assert_eq!(painted, (0..100).collect::<Vec<_>>());
     }
 }
