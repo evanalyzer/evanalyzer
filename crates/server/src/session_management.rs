@@ -93,6 +93,8 @@ pub struct SessionManagement {
     pub worker_ai_plugin: Option<PathBuf>,
     pub worker_max_threads: Option<usize>,
     pub worker_max_ram_mb: Option<u64>,
+    /// Passed to every worker as `--max-job-minutes`.
+    pub worker_max_job_minutes: Option<u64>,
     /// At most this many workers at once (`limits.max_workers`).
     pub max_workers: Option<usize>,
     state: Mutex<State>,
@@ -138,6 +140,7 @@ impl SessionManagement {
             worker_ai_plugin: None,
             worker_max_threads: None,
             worker_max_ram_mb: None,
+            worker_max_job_minutes: None,
             max_workers: None,
             state: Mutex::new(State {
                 sessions,
@@ -263,6 +266,9 @@ impl SessionManagement {
         }
         if let Some(mb) = self.worker_max_ram_mb {
             command.arg("--max-ram").arg(mb.to_string());
+        }
+        if let Some(minutes) = self.worker_max_job_minutes {
+            command.arg("--max-job-minutes").arg(minutes.to_string());
         }
         command
             .current_dir(&user.home)
@@ -630,6 +636,7 @@ pub(crate) mod tests {
         sessions.worker_ai_plugin = Some(PathBuf::from("/opt/eva/libevanalyzer_ai.so"));
         sessions.worker_max_threads = Some(8);
         sessions.worker_max_ram_mb = Some(16384);
+        sessions.worker_max_job_minutes = Some(600);
         let mut alice = user("alice");
         alice.home = dir.path().to_path_buf();
 
@@ -644,6 +651,7 @@ pub(crate) mod tests {
         assert_eq!(value_of("--ai-plugin"), "/opt/eva/libevanalyzer_ai.so");
         assert_eq!(value_of("--max-threads"), "8");
         assert_eq!(value_of("--max-ram"), "16384");
+        assert_eq!(value_of("--max-job-minutes"), "600");
         sessions.close_session(&entry.session_token).unwrap();
     }
 

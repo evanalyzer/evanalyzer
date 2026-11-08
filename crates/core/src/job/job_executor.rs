@@ -878,7 +878,10 @@ impl<'a> JobExecutor {
                     pixel_sizes.clone(),
                     image_cache_bytes,
                 ) {
-                    Ok(cache) => cache,
+                    Ok(cache) => GlobalPipelineCache {
+                        cancel: Some(Arc::clone(&cancel)),
+                        ..cache
+                    },
                     Err(e) => {
                         analyze_result = Err(e);
                         break 'stacks;
@@ -1493,6 +1496,7 @@ impl<'a> JobExecutor {
             annotated_objects: Default::default(),
             analysed_plane: Default::default(),
             class_colors: Arc::clone(&self.class_colors),
+            cancel: None,
         })
     }
 
@@ -4948,6 +4952,7 @@ mod tile_merge_end_to_end_tests {
             annotated_objects: Default::default(),
             analysed_plane: Default::default(),
             class_colors: Default::default(),
+            cancel: None,
             image_meta: GlobalImageMeta {
                 full_image_width: ImageSize {
                     width: full_width,

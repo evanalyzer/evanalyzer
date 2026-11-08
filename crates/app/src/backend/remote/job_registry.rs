@@ -45,6 +45,9 @@ const MAX_FINISHED: usize = 50;
 pub(super) struct JobRegistry {
     /// Oldest first.
     jobs: Mutex<Vec<Arc<JobEntry>>>,
+    /// An analysis running longer is cancelled (a server's
+    /// `workers.max_job_minutes`); `None`: no limit.
+    max_duration: Option<Duration>,
 }
 
 /// One analysis: running, or finished.
@@ -167,6 +170,14 @@ impl Snapshot {
 }
 
 impl JobRegistry {
+    /// Cancels every analysis that runs longer than `max_duration`.
+    pub(super) fn with_max_duration(max_duration: Option<Duration>) -> Self {
+        Self {
+            max_duration,
+            ..Self::default()
+        }
+    }
+
     /// Starts an analysis with `start` - unless one is running already - and
     /// keeps it running regardless of who follows it.
     pub(super) fn start(
@@ -196,10 +207,41 @@ impl JobRegistry {
         jobs.push(Arc::clone(&entry));
         drop(jobs);
 
+        // With a time limit, a watcher cancels the analysis once it's over;
+        // it ends early when the pump drops `finished`.
+        let finished = match self.max_duration {
+            Some(limit) => {
+                let (finished, ended) = std::sync::mpsc::channel::<()>();
+                let watched = Arc::clone(&entry);
+                std::thread::Builder::new()
+                    .name("evanalyzer-job-limit".into())
+                    .spawn(move || {
+                        if ended.recv_timeout(limit)
+                            == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                        {
+                            log::warn!(
+                                "Analysis {} cancelled: it ran longer than the server's \
+                                 limit of {} min",
+                                watched.id,
+                                limit.as_secs() / 60
+                            );
+                            watched.cancel.cancel();
+                        }
+                    })
+                    .map_err(|e| {
+                        InternalErrors::Internal(format!("could not start job thread: {e}"))
+                    })?;
+                Some(finished)
+            }
+            None => None,
+        };
         let pump = Arc::clone(&entry);
         std::thread::Builder::new()
             .name("evanalyzer-job".into())
-            .spawn(move || pump.run(job))
+            .spawn(move || {
+                pump.run(job);
+                drop(finished);
+            })
             .map_err(|e| InternalErrors::Internal(format!("could not start job thread: {e}")))?;
         log::info!(
             "Analysis {} started ({})",
@@ -510,6 +552,26 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("job did not finish");
+    }
+
+    /// With a time limit (a server's `workers.max_job_minutes`) an analysis
+    /// running longer is cancelled; one that ends in time is left alone.
+    #[test]
+    fn an_analysis_over_the_time_limit_is_cancelled() {
+        let registry = JobRegistry::with_max_duration(Some(Duration::from_millis(200)));
+        let (quick, control) = start(&registry);
+        control.finish(Ok(JobOutput::default()));
+        wait_until_finished(&registry);
+
+        let (slow, _control) = start(&registry);
+        for _ in 0..300 {
+            if slow.cancel.is_cancelled() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(slow.cancel.is_cancelled(), "cancelled after the limit");
+        assert!(!quick.cancel.is_cancelled(), "ended in time");
     }
 
     #[test]

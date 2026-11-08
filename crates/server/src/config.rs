@@ -110,6 +110,10 @@ pub struct WorkersConfig {
     /// Most RAM in MB each worker plans with (`--max-ram`), at least 1.
     /// Default: the computer's.
     pub max_ram_mb: Option<u64>,
+    /// An analysis running longer is cancelled (`--max-job-minutes`), so
+    /// one user's analysis can't take the machine for good. Default: no
+    /// limit - analyses of whole slides can take hours.
+    pub max_job_minutes: Option<u64>,
 }
 
 impl Default for WorkersConfig {
@@ -121,6 +125,7 @@ impl Default for WorkersConfig {
             ai_plugin: None,
             max_threads: None,
             max_ram_mb: None,
+            max_job_minutes: None,
         }
     }
 }
@@ -470,6 +475,9 @@ impl ServerConfig {
                  (leave them out for no limit)"
                     .into(),
             );
+        }
+        if self.workers.max_job_minutes == Some(0) {
+            return invalid("workers.max_job_minutes must be at least 1".into());
         }
         if self.limits.max_pending_logins == 0 {
             return invalid("limits.max_pending_logins must be at least 1".into());

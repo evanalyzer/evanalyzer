@@ -183,6 +183,11 @@ pub enum TopCommand {
         /// for this many minutes. Default: run until stopped.
         #[arg(long, value_name = "MINUTES")]
         idle_timeout: Option<u64>,
+
+        /// Cancel an analysis that runs longer than this many minutes.
+        /// Default: no limit.
+        #[arg(long, value_name = "MINUTES", value_parser = parse_at_least_one::<u64>)]
+        max_job_minutes: Option<u64>,
     },
 }
 
@@ -435,6 +440,19 @@ mod tests {
             }
             _ => panic!("expected the worker command"),
         }
+    }
+
+    #[test]
+    fn worker_takes_a_job_time_limit_of_at_least_one_minute() {
+        let args =
+            Args::try_parse_from(["evanalyzer", "worker", "--max-job-minutes", "90"]).unwrap();
+        match args.command {
+            Some(TopCommand::Worker {
+                max_job_minutes, ..
+            }) => assert_eq!(max_job_minutes, Some(90)),
+            _ => panic!("expected the worker command"),
+        }
+        assert!(Args::try_parse_from(["evanalyzer", "worker", "--max-job-minutes", "0"]).is_err());
     }
 
     #[test]

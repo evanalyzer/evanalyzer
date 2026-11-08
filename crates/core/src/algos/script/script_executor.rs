@@ -28,6 +28,9 @@ const MAX_CALL_LEVELS: usize = 32;
 const MAX_STRING_SIZE: usize = 1 << 20;
 const MAX_ARRAY_SIZE: usize = 100_000;
 const MAX_MAP_SIZE: usize = 10_000;
+/// A script looks every this many operations whether its analysis was
+/// cancelled (a server's job time limit, or the user).
+const CANCEL_CHECK_OPERATIONS: u64 = 256;
 
 /// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
 ///
@@ -98,7 +101,10 @@ impl ImageAlgorithm for Script {
         let _lent = LentHost::lend(ctx, cache, &classes, params)?;
         ENGINE
             .with(|engine| engine.run_ast_with_scope(&mut scope, &ast))
-            .map_err(|e| script_error(&e))
+            .map_err(|e| match *e {
+                EvalAltResult::ErrorTerminated(..) => InternalErrors::Cancelled,
+                _ => script_error(&e),
+            })
     }
 
     fn name(&self) -> &'static str {
@@ -299,6 +305,21 @@ fn new_engine() -> Engine {
         .set_max_string_size(MAX_STRING_SIZE)
         .set_max_array_size(MAX_ARRAY_SIZE)
         .set_max_map_size(MAX_MAP_SIZE);
+    // Stops the script once its analysis is cancelled - between two of
+    // its operations, as a command it `run`s finishes first.
+    engine.on_progress(|operations| {
+        if operations % CANCEL_CHECK_OPERATIONS != 0 {
+            return None;
+        }
+        let cancelled = HOST.with(|host| {
+            host.try_borrow().is_ok_and(|host| {
+                host.as_ref()
+                    .and_then(|host| host.cache.cancel.as_ref())
+                    .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed))
+            })
+        });
+        cancelled.then(|| "cancelled".into())
+    });
     engine.on_print(|text| info!("[script] {text}"));
     engine.on_debug(|text, _source, pos| debug!("[script] {}{text}", position_prefix(pos)));
 
@@ -593,6 +614,45 @@ mod tests {
     #[test]
     fn endless_loop_is_stopped_by_the_operation_limit() {
         assert!(run("loop {}").is_err());
+    }
+
+    /// A cancelled analysis (the user, a server's job time limit) stops a
+    /// script that would otherwise run up to its operation limit - each
+    /// operation may `run` an expensive command.
+    #[test]
+    fn a_cancelled_analysis_stops_the_script() {
+        let image = Image::<f32, 1>::from_size_slice(
+            ImageSize {
+                width: 4,
+                height: 3,
+            },
+            &[0.0; 12],
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(image).unwrap();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut cache = GlobalPipelineCache {
+            cancel: Some(cancel.clone()),
+            ..Default::default()
+        };
+        let script = |source: &str| Script {
+            classes: vec![],
+            source: source.into(),
+            values: Default::default(),
+        };
+        // Not cancelled: runs as before.
+        script("let n = 0; while n < 10000 { n += 1; }")
+            .execute(&mut ctx, &mut cache)
+            .unwrap();
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let started = std::time::Instant::now();
+        let err = script("let n = 0; while n < 10000 { n += 1; }")
+            .execute(&mut ctx, &mut cache)
+            .unwrap_err();
+        assert!(matches!(err, InternalErrors::Cancelled), "{err:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        // The context is back for the next step.
+        assert!(cache.cancel.is_some());
     }
 
     #[test]

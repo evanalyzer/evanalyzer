@@ -55,6 +55,7 @@ pub struct Worker {
     listener: TcpListener,
     token: String,
     idle_timeout: Option<Duration>,
+    max_job_duration: Option<Duration>,
 }
 
 impl Worker {
@@ -71,6 +72,7 @@ impl Worker {
             listener,
             token,
             idle_timeout: None,
+            max_job_duration: None,
         })
     }
 
@@ -83,6 +85,15 @@ impl Worker {
         self
     }
 
+    /// Cancels an analysis that runs longer than `limit` - a server's
+    /// `workers.max_job_minutes`, so one user's analysis (e.g. a script
+    /// running an expensive command a million times) can't take the
+    /// machine for good.
+    pub fn with_max_job_duration(mut self, limit: Duration) -> Self {
+        self.max_job_duration = Some(limit);
+        self
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr, InternalErrors> {
         Ok(self.listener.local_addr()?)
     }
@@ -91,7 +102,7 @@ impl Worker {
     pub fn run(self, backend: Arc<dyn Backend>) {
         let token = Arc::new(self.token);
         // Shared by all connections: analyses outlive the one that started them.
-        let jobs = Arc::new(JobRegistry::default());
+        let jobs = Arc::new(JobRegistry::with_max_duration(self.max_job_duration));
         let connections = Arc::new(AtomicUsize::new(0));
         if let Some(timeout) = self.idle_timeout {
             let (jobs, connections) = (Arc::clone(&jobs), Arc::clone(&connections));

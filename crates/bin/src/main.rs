@@ -109,7 +109,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 roots,
                 home,
                 idle_timeout,
-            } => start_worker(listen, token, roots, home, idle_timeout),
+                max_job_minutes,
+            } => start_worker(listen, token, roots, home, idle_timeout, max_job_minutes),
             TopCommand::HashPassword => print_password_hash(),
             TopCommand::Server { .. } => {
                 start_server(server_config.expect("loaded above for the server command"))
@@ -199,6 +200,7 @@ fn start_worker(
     roots: Vec<PathBuf>,
     home: Option<PathBuf>,
     idle_timeout_minutes: Option<u64>,
+    max_job_minutes: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = match token {
         Some(token) => token,
@@ -213,6 +215,10 @@ fn start_worker(
     if let Some(minutes) = idle_timeout_minutes {
         info!("Stopping after {minutes} min without client and analysis");
         worker = worker.with_idle_timeout(std::time::Duration::from_secs(minutes * 60));
+    }
+    if let Some(minutes) = max_job_minutes {
+        info!("Cancelling analyses after {minutes} min");
+        worker = worker.with_max_job_duration(std::time::Duration::from_secs(minutes * 60));
     }
     info!(
         "EVAnalyzer worker listening on ws://{}",
@@ -426,7 +432,14 @@ mod tests {
     #[test]
     fn a_worker_that_cannot_listen_fails_with_or_without_a_token() {
         for token in [Some("token".to_string()), None] {
-            let result = start_worker("not an address".into(), token, Vec::new(), None, Some(1));
+            let result = start_worker(
+                "not an address".into(),
+                token,
+                Vec::new(),
+                None,
+                Some(1),
+                None,
+            );
 
             let message = result.unwrap_err().to_string();
             assert!(message.contains("Could not listen on"), "{message}");

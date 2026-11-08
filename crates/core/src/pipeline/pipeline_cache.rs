@@ -118,6 +118,9 @@ pub struct GlobalPipelineCache {
     pub analysed_plane: AnalysedPlane,
     /// The project's class colors (`0xRRGGBB`), for commands that draw objects
     pub class_colors: Arc<HashMap<ObjectClass, u32>>,
+    /// Set when the analysis is cancelled: steps that can run long on
+    /// one tile (a script) stop when they see it. `None`: can't be.
+    pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 mod tests {
