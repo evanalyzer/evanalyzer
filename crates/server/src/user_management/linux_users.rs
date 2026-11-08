@@ -31,6 +31,12 @@ use std::{
 pub struct LinuxUsers {
     pub shadow_file: PathBuf,
     pub passwd_file: PathBuf,
+    pub group_file: PathBuf,
+    /// Accounts below this uid can't log in; uid 0 (`root`) never can.
+    pub min_uid: u32,
+    /// Only members of these groups (primary or listed) can log in; empty:
+    /// everyone from `min_uid` on.
+    pub allowed_groups: Vec<String>,
     /// Allowed folders of every user without an override (`{home}` = their
     /// home folder).
     pub default_allowed_dirs: Vec<String>,
@@ -43,6 +49,9 @@ impl Default for LinuxUsers {
         Self {
             shadow_file: "/etc/shadow".into(),
             passwd_file: "/etc/passwd".into(),
+            group_file: "/etc/group".into(),
+            min_uid: 1000,
+            allowed_groups: Vec::new(),
             default_allowed_dirs: vec!["{home}".into()],
             overrides: BTreeMap::new(),
         }
@@ -87,6 +96,12 @@ impl UserManagement for LinuxUsers {
                 return AuthenticationStatus::PasswordWrong;
             }
         };
+        if let Some(reason) = self.refusal(&username, &entry) {
+            // The same answer as a wrong password: clients can't probe for
+            // system accounts.
+            log::warn!("{username} may not log in: {reason}");
+            return AuthenticationStatus::PasswordWrong;
+        }
         let allowed_dirs = self
             .overrides
             .get(&username)
@@ -102,6 +117,52 @@ impl UserManagement for LinuxUsers {
             }),
         })
     }
+}
+
+impl LinuxUsers {
+    /// Why the account `username` (password already right) may not log in:
+    /// `root`, a system account, not in an allowed group.
+    fn refusal(&self, username: &str, entry: &PasswdEntry) -> Option<String> {
+        if entry.uid == 0 {
+            return Some("root never logs in".into());
+        }
+        if entry.uid < self.min_uid {
+            return Some(format!(
+                "uid {} is below users.linux.min_uid = {}",
+                entry.uid, self.min_uid
+            ));
+        }
+        if self.allowed_groups.is_empty() {
+            return None;
+        }
+        match in_any_group(&self.group_file, username, entry.gid, &self.allowed_groups) {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "not in users.linux.allowed_groups ({})",
+                self.allowed_groups.join(", ")
+            )),
+            Err(err) => Some(format!("cannot read {}: {err}", self.group_file.display())),
+        }
+    }
+}
+
+/// Whether the account `username` with primary group `gid` belongs to one
+/// of `groups`, per the group file (`name:x:gid:member,member`).
+fn in_any_group(path: &Path, username: &str, gid: u32, groups: &[String]) -> std::io::Result<bool> {
+    let reader = BufReader::new(File::open(path)?);
+    for line in reader.lines() {
+        let line = line?;
+        let fields: Vec<&str> = line.split(':').collect();
+        if line.starts_with('#') || fields.len() < 4 || !groups.iter().any(|g| g == fields[0]) {
+            continue;
+        }
+        if fields[2].parse::<u32>().is_ok_and(|g| g == gid)
+            || fields[3].split(',').any(|member| member.trim() == username)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Returns field `index` of the `:`-separated line whose first field is
@@ -272,6 +333,73 @@ mod tests {
             [PathBuf::from("/home/alice"), PathBuf::from("/data/shared")]
         );
         assert_eq!(allowed("bob", "hunter2"), [PathBuf::from("/srv/bob/work")]);
+    }
+
+    /// `root` and system accounts (below `min_uid`) don't log in even with
+    /// the right password; the answer is the same as for a wrong one.
+    #[test]
+    fn root_and_system_accounts_never_log_in() {
+        let mut f = fixture(
+            &format!(
+                "root:{SHA512_HASH}:19000:0:99999:7:::\n\
+                 backup:{SHA512_HASH}:19000:0:99999:7:::\n\
+                 alice:{SHA512_HASH}:19000:0:99999:7:::\n"
+            ),
+            "root:x:0:0:root:/root:/bin/bash\n\
+             backup:x:34:34:backup:/var/backups:/bin/sh\n\
+             alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+        );
+        let logs_in = |f: &Fixture, name| {
+            matches!(
+                login(f, name, "correct horse"),
+                AuthenticationStatus::Authenticated(_)
+            )
+        };
+        assert!(!logs_in(&f, "root"));
+        assert!(!logs_in(&f, "backup"));
+        assert!(logs_in(&f, "alice"));
+        // A lower limit lets system accounts in - never root.
+        f.users.min_uid = 0;
+        assert!(logs_in(&f, "backup"));
+        assert!(!logs_in(&f, "root"));
+    }
+
+    /// With `allowed_groups`, only their members log in: by primary group
+    /// or listed in the group file.
+    #[test]
+    fn only_members_of_the_allowed_groups_log_in() {
+        let mut f = fixture(
+            &format!(
+                "alice:{SHA512_HASH}:19000:0:99999:7:::\n\
+                 bob:{SHA512_HASH}:19000:0:99999:7:::\n\
+                 carol:{SHA512_HASH}:19000:0:99999:7:::\n"
+            ),
+            "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n\
+             bob:x:1001:1001:Bob:/home/bob:/bin/bash\n\
+             carol:x:1002:2000:Carol:/home/carol:/bin/bash\n",
+        );
+        let group_file = f._dir.path().join("group");
+        std::fs::write(
+            &group_file,
+            "alice:x:1000:\nbob:x:1001:\nlab:x:2000:alice,dave\nlabadmin:x:2001:bob\n",
+        )
+        .unwrap();
+        f.users.group_file = group_file;
+        f.users.allowed_groups = vec!["lab".into()];
+        let logs_in = |f: &Fixture, name| {
+            matches!(
+                login(f, name, "correct horse"),
+                AuthenticationStatus::Authenticated(_)
+            )
+        };
+        assert!(logs_in(&f, "alice"), "listed member");
+        assert!(logs_in(&f, "carol"), "primary group");
+        assert!(!logs_in(&f, "bob"), "only in labadmin");
+        f.users.group_file = f._dir.path().join("missing");
+        assert!(
+            !logs_in(&f, "alice"),
+            "an unreadable group file lets no one in"
+        );
     }
 
     #[test]

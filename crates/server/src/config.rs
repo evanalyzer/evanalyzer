@@ -284,6 +284,15 @@ pub struct LinuxUsersConfig {
     pub shadow_file: PathBuf,
     /// Default `/etc/passwd`.
     pub passwd_file: PathBuf,
+    /// Default `/etc/group`.
+    pub group_file: PathBuf,
+    /// Accounts with a lower uid (system accounts) can't log in; `root`
+    /// never can. Default 1000, where Debian, Ubuntu and Fedora start
+    /// people's accounts.
+    pub min_uid: u32,
+    /// Only members of one of these groups can log in. Default: empty,
+    /// every account from `min_uid` on.
+    pub allowed_groups: Vec<String>,
     /// Per-user exceptions, `[users.linux.overrides.<username>]`.
     pub overrides: BTreeMap<String, UserOverride>,
 }
@@ -293,6 +302,9 @@ impl Default for LinuxUsersConfig {
         Self {
             shadow_file: "/etc/shadow".into(),
             passwd_file: "/etc/passwd".into(),
+            group_file: "/etc/group".into(),
+            min_uid: 1000,
+            allowed_groups: Vec::new(),
             overrides: BTreeMap::new(),
         }
     }
@@ -521,6 +533,9 @@ impl ServerConfig {
             UserSource::Linux => Arc::new(LinuxUsers {
                 shadow_file: users.linux.shadow_file.clone(),
                 passwd_file: users.linux.passwd_file.clone(),
+                group_file: users.linux.group_file.clone(),
+                min_uid: users.linux.min_uid,
+                allowed_groups: users.linux.allowed_groups.clone(),
                 default_allowed_dirs: users.default_allowed_dirs.clone(),
                 overrides: users
                     .linux

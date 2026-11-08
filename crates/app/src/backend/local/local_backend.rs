@@ -44,27 +44,31 @@ pub struct LocalBackend {
 
 impl LocalBackend {
     /// The template folders stay reachable too, so clients can list and
-    /// save templates.
+    /// save templates: this account's to read and write, the bundled ones
+    /// (shared by every user of a server) only to read.
     pub fn restricted_to(roots: &[PathBuf]) -> Result<Self, InternalErrors> {
         let folders = local_template_folders();
-        let template_folders: Vec<PathBuf> = [folders.user, folders.bundled]
-            .into_iter()
-            .filter(|folder| folder.is_dir())
-            .collect();
+        let existing = |folder: PathBuf| folder.is_dir().then_some(folder);
+        let user: Vec<PathBuf> = existing(folders.user).into_iter().collect();
+        let bundled: Vec<PathBuf> = existing(folders.bundled).into_iter().collect();
         Ok(Self {
-            files: LocalFileSystem::restricted_to(roots)?.also_allowing(&template_folders)?,
+            files: LocalFileSystem::restricted_to(roots)?
+                .also_allowing(&user)?
+                .also_allowing_reading(&bundled)?,
             user_folder: None,
         })
     }
 
     /// Keeps the user folder (templates) in `home` - a worker serving a
-    /// logged-in user - instead of this process's account. Its templates
-    /// folder stays reachable when restricted to `--root`s.
+    /// logged-in user - instead of this process's account. When restricted
+    /// to `--root`s, its templates folder replaces this account's: users
+    /// whose workers run as the server's account (users file, single user)
+    /// can't plant templates for each other.
     pub fn with_home(mut self, home: &Path) -> Result<Self, InternalErrors> {
         let user_folder = settings::user_folder_in(home);
         let templates = super::templates::user_templates_folder_in(&user_folder);
         if self.files.is_restricted() {
-            self.files = std::mem::take(&mut self.files).also_allowing(&[templates])?;
+            self.files = std::mem::take(&mut self.files).replacing_hidden(&[templates])?;
         }
         self.user_folder = Some(user_folder);
         Ok(self)
@@ -87,8 +91,9 @@ impl LocalBackend {
         if !self.files.is_restricted() {
             return Ok(());
         }
+        // A job writes its results next to the project.
         if let Some(project_path) = project_path {
-            self.files.check(project_path)?;
+            self.files.check_write(project_path)?;
         }
         if let Some(root) = &settings.images.root {
             self.files.check(root)?;
@@ -264,6 +269,15 @@ mod home_tests {
                 .write_file(&home.path().join("outside.txt"), b"x")
                 .is_err(),
             "the rest of the home stays outside the allowed folders"
+        );
+        // The server account's own templates (shared by every user whose
+        // worker runs as that account) are no longer reachable.
+        let server_templates = super::super::templates::get_user_templates_folder();
+        assert!(
+            backend
+                .files
+                .check(&server_templates.join("planted.evaproj.template"))
+                .is_err()
         );
     }
 

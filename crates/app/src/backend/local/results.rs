@@ -193,7 +193,7 @@ impl ResultsSource for LocalResults {
         // Within what this backend may reach (a server: its `--root`s) -
         // the folder written to and the one the drawn images are read from
         // are the client's to choose.
-        self.files.check(&export.output_dir)?;
+        self.files.check_write(&export.output_dir)?;
         if let Some(drawn) = &export.drawn_images {
             self.files.check(&drawn.image_root)?;
         }

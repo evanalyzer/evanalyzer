@@ -28,6 +28,9 @@ pub struct LocalFileSystem {
     /// Further allowed folders that aren't shown as places (e.g. the
     /// templates folders a server keeps reachable for its clients).
     hidden_roots: Vec<PathBuf>,
+    /// Folders that may be read but not written, not shown as places (the
+    /// bundled templates every user of a server shares).
+    read_only_roots: Vec<PathBuf>,
 }
 
 impl LocalFileSystem {
@@ -37,6 +40,7 @@ impl LocalFileSystem {
         Ok(Self {
             roots: Some(canonical_roots(roots)?),
             hidden_roots: Vec::new(),
+            read_only_roots: Vec::new(),
         })
     }
 
@@ -46,14 +50,39 @@ impl LocalFileSystem {
         Ok(self)
     }
 
+    /// Additionally allows reading `folders`, without listing them as
+    /// places: nothing in them can be written, moved or deleted.
+    pub fn also_allowing_reading(mut self, folders: &[PathBuf]) -> Result<Self, InternalErrors> {
+        self.read_only_roots.extend(canonical_roots(folders)?);
+        Ok(self)
+    }
+
+    /// The same roots and read-only folders, the further allowed folders
+    /// replaced by `folders`.
+    pub fn replacing_hidden(mut self, folders: &[PathBuf]) -> Result<Self, InternalErrors> {
+        self.hidden_roots = canonical_roots(folders)?;
+        Ok(self)
+    }
+
     pub fn is_restricted(&self) -> bool {
         self.roots.is_some()
     }
 
-    /// Returns `path` if it's accessible under the current restriction.
+    /// Returns `path` if it may be read under the current restriction.
     /// Paths that don't exist yet (a file about to be saved) are checked via
     /// their nearest existing ancestor, so `..` can't escape a root.
     pub fn check(&self, path: &Path) -> Result<PathBuf, InternalErrors> {
+        self.check_in(path, true)
+    }
+
+    /// Returns `path` if it may be written (created, replaced, moved,
+    /// deleted) under the current restriction - as [`Self::check`], but not
+    /// inside a read-only folder.
+    pub fn check_write(&self, path: &Path) -> Result<PathBuf, InternalErrors> {
+        self.check_in(path, false)
+    }
+
+    fn check_in(&self, path: &Path, reading: bool) -> Result<PathBuf, InternalErrors> {
         let Some(roots) = &self.roots else {
             return Ok(path.to_path_buf());
         };
@@ -61,9 +90,14 @@ impl LocalFileSystem {
             return Err(denied(path));
         }
         let resolved = resolve_for_check(path).ok_or_else(|| denied(path))?;
+        let read_only = reading
+            .then_some(&self.read_only_roots)
+            .into_iter()
+            .flatten();
         if roots
             .iter()
             .chain(&self.hidden_roots)
+            .chain(read_only)
             .any(|root| resolved.starts_with(root))
         {
             Ok(path.to_path_buf())
@@ -151,7 +185,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     fn write_file(&self, path: &Path, data: &[u8]) -> Result<(), InternalErrors> {
-        let path = self.check(path)?;
+        let path = self.check_write(path)?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| io_error("create folder", parent, e))?;
         }
@@ -167,17 +201,17 @@ impl FileSystem for LocalFileSystem {
     }
 
     fn create_dir_all(&self, path: &Path) -> Result<(), InternalErrors> {
-        let path = self.check(path)?;
+        let path = self.check_write(path)?;
         std::fs::create_dir_all(&path).map_err(|e| io_error("create folder", &path, e))
     }
 
     fn rename(&self, from: &Path, to: &Path) -> Result<(), InternalErrors> {
-        let (from, to) = (self.check(from)?, self.check(to)?);
+        let (from, to) = (self.check_write(from)?, self.check_write(to)?);
         std::fs::rename(&from, &to).map_err(|e| io_error("move", &from, e))
     }
 
     fn remove_all(&self, path: &Path) -> Result<(), InternalErrors> {
-        let path = self.check(path)?;
+        let path = self.check_write(path)?;
         let result = match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&path),
             Ok(_) => std::fs::remove_file(&path),
@@ -364,6 +398,34 @@ mod tests {
         let places = fs.places().unwrap();
         assert_eq!(places.len(), 1);
         assert_eq!(places[0].path, allowed.path().canonicalize().unwrap());
+    }
+
+    /// A read-only folder (a server's bundled templates, shared by all its
+    /// users) can be read, never written, moved out of or deleted.
+    #[test]
+    fn a_read_only_folder_is_read_but_never_changed() {
+        let allowed = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        std::fs::write(shared.path().join("t.evaproj.template"), b"x").unwrap();
+        let fs = LocalFileSystem::restricted_to(&[allowed.path().to_path_buf()])
+            .unwrap()
+            .also_allowing_reading(&[shared.path().to_path_buf()])
+            .unwrap();
+        let template = shared.path().join("t.evaproj.template");
+        assert_eq!(fs.read_file(&template).unwrap(), b"x");
+        assert_eq!(fs.list_dir(shared.path()).unwrap().len(), 1);
+        assert!(fs.write_file(&template, b"planted").is_err());
+        assert!(
+            fs.write_file(&shared.path().join("new.template"), b"planted")
+                .is_err()
+        );
+        assert!(fs.create_dir_all(&shared.path().join("sub")).is_err());
+        assert!(fs.rename(&template, &allowed.path().join("t")).is_err());
+        assert!(fs.rename(&allowed.path().join("t"), &template).is_err());
+        assert!(fs.remove_all(&template).is_err());
+        assert_eq!(std::fs::read(&template).unwrap(), b"x");
+        assert!(fs.check_write(&allowed.path().join("ok")).is_ok());
+        assert_eq!(fs.places().unwrap().len(), 1, "not shown as a place");
     }
 
     #[cfg(unix)]
