@@ -224,6 +224,13 @@ impl ResultsGenerator {
         &self.database
     }
 
+    /// The one folder SQL on this database may write to (see
+    /// `evanalyzer_core::storage::duckdb::export_staging_dir`); `None` in
+    /// memory.
+    pub(super) fn export_staging_dir(&self) -> Option<std::path::PathBuf> {
+        self.database.export_staging_dir()
+    }
+
     pub fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         // Fetched up front (cached — see `classes_cache`) since

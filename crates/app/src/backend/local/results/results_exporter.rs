@@ -1927,34 +1927,60 @@ impl ResultExport {
     ) -> Result<(), InternalErrors> {
         check_cancelled(cancel)?;
         on_progress("Exporting Parquet", 0, 1);
-        let path = self.output_path("objects.parquet");
-        // DuckDB's `COPY` takes the destination as a single-quoted string
-        // literal inside the SQL text itself (not a bindable parameter), so
-        // any literal `'` in the path has to be escaped the same way a SQL
-        // string literal would be (doubling it) rather than passed through
-        // `params![]`.
-        let path_literal = path.to_string_lossy().replace('\'', "''");
-        // Built into DuckDB, loaded only here: no connection carries it
-        // (~10 MB) when nothing is written as Parquet.
-        let sql = format!("LOAD parquet; COPY objects TO '{path_literal}' (FORMAT parquet);");
-        database
-            .connection()
-            .execute_batch(&sql)
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        // SQL may write below the results file's staging folder only (no
+        // file access otherwise - see `lock_down` in the core's duckdb.rs):
+        // the files go there first, in a folder of this export's own (two
+        // exports of one file at once), then to where they were asked for.
+        let staging = database.export_staging_dir().ok_or_else(|| {
+            InternalErrors::Internal("results in memory can't be written as Parquet".into())
+        })?;
+        static EXPORTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = EXPORTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let folder = staging.join(format!("parquet-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&folder).map_err(|e| {
+            InternalErrors::Io(format!("could not create {}: {e}", folder.display()))
+        })?;
+        let mut tables = vec![("objects", "objects.parquet")];
         // The measurements beside them, as they are (one row per value).
         if !database.get_measurement_columns()?.is_empty() {
-            let path = self.output_path("measurements.parquet");
-            let path_literal = path.to_string_lossy().replace('\'', "''");
+            tables.push(("measurements", "measurements.parquet"));
+        }
+        let written = tables.iter().try_for_each(|(table, file)| {
+            let staged = folder.join(file);
+            // DuckDB's `COPY` takes the destination as a string literal in
+            // the SQL itself (not a bindable parameter): `'` doubled.
+            let literal = staged.to_string_lossy().replace('\'', "''");
+            // Built into DuckDB, loaded only here: no connection carries it
+            // (~10 MB) when nothing is written as Parquet.
             database
                 .connection()
                 .execute_batch(&format!(
-                    "COPY measurements TO '{path_literal}' (FORMAT parquet);"
+                    "LOAD parquet; COPY {table} TO '{literal}' (FORMAT parquet);"
                 ))
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        }
+            move_file(&staged, &self.output_path(file))
+        });
+        // Nothing stays behind: this export's folder, and the staging folder
+        // once no other export uses it.
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir(&staging);
+        written?;
         on_progress("Exporting Parquet", 1, 1);
         Ok(())
     }
+}
+
+/// `from` to `to`: renamed on the same disk, copied (then removed) to
+/// another one.
+fn move_file(from: &Path, to: &Path) -> Result<(), InternalErrors> {
+    let err =
+        |e: std::io::Error| InternalErrors::Io(format!("could not write {}: {e}", to.display()));
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to).map_err(err)?;
+    let _ = std::fs::remove_file(from);
+    Ok(())
 }
 
 fn xlsx_err(error: XlsxError) -> InternalErrors {
@@ -3557,6 +3583,10 @@ mod tests {
             )
             .expect("query parquet row count");
         assert_eq!(count, 3, "expected every seeded object, unfiltered");
+        // Written below the results file's staging folder first (SQL may
+        // write nowhere else), which is gone again.
+        let staging = out_dir.parent().unwrap().join("results.evadb.export");
+        assert!(!staging.exists(), "{} left behind", staging.display());
     }
 
     /// `write_list_document`'s `Parquet` arm is unreachable through
@@ -5218,8 +5248,10 @@ mod tests {
         }
         .start_export(&generator, &no_cancel(), &mut no_progress())
         .expect("export");
-        let rows: i64 = generator
-            .connection()
+        // Read through a connection of its own: the results' connection
+        // may read no file outside its staging folder.
+        let rows: i64 = duckdb::Connection::open_in_memory()
+            .unwrap()
             .query_row(
                 &format!(
                     "SELECT count(*) FROM '{}'",

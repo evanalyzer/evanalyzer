@@ -104,15 +104,60 @@ impl ResultsConnection {
         }
     }
 
-    /// An in-memory database (tests): no file, not shared.
+    /// An in-memory database (tests): no file, not shared, no file access
+    /// (see [`lock_down`]).
     pub fn open_in_memory() -> Result<ResultsConnection, InternalErrors> {
         let conn = Connection::open_in_memory_with_flags(offline_config()?)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        lock_down(&conn, None)?;
         Ok(ResultsConnection {
             conn: Some(conn),
             path: PathBuf::new(),
         })
     }
+}
+
+impl ResultsConnection {
+    /// The one folder SQL on this file may write to - where a Parquet
+    /// export is written first (see [`export_staging_dir`]); `None` in
+    /// memory.
+    pub fn export_staging_dir(&self) -> Option<PathBuf> {
+        (!self.path.as_os_str().is_empty()).then(|| export_staging_dir(&self.path))
+    }
+}
+
+/// `<results file>.export`, beside it as DuckDB's own `<results file>.tmp`:
+/// the one folder SQL on that file may write to (see [`lock_down`]) - a
+/// Parquet export goes there first, then to where it was asked for.
+pub fn export_staging_dir(results_file: &Path) -> PathBuf {
+    let mut dir = results_file.as_os_str().to_owned();
+    dir.push(".export");
+    PathBuf::from(dir)
+}
+
+/// No file access from SQL on `conn`'s database, except below
+/// `export_dir`: a results file can come from anyone, and a view or macro
+/// in it runs with the query that reads it - `read_text('~/.ssh/id_rsa')`
+/// would show a local file in the results or an export, `read_csv('https://…')`
+/// would phone home. Set right after opening, before anything reads the
+/// file; DuckDB refuses to switch it back on or widen the folders while
+/// the database is open, so the file can't undo it (no
+/// `lock_configuration` needed - the memory limit is still set later).
+/// DuckDB's own files (the WAL, spilling to its temp folder) aren't
+/// affected.
+fn lock_down(conn: &Connection, export_dir: Option<&Path>) -> Result<(), InternalErrors> {
+    let allowed = match export_dir {
+        Some(dir) => {
+            let dir = std::path::absolute(dir).map_err(|e| InternalErrors::Io(e.to_string()))?;
+            format!(
+                "SET allowed_directories = ['{}'];",
+                dir.to_string_lossy().replace('\'', "''")
+            )
+        }
+        None => String::new(),
+    };
+    conn.execute_batch(&format!("{allowed} SET enable_external_access = false;"))
+        .map_err(|e| InternalErrors::Io(format!("Could not restrict the results file: {e}")))
 }
 
 impl std::ops::Deref for ResultsConnection {
@@ -190,6 +235,7 @@ pub fn shared_connection(path: &Path) -> Result<ResultsConnection, InternalError
     }
 
     let anchor = Connection::open_with_flags(path, offline_config()?).map_err(to_io_err)?;
+    lock_down(&anchor, Some(&export_staging_dir(path)))?;
     let conn = anchor.try_clone().map_err(to_io_err)?;
     cache.insert(path.to_path_buf(), SharedDatabase { anchor, users: 1 });
     share_memory_limit(&cache);
@@ -3261,6 +3307,118 @@ mod tests {
         // A function of an extension that isn't built in fails instead.
         let refused = file.execute_batch("SELECT * FROM read_xlsx('x.xlsx')");
         assert!(refused.is_err());
+    }
+
+    /// A results file from someone else can't read this computer's files:
+    /// a view in it that would (named like a table, run with every query)
+    /// fails, and no query reads or writes outside the file's staging
+    /// folder, nor switches that back on.
+    #[test]
+    fn a_results_file_reads_no_local_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, "TOP SECRET").unwrap();
+        let secret = secret.to_string_lossy().replace('\'', "''");
+
+        let shared = dir.path().join("shared.evadb");
+        Connection::open(&shared)
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE VIEW images AS SELECT content AS image_name FROM read_text('{secret}');"
+            ))
+            .unwrap();
+        let conn = shared_connection(&shared).unwrap();
+        let read = conn.query_row("SELECT image_name FROM images", [], |row| {
+            row.get::<_, String>(0)
+        });
+        let err = read.expect_err("the view read the file").to_string();
+        assert!(
+            err.contains("Permission Error") && !err.contains("TOP SECRET"),
+            "{err}"
+        );
+        drop(conn);
+
+        // Any file: SQL on it has no file access.
+        let results = dir.path().join("results.evadb");
+        let conn = shared_connection(&results).unwrap();
+        let memory = ResultsConnection::open_in_memory().unwrap();
+        for conn in [&*conn, &*memory] {
+            let read = conn.query_row(
+                &format!("SELECT content FROM read_text('{secret}')"),
+                [],
+                |row| row.get::<_, String>(0),
+            );
+            assert!(read.is_err(), "read a local file: {read:?}");
+            assert!(
+                conn.execute_batch("SET enable_external_access = true;")
+                    .is_err()
+            );
+            assert!(
+                conn.execute_batch("SET allowed_directories = ['/'];")
+                    .is_err(),
+                "widened"
+            );
+            let outside = dir.path().join("out.parquet");
+            let copy = conn.execute_batch(&format!(
+                "LOAD parquet; COPY (SELECT 1 AS x) TO '{}' (FORMAT parquet);",
+                outside.to_string_lossy().replace('\'', "''")
+            ));
+            assert!(copy.is_err() && !outside.exists(), "wrote outside");
+        }
+        // A clone of the file's connection too; its staging folder works.
+        let clone = conn.try_clone().unwrap();
+        assert!(
+            clone
+                .execute_batch(&format!("SELECT * FROM read_text('{secret}')"))
+                .is_err()
+        );
+        let staging = conn.export_staging_dir().unwrap();
+        assert_eq!(staging, dir.path().join("results.evadb.export"));
+        std::fs::create_dir_all(&staging).unwrap();
+        let staged = staging.join("x.parquet");
+        conn.execute_batch(&format!(
+            "LOAD parquet; COPY (SELECT 1 AS x) TO '{}' (FORMAT parquet);",
+            staged.to_string_lossy().replace('\'', "''")
+        ))
+        .unwrap();
+        assert!(staged.is_file());
+        assert_eq!(memory.export_staging_dir(), None);
+    }
+
+    /// Locked down, DuckDB still spills to its own temp folder: a table
+    /// larger than its memory limit is written there and read back. Not
+    /// through the shared cache: a file's limit is reset there by every
+    /// other file opened (`share_memory_limit`), other tests' too. Its temp
+    /// folder can't be moved elsewhere either.
+    #[test]
+    fn a_locked_down_database_still_spills_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let conn = Connection::open_with_flags(&path, offline_config().unwrap()).unwrap();
+        lock_down(&conn, Some(&export_staging_dir(&path))).unwrap();
+        assert!(
+            conn.execute_batch("SET temp_directory = '/somewhere/else';")
+                .is_err(),
+            "the temp folder moved"
+        );
+        conn.execute_batch(
+            "SET threads = 1; SET memory_limit = '60MB';
+             CREATE TEMP TABLE big AS
+                SELECT range AS x, md5(range::VARCHAR) AS y FROM range(4000000);",
+        )
+        .unwrap();
+        let spilled: i64 = conn
+            .query_row(
+                "SELECT coalesce(sum(temporary_storage_bytes), 0) FROM duckdb_memory()",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(spilled > 60 << 20, "{spilled} bytes spilled");
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM big", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 4_000_000);
     }
 
     #[test]
