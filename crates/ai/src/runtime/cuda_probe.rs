@@ -71,7 +71,7 @@ fn probe() -> Vec<(u32, u32)> {
     // the arguments the CUDA driver API documents. The library stays loaded
     // (libtorch uses it later anyway).
     unsafe {
-        let Ok(driver) = libloading::Library::new(DRIVER) else {
+        let Ok(driver) = open_driver(DRIVER) else {
             return Vec::new();
         };
         let (Ok(init), Ok(device_count), Ok(device_get), Ok(attribute)) = (
@@ -100,6 +100,31 @@ fn probe() -> Vec<(u32, u32)> {
         std::mem::forget(driver);
         capabilities
     }
+}
+
+/// The NVIDIA driver library. On Windows from System32 only: by its bare
+/// name the search goes on to the current folder and `PATH` when there is
+/// no driver, so an `nvcuda.dll` put into a shared project folder would run
+/// when EVA is started there.
+///
+/// # Safety
+/// Loading runs the library's initializers.
+#[cfg(target_os = "windows")]
+unsafe fn open_driver(name: &str) -> Result<libloading::Library, libloading::Error> {
+    use libloading::os::windows::{LOAD_LIBRARY_SEARCH_SYSTEM32, Library};
+    // SAFETY: as the caller's.
+    unsafe { Library::load_with_flags(name, LOAD_LIBRARY_SEARCH_SYSTEM32) }.map(Into::into)
+}
+
+/// The NVIDIA driver library, from the system's library folders (a bare
+/// name never searches the current folder on Linux).
+///
+/// # Safety
+/// Loading runs the library's initializers.
+#[cfg(target_os = "linux")]
+unsafe fn open_driver(name: &str) -> Result<libloading::Library, libloading::Error> {
+    // SAFETY: as the caller's.
+    unsafe { libloading::Library::new(name) }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
