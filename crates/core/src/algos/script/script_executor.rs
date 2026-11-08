@@ -271,13 +271,15 @@ fn with_host<T>(f: impl FnOnce(&mut ScriptHost) -> Result<T, String>) -> ScriptR
 }
 
 /// A sandboxed engine: no file or network access (Rhai has none unless
-/// registered), bounded run time, recursion and memory. The script API:
+/// registered; `import` loads nothing - its default reads `.rhai` files),
+/// bounded run time, recursion and memory. The script API:
 ///
 /// - `run(command [, image] [, #{ params }]) -> Image`
 /// - `image()`, `set_image(image)`, `channel(index)`, `instance_count()`
 /// - on `Image`: `width`, `height`, `mean()`, `min()`, `max()`
 fn new_engine() -> Engine {
     let mut engine = Engine::new();
+    engine.set_module_resolver(rhai::module_resolvers::DummyModuleResolver::new());
     script_params::register(
         &mut engine,
         |name| HOST.with_borrow(|host| host.as_ref().and_then(|h| h.params.get(name).cloned())),
@@ -568,6 +570,24 @@ mod tests {
     fn runtime_error_fails_the_step() {
         let err = run(r#"throw "boom";"#).unwrap_err().to_string();
         assert!(err.contains("boom"), "{err}");
+    }
+
+    /// A script can't read files: `import` loads no `.rhai` file from disk
+    /// (a shared pipeline's script stays inside its own text).
+    #[test]
+    fn import_reads_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("other.rhai"),
+            "fn boom() { throw \"read\"; }",
+        )
+        .unwrap();
+        let module = dir.path().join("other").display().to_string();
+        let err = run(&format!("import {module:?} as other; other::boom();"))
+            .expect_err("import refused")
+            .to_string();
+        assert!(!err.contains("read"), "the file was loaded: {err}");
+        assert!(err.contains("other"), "{err}");
     }
 
     #[test]
