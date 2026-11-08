@@ -1845,7 +1845,7 @@ mod tests {
     /// determined on this platform.
     fn current_process_rss_bytes() -> Option<u64> {
         let pid = get_current_pid().ok()?;
-        let mut sys = System::new();
+        let mut sys = System::new().ok()?;
         sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
         sys.process(pid).map(|p| p.memory())
     }

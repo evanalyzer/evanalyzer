@@ -50,8 +50,19 @@ pub struct SystemRam {
 }
 
 impl SystemRam {
+    /// Nothing known (a system `sysinfo` doesn't support): 0 - as `sysinfo`
+    /// reported it there before 0.40.
     pub fn now() -> Self {
-        let mut sys = System::new();
+        let mut sys = match System::new() {
+            Ok(sys) => sys,
+            Err(e) => {
+                log::warn!("The computer's RAM is unknown: {e}");
+                return Self {
+                    total: 0,
+                    available: 0,
+                };
+            }
+        };
         sys.refresh_memory();
         let ram = Self {
             total: sys.total_memory(),

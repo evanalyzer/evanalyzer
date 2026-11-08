@@ -430,11 +430,18 @@ fn forward_to_worker(client: WebSocket<ClientStream>, port: u16, hello: Message)
 /// Logs the addresses clients can connect to: `0.0.0.0` (every network) is
 /// none, so for it this machine's host name and IP addresses are listed.
 fn log_connect_addresses(scheme: &str, local: SocketAddr) {
-    let ips = sysinfo::Networks::new_with_refreshed_list()
-        .iter()
-        .flat_map(|(_, network)| network.ip_networks().iter().map(|net| net.addr))
-        .collect();
-    let urls = connect_urls(scheme, local, sysinfo::System::host_name(), ips);
+    // Without them (an unsupported system) only what is known is listed.
+    let ips = match sysinfo::Networks::new_with_refreshed_list() {
+        Ok(networks) => networks
+            .iter()
+            .flat_map(|(_, network)| network.ip_networks().iter().map(|net| net.addr))
+            .collect(),
+        Err(e) => {
+            warn!("This machine's IP addresses are unknown: {e}");
+            Vec::new()
+        }
+    };
+    let urls = connect_urls(scheme, local, sysinfo::System::host_name().ok(), ips);
     if local.ip().is_loopback() {
         info!(
             "Only clients on this machine can connect, with {}",

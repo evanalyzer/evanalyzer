@@ -345,8 +345,14 @@ impl State {
 /// was set forward after a worker started (no real-time clock), that worker
 /// counts as gone too: the user's next login starts a new one, and the old
 /// one stops once it has been idle for `workers.idle_timeout_minutes`.
+/// Unknown (an unsupported system): the epoch - no session counts as from
+/// before a reboot.
 fn last_boot() -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(sysinfo::System::boot_time())
+    let boot = sysinfo::System::boot_time().unwrap_or_else(|e| {
+        warn!("When this machine booted is unknown: {e}");
+        0
+    });
+    UNIX_EPOCH + Duration::from_secs(boot)
 }
 
 fn load(path: &Path) -> Vec<SessionEntry> {
