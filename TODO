@@ -845,3 +845,56 @@ Not a feature, but needed for adoption - make the existing validation visible:
 - [ ] Software paper (Bioinformatics application note or Nature Methods brief). Not JOSS: requires an OSI licence, PolyForm Noncommercial isn't one.
 - [x] `CITATION.cff` (GitHub's "Cite this repository", cites the repo until the paper is out) and a ready-to-paste methods paragraph in "Cite project" (EVAnalyzer + version, each pipeline's steps with their `[@key]` citations) - done 2026-10-27; `CitationMetadata::DANMAYR` points to the GitHub repo. When the paper is out: its DOI into `DANMAYR` and `CITATION.cff` (`preferred-citation`).
 - [x] "How to cite" section in the README, and `evanalyzer cli cite --project … [--out …]` (same file as the GUI's "Cite project") - done 2026-10-27.
+
+## Feature gaps vs. Imaris (2D only, 2026-11-08)
+Imaris is closed source: user documentation and papers only. 3D rendering is out of scope; the gaps are its object types (Spots, Filaments), manual curation, image correction and track statistics.
+
+### Spots
+- [x] Command "Find Maxima" (`segmentation/find_maxima.rs`, 2026-11-08): each pixel without a brighter one within the radius = one 1-pixel object, quality cut-off manual or Otsu, plateaus = one pixel, flat regions never maxima. Self-contained (no code shared with Watershed's seed search).
+- [ ] Module "Spot detection" in the templates repo: Gaussian Blur (or DoG) → Find Maxima → Extract Objects → Transform Objects › Draw Circle.
+- [ ] Transform Objects › Draw Circle: "equivalent diameter from the area" (region growing: Threshold + Propagation from the maxima, then a circle of the grown area).
+- [ ] Find Maxima in the real app: parameter panel, an EV and an smFISH image, a whole slide (duplicates at tile seams - no halo, like Watershed).
+- [ ] Maybe: sub-pixel position (quadratic fit around the maximum), only if distances/tracking need it.
+
+### Filaments (neurites, vessels, fibres)
+Clean room: Fiji's AnalyzeSkeleton and SNT are GPL - papers only (Frangi et al. 1998, Zhang & Suen 1984, Lee et al. 1994, Sholl 1953, Ferreira et al. 2014 for the Sholl metrics).
+Design (2026-11-08): skeletons, branch points and end points are ordinary objects (masks in `objects`, parents via Relate Objects), skeleton values ordinary measurements - no change to the database or the results for them. Only the Sholl profile (a value per ring) needs the database (variant B below).
+Sholl analysis: concentric circles around the soma at a fixed step; per circle the number of crossings with the skeleton = the branching at that distance. The curve (crossings over radius) and its summary values compare how complex neurons are.
+Phase 1 - automatic, on a segmentation (~3-4 weeks):
+- [ ] Image command "Vesselness" (Frangi): from the Hessian eigenvalues at a few scales (smallest/largest fibre width, bright or dark fibres), so thin fibres can be thresholded. Self-contained, Hessian code untouched. ~3 days.
+- [x] Object command "Skeletonize Objects" (`object/skeletonize_objects.rs`, 2026-11-08; Guo & Hall 1989 thinning on one bit per pixel of the object's box, staircase corners removed, spurs pruned from their end point and thinned again after). Planned as: input class → skeleton class (1-pixel wide), optional classes for branch points and end points (1-pixel objects); pruning of spurs shorter than a minimum length (px/nm). Whole image (after tile merge, neurites cross tiles), in windows per object like Propagation. Parents via Relate Objects (skeleton inside its neurite, points on their skeleton); counts per parent exist. ~1 week.
+- [ ] "Measure Object Skeleton": total length (√2 per diagonal step), end points, branch points, segments, longest path, mean segment length and straightness, mean diameter (2 × distance map along the skeleton) - ordinary per-object measurements. ~3-4 days.
+- [ ] "Measure Object Sholl": skeleton class, centre class (soma as the parent, its centroid), ring step, maximum radius. Summary values as ordinary measurements: max intersections, critical radius, enclosing radius, Sholl regression coefficient. The profile (intersections per ring) as one profile measurement (below). ~3-4 days.
+- [ ] Database (variant B, decided 2026-11-08): nullable `measurements.position` (DOUBLE, the ring radius in nm; NULL for every other measurement) and `measurement_info.profile` (BOOLEAN, default false) - one measurement "Intersections" with a row per ring instead of one measurement per ring. `RESULTS_SCHEMA_VERSION` 1 → 2, `open_existing` adds both columns to older files. Profile measurements stay out of `objects.measurement_values` and out of the ordinary value pickers. ~2 days.
+- [ ] Results: Sholl profile chart - radius on x, intersections on y, mean ± SD per class / well, the selected object's own curve. Export in long format (object, radius, value). ~3-4 days.
+- [ ] Results: thin objects stay visible when zoomed out (a 1-pixel-wide skeleton at least one screen pixel wide; today only objects smaller than a screen pixel collapse to a dot). Check first. ~1 day.
+- [ ] Results: minimum marker size for point objects (branch/end points, Find Maxima spots): a dot of 3-5 screen pixels, display only. ~1 day.
+- [ ] Maybe: Sholl rings drawn around the selected object (to check the centre).
+- [ ] Tests: synthetic trees with known lengths/branches/crossings; `tile_ram` / `whole_image_ram` for the new commands. Template "Neurite analysis" (soma + neurites + skeleton + Sholl).
+- Already there, no change: "Color by value" (e.g. skeletons by length), object cards, relation views, class filters.
+Phase 2 - tracing from the soma (~2 weeks):
+- [ ] Object command "Trace Filaments": seeds = soma class, shortest path (Dijkstra) on a cost image (raw or Vesselness) to the end points - a correct tree where the threshold breaks a neurite. One object per segment, parent = the next segment towards the soma (`parent_ids`), branch level (primary, secondary, …) as a measurement. No database change.
+- [ ] Results: tree view (neuron → segments), shared design with the planned lineage tree view of tracks.
+Phase 3 - later:
+- [ ] Spines: small objects with the dendrite segment as parent, density per µm, shape classes. No database / results change.
+
+### Manual correction of objects and tracks
+- [ ] Delete, merge and split detected objects in the viewer; add/remove spots by click.
+- [ ] Edit tracks: join, break, reassign (see "Allow manual setting a tracking id" under Results).
+- [ ] Corrections stored in the project so the results stay reproducible (design open: geometric edits per image applied by a pipeline step vs. edits in the results only).
+
+### Image correction (time series, multichannel)
+- [ ] Drift correction: register the time points of a series (phase correlation), image command before tracking.
+- [ ] Chromatic shift correction: x/y offset per channel (measured once on beads, or estimated by cross-correlation) - matters for coloc.
+
+### Track statistics
+- [ ] Max / instantaneous speed per track (also under Tracks), acceleration.
+- [ ] MSD per track and per class: diffusion coefficient, motion type (confined / free / directed) from the MSD slope.
+- [ ] Directionality: mean track angle, direction autocorrelation; track filters in the Over time chart (see Tracks).
+
+### Vantage-style plots
+- [ ] Gating: draw a region in a scatter plot → the objects inside become a class or a results filter.
+- [ ] Small multiples: one plot per class / well.
+
+### Deconvolution
+- [ ] Image command "Deconvolution" (Richardson-Lucy, theoretical widefield/confocal PSF from wavelength, NA, refractive index and pixel size; iterations). Needs tiles with a halo (a few PSF widths) - today tiles have none.

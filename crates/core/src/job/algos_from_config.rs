@@ -1168,6 +1168,19 @@ impl From<SegmentationMappingSettings> for SegmentationMapping {
     }
 }
 
+impl From<SkeletonizeObjectsSettings> for SkeletonizeObjects {
+    fn from(_s: SkeletonizeObjectsSettings) -> Self {
+        SkeletonizeObjects {
+            input_class: _s.input_class,
+            skeleton_class: _s.skeleton_class,
+            branch_point_class: _s.branch_point_class,
+            end_point_class: _s.end_point_class,
+            min_branch_length: _s.min_branch_length.clamp(0.0, 100000.0),
+            length_unit: _s.length_unit,
+        }
+    }
+}
+
 impl From<StardistSettings> for Stardist {
     fn from(_s: StardistSettings) -> Self {
         Stardist {
@@ -1509,6 +1522,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::Script(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Script::from(settings),
+        ))),
+        PipelineCommand::SkeletonizeObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::SkeletonizeObjects::from(settings),
         ))),
         PipelineCommand::Stardist(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Stardist::from(settings),

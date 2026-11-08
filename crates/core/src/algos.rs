@@ -101,6 +101,7 @@ pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;
 pub use self::object::propagation::Propagation;
 pub use self::object::relate_objects::{RelateObjects, RelateRule};
+pub use self::object::skeletonize_objects::SkeletonizeObjects;
 pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_edge};
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;

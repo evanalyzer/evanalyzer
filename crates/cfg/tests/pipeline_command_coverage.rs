@@ -393,7 +393,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 59] = [
+    let expected: [(&str, &[CommandCategory]); 60] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -447,6 +447,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("AI Pixel Classifier", &[InstanceSegmentation]),
         ("Relate Objects", &[Object, Measure, Dataset]),
         ("RankFilter", &[Segment, Preprocess]),
+        ("Skeletonize Objects", &[Object, Measure, Dataset]),
         ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
         // A script can sit at any stage, so every stage may follow it.

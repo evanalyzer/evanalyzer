@@ -4032,6 +4032,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "SKELETONIZE_OBJECTS"
+            }
+          },
+          "$ref": "#/$defs/SkeletonizeObjectsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "STARDIST"
             }
           },
@@ -5120,6 +5133,45 @@
         "PIXELS",
         "PERCENT"
       ]
+    },
+    "SkeletonizeObjectsSettings": {
+      "description": "Reduces each object to its 1-pixel-wide centre line (skeleton), for\nfilament analysis (neurites, vessels, fibres).\n\n[Threshold] -> [Extract Objects] -> [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]\n\nEach object of the input class gets one skeleton object; branch points\nand end points can become 1-pixel objects of their own classes. Spurs\nshorter than the minimum branch length are pruned. The input objects\nstay as they are; link skeletons and points to them with Relate Objects.",
+      "type": "object",
+      "properties": {
+        "branchPointClass": {
+          "description": "The class the branch points get (one 1-pixel object each). Unset:\nnone are created.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "endPointClass": {
+          "description": "The class the end points get (one 1-pixel object each). Unset: none\nare created.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "inputClass": {
+          "description": "Objects carrying this class are skeletonized (e.g. the thresholded\nneurites).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "lengthUnit": {
+          "description": "Unit `min_branch_length` is expressed in.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        },
+        "minBranchLength": {
+          "description": "Side branches shorter than this (from their end point to the branch\npoint) are removed - the spurs a ragged outline leaves. 0: none are\nremoved.",
+          "type": "number",
+          "format": "float",
+          "default": 5.0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "skeletonClass": {
+          "description": "The class the skeletons get (one per input object).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
     },
     "StardistSettings": {
       "description": "Instance segmentation using a pretrained StarDist model exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",

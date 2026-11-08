@@ -179,6 +179,15 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
             parent_classes: vec![CELL],
             ..Default::default()
         }),
+        // Cells (and the tissue-sized one) as filaments: thinning works on
+        // one bit per pixel of each object's box.
+        C::SkeletonizeObjects(_) => C::SkeletonizeObjects(SkeletonizeObjectsSettings {
+            input_class: CELL,
+            skeleton_class: OUTPUT,
+            branch_point_class: SPOT,
+            end_point_class: NUCLEUS,
+            ..Default::default()
+        }),
         C::TransformObjects(_) => C::TransformObjects(TransformObjectsSettings {
             input_class: CELL,
             output_class: OUTPUT,

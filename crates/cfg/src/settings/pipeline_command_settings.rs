@@ -3108,6 +3108,52 @@ impl Default for RelateObjectsSettings {
     }
 }
 
+/// Reduces each object to its 1-pixel-wide centre line (skeleton), for
+/// filament analysis (neurites, vessels, fibres).
+///
+/// [Threshold] -> [Extract Objects] -> [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]
+///
+/// Each object of the input class gets one skeleton object; branch points
+/// and end points can become 1-pixel objects of their own classes. Spurs
+/// shorter than the minimum branch length are pruned. The input objects
+/// stay as they are; link skeletons and points to them with Relate Objects.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct SkeletonizeObjectsSettings {
+    /// Objects carrying this class are skeletonized (e.g. the thresholded
+    /// neurites).
+    pub input_class: ObjectClass,
+    /// The class the skeletons get (one per input object).
+    pub skeleton_class: ObjectClass,
+    /// The class the branch points get (one 1-pixel object each). Unset:
+    /// none are created.
+    pub branch_point_class: ObjectClass,
+    /// The class the end points get (one 1-pixel object each). Unset: none
+    /// are created.
+    pub end_point_class: ObjectClass,
+    /// Side branches shorter than this (from their end point to the branch
+    /// point) are removed - the spurs a ragged outline leaves. 0: none are
+    /// removed.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_branch_length: f32,
+    /// Unit `min_branch_length` is expressed in.
+    pub length_unit: SizeUnits,
+}
+
+impl Default for SkeletonizeObjectsSettings {
+    fn default() -> Self {
+        Self {
+            input_class: ObjectClass::default(),
+            skeleton_class: ObjectClass::default(),
+            branch_point_class: ObjectClass::Unset,
+            end_point_class: ObjectClass::Unset,
+            min_branch_length: 5.0f32,
+            length_unit: SizeUnits::Pixels,
+        }
+    }
+}
+
 /// Transforms given ROIs and either replaces the old ones or creates new ones.
 ///
 /// This command applies a geometric transform (scale, circle, fitted ellipse) to every object
