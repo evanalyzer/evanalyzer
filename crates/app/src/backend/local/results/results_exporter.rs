@@ -2320,12 +2320,29 @@ fn write_csv_row(out: &mut impl std::io::Write, fields: &[String]) -> std::io::R
     out.write_all(b"\n")
 }
 
-/// `field`, quoted when it holds a comma, quote or line break.
+/// `field`, quoted when it holds a comma, quote or line break. Text that
+/// Excel or LibreOffice would run as a formula (a class or image name
+/// starting with `=`, `+`, `-`, `@`, tab or CR, from a shared project)
+/// gets a `'` in front - numbers (`-0.5`) stay as they are.
 fn write_csv_field(out: &mut impl std::io::Write, field: &str) -> std::io::Result<()> {
+    let guarded;
+    let field = match runs_as_formula(field) {
+        true => {
+            guarded = format!("'{field}");
+            guarded.as_str()
+        }
+        false => field,
+    };
     match field.contains([',', '"', '\n', '\r']) {
         true => write!(out, "\"{}\"", field.replace('"', "\"\"")),
         false => out.write_all(field.as_bytes()),
     }
+}
+
+/// Whether a spreadsheet would read `field` as a formula: it starts with a
+/// formula character and isn't a number.
+fn runs_as_formula(field: &str) -> bool {
+    field.starts_with(['=', '+', '-', '@', '\t', '\r']) && field.trim().parse::<f64>().is_err()
 }
 
 /// `cell` as CSV - the text `cell_text` gives it (floats through `zmij`,
@@ -2820,6 +2837,28 @@ mod tests {
         let mut out = Vec::new();
         write_csv_field(&mut out, field).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    /// Text a spreadsheet would run as a formula gets a `'`; numbers,
+    /// negative ones too, and text with the characters elsewhere don't.
+    #[test]
+    fn text_that_would_run_as_a_formula_is_not_a_formula() {
+        assert_eq!(
+            csv_escape("=HYPERLINK(\"http://x\")"),
+            "\"'=HYPERLINK(\"\"http://x\"\")\""
+        );
+        assert_eq!(csv_escape("=1+2"), "'=1+2");
+        assert_eq!(csv_escape("+cmd|' /C calc'!A0"), "'+cmd|' /C calc'!A0");
+        assert_eq!(csv_escape("-2+3"), "'-2+3");
+        assert_eq!(csv_escape("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(csv_escape("\t=1"), "'\t=1");
+        assert_eq!(csv_escape("\r=1"), "\"'\r=1\"");
+        for number in ["-0.5", "-3", "+7", "-1e-3", "-inf"] {
+            assert_eq!(csv_escape(number), number);
+        }
+        for text in ["Nucleus", "a=b", "x-1", "", "e-mail"] {
+            assert_eq!(csv_escape(text), text);
+        }
     }
 
     /// Fields go out as before: empty ones (the first too) between commas,
