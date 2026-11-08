@@ -3488,6 +3488,40 @@ pub struct MeasureObjectShapeSettings {
     pub objects: ObjectClass,
 }
 
+/// For each skeleton (Skeletonize Objects): its total length, the longest
+/// path through it, its end points, branch points and segments (the lines
+/// between them), their mean length and straightness (the straight
+/// distance between a segment's ends / its length; loops don't count) and,
+/// with "Diameter from", the mean diameter of the object it was made of
+/// along it. Lengths in pixels.
+///
+/// [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureObjectSkeletonSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("skeleton_01/...").
+    pub id: String,
+    /// The skeletons measured (the skeleton class of Skeletonize Objects).
+    pub objects: ObjectClass,
+    /// The class of the objects the skeletons were made of (e.g. the
+    /// neurites), linked to them as their parents by Relate Objects: the
+    /// diameter is twice the distance from the skeleton to their outline.
+    /// Unset: no diameter.
+    pub diameter_from: ObjectClass,
+}
+
+impl Default for MeasureObjectSkeletonSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            objects: ObjectClass::default(),
+            diameter_from: ObjectClass::Unset,
+        }
+    }
+}
+
 /// Measures the texture of a channel in each object of a class - Haralick's
 /// features of the gray-level co-occurrence matrix, per object.
 ///

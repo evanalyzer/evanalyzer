@@ -1959,6 +1959,27 @@
         "objects"
       ]
     },
+    "MeasureObjectSkeletonSettings": {
+      "description": "For each skeleton (Skeletonize Objects): its total length, the longest\npath through it, its end points, branch points and segments (the lines\nbetween them), their mean length and straightness (the straight\ndistance between a segment's ends / its length; loops don't count) and,\nwith \"Diameter from\", the mean diameter of the object it was made of\nalong it. Lengths in pixels.\n\n[Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]",
+      "type": "object",
+      "properties": {
+        "diameterFrom": {
+          "description": "The class of the objects the skeletons were made of (e.g. the\nneurites), linked to them as their parents by Relate Objects: the\ndiameter is twice the distance from the skeleton to their outline.\nUnset: no diameter.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"skeleton_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "objects": {
+          "description": "The skeletons measured (the skeleton class of Skeletonize Objects).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
+    },
     "MeasureObjectTextureSettings": {
       "description": "Measures the texture of a channel in each object of a class - Haralick's\nfeatures of the gray-level co-occurrence matrix, per object.\n\nThe same values as Measure Image Texture, of the object's pixels only.",
       "type": "object",
@@ -3306,6 +3327,19 @@
             }
           },
           "$ref": "#/$defs/MeasureObjectShapeSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_OBJECT_SKELETON"
+            }
+          },
+          "$ref": "#/$defs/MeasureObjectSkeletonSettings",
           "required": [
             "type"
           ]

@@ -167,7 +167,7 @@ impl ImageAlgorithm for SkeletonizeObjects {
     }
 }
 
-static GUO_HALL_1989: CitationMetadata = CitationMetadata {
+pub(crate) static GUO_HALL_1989: CitationMetadata = CitationMetadata {
     cite_key: "guo1989parallel",
     title: "Parallel Thinning with Two-Subiteration Algorithms",
     authors: &["Zicheng Guo", "Richard W. Hall"],
@@ -203,7 +203,7 @@ pub(crate) struct Skeleton {
 
 /// The neighbours' offsets in the order P2 … P9 of the thinning papers:
 /// N, NE, E, SE, S, SW, W, NW.
-const RING: [(isize, isize); 8] = [
+pub(crate) const RING: [(isize, isize); 8] = [
     (0, -1),
     (1, -1),
     (1, 0),
@@ -216,14 +216,13 @@ const RING: [(isize, isize); 8] = [
 
 /// One bit per pixel of an object's box with a 1-pixel border of 0 around
 /// (so every pixel of the object has all 8 neighbours in the grid).
-struct Grid {
-    width: usize,
-    height: usize,
-    bits: BitVec<u64, Lsb0>,
+pub(crate) struct Grid {
+    pub(crate) width: usize,
+    pub(crate) bits: BitVec<u64, Lsb0>,
 }
 
 impl Grid {
-    fn of(object: &Object) -> Self {
+    pub(crate) fn of(object: &Object) -> Self {
         let [x0, y0, x1, y1] = object.bbox;
         let box_width = (x1 - x0 + 1) as usize;
         let width = box_width + 2;
@@ -233,14 +232,10 @@ impl Grid {
             let (x, y) = (i % box_width, i / box_width);
             bits.set((y + 1) * width + x + 1, true);
         }
-        Grid {
-            width,
-            height,
-            bits,
-        }
+        Grid { width, bits }
     }
 
-    fn get(&self, p: usize) -> bool {
+    pub(crate) fn get(&self, p: usize) -> bool {
         self.bits[p]
     }
 
@@ -250,7 +245,7 @@ impl Grid {
 
     /// The index of `p`'s neighbour `k` (in [`RING`] order). Every set
     /// pixel is off the border, so its neighbours are in the grid.
-    fn neighbour(&self, p: usize, k: usize) -> usize {
+    pub(crate) fn neighbour(&self, p: usize, k: usize) -> usize {
         let (dx, dy) = RING[k];
         (p as isize + dy * self.width as isize + dx) as usize
     }
@@ -260,12 +255,12 @@ impl Grid {
         std::array::from_fn(|k| self.get(self.neighbour(p, k)))
     }
 
-    fn neighbour_count(&self, p: usize) -> usize {
+    pub(crate) fn neighbour_count(&self, p: usize) -> usize {
         self.ring(p).iter().filter(|&&on| on).count()
     }
 
     /// The set pixels, in row order.
-    fn ones(&self) -> Vec<usize> {
+    pub(crate) fn ones(&self) -> Vec<usize> {
         self.bits.iter_ones().collect()
     }
 }
@@ -299,7 +294,7 @@ fn removable(n: &[bool; 8], first: bool) -> bool {
 /// Step 1: thinning in place. Only the border pixels are looked at; after
 /// a sub-iteration the next border is the surviving one plus the set
 /// neighbours of the removed pixels.
-fn thin(grid: &mut Grid) {
+pub(crate) fn thin(grid: &mut Grid) {
     let mut queued: BitVec<u64, Lsb0> = BitVec::repeat(false, grid.bits.len());
     // Filtered while iterating: collecting every pixel first would take
     // 8 bytes per pixel of a tissue-sized object.
@@ -354,7 +349,7 @@ fn thin(grid: &mut Grid) {
 /// with exactly two set 4-neighbours at a right angle, whose removal keeps
 /// its neighbours connected - in row order, until none is left. A pixel
 /// with three 4-neighbours (the centre of a T) stays, so do end points.
-fn one_pixel_wide(grid: &mut Grid) {
+pub(crate) fn one_pixel_wide(grid: &mut Grid) {
     loop {
         let mut changed = false;
         for p in grid.ones() {
@@ -492,7 +487,7 @@ fn prune(grid: &mut Grid, min_length: f32) -> bool {
 
 /// The branch-point pixels (three or more neighbours), each with the id of
 /// its 8-connected group (the group's first pixel in row order).
-fn junction_groups(grid: &Grid) -> HashMap<usize, usize> {
+pub(crate) fn junction_groups(grid: &Grid) -> HashMap<usize, usize> {
     let junctions: Vec<usize> = grid
         .ones()
         .into_iter()

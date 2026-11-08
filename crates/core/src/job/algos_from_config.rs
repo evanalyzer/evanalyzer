@@ -1032,6 +1032,16 @@ impl From<MeasureObjectShapeSettings> for MeasureObjectShape {
     }
 }
 
+impl From<MeasureObjectSkeletonSettings> for MeasureObjectSkeleton {
+    fn from(_s: MeasureObjectSkeletonSettings) -> Self {
+        MeasureObjectSkeleton {
+            id: _s.id,
+            objects: _s.objects,
+            diameter_from: _s.diameter_from,
+        }
+    }
+}
+
 impl From<MeasureObjectTextureSettings> for MeasureObjectTexture {
     fn from(_s: MeasureObjectTextureSettings) -> Self {
         MeasureObjectTexture {
@@ -1489,6 +1499,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::MeasureObjectShape(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectShape::from(settings),
+        ))),
+        PipelineCommand::MeasureObjectSkeleton(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureObjectSkeleton::from(settings),
         ))),
         PipelineCommand::MeasureObjectTexture(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectTexture::from(settings),

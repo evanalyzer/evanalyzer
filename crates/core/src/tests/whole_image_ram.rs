@@ -136,6 +136,13 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
             method: MeasureObjectNeighborsNeighborMethodSettings::ExpandUntilAdjacent,
             distance: 5,
         }),
+        // The spots as skeletons (thinned on the fly), their cells' outlines
+        // for the diameter - the tissue-sized one too.
+        C::MeasureObjectSkeleton(_) => C::MeasureObjectSkeleton(MeasureObjectSkeletonSettings {
+            id,
+            objects: SPOT,
+            diameter_from: CELL,
+        }),
         C::MeasureObjectShape(_) => {
             C::MeasureObjectShape(MeasureObjectShapeSettings { id, objects: CELL })
         }
