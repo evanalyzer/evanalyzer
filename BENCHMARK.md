@@ -2092,6 +2092,34 @@ tile of 24 px cells, flat probability 0.9 (590,000 candidates, 8,188 kept;
 The step picker's RAM line (one `DetailSection`): generated UI code 58.63 →
 58.67 MB (+39 KB).
 
+## Results files without file access from SQL (2026-11-08)
+
+A shared results file could read local files through a view
+(`read_text('~/.ssh/…')`). Now every results file is locked down right
+after opening: no file access from SQL except its `<file>.export/` folder
+(the Parquet export goes there first, then is moved). Release builds of the
+same tree, alternated, 10 s apart, 3 rounds; the 1.7 GB results file
+(`tests/20260831_Uptake1_Exp0706_PH1.evadb`, a copy), 22 cores:
+
+| Variant | Open + close (×200) | CPU per open | Peak RAM |
+|---|---|---|---|
+| Before | 11.4-11.8 ms | 13.6-14.0 ms | 41-43 MB |
+| Lock-down (now) | 11.3-12.0 ms | 13.5-14.4 ms | 42-43 MB |
+| + refusing files with views (dropped) | 12.0-12.5 ms | 15.0-15.6 ms | 44-45 MB |
+| + refusing files with views or macros (dropped) | 21.2-22.2 ms | 29.7-30.4 ms | 38-39 MB* |
+
+\* That run's baseline was built in another folder (30-34 MB): peak RSS
+counts the executable's pages, so builds from different folders differ by
+~9 MB - compare builds of the same tree only.
+
+| Parquet export, 1.6 GB written | Before | Now | CPU | Peak RAM |
+|---|---|---|---|---|
+| Into a folder on the same disk | 5.33-5.88 s | 5.25-5.84 s | 24-28 s both | 5.8-8.7 GB both |
+| Onto another file system (`/dev/shm`) | 5.65-6.00 s | 6.10-6.32 s (+0.4 s: copied, not renamed) | 27-31 s both | 7.6-9.9 GB both |
+
+The Parquet export's peak (DuckDB's own buffers, up to its share of the RAM)
+was high before already - not changed here.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2142,6 +2170,7 @@ graphics driver).
 | Whole slide 9343 × 27143, 5 channels (`tests/haut`, 212,413 objects), 4 or 21 threads | 7.4-7.6 GB; with 6 GB available it overruns them (OOM) | 2026-10-28 | Whole slide: the cache budget in the tile merge |
 | Same slide, one cache budget for the merged tiles (a), 4 threads with ~4 / ~6 GB available | 3.5-3.6 / 5.3-5.4 GB (was 5.4-5.5 / 5.9-6.3 GB) | 2026-10-28 | Whole slide: one cache budget for the merged tiles |
 | Exports of 4,000 images / 4M objects: grouped by image, list CSV | 0.65-0.73 GB / 1.1 GB | 2026-10-28 | Exports of a 4,000-image batch |
+| Parquet export of a 1.7 GB results file (1.6 GB written), 62 GB computer | 5.8-9.9 GB (DuckDB's buffers) | 2026-11-08 | Results files without file access from SQL |
 | Whole slide `tests/haut` with Measure Object Colocalization, cells covering the slide, 21 threads | 8.0-8.2 GB (was 11.0 GB) | 2026-10-28 | Measure Object Colocalization: one object at a time |
 | Results window, switching between 4M-object results files | ~50 MB after closing each (was +250 MB per file opened) | 2026-10-28 | Results files closed when unused |
 | Whole slide `tests/haut` + coloc, automatic threads, ~4 GB free | 2.97-3.22 GB (was 4.31-4.41 GB, and 3.6-3.9 × slower) | 2026-10-28 | RAM rework step 2 |
