@@ -137,6 +137,7 @@ impl ImageAlgorithm for MeasureObjectSkeleton {
                         object: (*id).clone(),
                         value: row[i],
                         related: None,
+                        position: None,
                     })
                     .collect()
             })

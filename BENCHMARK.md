@@ -2120,6 +2120,21 @@ counts the executable's pages, so builds from different folders differ by
 The Parquet export's peak (DuckDB's own buffers, up to its share of the RAM)
 was high before already - not changed here.
 
+## Profile measurements: results format 2 (2026-11-08)
+
+`measurements.position` and `measurement_info.profile` (for the Sholl
+profile) - one more, almost always NULL, column per measurement row. A
+throwaway example exporting 20 images × 5000 objects × 5 per-object values
+(500k measurement rows plus the objects); the baseline built from the commit
+before in a worktree, alternated, 10 s apart, 4 rounds:
+
+| Variant | Export | CPU | Peak RAM |
+|---|---|---|---|
+| Format 1 (before) | 1.33-1.37 s (median 1.335) | 2.74-2.85 s | 457-461 MB |
+| Format 2 (now) | 1.34-1.42 s (median 1.365) | 2.79-2.84 s | 452-459 MB |
+
+CPU and peak RAM unchanged; the wall time within the runs' spread (~2 %).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

@@ -269,7 +269,13 @@ fn share_memory_limit(cache: &HashMap<PathBuf, SharedDatabase>) {
 /// The format of the results files this build writes (`run.schema_version`).
 /// Raise it with every change a reader of an older build would misread, and
 /// teach the readers the older formats they still open.
-pub const RESULTS_SCHEMA_VERSION: u32 = 1;
+pub const RESULTS_SCHEMA_VERSION: u32 = 2;
+
+// Format history:
+// 1: the first.
+// 2: profile measurements - `measurement_info.profile` and
+//    `measurements.position` (a value per position, e.g. per Sholl ring);
+//    an older build would read a profile's rows as one value each.
 
 /// The format `conn`'s results file was written in - 0 for a file from before
 /// it was recorded (no `run` table or no `schema_version`).
@@ -472,9 +478,21 @@ impl DuckDbExporter {
             )));
         }
         let conn = shared_connection(path)?;
-        // Only into a file of this build's format: another one's rows wouldn't fit.
+        // Only into a file of this build's format: another one's rows wouldn't
+        // fit. Format 1 becomes 2 here - it only lacks the profile columns
+        // (it can't hold a profile, so the defaults are exact).
         let version = results_schema_version(&conn)?;
-        if version != RESULTS_SCHEMA_VERSION {
+        if version == 1 {
+            conn.execute_batch(
+                // DuckDB can't add a NOT NULL column: readers take
+                // `coalesce(profile, false)`.
+                "ALTER TABLE measurement_info ADD COLUMN IF NOT EXISTS \
+                     profile BOOLEAN DEFAULT false;
+                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS position DOUBLE;
+                 UPDATE run SET schema_version = 2;",
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        } else if version != RESULTS_SCHEMA_VERSION {
             return Err(InternalErrors::ParseError(format!(
                 "these results are in format version {version}, this build writes version \
                  {RESULTS_SCHEMA_VERSION} - run the analysis again"
@@ -538,7 +556,7 @@ impl DuckDbExporter {
             .prepare(
                 "INSERT OR IGNORE INTO measurement_info \
                  (key, measurement, step, unit, target, range_min, range_max, aggregatable, \
-                 object_index, related_objects) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 object_index, related_objects, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .map_err(err)?;
         let indices = self
@@ -556,7 +574,8 @@ impl DuckDbExporter {
                 i.range.map(|r| r.1),
                 i.aggregatable,
                 indices.get(&i.key),
-                i.related_objects
+                i.related_objects,
+                i.profile
             ])
             .map_err(err)?;
         }
@@ -573,10 +592,10 @@ impl DuckDbExporter {
                     for (region, value) in values {
                         match region {
                             MeasurementRegion::Image => {
-                                rows.push(row(RowRegion::Image, None, None), *value)
+                                rows.push(row(RowRegion::Image, None, None), *value, None)
                             }
                             MeasurementRegion::Class(class) => {
-                                rows.push(row(RowRegion::Class(*class), None, None), *value)
+                                rows.push(row(RowRegion::Class(*class), None, None), *value, None)
                             }
                         }
                         rows.flush_if_full(&mut app)?;
@@ -587,6 +606,7 @@ impl DuckDbExporter {
                         rows.push(
                             row(RowRegion::Object, Some(&v.object), v.related.as_ref()),
                             v.value,
+                            v.position,
                         );
                         rows.flush_if_full(&mut app)?;
                     }
@@ -1190,6 +1210,7 @@ struct MeasurementColumns {
     unit: StringBuilder,
     key: StringBuilder,
     value: Float64Builder,
+    position: Float64Builder,
 }
 
 impl MeasurementColumns {
@@ -1209,6 +1230,7 @@ impl MeasurementColumns {
             unit: StringBuilder::new(),
             key: StringBuilder::new(),
             value: Float64Builder::new(),
+            position: Float64Builder::new(),
         }
     }
 
@@ -1232,6 +1254,7 @@ impl MeasurementColumns {
             ("unit", arr(&mut self.unit)),
             ("key", arr(&mut self.key)),
             ("value", arr(&mut self.value)),
+            ("position", arr(&mut self.position)),
         ])
         .map_err(|e| InternalErrors::Io(e.to_string()))
         .and_then(|batch| with_uuid_columns(batch, &["object_id", "related_object_id"]))
@@ -1270,7 +1293,8 @@ impl<'a> MeasurementRows<'a> {
     }
 
     /// Adds a row; a value that isn't a number (NaN, infinite) is NULL.
-    fn push(&mut self, row: MeasurementRow<'_>, value: f64) {
+    /// `position`: where on a profile the value is (else `None`).
+    fn push(&mut self, row: MeasurementRow<'_>, value: f64, position: Option<f64>) {
         // An object's classes are cached by id - referenced here, not copied
         // per row.
         if let (RowRegion::Object, Some(id)) = (&row.region, row.object)
@@ -1320,6 +1344,7 @@ impl<'a> MeasurementRows<'a> {
         c.unit.append_value(row.unit);
         c.key.append_value(row.key);
         c.value.append_option(value.is_finite().then_some(value));
+        c.position.append_option(position.filter(|p| p.is_finite()));
     }
 
     fn flush_if_full(&mut self, app: &mut duckdb::Appender<'_>) -> Result<(), InternalErrors> {
@@ -1500,7 +1525,10 @@ CREATE TABLE IF NOT EXISTS measurement_info (
     -- (1-based). NULL for an image measurement.
     object_index  INTEGER,
     -- Each value names another object (`measurements.related_object_id`).
-    related_objects BOOLEAN NOT NULL DEFAULT false
+    related_objects BOOLEAN NOT NULL DEFAULT false,
+    -- A profile: several values per object, each at a position
+    -- (`measurements.position`); no `object_index` (since format 2).
+    profile       BOOLEAN NOT NULL DEFAULT false
 );
 
 -- The measurements' values, one row each with what it is about - like
@@ -1526,7 +1554,10 @@ CREATE TABLE IF NOT EXISTS measurements (
     measurement        VARCHAR NOT NULL,
     unit               VARCHAR NOT NULL,
     key                VARCHAR NOT NULL,
-    value              DOUBLE
+    value              DOUBLE,
+    -- Where on the object's profile the value is (e.g. a Sholl ring's
+    -- radius in nm); NULL but for a profile measurement (since format 2).
+    position           DOUBLE
 );
 
 -- How the analysis run that wrote this file ended: 'running' from its start
@@ -1595,6 +1626,10 @@ impl DuckDbExporter {
             let MeasurementValues::Objects(values) = values else {
                 continue;
             };
+            // A profile has several values per object: no single one.
+            if info.profile {
+                continue;
+            }
             let next = indices.len() as i32 + 1;
             let index = *indices.entry(info.key.clone()).or_insert(next);
             for v in values {
@@ -2518,6 +2553,127 @@ mod tests {
         );
     }
 
+    /// A profile (several values per object, each at a position) is rows
+    /// with their position, without an `object_index` - the objects'
+    /// `measurement_values` hold only the ordinary measurements.
+    #[test]
+    fn a_profile_is_rows_with_positions_not_an_object_value() {
+        use crate::pipeline::pipeline_measure::PipelineMeasurements;
+        use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new(), &MetaData::default()).unwrap();
+        let info = |key: &str, profile: bool| MeasurementInfo {
+            key: key.into(),
+            name: key.into(),
+            step: "sholl_01".into(),
+            unit: MeasurementUnit::Count,
+            target: MeasurementTarget::Object,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+            profile,
+        };
+        let value = |value: f64, position: Option<f64>| ObjectValue {
+            object: ObjectId(1),
+            value,
+            related: None,
+            position,
+        };
+        let mut cache = cache_with_objects("a.tif", 1);
+        cache.measurements = PipelineMeasurements {
+            measurements: vec![
+                Measurement {
+                    info: info("sholl_01/intersections", true),
+                    values: MeasurementValues::Objects(vec![
+                        value(3.0, Some(1000.0)),
+                        value(5.0, Some(2000.0)),
+                        value(1.0, Some(3000.0)),
+                    ]),
+                },
+                Measurement {
+                    info: info("sholl_01/max_intersections", false),
+                    values: MeasurementValues::Objects(vec![value(5.0, None)]),
+                },
+            ],
+            z_stack: 0,
+            t_stack: 0,
+            excluded: None,
+        };
+        exporter.export(&cache).unwrap();
+
+        let conn = exporter.conn.lock().unwrap();
+        let infos: Vec<(String, bool, Option<i32>)> = conn
+            .prepare("SELECT key, profile, object_index FROM measurement_info ORDER BY key")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            infos,
+            [
+                ("sholl_01/intersections".into(), true, None),
+                ("sholl_01/max_intersections".into(), false, Some(1)),
+            ]
+        );
+        let rows: Vec<(String, f64, Option<f64>)> = conn
+            .prepare("SELECT key, value, position FROM measurements ORDER BY key, position")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("sholl_01/intersections".into(), 3.0, Some(1000.0)),
+                ("sholl_01/intersections".into(), 5.0, Some(2000.0)),
+                ("sholl_01/intersections".into(), 1.0, Some(3000.0)),
+                ("sholl_01/max_intersections".into(), 5.0, None),
+            ]
+        );
+        let values: String = conn
+            .query_row("SELECT measurement_values::VARCHAR FROM objects", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(values, "[5.0]");
+    }
+
+    /// A results file of format 1 is moved to format 2 when opened to add
+    /// to: it gets the profile columns (and can't hold a profile, so
+    /// their defaults are exact).
+    #[test]
+    fn a_format_1_file_is_migrated_when_opened_to_add_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        drop(test_exporter(&path));
+        {
+            // What format 1 wrote: the tables without the profile columns.
+            let conn = shared_connection(&path).unwrap();
+            conn.execute_batch(
+                "ALTER TABLE measurement_info DROP COLUMN profile;
+                 ALTER TABLE measurements DROP COLUMN position;
+                 UPDATE run SET schema_version = 1;",
+            )
+            .unwrap();
+        }
+        let exporter = DuckDbExporter::open_existing(&path).unwrap();
+        let conn = exporter.lock_conn();
+        assert_eq!(results_schema_version(&conn).unwrap(), 2);
+        let columns: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM information_schema.columns WHERE \
+                 (table_name = 'measurement_info' AND column_name = 'profile') OR \
+                 (table_name = 'measurements' AND column_name = 'position')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 2);
+    }
+
     /// Each image's analysed time points and z-planes are kept - also ones
     /// without objects.
     /// Each value is a row with what it is about - readable without a join;
@@ -2540,6 +2696,7 @@ mod tests {
             range: Some((-1.0, 1.0)),
             aggregatable: true,
             related_objects: false,
+            profile: false,
         };
         for (t, value) in [(0, 0.5), (1, f64::NAN)] {
             // Object 1, in class 1 ("Nucleus").
@@ -2563,6 +2720,7 @@ mod tests {
                             object: ObjectId(1),
                             value: 0.25,
                             related: Some(ObjectId(7)),
+                            position: None,
                         }]),
                     },
                 ],
@@ -2672,6 +2830,7 @@ mod tests {
             range: None,
             aggregatable: true,
             related_objects: false,
+            profile: false,
         };
         let objects = |key: &str, values: Vec<(u128, f64)>| Measurement {
             info: info(key, MeasurementTarget::Object),
@@ -2753,6 +2912,7 @@ mod tests {
                     range: None,
                     aggregatable: true,
                     related_objects: false,
+                    profile: false,
                 },
                 values: MeasurementValues::Objects(
                     (1..=count)

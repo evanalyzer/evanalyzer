@@ -62,6 +62,7 @@ impl<'a> Outputs<'a> {
             range: None,
             aggregatable: true,
             related_objects: false,
+            profile: false,
         }
     }
 

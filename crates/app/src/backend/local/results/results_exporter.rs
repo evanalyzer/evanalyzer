@@ -1132,7 +1132,9 @@ impl ResultExport {
                 ));
             }
         }
-        const COLUMNS: [&str; 13] = [
+        // `position` (a profile's, e.g. a Sholl ring's radius) since format 2.
+        let with_position = database.has_column("measurements", "position")?;
+        let mut columns = vec![
             "image_name",
             "image_rel_path",
             "z_stack",
@@ -1147,16 +1149,21 @@ impl ResultExport {
             "key",
             "value",
         ];
+        if with_position {
+            columns.push("position");
+        }
         let sql = format!(
             "SELECT image_name, image_rel_path, z_stack, t_stack, region, object_id::VARCHAR, \
-             related_object_id::VARCHAR, object_class_name, step, measurement, unit, key, value \
-             FROM measurements WHERE {} \
-             ORDER BY image_name, t_stack, z_stack, step, key, region, object_id",
-            conditions.join(" AND ")
+             related_object_id::VARCHAR, object_class_name, step, measurement, unit, key, value\
+             {} FROM measurements WHERE {} \
+             ORDER BY image_name, t_stack, z_stack, step, key, region, object_id{}",
+            if with_position { ", position" } else { "" },
+            conditions.join(" AND "),
+            if with_position { ", position" } else { "" },
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         let mut each_row = |out: &mut dyn FieldSink| -> Result<(), InternalErrors> {
-            for name in COLUMNS {
+            for name in &columns {
                 out.text(name)?;
             }
             out.end_row()?;
@@ -1167,14 +1174,14 @@ impl ResultExport {
                 if n.is_multiple_of(65_536) {
                     check_cancelled(cancel)?;
                 }
-                for i in 0..COLUMNS.len() {
+                for i in 0..columns.len() {
                     match i {
                         // z: NULL for a value of a whole volume (an empty cell).
                         2 => {
                             out.optional(row.get::<_, Option<i32>>(i).map_err(err)?.map(f64::from))?
                         }
                         3 => out.number(row.get::<_, i32>(i).map_err(err)? as f64)?,
-                        12 => out.optional(row.get::<_, Option<f64>>(i).map_err(err)?)?,
+                        12 | 13 => out.optional(row.get::<_, Option<f64>>(i).map_err(err)?)?,
                         _ => match row.get::<_, Option<String>>(i).map_err(err)? {
                             Some(text) => out.text(&text)?,
                             None => out.empty()?,
@@ -5203,6 +5210,60 @@ mod tests {
                 ),
                 "img1.tif,img1.tif,0,1,image,,,,p_01,Pearson,None,p_01/p,",
                 "img2.tif,img2.tif,0,0,image,,,,p_01,Pearson,None,p_01/p,0.75",
+            ]
+        );
+    }
+
+    /// Format 2: a profile (rows with a position) isn't offered as a value,
+    /// and the export gets a `position` column - empty for ordinary values.
+    #[test]
+    fn a_profile_is_exported_with_its_positions_and_not_offered_as_a_value() {
+        let (generator, out_dir, object) = with_measurements();
+        generator
+            .connection()
+            .execute_batch(&format!(
+                "ALTER TABLE measurement_info ADD COLUMN profile BOOLEAN DEFAULT false;
+                 ALTER TABLE measurements ADD COLUMN position DOUBLE;
+                 INSERT INTO measurement_info VALUES
+                     ('s_01/i', 'Intersections', 's_01', 'Count', 'Object', NULL, NULL, true, NULL, true);
+                 INSERT INTO measurements VALUES
+                     ('img1.tif', 'img1.tif', 0, 0, 'object', '{object}', NULL, NULL, NULL, 's_01', 'Intersections', 'Count', 's_01/i', 4, 2000),
+                     ('img1.tif', 'img1.tif', 0, 0, 'object', '{object}', NULL, NULL, NULL, 's_01', 'Intersections', 'Count', 's_01/i', 2, 1000);"
+            ))
+            .unwrap();
+        let offered: Vec<String> = generator
+            .get_measurement_columns()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.key)
+            .collect();
+        assert_eq!(offered, ["p_01/p", "q_01/q"]);
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_measurements: true,
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let csv = std::fs::read_to_string(out_dir.join("measurements.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(lines[0].ends_with(",key,value,position"), "{}", lines[0]);
+        assert!(lines.contains(&"img1.tif,img1.tif,0,0,image,,,,p_01,Pearson,None,p_01/p,0.5,"));
+        let profile: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|l| l.contains("s_01/i"))
+            .collect();
+        assert_eq!(
+            profile,
+            [
+                format!(
+                    "img1.tif,img1.tif,0,0,object,{object},,,s_01,Intersections,Count,s_01/i,2,1000"
+                ),
+                format!(
+                    "img1.tif,img1.tif,0,0,object,{object},,,s_01,Intersections,Count,s_01/i,4,2000"
+                ),
             ]
         );
     }

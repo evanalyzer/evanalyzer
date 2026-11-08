@@ -62,6 +62,12 @@ pub struct MeasurementInfo {
     /// - the nearest neighbour, the parent): the results offer that object.
     #[serde(default)]
     pub related_objects: bool,
+    /// A profile: several values per object, each at a position
+    /// (`ObjectValue::position`, e.g. the radius of a Sholl ring) - a curve
+    /// per object, not one number. Not one of the objects' values
+    /// (`objects.measurement_values`) nor offered where one number is.
+    #[serde(default)]
+    pub profile: bool,
 }
 
 impl MeasurementInfo {
@@ -74,6 +80,12 @@ impl MeasurementInfo {
     /// Its values each name the other object they are about.
     pub fn naming_objects(mut self) -> Self {
         self.related_objects = true;
+        self
+    }
+
+    /// A profile: several values per object, each at a position.
+    pub fn profile(mut self) -> Self {
+        self.profile = true;
         self
     }
 }
@@ -115,6 +127,11 @@ pub struct ObjectValue {
     pub object: ObjectId,
     pub value: f64,
     pub related: Option<ObjectId>,
+    /// Where on the object's profile the value is (e.g. a Sholl ring's
+    /// radius in nm) - only for a profile measurement
+    /// (`MeasurementInfo::profile`).
+    #[serde(default)]
+    pub position: Option<f64>,
 }
 
 impl From<(ObjectId, f64)> for ObjectValue {
@@ -123,6 +140,7 @@ impl From<(ObjectId, f64)> for ObjectValue {
             object,
             value,
             related: None,
+            position: None,
         }
     }
 }

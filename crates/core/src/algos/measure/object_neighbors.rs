@@ -159,6 +159,7 @@ impl ImageAlgorithm for MeasureObjectNeighbors {
                             object: object.clone(),
                             value: row[i].0,
                             related: row[i].1.clone(),
+                            position: None,
                         })
                         .collect()
                 })

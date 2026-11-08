@@ -2945,12 +2945,19 @@ impl ResultsGenerator {
         if !exists {
             return Ok(Vec::new());
         }
+        // Profiles (a curve per object, since format 2) are no single value:
+        // not offered here.
+        let not_profile = if self.has_column("measurement_info", "profile")? {
+            "WHERE NOT coalesce(profile, false)"
+        } else {
+            ""
+        };
         let mut stmt = self
             .database
-            .prepare(
+            .prepare(&format!(
                 "SELECT key, step, measurement, target = 'Object' FROM measurement_info \
-                 ORDER BY step, measurement, key",
-            )
+                 {not_profile} ORDER BY step, measurement, key"
+            ))
             .map_err(err)?;
         let columns = stmt
             .query_map([], |row| {
@@ -2965,6 +2972,18 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         Ok(columns)
+    }
+
+    /// Whether `table` has `column` - one added by a later results format.
+    pub(super) fn has_column(&self, table: &str, column: &str) -> Result<bool, InternalErrors> {
+        self.database
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.columns \
+                 WHERE table_name = ? AND column_name = ?",
+                [table, column],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))
     }
 
     /// The keys of the measurements whose values name another object

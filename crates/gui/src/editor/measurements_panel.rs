@@ -144,6 +144,7 @@ mod tests {
                 range: None,
                 aggregatable: true,
                 related_objects: false,
+                profile: false,
             },
             values,
         }

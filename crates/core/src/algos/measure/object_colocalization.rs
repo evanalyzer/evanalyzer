@@ -120,6 +120,7 @@ impl ImageAlgorithm for MeasureObjectColocalization {
                         object: object.clone(),
                         value: values[i],
                         related: None,
+                        position: None,
                     }),
             );
         }

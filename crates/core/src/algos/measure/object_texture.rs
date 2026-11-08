@@ -100,6 +100,7 @@ impl ImageAlgorithm for MeasureObjectTexture {
                     object: id.clone(),
                     value: values[feature],
                     related: None,
+                    position: None,
                 })
                 .collect();
             cache.add_object_measurement(texture.output(&self.id, feature, true), values);

@@ -83,11 +83,13 @@ impl ImageAlgorithm for MeasureObjectDistanceToParent {
                 object: id.clone(),
                 value: c,
                 related: related.clone(),
+                position: None,
             });
             minimum.push(ObjectValue {
                 object: id.clone(),
                 value: m,
                 related,
+                position: None,
             });
         }
         cache.add_object_measurement(self.measurement_output("centroid_distance"), centroid);
