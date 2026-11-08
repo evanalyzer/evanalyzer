@@ -68,13 +68,15 @@ desktop app uses on the user's own machine:
 | `source` | Accounts | Home folder | Worker runs as |
 |---|---|---|---|
 | `single` (default) | One account in `[users.single]`: `admin`, with a random password made up at every start and printed to the console unless `users.single.password` is set | `users.single.home`, default: a folder of its own, `<data_dir>/single-user` | the server's account |
-| `linux` | This machine's system users, checked against `/etc/shadow`. The server needs root or membership in the `shadow` group. | from `/etc/passwd` | the user's own account, if the server runs as root |
+| `linux` | This machine's system users, checked against `/etc/shadow`. The server needs root or membership in the `shadow` group. `root` and accounts below `users.linux.min_uid` (default 1000, the system accounts) can't log in; `users.linux.allowed_groups` limits it to members of those groups. | from `/etc/passwd` | the user's own account, if the server runs as root |
 | `file` | The `[[user]]` entries of a separate users file, `[users.file] path`. No system accounts needed. | `home` of each entry | the server's account |
 
 ### Allowed folders
 
 A worker can read and write only its user's *allowed folders* and the
-user's EVAnalyzer folder, which holds settings and templates. The allowed
+user's EVAnalyzer folder, which holds settings and templates. The
+templates bundled with the program can be read, not changed - every user
+shares them. The allowed
 folders come from:
 
 - the account's own `allowed_dirs`: `users.single.allowed_dirs`, an
@@ -216,8 +218,20 @@ limit):
 - `max_workers`: users working at the same time. A login that would start
   one more worker is refused with "try again later"; users whose worker is
   running can always log in.
-- `max_connections`: open client connections, all users together. Further
-  connections are refused with "try again later".
+- `max_connections`: logged-in client connections, all users together.
+  Further logins are refused with "try again later".
+- `max_pending_logins` (default 32): connections that aren't logged in
+  yet. Each has 10 s to log in and may send at most 64 KiB until then;
+  further connections are refused, so connections that never log in can't
+  use up the server.
+- `[workers] max_job_minutes`: an analysis running longer is cancelled
+  (default: no limit). Scripts stop as soon as their analysis is
+  cancelled.
+
+After 5 wrong passwords (or unknown sessions) from one address, its next
+tries are refused without checking the password: 1 s, then 2, 4, ... up to
+5 minutes. A successful login or 15 quiet minutes start over. IPv6
+addresses count per /64 network.
 
 ## Example: a lab server with its own accounts
 

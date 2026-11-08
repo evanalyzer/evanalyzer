@@ -60,6 +60,12 @@ username = "admin"
 # root, the server starts each worker as its user's system account.
 shadow_file = "/etc/shadow"
 passwd_file = "/etc/passwd"
+group_file = "/etc/group"
+# Accounts with a lower uid (system accounts) can't log in; root never can.
+min_uid = 1000
+# Only members of these groups (primary group or listed in the group file)
+# can log in. Default: empty, every account from min_uid on.
+# allowed_groups = ["evanalyzer"]
 
 # Per-user exceptions to users.default_allowed_dirs:
 # [users.linux.overrides.alice]
@@ -107,6 +113,10 @@ idle_timeout_minutes = 120
 # database are sized as if the computer had no more. Not a hard limit on
 # every allocation. Default: the computer's (or the container's limit).
 #max_ram_mb = 16384
+# An analysis running longer than this many minutes is cancelled, so one
+# user's analysis can't take the machine for good. Default: no limit -
+# whole slides can take hours.
+#max_job_minutes = 720
 
 [limits]
 # Not set: no limit.
@@ -114,6 +124,12 @@ idle_timeout_minutes = 120
 # would start one more is refused with "try again later"; users whose worker
 # runs already can always log in.
 # max_workers = 20
-# At most this many client connections at once, all users together (one GUI
-# or CLI is one connection).
+# At most this many logged-in client connections at once, all users together
+# (one GUI or CLI is one connection).
 # max_connections = 100
+# At most this many connections that aren't logged in yet. Each has 10 s to
+# log in (messages up to 64 KiB until then); further ones are refused, so
+# connections that never log in can't use up the server. After 5 wrong
+# passwords from one address its next tries wait 1 s, then 2, 4, ... up to
+# 5 min. Default 32.
+# max_pending_logins = 32
