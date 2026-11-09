@@ -753,11 +753,34 @@ impl ResultsStateController {
             (Some(family), Some(selected)) => family.links(selected, &objects),
             _ => Vec::new(),
         };
+        // Charts › Profile: the selected object's circles, around its
+        // parent on this image (the soma Relate linked it to), else itself.
+        let profile_shown = *self.rail_mode.lock().expect("Poisoned") == ResultsRailMode::Charts
+            && self.chart_filter.lock().expect("Poisoned").kind == ChartKind::Profile;
+        let rings = match (
+            self.profile_rings.lock().expect("Poisoned").as_ref(),
+            selected.and_then(|i| objects.get(i)),
+        ) {
+            (Some((id, radii, peak)), Some(object)) if profile_shown && *id == object.object_id => {
+                let centre = object
+                    .parent_ids
+                    .iter()
+                    .find_map(|parent| objects.iter().find(|o| o.object_id == *parent))
+                    .unwrap_or(object)
+                    .centroid_px;
+                radii
+                    .iter()
+                    .map(|r| ((centre[0], centre[1]), *r as f32, Some(*r) == *peak))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let overlay = ResultsOverlay {
             objects: drawn,
             sources,
             links,
             trails,
+            rings,
         };
         self.viewport().set_results_overlay(Some(overlay));
     }

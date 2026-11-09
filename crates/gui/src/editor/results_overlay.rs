@@ -35,6 +35,10 @@ pub struct ResultsOverlay {
     pub links: Vec<Link>,
     /// The tracks' trails, under the objects.
     pub trails: Option<Arc<TrailsOverlay>>,
+    /// Circles over everything (Charts › Profile: the selected object's
+    /// Sholl circles): centre and radius in image pixels, and whether it is
+    /// the one drawn stronger (the highest value).
+    pub rings: Vec<((f32, f32), f32, bool)>,
 }
 
 impl ResultsOverlay {
@@ -149,6 +153,45 @@ pub fn draw_results_overlay(
         off_x,
         off_y,
     );
+    if !overlay.rings.is_empty() {
+        draw_rings(buffer, &overlay.rings, buf_w, buf_h, zoom, off_x, off_y);
+    }
+}
+
+/// The rings' color (Ink's focus, dark theme).
+const RING_RGB: [u8; 3] = [0x8b, 0x8b, 0xf0];
+
+/// `rings` as thin anti-aliased circles (polylines, about a segment per 4
+/// screen pixels of the circumference), the stronger one more opaque.
+fn draw_rings(
+    buffer: &mut [slint::Rgba8Pixel],
+    rings: &[((f32, f32), f32, bool)],
+    buf_w: u32,
+    buf_h: u32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) {
+    let mut canvas = Canvas {
+        buffer,
+        w: buf_w as i64,
+        h: buf_h as i64,
+    };
+    for &((cx, cy), radius, strong) in rings {
+        let (sx, sy, r) = (cx * zoom + off_x, cy * zoom + off_y, radius * zoom);
+        if r < 1.0 {
+            continue;
+        }
+        let segments = ((std::f32::consts::TAU * r / 4.0).ceil() as usize).clamp(16, 720);
+        let at = |i: usize| {
+            let a = i as f32 / segments as f32 * std::f32::consts::TAU;
+            (sx + r * a.cos(), sy + r * a.sin())
+        };
+        let alpha = if strong { 0.95 } else { 0.45 };
+        for i in 0..segments {
+            canvas.line(at(i), at(i + 1), RING_RGB, alpha, true);
+        }
+    }
 }
 
 /// The trails of `trails` into `buffer`, as `draw_results_overlay` places
@@ -338,6 +381,7 @@ mod tests {
         ResultsOverlay {
             sources: Vec::new(),
             links: Vec::new(),
+            rings: Vec::new(),
             objects: Vec::new(),
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: Arc::new(ImageTracks {
@@ -427,6 +471,7 @@ mod tests {
         let with = |tracks: &Arc<ImageTracks>, frames, selected, only_selected| ResultsOverlay {
             sources: Vec::new(),
             links: Vec::new(),
+            rings: Vec::new(),
             objects: Vec::new(),
             trails: Some(Arc::new(TrailsOverlay {
                 tracks: tracks.clone(),
@@ -592,6 +637,7 @@ mod tests {
             )],
             sources: Vec::new(),
             links: Vec::new(),
+            rings: Vec::new(),
             trails: None,
         }
     }
@@ -687,5 +733,38 @@ mod tests {
             (zoom - 0.6 * 0.95).abs() < 1e-5,
             "a huge object: the whole image fitted"
         );
+    }
+
+    /// Rings are drawn as circles around their centre, the strong one more
+    /// opaque; a ring smaller than a screen pixel isn't.
+    #[test]
+    fn rings_are_drawn_as_circles() {
+        let overlay = ResultsOverlay {
+            objects: Vec::new(),
+            sources: Vec::new(),
+            links: Vec::new(),
+            trails: None,
+            rings: vec![
+                ((50.0, 50.0), 20.0, false),
+                ((50.0, 50.0), 30.0, true),
+                ((5.0, 5.0), 0.5, false),
+            ],
+        };
+        let mut buffer = vec![
+            slint::Rgba8Pixel {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0
+            };
+            100 * 100
+        ];
+        draw_results_overlay(&mut buffer, &overlay, 100, 100, 1.0, 0.0, 0.0, 0.5);
+        let at = |x: usize, y: usize| buffer[y * 100 + x].a;
+        // On each circle (right of the centre), not at the centre.
+        assert!(at(70, 50) > 0);
+        assert!(at(80, 50) > at(70, 50), "the strong ring more opaque");
+        assert_eq!(at(50, 50), 0);
+        assert_eq!(at(5, 5), 0, "a sub-pixel ring isn't drawn");
     }
 }

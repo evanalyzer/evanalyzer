@@ -38,3 +38,10 @@ affected. A fixed noise level gives the same result on every tile.
 ### Measure Object Skeleton: longest path on skeletons with loops
 The longest path is found with two sweeps along the skeleton - exact for a
 tree, an approximation (a lower bound) when the skeleton has loops.
+
+### Split view: the Sholl circles' centre
+The results don't store the centre Measure Object Sholl used. The split
+view draws the selected skeleton's circles around its parent on the image
+(the soma Relate Objects linked it to), else around the skeleton itself -
+the same centre when "Centre from" was the soma class Relate linked, an
+approximation otherwise. The profile's values are not affected.

@@ -526,6 +526,10 @@ pub struct ResultsStateController {
     available_columns: Mutex<Vec<ColumnEntry>>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
+    /// Charts › Profile's selected object: its id, its curve's positions
+    /// and the one with the highest value - the split view draws them as
+    /// circles. `None`: none drawn.
+    profile_rings: Mutex<Option<(String, Vec<f64>, Option<f64>)>>,
     // Last-rendered plate cells, by well key (e.g. "C12") — so
     // `on_plate_cell_clicked` can look up what to show in the sidebar
     // without re-querying the database.
@@ -636,6 +640,7 @@ impl ResultsStateController {
             images: Mutex::new(Vec::new()),
             available_columns: Mutex::new(Vec::new()),
             profile_columns: Mutex::new(Vec::new()),
+            profile_rings: Mutex::new(None),
             matrix_cells: Mutex::new(HashMap::new()),
             well_cells: Mutex::new(HashMap::new()),
             image_heatmap_cells: Mutex::new(HashMap::new()),
@@ -3259,6 +3264,17 @@ impl ResultsStateController {
 
         let chart_filter = self.chart_filter.lock().expect("Poisened").clone();
         let object_classes = chart_filter.object_class.map(|class| vec![class]);
+        // Another chart: the profile's circles go.
+        if chart_filter.kind != ChartKind::Profile
+            && self
+                .profile_rings
+                .lock()
+                .expect("Poisened")
+                .take()
+                .is_some()
+        {
+            self.split_push_overlay();
+        }
 
         match chart_filter.kind {
             ChartKind::Histogram => {
@@ -3395,8 +3411,31 @@ impl ResultsStateController {
                     })
                     .flatten();
                 let curve = selected
+                    .clone()
                     .and_then(|id| db.object_profile(&profile.key, &id).ok())
                     .unwrap_or_default();
+                // Its circles on the split view's image.
+                let rings = selected.filter(|_| !curve.is_empty()).map(|id| {
+                    let peak = curve
+                        .iter()
+                        .copied()
+                        .fold(None::<(f64, f64)>, |best, (p, v)| match best {
+                            Some((_, bv)) if bv >= v => best,
+                            _ => Some((p, v)),
+                        })
+                        .filter(|(_, v)| *v > 0.0)
+                        .map(|(p, _)| p);
+                    (id, curve.iter().map(|c| c.0).collect(), peak)
+                });
+                let changed = {
+                    let mut kept = self.profile_rings.lock().expect("Poisened");
+                    let changed = *kept != rings;
+                    *kept = rings;
+                    changed
+                };
+                if changed {
+                    self.split_push_overlay();
+                }
                 let label = format!("{} · {}", profile.step, profile.name);
                 match db.profile(&filter) {
                     Ok(result) => {
@@ -8314,6 +8353,7 @@ pub(crate) mod tests {
             sources: Vec::new(),
             links: Vec::new(),
             trails: None,
+            rings: Vec::new(),
         };
         let (w, h) = (1920 + 512, 1080 + 512);
         let max_x = objects.iter().map(|o| o.bbox_px[2]).max().unwrap_or(1) as f32;
@@ -9860,6 +9900,18 @@ pub(crate) mod tests {
             .map(|c| c.value.to_string())
             .collect();
         assert_eq!(cards, ["4 at 20 px", "20 px", "3"]);
+        // Its circles on the split view: one per radius, the highest one
+        // stronger - around the object itself (no parent on the image).
+        assert_eq!(
+            *o.controller.profile_rings.lock().unwrap(),
+            Some((
+                o.controller.split.lock().unwrap().objects[0]
+                    .object_id
+                    .clone(),
+                vec![10.0, 20.0, 30.0],
+                Some(20.0)
+            ))
+        );
         // Switched off: no curve.
         s.set_chart_profile_curve(false);
         s.invoke_chart_time_changed();
