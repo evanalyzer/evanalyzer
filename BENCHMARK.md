@@ -168,6 +168,23 @@ Renderer (Settings › Viewport › Draw in software, read at startup): with
 Slint's own software renderer the idle app takes ~135 MB less (500 → 365
 MB release, 582 → 444 MB debug, measured before the libtorch split) - no OpenGL/Vulkan stack is loaded.
 
+### Startup again (2026-11-09)
+
+Same method (release binary, Xvfb, window polled every 10 ms, RSS 4 s
+later), today's `filamant` branch, 5 warm and 3 cold runs (page cache
+dropped before each):
+
+| | 2026-10-19 (plugin split) | 2026-11-09 |
+|---|---|---|
+| Window on screen, warm | 154-174 ms | 36-50 ms |
+| Window on screen, cold | 483-491 ms | 113-116 ms |
+| `main` → controllers ready (log) | - | 28-31 ms warm, 75-77 ms cold |
+| RAM after startup, idle | 207 MB | 204-223 MB |
+
+CPU in the first 4 s: 6.6-7.4 s - the start page's drifting cells with
+software rendering (no graphics card here), as noted above; Reduce motion
+stops them.
+
 ### Leak checks (soak tests)
 
 - Viewer, 400 renders (zoom, pan, compare on/off with a breakpoint tile):
