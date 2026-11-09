@@ -223,6 +223,17 @@ pub trait ResultsSource: Send + Sync {
     /// One object's profile: (position, value), by position.
     fn object_profile(&self, key: &str, object_id: &str)
     -> Result<Vec<(f64, f64)>, InternalErrors>;
+    /// The results hold traced neurons (Trace Filaments - Results › Trees
+    /// is offered).
+    fn has_trees(&self) -> Result<bool, InternalErrors>;
+    /// The traced neurons of `images` (`None`: all) with their Measure
+    /// Filament Tree values.
+    fn tree_neurons(
+        &self,
+        images: Option<Vec<String>>,
+    ) -> Result<crate::api::TreeNeurons, InternalErrors>;
+    /// The segments of the neuron with soma `soma_id`.
+    fn tree_segments(&self, soma_id: &str) -> Result<Vec<crate::api::TreeSegment>, InternalErrors>;
     /// The objects of one image (Results › Split with image).
     fn image_objects(
         &self,

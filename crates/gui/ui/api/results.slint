@@ -8,7 +8,7 @@ import { MultiSelectItem } from "../ink/ink.slint";
 import { ClassItemData } from "classification.slint";
 
 // Tracks: only with tracked objects - one image's tracks, beside it.
-export enum ResultsRailMode { list, matrix, charts, tracks, paths }
+export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 
 // Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
 // object (single image + detected objects).
@@ -246,6 +246,16 @@ export struct ChartTimeLine {
     color: color,
     line: string,
     band: string,
+}
+
+// A traced neuron in Results › Trees' list: its name, its Measure
+// Filament Tree values as text ("–" not measured).
+export struct TreeRow {
+    label: string,
+    length: string,
+    primary: string,
+    branch-points: string,
+    tips: string,
 }
 
 // A summary card under the profile chart (the selected object's values):
@@ -887,6 +897,37 @@ export global ResultsState {
     in-out property <bool> chart-profile-curve: true;
     in-out property <bool> chart-profile-mark: true;
     in property <[ChartCard]> chart-profile-cards: [];
+
+    // -------- Trees (traced neurons: Trace Filaments) --------
+    // Offered only with traced trees in the results.
+    in property <bool> has-trees: false;
+    in property <[TreeRow]> trees-rows: [];
+    in-out property <int> trees-selected: -1;
+    callback trees-row-clicked(int);
+    // The column sorted by (0 name, 1 length, 2 primary, 3 branch points,
+    // 4 tips), descending but by name.
+    in-out property <int> trees-sort: 1;
+    callback trees-sort-changed();
+    // The selected neuron: its name and its values in a line; "" none.
+    in property <string> trees-title: "";
+    in property <string> trees-summary: "";
+    // The dendrogram (paths in a 1000 x 1000 box, x the path distance):
+    // a line per color (a level / order) with its legend label, the tips,
+    // the selected segment and its way back to the soma.
+    in property <[ChartTimeLine]> trees-lines: [];
+    in property <string> trees-tips: "";
+    in property <string> trees-path: "";
+    in property <string> trees-selected-segment: "";
+    in property <string> trees-x-max: "";
+    // 0 branch level, 1 Strahler order (how it's drawn, never a value).
+    in-out property <int> trees-color-by: 0;
+    callback trees-color-by-changed();
+    // A click in the dendrogram: where, and the box's size.
+    callback trees-dendrogram-clicked(float, float, float, float);
+    // The selected segment's values; a note ("" none), e.g. traced but not
+    // measured.
+    in property <[ChartCard]> trees-cards: [];
+    in property <string> trees-note: "";
 
     // Set whenever the selected column(s) can't be charted yet (identity
     // columns, per-channel intensity — see `chart_value_expr` in

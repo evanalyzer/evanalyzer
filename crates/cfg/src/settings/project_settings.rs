@@ -218,6 +218,7 @@ pub enum ResultsViewKind {
     Charts,
     Tracks,
     Paths,
+    Trees,
 }
 
 /// See `ProjectSettings::editor`.

@@ -149,6 +149,7 @@ pub mod results {
         ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint,
         ProfileResult,
     };
+    pub use crate::api::{TREE_NEURON_VALUES, TreeNeuron, TreeNeurons, TreeSegment};
     pub use crate::api::{
         TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
         TimeCoursePoint, TimeCourseResult, TimeCourseStat, TrackHistory, TrackSummary,

@@ -365,6 +365,14 @@ export component ResultsBarNav inherits HorizontalLayout {
                 }
             }
 
+            InkMenuItem {
+                text: "Trees";
+                enabled: ResultsState.has-trees;
+                clicked => {
+                    ResultsState.view-new("trees");
+                }
+            }
+
             InkMenuSeparator { }
 
             InkMenuItem {
@@ -426,6 +434,15 @@ export component ResultsBarNav inherits HorizontalLayout {
                 enabled: ResultsState.has-tracks;
                 clicked => {
                     ResultsState.view-show-as(root.menu-id, "paths");
+                }
+            }
+
+            InkMenuItem {
+                text: "Trees";
+                checked: root.menu-tab.kind == "TREES";
+                enabled: ResultsState.has-trees;
+                clicked => {
+                    ResultsState.view-show-as(root.menu-id, "trees");
                 }
             }
 

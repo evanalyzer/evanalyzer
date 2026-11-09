@@ -1,0 +1,344 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// results/results_trees.slint — Results › Trees: the traced neurons (Trace
+// Filaments) with their Measure Filament Tree values, and the selected
+// neuron's dendrogram - x the path distance from the soma, a row per tip,
+// branches colored by branch level or Strahler order (how it's drawn,
+// never a value). A click on a branch selects its segment (the split view
+// follows); the mouse wheel zooms, dragging pans. Design canvas "Neuron
+// tree view" (boards 1-4).
+
+import { ResultsState } from "../api/results.slint";
+import { Ink, InkSegmented } from "../ink/ink.slint";
+import { ListView } from "std-widgets.slint";
+
+component SortHead inherits Rectangle {
+    in property <string> text;
+    in property <int> column;
+    in property <length> col-width;
+    width: root.col-width;
+    height: 24px;
+    Text {
+        text: root.text + (ResultsState.trees-sort == root.column ? " ▾" : "");
+        font-size: Ink.fs-caption;
+        color: ResultsState.trees-sort == root.column ? Ink.text : Ink.text-mute;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    TouchArea {
+        clicked => {
+            ResultsState.trees-sort = root.column;
+            ResultsState.trees-sort-changed();
+        }
+    }
+}
+
+export component ResultsTreesView inherits Rectangle {
+    background: Ink.ground;
+    property <length> list-w: 340px;
+    property <float> zoom: 1;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        // -- The neurons --
+        Rectangle {
+            width: root.list-w;
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            clip: true;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: "NEURONS";
+                    font-size: Ink.fs-caption;
+                    font-weight: 600;
+                    color: Ink.text-dim;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    SortHead {
+                        text: "Neuron";
+                        column: 0;
+                        col-width: 110px;
+                    }
+                    SortHead {
+                        text: "Length";
+                        column: 1;
+                        col-width: 70px;
+                    }
+                    SortHead {
+                        text: "Prim.";
+                        column: 2;
+                        col-width: 40px;
+                    }
+                    SortHead {
+                        text: "Br.";
+                        column: 3;
+                        col-width: 40px;
+                    }
+                    SortHead {
+                        text: "Tips";
+                        column: 4;
+                        col-width: 40px;
+                    }
+                }
+                ListView {
+                    vertical-stretch: 1;
+                    for row[i] in ResultsState.trees-rows: Rectangle {
+                        height: 28px;
+                        border-radius: 4px;
+                        background: ResultsState.trees-selected == i ? Ink.selection : (row-touch.has-hover ? Ink.hover : transparent);
+                        accessible-role: list-item;
+                        accessible-label: row.label;
+                        accessible-action-default => {
+                            ResultsState.trees-row-clicked(i);
+                        }
+                        row-touch := TouchArea {
+                            clicked => {
+                                ResultsState.trees-row-clicked(i);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            padding-left: 2px;
+                            Text {
+                                width: 110px;
+                                text: row.label;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                width: 70px;
+                                text: row.length;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                width: 40px;
+                                text: row.primary;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                width: 40px;
+                                text: row.branch-points;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                width: 40px;
+                                text: row.tips;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                if ResultsState.trees-note != "": Text {
+                    text: ResultsState.trees-note;
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-mute;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // -- The selected neuron's dendrogram --
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            clip: true;
+
+            if ResultsState.trees-title == "": Text {
+                text: "Select a neuron to see its tree.";
+                font-size: Ink.fs-body;
+                color: Ink.text-mute;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            if ResultsState.trees-title != "": VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: ResultsState.trees-title;
+                        font-size: Ink.fs-body;
+                        font-weight: 600;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: ResultsState.trees-summary;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    InkSegmented {
+                        label: "Color by";
+                        model: ["Branch level", "Strahler order"];
+                        selected: ResultsState.trees-color-by;
+                        picked(i) => {
+                            ResultsState.trees-color-by = i;
+                            ResultsState.trees-color-by-changed();
+                        }
+                    }
+                }
+                // The legend.
+                HorizontalLayout {
+                    spacing: 14px;
+                    alignment: start;
+                    for line in ResultsState.trees-lines: HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 14px;
+                                height: 3px;
+                                background: line.color;
+                            }
+                        }
+                        Text {
+                            text: line.label;
+                            font-size: Ink.fs-secondary;
+                            color: Ink.text-dim;
+                        }
+                    }
+                    Text {
+                        text: "● tip";
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                    }
+                }
+                plot := Rectangle {
+                    vertical-stretch: 1;
+                    background: Ink.raised;
+                    border-radius: 4px;
+                    clip: true;
+                    accessible-role: image;
+                    accessible-label: "Dendrogram of " + ResultsState.trees-title;
+                    flick := Flickable {
+                        content-width: plot.width * root.zoom;
+                        content-height: plot.height * root.zoom;
+                        for line in ResultsState.trees-lines: Path {
+                            width: flick.content-width;
+                            height: flick.content-height;
+                            viewbox-width: 1000;
+                            viewbox-height: 1000;
+                            fit: fill;
+                            commands: line.line != "" ? line.line : "M 0 0";
+                            stroke: line.color;
+                            stroke-width: 2.5px;
+                        }
+                        if ResultsState.trees-path != "": Path {
+                            width: flick.content-width;
+                            height: flick.content-height;
+                            viewbox-width: 1000;
+                            viewbox-height: 1000;
+                            fit: fill;
+                            commands: ResultsState.trees-path;
+                            stroke: Ink.focus;
+                            stroke-width: 3px;
+                        }
+                        if ResultsState.trees-tips != "": Path {
+                            width: flick.content-width;
+                            height: flick.content-height;
+                            viewbox-width: 1000;
+                            viewbox-height: 1000;
+                            fit: fill;
+                            commands: ResultsState.trees-tips;
+                            stroke: Ink.text;
+                            stroke-width: 5px;
+                        }
+                        if ResultsState.trees-selected-segment != "": Path {
+                            width: flick.content-width;
+                            height: flick.content-height;
+                            viewbox-width: 1000;
+                            viewbox-height: 1000;
+                            fit: fill;
+                            commands: ResultsState.trees-selected-segment;
+                            stroke: #fce903;
+                            stroke-width: 5px;
+                        }
+                        TouchArea {
+                            width: flick.content-width;
+                            height: flick.content-height;
+                            clicked => {
+                                ResultsState.trees-dendrogram-clicked(
+                                    self.mouse-x / 1px, self.mouse-y / 1px,
+                                    self.width / 1px, self.height / 1px);
+                            }
+                            // The wheel zooms (1x - 20x); dragging pans
+                            // (the Flickable).
+                            scroll-event(event) => {
+                                root.zoom = clamp(root.zoom * Math.pow(1.0015, event.delta-y / 1px), 1, 20);
+                                accept
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    Text {
+                        text: "0";
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-mute;
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "path distance from the soma →";
+                        font-size: Ink.fs-caption;
+                        color: Ink.text-mute;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: ResultsState.trees-x-max;
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-mute;
+                    }
+                }
+                if ResultsState.trees-cards.length > 0: HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    for card in ResultsState.trees-cards: Rectangle {
+                        background: Ink.raised;
+                        border-radius: Ink.radius-md;
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 2px;
+                            Text {
+                                text: card.label;
+                                font-size: Ink.fs-caption;
+                                color: Ink.text-mute;
+                            }
+                            Text {
+                                text: card.value;
+                                font-size: Ink.fs-body;
+                                color: Ink.text;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

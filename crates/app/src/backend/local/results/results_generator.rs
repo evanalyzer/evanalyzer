@@ -62,6 +62,9 @@ pub struct ResultsGenerator {
     profiles_cache: RefCell<Option<bool>>,
     /// Whether Measure Track Motion stored values (`has_track_motion`).
     pub(super) track_motion_cache: RefCell<Option<bool>>,
+    /// The (parent class, child class) pairs (`get_relations`) - fixed when
+    /// the results are written; asked for by the columns and Trees.
+    relations_cache: RefCell<Option<Vec<(ObjectClass, ObjectClass)>>>,
 }
 
 impl ResultsGenerator {
@@ -76,6 +79,7 @@ impl ResultsGenerator {
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
             profiles_cache: RefCell::new(None),
+            relations_cache: RefCell::new(None),
             track_motion_cache: RefCell::new(None),
         })
     }
@@ -244,6 +248,7 @@ impl ResultsGenerator {
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
             profiles_cache: RefCell::new(None),
+            relations_cache: RefCell::new(None),
             track_motion_cache: RefCell::new(None),
         })
     }
@@ -2930,6 +2935,15 @@ impl ResultsGenerator {
     /// The (parent class, child class) pairs Relate Objects linked in these
     /// results, sorted - none in results without `parent_ids`.
     pub fn get_relations(&self) -> Result<Vec<(ObjectClass, ObjectClass)>, InternalErrors> {
+        if let Some(cached) = self.relations_cache.borrow().as_ref() {
+            return Ok(cached.clone());
+        }
+        let relations = self.read_relations()?;
+        *self.relations_cache.borrow_mut() = Some(relations.clone());
+        Ok(relations)
+    }
+
+    fn read_relations(&self) -> Result<Vec<(ObjectClass, ObjectClass)>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         if !self.has_parent_ids()? {
             return Ok(Vec::new());
@@ -4898,6 +4912,7 @@ mod tests {
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
             profiles_cache: RefCell::new(None),
+            relations_cache: RefCell::new(None),
             track_motion_cache: RefCell::new(None),
         }
     }

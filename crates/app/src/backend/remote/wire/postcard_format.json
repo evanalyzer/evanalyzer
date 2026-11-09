@@ -1,5 +1,5 @@
 {
-  "protocol_version": 37,
+  "protocol_version": 38,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1554,13 +1554,34 @@
           }
         },
         "17": {
+          "Flag": {
+            "NEWTYPE": "BOOL"
+          }
+        },
+        "18": {
+          "TreeNeurons": {
+            "NEWTYPE": {
+              "TYPENAME": "TreeNeurons"
+            }
+          }
+        },
+        "19": {
+          "TreeSegments": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "TreeSegment"
+              }
+            }
+          }
+        },
+        "20": {
           "Tracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracks"
             }
           }
         },
-        "18": {
+        "21": {
           "TrackSummary": {
             "NEWTYPE": {
               "SEQ": {
@@ -1569,7 +1590,7 @@
             }
           }
         },
-        "19": {
+        "22": {
           "TrackPaths": {
             "NEWTYPE": {
               "TYPENAME": "TrackPaths"
@@ -1714,40 +1735,57 @@
           }
         },
         "20": {
+          "HasTrees": "UNIT"
+        },
+        "21": {
+          "TreeNeurons": {
+            "NEWTYPE": {
+              "OPTION": {
+                "SEQ": "STR"
+              }
+            }
+          }
+        },
+        "22": {
+          "TreeSegments": {
+            "NEWTYPE": "STR"
+          }
+        },
+        "23": {
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
             }
           }
         },
-        "21": {
+        "24": {
           "ImageObjects": {
             "NEWTYPE": {
               "TYPENAME": "ImageObjectsFilter"
             }
           }
         },
-        "22": {
+        "25": {
           "ImageTracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracksFilter"
             }
           }
         },
-        "23": {
+        "26": {
           "HasTracks": "UNIT"
         },
-        "24": {
+        "27": {
           "TrackSummary": {
             "NEWTYPE": {
               "TYPENAME": "TrackSummaryFilter"
             }
           }
         },
-        "25": {
+        "28": {
           "HasLineage": "UNIT"
         },
-        "26": {
+        "29": {
           "TrackPaths": {
             "NEWTYPE": {
               "TYPENAME": "TrackPathsFilter"
@@ -2480,6 +2518,94 @@
         },
         {
           "no_edge": "BOOL"
+        }
+      ]
+    },
+    "TreeNeuron": {
+      "STRUCT": [
+        {
+          "soma_id": "STR"
+        },
+        {
+          "image_rel_path": "STR"
+        },
+        {
+          "image_name": "STR"
+        },
+        {
+          "soma_bbox_px": {
+            "TUPLEARRAY": {
+              "CONTENT": "U32",
+              "SIZE": 4
+            }
+          }
+        },
+        {
+          "segments": "U64"
+        },
+        {
+          "values": {
+            "SEQ": {
+              "OPTION": "F64"
+            }
+          }
+        }
+      ]
+    },
+    "TreeNeurons": {
+      "STRUCT": [
+        {
+          "neurons": {
+            "SEQ": {
+              "TYPENAME": "TreeNeuron"
+            }
+          }
+        },
+        {
+          "measured": "BOOL"
+        }
+      ]
+    },
+    "TreeSegment": {
+      "STRUCT": [
+        {
+          "object_id": "STR"
+        },
+        {
+          "parent": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "bbox_px": {
+            "TUPLEARRAY": {
+              "CONTENT": "U32",
+              "SIZE": 4
+            }
+          }
+        },
+        {
+          "length": "F64"
+        },
+        {
+          "path_distance": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "branch_level": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "strahler_order": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "straightness": {
+            "OPTION": "F64"
+          }
         }
       ]
     },

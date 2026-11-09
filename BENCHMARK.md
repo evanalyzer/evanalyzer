@@ -2196,6 +2196,15 @@ With it, one image's tracks cost about 1 ms (200 tracks) to 5 ms (1,500
 tracks) more: their stored values and drift, read in one query
 (`has_track_motion` is asked once per opened file).
 
+## Results › Trees: opening results (2026-11-09)
+
+Whether to offer Trees (traced neurons) is read off the relations the
+column list reads anyway - now cached per opened file. Worst case: the
+1.7 GB reference results (a copy) with a parent on each of its 5 576 165
+objects, release, 7 runs: the columns 69-89 ms (as before, they read the
+relations), has_tracks 0.8-1.1 ms, has_trees 1-2 µs. First tries: a grouped
+query 29-41 ms, an EXISTS with list_has_any 45-67 ms - both dropped.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

@@ -15,6 +15,7 @@ mod paths;
 pub(crate) mod split;
 mod tracks;
 mod tracks_all;
+mod trees;
 mod views;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartCard, ChartScatterPoint, ChartTimeLine,
@@ -621,6 +622,8 @@ pub struct ResultsStateController {
     tracks_all: Mutex<tracks_all::TracksAllState>,
     /// Results › Paths: its view's settings and what it shows.
     paths: Mutex<paths::PathsState>,
+    /// Results › Trees: the traced neurons, the one shown, its segments.
+    trees: Mutex<trees::TreesState>,
 }
 
 impl ResultsStateController {
@@ -671,6 +674,7 @@ impl ResultsStateController {
             tracks: Mutex::new(tracks::TracksState::default()),
             tracks_all: Mutex::new(tracks_all::TracksAllState::default()),
             paths: Mutex::new(paths::PathsState::default()),
+            trees: Mutex::new(trees::TreesState::default()),
         }
     }
 
@@ -682,6 +686,7 @@ impl ResultsStateController {
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
             self.attach_paths_callbacks(&ui);
+            self.attach_trees_callbacks(&ui);
 
             // -------- ResultsState (api/results.slint) --------
             // Prototypes only for now - wire up the real behavior next.
@@ -736,6 +741,9 @@ impl ResultsStateController {
                     }
                     if mode == ResultsRailMode::Paths {
                         manager.paths_show();
+                    }
+                    if mode == ResultsRailMode::Trees {
+                        manager.trees_show();
                     }
                 });
 
@@ -2782,6 +2790,13 @@ impl ResultsStateController {
         *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
         *self.tracks_all.lock().expect("Poisoned") = tracks_all::TracksAllState::default();
         *self.paths.lock().expect("Poisoned") = paths::PathsState::default();
+        {
+            // Another analysis: its own neurons (the view's setting stays).
+            let mut trees = self.trees.lock().expect("Poisoned");
+            let by_strahler = trees.by_strahler;
+            *trees = trees::TreesState::default();
+            trees.by_strahler = by_strahler;
+        }
         self.viewport().set_results_overlay(None);
         *self.matrix_filter.lock().expect("Poisoned") = None;
         self.classes.lock().expect("Poisoned").clear();
@@ -2809,6 +2824,7 @@ impl ResultsStateController {
             state.set_database_name("".into());
             state.set_run_warning("".into());
             state.set_has_tracks(false);
+            state.set_has_trees(false);
             state.set_has_lineage(false);
             state.set_has_measurements(false);
             state.set_has_profiles(false);
@@ -2857,6 +2873,11 @@ impl ResultsStateController {
                         error!("Could not read whether the tracks divide: {err}");
                         false
                     });
+                // Trees only with traced neurons (Trace Filaments).
+                let has_trees = results.has_trees().unwrap_or_else(|err| {
+                    error!("Could not read whether neurons were traced: {err}");
+                    false
+                });
                 let ui_weak = self.ui.clone();
                 crate::helper::ui_thread::invoke_from_event_loop(move || {
                     let Some(ui) = ui_weak.upgrade() else {
@@ -2865,6 +2886,11 @@ impl ResultsStateController {
                     let state = ui.global::<ResultsState>();
                     state.set_has_tracks(has_tracks);
                     state.set_has_lineage(has_lineage);
+                    state.set_has_trees(has_trees);
+                    if !has_trees && state.get_rail_mode() == ResultsRailMode::Trees {
+                        state.set_rail_mode(ResultsRailMode::List);
+                        state.invoke_rail_mode_selected(ResultsRailMode::List);
+                    }
                     if !has_tracks
                         && matches!(
                             state.get_rail_mode(),
@@ -9905,6 +9931,140 @@ pub(crate) mod tests {
             s.get_chart_error()
         );
         assert_eq!(s.get_chart_time_data().row_count(), 0);
+    }
+
+    /// The test database with one traced neuron: its first object a soma
+    /// (class 1), the next three segments (class 7: a root and its two
+    /// children), all on the first object's image - not measured.
+    fn opened_with_trees() -> (Opened, Vec<String>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let ids = {
+            let conn = duckdb::Connection::open(&path).expect("open test db");
+            let mut ids: Vec<String> = conn
+                .prepare("SELECT object_id::VARCHAR FROM objects ORDER BY object_id LIMIT 3")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(ids.len(), 3, "the test database has three objects");
+            // A fourth: a copy of the third.
+            let fourth = "00000000-0000-0000-0000-0000000000ff".to_string();
+            conn.execute_batch(&format!(
+                "INSERT INTO objects SELECT * REPLACE ('{fourth}'::UUID AS object_id)
+                 FROM objects WHERE object_id = '{}';",
+                ids[2]
+            ))
+            .unwrap();
+            ids.push(fourth);
+            let (soma, root, a, b) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+            // All on the soma's image.
+            conn.execute_batch(&format!(
+                "UPDATE objects SET image_rel_path = (SELECT image_rel_path FROM objects
+                     WHERE object_id = '{soma}'), image_name = (SELECT image_name FROM objects
+                     WHERE object_id = '{soma}')
+                     WHERE object_id IN ('{root}', '{a}', '{b}');
+                 UPDATE objects SET object_class_id = [1] WHERE object_id = '{soma}';
+                 UPDATE objects SET object_class_id = [7], parent_ids = MAP {{1: '{soma}'::UUID}}
+                     WHERE object_id = '{root}';
+                 UPDATE objects SET object_class_id = [7],
+                     parent_ids = MAP {{1: '{soma}'::UUID, 7: '{root}'::UUID}}
+                     WHERE object_id IN ('{a}', '{b}');"
+            ))
+            .unwrap();
+            ids
+        };
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        (
+            Opened {
+                ui,
+                controller,
+                _dir: dir,
+            },
+            ids,
+        )
+    }
+
+    /// Traced neurons: Trees is offered, lists the neuron, draws its tree;
+    /// a click on a branch selects its segment; not measured: it says so.
+    #[test]
+    fn the_trees_view_lists_the_neurons_and_draws_a_tree() {
+        let (o, _) = opened_with_trees();
+        let s = o.state();
+        assert!(s.get_has_trees());
+        s.set_rail_mode(ResultsRailMode::Trees);
+        s.invoke_rail_mode_selected(ResultsRailMode::Trees);
+        drain_ui_queue();
+        assert_eq!(s.get_trees_rows().row_count(), 1);
+        assert!(
+            s.get_trees_note().contains("Measure Filament Tree"),
+            "{}",
+            s.get_trees_note()
+        );
+        assert_eq!(s.get_trees_title(), "", "nothing selected yet");
+
+        s.invoke_trees_row_clicked(0);
+        drain_ui_queue();
+        assert_ne!(s.get_trees_title(), "");
+        assert_eq!(s.get_trees_selected(), 0);
+        // Not measured: every branch level 1 - one color.
+        assert_eq!(s.get_trees_lines().row_count(), 1);
+        assert_ne!(s.get_trees_tips(), "");
+
+        // The two children are on rows 1/4 and 3/4 of the box: a click on
+        // the lower one's line selects it.
+        let (w, h) = (1000.0f32, 400.0f32);
+        s.invoke_trees_dendrogram_clicked(900.0, h * 0.75, w, h);
+        drain_ui_queue();
+        assert_ne!(s.get_trees_selected_segment(), "");
+        assert_ne!(s.get_trees_path(), "", "its way back to the soma");
+        assert_eq!(s.get_trees_cards().row_count(), 5);
+    }
+
+    /// A click on a segment in the image: its neuron selected, the
+    /// segment in the dendrogram.
+    #[test]
+    fn a_click_on_a_segment_in_the_image_selects_it_in_the_tree() {
+        let (o, ids) = opened_with_trees();
+        let s = o.state();
+        s.set_rail_mode(ResultsRailMode::Trees);
+        s.invoke_rail_mode_selected(ResultsRailMode::Trees);
+        drain_ui_queue();
+        o.controller
+            .trees_object_clicked(&ids[3], std::slice::from_ref(&ids[0]));
+        drain_ui_queue();
+        assert_eq!(s.get_trees_selected(), 0);
+        assert_ne!(s.get_trees_selected_segment(), "");
+        assert_eq!(s.get_trees_cards().row_count(), 5);
+    }
+
+    /// How the tree is colored is the view's (saved with it).
+    #[test]
+    fn the_trees_coloring_is_saved_with_the_view() {
+        let (o, _) = opened_with_trees();
+        let s = o.state();
+        s.set_rail_mode(ResultsRailMode::Trees);
+        s.invoke_rail_mode_selected(ResultsRailMode::Trees);
+        drain_ui_queue();
+        s.set_trees_color_by(1);
+        s.invoke_trees_color_by_changed();
+        drain_ui_queue();
+        let kept = o.controller.capture_view_settings().expect("settings");
+        assert!(kept.trees.by_strahler);
+    }
+
+    /// Without traced neurons Trees isn't offered.
+    #[test]
+    fn without_traced_neurons_there_is_no_trees_view() {
+        let o = opened();
+        assert!(!o.state().get_has_trees());
     }
 
     /// The test database with a Sholl profile (results format 2) for its

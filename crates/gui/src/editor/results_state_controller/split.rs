@@ -404,6 +404,14 @@ impl ResultsStateController {
             self.split_push_overlay();
             return;
         }
+        if self.in_trees() {
+            let (id, parents) = {
+                let split = self.split.lock().expect("Poisoned");
+                let object = &split.objects[index];
+                (object.object_id.clone(), object.parent_ids.clone())
+            };
+            self.trees_object_clicked(&id, &parents);
+        }
         let row = self
             .list_row_locations
             .lock()

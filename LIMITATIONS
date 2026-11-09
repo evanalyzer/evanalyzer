@@ -57,3 +57,11 @@ the tracing soma's window (its box grown by the maximum reach). A soma
 outside that window doesn't compete - with a reach smaller than the
 distance between neighbouring neurons a tip near the window's edge can go
 to the wrong one. A larger reach lifts it (more RAM per window).
+
+### Results › Trees: which classes are the tree
+The results don't record which classes Trace Filaments used. Trees reads
+them off the objects: the segment class is the one linked to parents of its
+own class, the soma class the other parent class of its root segments (the
+most common one). With segments also related to a third class by Relate
+Objects, a different soma class could be picked if that one were more
+common among the root segments.

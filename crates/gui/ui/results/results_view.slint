@@ -14,6 +14,7 @@ import { ResultsChartsView } from "results_charts.slint";
 import { ResultsTracksView } from "results_tracks.slint";
 import { ResultsTracksAllView } from "results_tracks_all.slint";
 import { ResultsPathsView } from "results_paths.slint";
+import { ResultsTreesView } from "results_trees.slint";
 import { ResultsListPanel } from "../editor/results_list_panel.slint";
 
 export component ResultsView inherits Rectangle {
@@ -78,6 +79,10 @@ export component ResultsView inherits Rectangle {
         }
         // Paths: every track from its start, and the motion map.
         if ResultsState.rail-mode == ResultsRailMode.paths: ResultsPathsView {
+            vertical-stretch: 1;
+        }
+        // Trees: the traced neurons and their dendrograms.
+        if ResultsState.rail-mode == ResultsRailMode.trees: ResultsTreesView {
             vertical-stretch: 1;
         }
     }

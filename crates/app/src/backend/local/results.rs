@@ -18,6 +18,7 @@ mod results_generator;
 mod results_profile;
 mod results_time_course;
 mod results_tracks;
+mod results_trees;
 #[cfg(test)]
 mod test_support;
 
@@ -173,6 +174,21 @@ impl ResultsSource for LocalResults {
         object_id: &str,
     ) -> Result<Vec<(f64, f64)>, InternalErrors> {
         self.with(|db| results_profile::object_profile(db, key, object_id))
+    }
+
+    fn has_trees(&self) -> Result<bool, InternalErrors> {
+        self.with(results_trees::has_trees)
+    }
+
+    fn tree_neurons(
+        &self,
+        images: Option<Vec<String>>,
+    ) -> Result<crate::api::TreeNeurons, InternalErrors> {
+        self.with(|db| results_trees::tree_neurons(db, images.as_deref()))
+    }
+
+    fn tree_segments(&self, soma_id: &str) -> Result<Vec<crate::api::TreeSegment>, InternalErrors> {
+        self.with(|db| results_trees::tree_segments(db, soma_id))
     }
 
     fn image_objects(

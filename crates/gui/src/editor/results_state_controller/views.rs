@@ -39,15 +39,22 @@ pub(super) struct ViewUnavailable {
 }
 
 /// The view tabs as the bar shows them.
-fn view_tabs(views: &[ResultsView], has_tracks: bool) -> Vec<crate::ResultsViewTab> {
+fn view_tabs(
+    views: &[ResultsView],
+    has_tracks: bool,
+    has_trees: bool,
+) -> Vec<crate::ResultsViewTab> {
     views
         .iter()
         .map(|view| crate::ResultsViewTab {
             id: view.id as i32,
             name: view.name.as_str().into(),
             kind: kind_label(view.kind).into(),
-            available: !matches!(view.kind, ResultsViewKind::Tracks | ResultsViewKind::Paths)
-                || has_tracks,
+            available: match view.kind {
+                ResultsViewKind::Tracks | ResultsViewKind::Paths => has_tracks,
+                ResultsViewKind::Trees => has_trees,
+                _ => true,
+            },
             // "List", "Plate 2": the name says it already.
             show_kind: !view.name.to_uppercase().starts_with(kind_label(view.kind)),
         })
@@ -61,6 +68,7 @@ fn kind_label(kind: ResultsViewKind) -> &'static str {
         ResultsViewKind::Charts => "CHART",
         ResultsViewKind::Tracks => "TRACKS",
         ResultsViewKind::Paths => "PATHS",
+        ResultsViewKind::Trees => "TREES",
     }
 }
 
@@ -71,6 +79,7 @@ fn kind_of_key(key: &str) -> Option<ResultsViewKind> {
         "charts" => Some(ResultsViewKind::Charts),
         "tracks" => Some(ResultsViewKind::Tracks),
         "paths" => Some(ResultsViewKind::Paths),
+        "trees" => Some(ResultsViewKind::Trees),
         _ => None,
     }
 }
@@ -82,6 +91,7 @@ fn rail_mode_of(kind: ResultsViewKind) -> ResultsRailMode {
         ResultsViewKind::Charts => ResultsRailMode::Charts,
         ResultsViewKind::Tracks => ResultsRailMode::Tracks,
         ResultsViewKind::Paths => ResultsRailMode::Paths,
+        ResultsViewKind::Trees => ResultsRailMode::Trees,
     }
 }
 
@@ -219,7 +229,8 @@ impl ResultsStateController {
                 return;
             };
             let state = ui.global::<ResultsState>();
-            let tabs: Vec<crate::ResultsViewTab> = view_tabs(&views, state.get_has_tracks());
+            let tabs: Vec<crate::ResultsViewTab> =
+                view_tabs(&views, state.get_has_tracks(), state.get_has_trees());
             let active_view = views.iter().find(|view| view.id == active);
             state.set_views(ModelRc::from(Rc::new(VecModel::from(tabs))));
             state.set_active_view(active as i32);
@@ -265,6 +276,7 @@ impl ResultsStateController {
             ResultsViewKind::Charts => ResultsRailMode::Charts,
             ResultsViewKind::Tracks => ResultsRailMode::Tracks,
             ResultsViewKind::Paths => ResultsRailMode::Paths,
+            ResultsViewKind::Trees => ResultsRailMode::Trees,
         };
     }
 
@@ -423,6 +435,7 @@ impl ResultsStateController {
             .expect("Poisoned")
             .set_column_ids(settings.tracks.columns.as_deref());
         self.paths.lock().expect("Poisoned").view = settings.paths.clone();
+        self.trees.lock().expect("Poisoned").by_strahler = settings.trees.by_strahler;
         *self.view_unavailable.lock().expect("Poisoned") = Some(unavailable);
         missing.dedup();
         missing
@@ -520,12 +533,16 @@ impl ResultsStateController {
             columns: self.tracks_all.lock().expect("Poisoned").column_ids(),
         };
         let paths = self.paths.lock().expect("Poisoned").view.clone();
+        let trees = evanalyzer_app::results::view_settings::TreesView {
+            by_strahler: self.trees.lock().expect("Poisoned").by_strahler,
+        };
         Some(ViewSettings {
             list,
             plate,
             chart,
             tracks,
             paths,
+            trees,
         })
     }
 
@@ -637,6 +654,7 @@ impl ResultsStateController {
                         ResultsViewKind::Charts => "Charts",
                         ResultsViewKind::Tracks => "Tracks",
                         ResultsViewKind::Paths => "Paths",
+                        ResultsViewKind::Trees => "Trees",
                     };
                     let name = free_name(&views.views, base);
                     views.views.push(ResultsView {
@@ -1077,6 +1095,7 @@ impl ResultsStateController {
                         ResultsViewKind::Charts => "Charts",
                         ResultsViewKind::Tracks => "Tracks",
                         ResultsViewKind::Paths => "Paths",
+                        ResultsViewKind::Trees => "Trees",
                     };
                     ResultsView {
                         id,

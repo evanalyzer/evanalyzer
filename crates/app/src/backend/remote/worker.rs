@@ -822,6 +822,13 @@ fn answer_query(
         ResultsQuery::ObjectProfile { key, object_id } => {
             ResultsAnswer::ObjectProfile(source.object_profile(&key, &object_id)?)
         }
+        ResultsQuery::HasTrees => ResultsAnswer::Flag(source.has_trees()?),
+        ResultsQuery::TreeNeurons(images) => {
+            ResultsAnswer::TreeNeurons(source.tree_neurons(images)?)
+        }
+        ResultsQuery::TreeSegments(soma) => {
+            ResultsAnswer::TreeSegments(source.tree_segments(&soma)?)
+        }
         ResultsQuery::ImageObjects(filter) => {
             ResultsAnswer::Objects(source.image_objects(&filter)?)
         }

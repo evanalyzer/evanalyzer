@@ -277,6 +277,30 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn has_trees(&self) -> Result<bool, InternalErrors> {
+        match self.query(ResultsQuery::HasTrees)? {
+            ResultsAnswer::Flag(yes) => Ok(yes),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn tree_neurons(
+        &self,
+        images: Option<Vec<String>>,
+    ) -> Result<crate::api::TreeNeurons, InternalErrors> {
+        match self.query(ResultsQuery::TreeNeurons(images))? {
+            ResultsAnswer::TreeNeurons(neurons) => Ok(neurons),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn tree_segments(&self, soma_id: &str) -> Result<Vec<crate::api::TreeSegment>, InternalErrors> {
+        match self.query(ResultsQuery::TreeSegments(soma_id.to_string()))? {
+            ResultsAnswer::TreeSegments(segments) => Ok(segments),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn image_objects(
         &self,
         filter: &crate::api::ImageObjectsFilter,
@@ -722,6 +746,18 @@ mod tests {
         }
         fn object_profile(&self, _: &str, _: &str) -> Result<Vec<(f64, f64)>, InternalErrors> {
             Err(broken("object profile"))
+        }
+        fn has_trees(&self) -> Result<bool, InternalErrors> {
+            Err(broken("has trees"))
+        }
+        fn tree_neurons(
+            &self,
+            _: Option<Vec<String>>,
+        ) -> Result<crate::api::TreeNeurons, InternalErrors> {
+            Err(broken("tree neurons"))
+        }
+        fn tree_segments(&self, _: &str) -> Result<Vec<crate::api::TreeSegment>, InternalErrors> {
+            Err(broken("tree segments"))
         }
         fn image_objects(
             &self,

@@ -122,6 +122,7 @@ pub struct ViewSettings {
     pub chart: ChartView,
     pub tracks: TracksView,
     pub paths: PathsView,
+    pub trees: TreesView,
 }
 
 impl ViewSettings {
@@ -145,8 +146,19 @@ impl ViewSettings {
             chart: section(value, "chart"),
             tracks: section(value, "tracks"),
             paths: section(value, "paths"),
+            trees: section(value, "trees"),
         }
     }
+}
+
+/// Results › Trees: how its dendrogram is drawn (no setting changes a
+/// value - only the colors).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TreesView {
+    /// Branches colored by their Strahler order, else by their branch
+    /// level.
+    pub by_strahler: bool,
 }
 
 /// Results › Tracks, Full: what its table shows.

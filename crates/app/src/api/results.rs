@@ -1071,6 +1071,56 @@ pub struct ProfileResult {
     pub lines_total: usize,
 }
 
+/// The neuron values of Measure Filament Tree, in `TreeNeuron::values`
+/// order: (id at the end of its key, name).
+pub const TREE_NEURON_VALUES: [(&str, &str); 6] = [
+    ("total_length", "Length"),
+    ("primary_neurites", "Primary"),
+    ("branch_points", "Branch points"),
+    ("tips", "Tips"),
+    ("max_branch_level", "Highest level"),
+    ("longest_path", "Longest path"),
+];
+
+/// A traced neuron (Trace Filaments): its soma and what Measure Filament
+/// Tree measured on it - Results › Trees' list.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreeNeuron {
+    pub soma_id: String,
+    pub image_rel_path: String,
+    pub image_name: String,
+    /// The soma's box (the split view selects it).
+    pub soma_bbox_px: [u32; 4],
+    /// Its segments.
+    pub segments: u64,
+    /// `TREE_NEURON_VALUES` (`None`: not measured).
+    pub values: Vec<Option<f64>>,
+}
+
+/// The traced neurons of the results.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreeNeurons {
+    pub neurons: Vec<TreeNeuron>,
+    /// A Measure Filament Tree step ran (its values are there).
+    pub measured: bool,
+}
+
+/// One segment of a traced neuron and what Measure Filament Tree measured
+/// on it - Results › Trees' dendrogram.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreeSegment {
+    pub object_id: String,
+    /// The segment it continues (`None`: it starts at the soma).
+    pub parent: Option<String>,
+    pub bbox_px: [u32; 4],
+    /// Its length: measured, else its pixel count.
+    pub length: f64,
+    pub path_distance: Option<f64>,
+    pub branch_level: Option<f64>,
+    pub strahler_order: Option<f64>,
+    pub straightness: Option<f64>,
+}
+
 /// What a profile export holds (`ResultExport::with_profile`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProfileExportContent {
