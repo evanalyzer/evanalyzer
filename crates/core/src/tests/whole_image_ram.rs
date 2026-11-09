@@ -150,6 +150,13 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
             centre_from: CELL,
             ..Default::default()
         }),
+        // The cells as segments (the tissue-sized one too), their nuclei as
+        // somata.
+        C::MeasureFilamentTree(_) => C::MeasureFilamentTree(MeasureFilamentTreeSettings {
+            id,
+            segments: CELL,
+            somata: NUCLEUS,
+        }),
         C::MeasureObjectShape(_) => {
             C::MeasureObjectShape(MeasureObjectShapeSettings { id, objects: CELL })
         }

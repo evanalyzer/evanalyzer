@@ -3373,6 +3373,25 @@ pub struct ExcludeImageSettings {
     pub rules: Vec<ExcludeRuleSettings>,
 }
 
+/// Per traced segment (Trace Filaments) its branch level, Strahler order,
+/// path distance from the soma to its far end, length and straightness;
+/// per neuron (on its soma) the total length, the primary neurites, branch
+/// points and tips, the highest branch level and the longest path. Lengths
+/// in pixels.
+///
+/// [Trace Filaments] -> [Measure Filament Tree]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureFilamentTreeSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("tree_01/...").
+    pub id: String,
+    /// The segments measured (Trace Filaments' output class).
+    pub segments: ObjectClass,
+    /// The somata (Trace Filaments' seeds): the per-neuron values go on them.
+    pub somata: ObjectClass,
+}
+
 /// Measures how much of the image the objects of a class cover.
 ///
 /// The area in pixels and µm² (with a known pixel size) and the part of the

@@ -1708,6 +1708,29 @@
         }
       ]
     },
+    "MeasureFilamentTreeSettings": {
+      "description": "Per traced segment (Trace Filaments) its branch level, Strahler order,\npath distance from the soma to its far end, length and straightness;\nper neuron (on its soma) the total length, the primary neurites, branch\npoints and tips, the highest branch level and the longest path. Lengths\nin pixels.\n\n[Trace Filaments] -> [Measure Filament Tree]",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"tree_01/...\").",
+          "type": "string"
+        },
+        "segments": {
+          "description": "The segments measured (Trace Filaments' output class).",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "somata": {
+          "description": "The somata (Trace Filaments' seeds): the per-neuron values go on them.",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "id",
+        "segments",
+        "somata"
+      ]
+    },
     "MeasureImageAreaOccupiedSettings": {
       "description": "Measures how much of the image the objects of a class cover.\n\nThe area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
       "type": "object",
@@ -3310,6 +3333,19 @@
             }
           },
           "$ref": "#/$defs/LoadChannelSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_FILAMENT_TREE"
+            }
+          },
+          "$ref": "#/$defs/MeasureFilamentTreeSettings",
           "required": [
             "type"
           ]

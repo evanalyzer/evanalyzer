@@ -393,7 +393,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 65] = [
+    let expected: [(&str, &[CommandCategory]); 66] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -439,6 +439,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Measure Object Colocalization", &[Measure, Dataset]),
         ("Measure Object Neighbors", &[Measure, Dataset]),
         ("Measure Object Distance To Parent", &[Measure, Dataset]),
+        ("Measure Filament Tree", &[Measure, Dataset]),
         ("Measure Object Shape", &[Measure, Dataset]),
         ("Measure Object Skeleton", &[Measure, Dataset]),
         ("Measure Object Sholl", &[Measure, Dataset]),

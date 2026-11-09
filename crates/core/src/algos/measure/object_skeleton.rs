@@ -231,6 +231,40 @@ fn measure(skeleton: &Object, parent: Option<&RowRuns>) -> [f64; VALUES.len()] {
     ]
 }
 
+/// The length of a 1-pixel-wide line object (a skeleton or a traced
+/// segment) as Measure Object Skeleton counts it, and the straight distance
+/// between its two ends (`None`: it has not exactly two). Not thinned first:
+/// the object is taken as it is.
+pub(crate) fn line_length_and_span(object: &Object) -> (f64, Option<f64>) {
+    let grid = Grid::of(object);
+    // Over the bits, not a list of them: an object that is no line (a
+    // filled one) would make that list 8 bytes per pixel.
+    let length = grid
+        .bits
+        .iter_ones()
+        .flat_map(|p| (0..8).map(move |k| (p, k)))
+        .filter(|&(p, k)| {
+            let q = grid.neighbour(p, k);
+            q > p && grid.get(q) && !bridged(&grid, p, k)
+        })
+        .map(|(_, k)| step_length(k))
+        .sum();
+    let ends: Vec<usize> = grid
+        .bits
+        .iter_ones()
+        .filter(|&p| grid.neighbour_count(p) == 1)
+        .take(3)
+        .collect();
+    let span = (ends.len() == 2).then(|| {
+        let w = grid.width;
+        let (a, b) = (ends[0], ends[1]);
+        let dx = (a % w) as f64 - (b % w) as f64;
+        let dy = (a / w) as f64 - (b / w) as f64;
+        (dx * dx + dy * dy).sqrt()
+    });
+    (length, span)
+}
+
 /// A line of the skeleton between two nodes (end or branch points), or a
 /// loop without one.
 struct Segment {

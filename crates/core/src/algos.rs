@@ -77,6 +77,7 @@ pub use self::measure::image_quality::MeasureImageQuality;
 pub use self::measure::image_texture::MeasureImageTexture;
 pub use self::measure::object_colocalization::MeasureObjectColocalization;
 pub use self::measure::object_distance_to_parent::MeasureObjectDistanceToParent;
+pub use self::measure::object_filament_tree::MeasureFilamentTree;
 pub use self::measure::object_neighbors::{MeasureObjectNeighbors, NeighborMethod};
 pub use self::measure::object_shape::MeasureObjectShape;
 pub use self::measure::object_sholl::MeasureObjectSholl;

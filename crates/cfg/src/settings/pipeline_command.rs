@@ -199,6 +199,12 @@ pub enum PipelineCommand {
     #[serde(alias = "load-channel", alias = "loadChannel", alias = "load_channel")]
     LoadChannel(LoadChannelSettings),
     #[serde(
+        alias = "measure-filament-tree",
+        alias = "measureFilamentTree",
+        alias = "measure_filament_tree"
+    )]
+    MeasureFilamentTree(MeasureFilamentTreeSettings),
+    #[serde(
         alias = "measure-image-area-occupied",
         alias = "measureImageAreaOccupied",
         alias = "measure_image_area_occupied"
@@ -570,272 +576,279 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 26,
+            name: "Measure Filament Tree",
+            category: CommandCategory::Measure,
+            summary: "Per traced segment (Trace Filaments) its branch level, Strahler order, path distance from the soma to its far end, length and straightness; per neuron (on its soma) the total length, the primary neurites, branch points and tips, the highest branch level and the longest path.",
+            description: "Lengths in pixels.\n\n[Trace Filaments] -> [Measure Filament Tree]",
+        },
+        CommandMeta {
+            id: 27,
             name: "Measure Image Area Occupied",
             category: CommandCategory::Measure,
             summary: "Measures how much of the image the objects of a class cover.",
             description: "The area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
         },
         CommandMeta {
-            id: 27,
+            id: 28,
             name: "Measure Image Colocalization",
             category: CommandCategory::Measure,
             summary: "Measures how two channels go together over the whole image - colocalization of the whole image as one region.",
             description: "Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
         },
         CommandMeta {
-            id: 28,
+            id: 29,
             name: "Measure Image Intensity",
             category: CommandCategory::Measure,
             summary: "Measures the brightness of a channel across the whole image.",
             description: "Total, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
         },
         CommandMeta {
-            id: 29,
+            id: 30,
             name: "Measure Image Quality",
             category: CommandCategory::Measure,
             summary: "Measures how usable a channel of the image is: sharp, not noisy, not overexposed.",
             description: "Focus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all by their standard definitions - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
         },
         CommandMeta {
-            id: 30,
+            id: 31,
             name: "Measure Image Texture",
             category: CommandCategory::Measure,
             summary: "Measures the texture of a channel over the whole image - Haralick's features of the gray-level co-occurrence matrix, per image.",
             description: "The pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
         },
         CommandMeta {
-            id: 31,
+            id: 32,
             name: "Measure Object Colocalization",
             category: CommandCategory::Measure,
             summary: "Measures how two channels go together in each object of a class - colocalization of every object as its own region.",
             description: "The values of Measure Image Colocalization (but the slope) of the\nobject's pixels: the threshold is a percentage of the object's maximum,\nRWC ranks the values of all the objects, and Costes uses the whole\nimage's Costes thresholds.",
         },
         CommandMeta {
-            id: 32,
+            id: 33,
             name: "Measure Object Distance To Parent",
             category: CommandCategory::Measure,
             summary: "Each child's distance to its parent of a class (linked by Relate Objects): centre to centre, and from its centre to the parent's edge.",
             description: "A child without a parent of the class has no value.",
         },
         CommandMeta {
-            id: 33,
+            id: 34,
             name: "Measure Object Neighbors",
             category: CommandCategory::Measure,
             summary: "For each object: its neighbours, how much of its outline touches them, and its first and second closest object.",
             description: "The closest objects are by the distance between the centres; each\ndistance names the object it is to. \"Percent touching\" is the part of\nthe object's outline pixels within the distance (+ ½ px) of a neighbour.",
         },
         CommandMeta {
-            id: 34,
+            id: 35,
             name: "Measure Object Shape",
             category: CommandCategory::Measure,
             summary: "For each object: its convex area and solidity (the convex area counts the pixels whose centre lies in the convex hull, so a convex object has a solidity of exactly 1; solidity = area / convex area), its Euler number (1 - holes, 8-connected) and its radii (the distance of its pixels to the nearest pixel outside it: maximum, mean, median).",
             description: "",
         },
         CommandMeta {
-            id: 35,
+            id: 36,
             name: "Measure Object Sholl",
             category: CommandCategory::Measure,
             summary: "Sholl analysis of skeletons: circles around a centre (the soma) at a fixed step, the skeleton's crossings per circle (a profile - the curve over the radius) and its summary: the most crossings, the critical and the enclosing radius, the mean crossings and the Sholl regression coefficient.",
             description: "Radii in pixels.\n\n[Skeletonize Objects] -> [Relate Objects (skeletons to somata)] -> [Measure Object Sholl]",
         },
         CommandMeta {
-            id: 36,
+            id: 37,
             name: "Measure Object Skeleton",
             category: CommandCategory::Measure,
             summary: "For each skeleton (Skeletonize Objects): its total length, the longest path through it, its end points, branch points and segments (the lines between them), their mean length and straightness (the straight distance between a segment's ends / its length; loops don't count) and, with \"Diameter from\", the mean diameter of the object it was made of along it.",
             description: "Lengths in pixels.\n\n[Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]",
         },
         CommandMeta {
-            id: 37,
+            id: 38,
             name: "Measure Object Texture",
             category: CommandCategory::Measure,
             summary: "Measures the texture of a channel in each object of a class - Haralick's features of the gray-level co-occurrence matrix, per object.",
             description: "The same values as Measure Image Texture, of the object's pixels only.",
         },
         CommandMeta {
-            id: 38,
+            id: 39,
             name: "Measure Track Motion",
             category: CommandCategory::Dataset,
             summary: "How each track moved: path, displacement, the CASA speeds and ratios (VCL, VSL, VAP, LIN, STR, WOB, ALH, BCF), turning angle and mean squared displacement (α, D) - per track, in pixels and time points.",
             description: "[Track LAP / Kalman / ...] -> [Measure Track Motion]\n\nWith a drift reference (objects that don't swim, e.g. immotile cells or\nbeads, tracked too) the drift of the image is taken away first: the\nmedian step of the reference tracks from one time point to the next.",
         },
         CommandMeta {
-            id: 39,
+            id: 40,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
         },
         CommandMeta {
-            id: 40,
+            id: 41,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.",
         },
         CommandMeta {
-            id: 41,
+            id: 42,
             name: "ObjectMath",
             category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by object pair.",
             description: "When more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 42,
+            id: 43,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "Segments the image with a pixel classifier trained in the AI training dialog.",
             description: "[Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nTrain a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.\nThe classifier assigns every pixel of the image to a class, producing a segmented image.\nThe segmentation mapping translates the model's classes into this project's segmentation classes.\n\nUse a pixel classifier in place of a threshold step.\nLike a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.",
         },
         CommandMeta {
-            id: 43,
+            id: 44,
             name: "Propagation",
             category: CommandCategory::Object,
             summary: "Grows a region around each seed object through a channel.",
             description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
         },
         CommandMeta {
-            id: 44,
+            id: 45,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 45,
+            id: 46,
             name: "Relate Objects",
             category: CommandCategory::Object,
             summary: "Links objects to the objects they belong to: each child (e.g.",
             description: "a spot) gets at most one parent of each parent class (e.g. its cell).\n\nThe results then give per parent the number of its children and the\nmean, median, ... of their measurements, and the parent's values next to\neach child. A child already linked to a parent of one of these classes\nis linked anew - or unlinked when no parent matches.",
         },
         CommandMeta {
-            id: 46,
+            id: 47,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 47,
+            id: 48,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 48,
+            id: 49,
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 49,
+            id: 50,
             name: "Skeletonize Objects",
             category: CommandCategory::Object,
             summary: "Reduces each object to its 1-pixel-wide centre line (skeleton), for filament analysis (neurites, vessels, fibres).",
             description: "[Threshold] -> [Extract Objects] -> [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]\n\nEach object of the input class gets one skeleton object; branch points\nand end points can become 1-pixel objects of their own classes. Spurs\nshorter than the minimum branch length are pruned. The input objects\nstay as they are; link skeletons and points to them with Relate Objects.",
         },
         CommandMeta {
-            id: 50,
+            id: 51,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 51,
+            id: 52,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 52,
+            id: 53,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 53,
+            id: 54,
             name: "Trace Filaments",
             category: CommandCategory::Object,
             summary: "Traces each neuron as a tree from its soma to its tips (the end points of Skeletonize Objects) along the cheapest paths - bridging dim gaps and giving each tip to the soma reaching it most cheaply - and splits it into segments at its branch points.",
             description: "[Skeletonize Objects (end points)] -> [Trace Filaments] -> [Measure Filament Tree]\n\nEach segment is a 1-pixel-wide object of the output class, linked to the\nnext segment towards the soma (a root segment: none) and to its soma.",
         },
         CommandMeta {
-            id: 54,
+            id: 55,
             name: "Track Kalman",
             category: CommandCategory::Dataset,
             summary: "Links objects into tracks by the globally best assignment, predicting each track's next position from its velocity (directed motion).",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances to the\npredicted positions is smallest, each object once. Each track's velocity\nis followed by a Kalman filter. Then track ends are linked to starts up\nto `max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split), as in Track LAP.",
         },
         CommandMeta {
-            id: 55,
+            id: 56,
             name: "Track LAP",
             category: CommandCategory::Dataset,
             summary: "Links objects into tracks by the globally best assignment, for objects moving at random (Brownian motion).",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances is smallest,\neach object once (Jaqaman et al., 2008). Then track ends are linked to\nstarts up to `max_gap_frames` later (an object missed by the\nsegmentation), and - if switched on - track ends into other tracks\n(merge) and starts out of them (split). A merge or split starts new\ntracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 56,
+            id: 57,
             name: "TrackNearestNeighbor",
             category: CommandCategory::Dataset,
             summary: "Links each object to the nearest one in the next frame.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 57,
+            id: 58,
             name: "Track Overlap",
             category: CommandCategory::Dataset,
             summary: "Links objects into tracks by the globally best assignment of overlapping masks.",
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that they overlap the most in total, each object\nonce - two objects can be linked if their intersection over union is\nat least `min_overlap`. Then track ends are linked to starts up to\n`max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split). A merge or split starts\nnew tracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 58,
+            id: 59,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.\n\nA transformed shape with no pixels left (e.g. `Shrink` by more than the object's own\nsize) is not an object: no new object is created, and in place the input object is removed.",
         },
         CommandMeta {
-            id: 59,
+            id: 60,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 60,
+            id: 61,
             name: "Vesselness",
             category: CommandCategory::Preprocess,
             summary: "Highlights lines (fibres, neurites, vessels) of the given widths, so a threshold segments them (Frangi vesselness).",
             description: "[Vesselness] -> [Threshold] -> [Connected Components] -> [Extract Objects] -> [Skeletonize Objects]\n\nThe result is 0..1: high in the middle of a line, low for the\nbackground, blobs and flat areas.",
         },
         CommandMeta {
-            id: 61,
+            id: 62,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 62,
+            id: 63,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 63,
+            id: 64,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 64,
+            id: 65,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.",
@@ -907,93 +920,96 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             LoadAnnotatedObjectsSettings::default(),
         )),
         25 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
-        26 => Some(PipelineCommand::MeasureImageAreaOccupied(
+        26 => Some(PipelineCommand::MeasureFilamentTree(
+            MeasureFilamentTreeSettings::default(),
+        )),
+        27 => Some(PipelineCommand::MeasureImageAreaOccupied(
             MeasureImageAreaOccupiedSettings::default(),
         )),
-        27 => Some(PipelineCommand::MeasureImageColocalization(
+        28 => Some(PipelineCommand::MeasureImageColocalization(
             MeasureImageColocalizationSettings::default(),
         )),
-        28 => Some(PipelineCommand::MeasureImageIntensity(
+        29 => Some(PipelineCommand::MeasureImageIntensity(
             MeasureImageIntensitySettings::default(),
         )),
-        29 => Some(PipelineCommand::MeasureImageQuality(
+        30 => Some(PipelineCommand::MeasureImageQuality(
             MeasureImageQualitySettings::default(),
         )),
-        30 => Some(PipelineCommand::MeasureImageTexture(
+        31 => Some(PipelineCommand::MeasureImageTexture(
             MeasureImageTextureSettings::default(),
         )),
-        31 => Some(PipelineCommand::MeasureObjectColocalization(
+        32 => Some(PipelineCommand::MeasureObjectColocalization(
             MeasureObjectColocalizationSettings::default(),
         )),
-        32 => Some(PipelineCommand::MeasureObjectDistanceToParent(
+        33 => Some(PipelineCommand::MeasureObjectDistanceToParent(
             MeasureObjectDistanceToParentSettings::default(),
         )),
-        33 => Some(PipelineCommand::MeasureObjectNeighbors(
+        34 => Some(PipelineCommand::MeasureObjectNeighbors(
             MeasureObjectNeighborsSettings::default(),
         )),
-        34 => Some(PipelineCommand::MeasureObjectShape(
+        35 => Some(PipelineCommand::MeasureObjectShape(
             MeasureObjectShapeSettings::default(),
         )),
-        35 => Some(PipelineCommand::MeasureObjectSholl(
+        36 => Some(PipelineCommand::MeasureObjectSholl(
             MeasureObjectShollSettings::default(),
         )),
-        36 => Some(PipelineCommand::MeasureObjectSkeleton(
+        37 => Some(PipelineCommand::MeasureObjectSkeleton(
             MeasureObjectSkeletonSettings::default(),
         )),
-        37 => Some(PipelineCommand::MeasureObjectTexture(
+        38 => Some(PipelineCommand::MeasureObjectTexture(
             MeasureObjectTextureSettings::default(),
         )),
-        38 => Some(PipelineCommand::MeasureTrackMotion(
+        39 => Some(PipelineCommand::MeasureTrackMotion(
             MeasureTrackMotionSettings::default(),
         )),
-        39 => Some(PipelineCommand::MedianSubtract(
+        40 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        40 => Some(PipelineCommand::MorphologicalCommand(
+        41 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        41 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        42 => Some(PipelineCommand::PixelClassifier(
+        42 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        43 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        43 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
-        44 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        45 => Some(PipelineCommand::RelateObjects(
+        44 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
+        45 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        46 => Some(PipelineCommand::RelateObjects(
             RelateObjectsSettings::default(),
         )),
-        46 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        47 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        48 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        49 => Some(PipelineCommand::SkeletonizeObjects(
+        47 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        48 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        49 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        50 => Some(PipelineCommand::SkeletonizeObjects(
             SkeletonizeObjectsSettings::default(),
         )),
-        50 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        51 => Some(PipelineCommand::StructureTensor(
+        51 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        52 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        52 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        53 => Some(PipelineCommand::TraceFilaments(
+        53 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        54 => Some(PipelineCommand::TraceFilaments(
             TraceFilamentsSettings::default(),
         )),
-        54 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
-        55 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
-        56 => Some(PipelineCommand::TrackNearestNeighbor(
+        55 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
+        56 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
+        57 => Some(PipelineCommand::TrackNearestNeighbor(
             TrackNearestNeighborSettings::default(),
         )),
-        57 => Some(PipelineCommand::TrackOverlap(
+        58 => Some(PipelineCommand::TrackOverlap(
             TrackOverlapSettings::default(),
         )),
-        58 => Some(PipelineCommand::TransformObjects(
+        59 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        59 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        60 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
-        61 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        62 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        63 => Some(PipelineCommand::WeightedDeviation(
+        60 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        61 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
+        62 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        63 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        64 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        64 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        65 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -1029,6 +1045,7 @@ impl PipelineCommand {
         "laplacian",
         "load_annotated_objects",
         "load_channel",
+        "measure_filament_tree",
         "measure_image_area_occupied",
         "measure_image_colocalization",
         "measure_image_intensity",
@@ -1099,6 +1116,7 @@ impl PipelineCommand {
             Self::Laplacian(_) => "laplacian",
             Self::LoadAnnotatedObjects(_) => "load_annotated_objects",
             Self::LoadChannel(_) => "load_channel",
+            Self::MeasureFilamentTree(_) => "measure_filament_tree",
             Self::MeasureImageAreaOccupied(_) => "measure_image_area_occupied",
             Self::MeasureImageColocalization(_) => "measure_image_colocalization",
             Self::MeasureImageIntensity(_) => "measure_image_intensity",
@@ -1192,6 +1210,9 @@ impl PipelineCommand {
                 LoadAnnotatedObjectsSettings::default(),
             )),
             "load_channel" => Some(Self::LoadChannel(LoadChannelSettings::default())),
+            "measure_filament_tree" => Some(Self::MeasureFilamentTree(
+                MeasureFilamentTreeSettings::default(),
+            )),
             "measure_image_area_occupied" => Some(Self::MeasureImageAreaOccupied(
                 MeasureImageAreaOccupiedSettings::default(),
             )),
@@ -1299,6 +1320,7 @@ impl PipelineCommand {
             Self::Laplacian(_) => "Laplacian",
             Self::LoadAnnotatedObjects(_) => "LoadAnnotatedObjects",
             Self::LoadChannel(_) => "LoadChannel",
+            Self::MeasureFilamentTree(_) => "Measure Filament Tree",
             Self::MeasureImageAreaOccupied(_) => "Measure Image Area Occupied",
             Self::MeasureImageColocalization(_) => "Measure Image Colocalization",
             Self::MeasureImageIntensity(_) => "Measure Image Intensity",
@@ -1375,6 +1397,7 @@ impl PipelineCommand {
             Self::Laplacian(_) => &CommandCategory::Preprocess,
             Self::LoadAnnotatedObjects(_) => &CommandCategory::Object,
             Self::LoadChannel(_) => &CommandCategory::Preprocess,
+            Self::MeasureFilamentTree(_) => &CommandCategory::Measure,
             Self::MeasureImageAreaOccupied(_) => &CommandCategory::Measure,
             Self::MeasureImageColocalization(_) => &CommandCategory::Measure,
             Self::MeasureImageIntensity(_) => &CommandCategory::Measure,
@@ -1473,6 +1496,7 @@ impl PipelineCommand {
                 CommandCategory::Dataset,
             ],
             Self::LoadChannel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::MeasureFilamentTree(_) => &[CommandCategory::Measure, CommandCategory::Dataset],
             Self::MeasureImageAreaOccupied(_) => {
                 &[CommandCategory::Measure, CommandCategory::Dataset]
             }
@@ -1591,6 +1615,7 @@ impl PipelineCommand {
             Self::Laplacian(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Dropdown, options: vec!["3".to_string(), "5".to_string(), "7".to_string()], min: 3.0f32, max: 7.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::LoadAnnotatedObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "keep_annotated_classes".to_string(), display_name: "Keep Annotated Classes".to_string(), description: "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.".to_string(), value: format!("{}", _s.keep_annotated_classes), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (false)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "use_on".to_string(), display_name: "Use on".to_string(), description: "On which planes an annotation is used: where it was drawn, or on\nevery plane (and time point) - e.g. a region outlined once.".to_string(), value: match _s.use_on { ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane => "Its own plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlane => "Every plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlaneAndTimePoint => "Every plane and time point".to_string() }, param_type: ParamType::Dropdown, options: vec!["Its own plane".to_string(), "Every plane".to_string(), "Every plane and time point".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectLoadAnnotaedObjectsAnnotationUseSettings :: OwnPlane) { ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane => "Its own plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlane => "Every plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlaneAndTimePoint => "Every plane and time point".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }]].concat(),
             Self::LoadChannel(_s) => [vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The image channel to load.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "projection".to_string(), display_name: "Projection".to_string(), description: "Optional z projection setting\n\nIf set to Auto the global z-projection setting from the project is used.\nIf not Auto the image channel is loaded with the given z-projection settings.".to_string(), value: match _s.projection { MathLoadChannelChannelZProjectionSettings::Auto => "Auto".to_string(), MathLoadChannelChannelZProjectionSettings::None => "None".to_string(), MathLoadChannelChannelZProjectionSettings::MaxIntensity => "Max Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::MinIntensity => "Min Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::AvgIntensity => "Avg Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::SumIntensity => "Sum Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => "Take The Middle".to_string() }, param_type: ParamType::Dropdown, options: vec!["Auto".to_string(), "None".to_string(), "Max Intensity".to_string(), "Min Intensity".to_string(), "Avg Intensity".to_string(), "Sum Intensity".to_string(), "Take The Middle".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathLoadChannelChannelZProjectionSettings :: Auto) { MathLoadChannelChannelZProjectionSettings::Auto => "Auto".to_string(), MathLoadChannelChannelZProjectionSettings::None => "None".to_string(), MathLoadChannelChannelZProjectionSettings::MaxIntensity => "Max Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::MinIntensity => "Min Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::AvgIntensity => "Avg Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::SumIntensity => "Sum Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => "Take The Middle".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false], section: String::new() }], vec![ParameterDef { name: "z_index".to_string(), display_name: "Z Index".to_string(), description: "With projection None: the z-plane loaded (0 = the first).".to_string(), value: format!("{}", _s.z_index), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0u32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::MeasureFilamentTree(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"tree_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segments".to_string(), display_name: "Segments".to_string(), description: "The segments measured (Trace Filaments' output class).".to_string(), value: _s.segments.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "somata".to_string(), display_name: "Somata".to_string(), description: "The somata (Trace Filaments' seeds): the per-neuron values go on them.".to_string(), value: _s.somata.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureImageAreaOccupied(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"area_occupied_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "The objects whose area is measured.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureImageColocalization(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"coloc_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_a".to_string(), display_name: "Channel A".to_string(), description: "The first channel (A).".to_string(), value: _s.channel_a.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel_b".to_string(), display_name: "Channel B".to_string(), description: "The second channel (B).".to_string(), value: _s.channel_b.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (1)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "threshold_percent".to_string(), display_name: "Threshold (% of maximum)".to_string(), description: "A pixel counts for Manders, the overlap and RWC when it is brighter\nthan this percentage of its channel's maximum (in the image).".to_string(), value: format!("{}", _s.threshold_percent), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "costes".to_string(), display_name: "Costes thresholds".to_string(), description: "Manders with Costes' automatic thresholds, and how they are found.".to_string(), value: match _s.costes { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, param_type: ParamType::Dropdown, options: vec!["Off".to_string(), "Faster".to_string(), "Fast".to_string(), "Accurate".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MeasureColocalizationCostesMethodSettings :: Faster) { MeasureColocalizationCostesMethodSettings::Off => "Off".to_string(), MeasureColocalizationCostesMethodSettings::Faster => "Faster".to_string(), MeasureColocalizationCostesMethodSettings::Fast => "Fast".to_string(), MeasureColocalizationCostesMethodSettings::Accurate => "Accurate".to_string() }, advanced: false, option_advanced: vec![false, false, false, false], section: String::new() }]].concat(),
             Self::MeasureImageIntensity(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"intensity_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel to measure.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1704,6 +1729,7 @@ impl PipelineCommand {
             Self::Laplacian(s) => format!("Kernel Size: {}", format!("{:.3}", s.kernel_size)),
             Self::LoadAnnotatedObjects(_) => String::new(),
             Self::LoadChannel(_) => String::new(),
+            Self::MeasureFilamentTree(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureImageAreaOccupied(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureImageColocalization(s) => format!("ID: {}", s.id.clone()),
             Self::MeasureImageIntensity(s) => format!("ID: {}", s.id.clone()),
@@ -1820,6 +1846,7 @@ impl PipelineCommand {
     /// measurements' keys start with it. `None`: no measurement step.
     pub fn measurement_id(&self) -> Option<&str> {
         match self {
+            Self::MeasureFilamentTree(s) => Some(s.id.as_str()),
             Self::MeasureImageAreaOccupied(s) => Some(s.id.as_str()),
             Self::MeasureImageColocalization(s) => Some(s.id.as_str()),
             Self::MeasureImageIntensity(s) => Some(s.id.as_str()),
@@ -1840,6 +1867,7 @@ impl PipelineCommand {
     /// [`Self::measurement_id`] to change.
     pub fn measurement_id_mut(&mut self) -> Option<&mut String> {
         match self {
+            Self::MeasureFilamentTree(s) => Some(&mut s.id),
             Self::MeasureImageAreaOccupied(s) => Some(&mut s.id),
             Self::MeasureImageColocalization(s) => Some(&mut s.id),
             Self::MeasureImageIntensity(s) => Some(&mut s.id),
@@ -1861,6 +1889,7 @@ impl PipelineCommand {
     /// "pearson_01").
     pub fn measurement_id_prefix(&self) -> Option<&'static str> {
         match self {
+            Self::MeasureFilamentTree(_) => Some("tree"),
             Self::MeasureImageAreaOccupied(_) => Some("area_occupied"),
             Self::MeasureImageColocalization(_) => Some("coloc"),
             Self::MeasureImageIntensity(_) => Some("intensity"),
@@ -1964,6 +1993,10 @@ impl PipelineCommand {
                 classes.push(s.output_class);
             }
             Self::LoadChannel(_) => {}
+            Self::MeasureFilamentTree(s) => {
+                classes.push(s.segments);
+                classes.push(s.somata);
+            }
             Self::MeasureImageAreaOccupied(s) => {
                 classes.push(s.object_class);
             }
@@ -2993,6 +3026,21 @@ impl PipelineCommand {
                 if param_name == "z_index" {
                     if let Ok(v) = value.parse::<u32>() {
                         s.z_index = v;
+                    }
+                }
+            }
+            Self::MeasureFilamentTree(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "segments" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.segments = v;
+                    }
+                }
+                if param_name == "somata" {
+                    if let Some(v) = ObjectClass::from_text(value) {
+                        s.somata = v;
                     }
                 }
             }
@@ -4463,6 +4511,7 @@ impl PipelineCommand {
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
             Self::LoadChannel(_) => {}
+            Self::MeasureFilamentTree(_) => {}
             Self::MeasureImageAreaOccupied(_) => {}
             Self::MeasureImageColocalization(_) => {}
             Self::MeasureImageIntensity(_) => {}
@@ -4574,6 +4623,7 @@ impl PipelineCommand {
             Self::Laplacian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
             Self::LoadChannel(_) => {}
+            Self::MeasureFilamentTree(_) => {}
             Self::MeasureImageAreaOccupied(_) => {}
             Self::MeasureImageColocalization(_) => {}
             Self::MeasureImageIntensity(_) => {}

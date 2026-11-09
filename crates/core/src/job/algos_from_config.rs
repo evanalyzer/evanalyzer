@@ -946,6 +946,16 @@ impl From<LoadChannelSettings> for LoadChannel {
     }
 }
 
+impl From<MeasureFilamentTreeSettings> for MeasureFilamentTree {
+    fn from(_s: MeasureFilamentTreeSettings) -> Self {
+        MeasureFilamentTree {
+            id: _s.id,
+            segments: _s.segments,
+            somata: _s.somata,
+        }
+    }
+}
+
 impl From<MeasureImageAreaOccupiedSettings> for MeasureImageAreaOccupied {
     fn from(_s: MeasureImageAreaOccupiedSettings) -> Self {
         MeasureImageAreaOccupied {
@@ -1539,6 +1549,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::LoadChannel(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::LoadChannel::from(settings),
+        ))),
+        PipelineCommand::MeasureFilamentTree(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MeasureFilamentTree::from(settings),
         ))),
         PipelineCommand::MeasureImageAreaOccupied(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureImageAreaOccupied::from(settings),

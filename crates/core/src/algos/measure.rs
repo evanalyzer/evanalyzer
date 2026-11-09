@@ -16,6 +16,7 @@ pub mod image_quality;
 pub mod image_texture;
 pub mod object_colocalization;
 pub mod object_distance_to_parent;
+pub mod object_filament_tree;
 pub mod object_neighbors;
 pub mod object_shape;
 pub mod object_sholl;
