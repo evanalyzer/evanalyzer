@@ -16,6 +16,8 @@ use super::tracks::{TRACK_PALETTE, area_curve};
 use super::*;
 use crate::{TrackAllRow, TrackDetail, TrackFrame};
 use evanalyzer_app::global::SpeedUnit;
+#[cfg(test)]
+use evanalyzer_app::results::TrackMotion;
 use evanalyzer_app::results::{ImageTracks, ImageTracksFilter, TrackSummary, TrackSummaryFilter};
 use slint::{Model, ModelNotify, ModelTracker};
 use std::cell::RefCell;
@@ -53,19 +55,25 @@ pub(super) struct TracksAllState {
 }
 
 /// The table's order: by image and track, else descending by time points,
-/// distance moved, speed or straightness (none last).
+/// distance moved, speed, straightness, turning, max distance or MSD α
+/// (none last).
 fn order_of(rows: &[TrackSummary], sort: i32) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
     let key = |track: &TrackSummary| -> f64 {
+        let m = &track.motion;
         match sort {
-            1 => f64::from(track.points),
-            2 => track.displacement_px,
-            3 => track.speed_px_per_frame().unwrap_or(f64::NEG_INFINITY),
-            _ => track.straightness().unwrap_or(f64::NEG_INFINITY),
+            1 => Some(f64::from(track.points)),
+            2 => m.displacement,
+            3 => m.vcl,
+            4 => m.lin,
+            5 => m.turning,
+            6 => m.max_distance,
+            _ => m.msd_alpha,
         }
+        .unwrap_or(f64::NEG_INFINITY)
     };
     match sort {
-        1..=4 => order.sort_by(|&a, &b| key(&rows[b]).total_cmp(&key(&rows[a]))),
+        1..=7 => order.sort_by(|&a, &b| key(&rows[b]).total_cmp(&key(&rows[a]))),
         _ => order.sort_by(|&a, &b| {
             (&rows[a].image, rows[a].track_id).cmp(&(&rows[b].image, rows[b].track_id))
         }),
@@ -108,10 +116,12 @@ impl Shown {
         }
     }
 
-    fn length(&self, track: &TrackSummary, px: f64) -> String {
-        match (self.um, track.um_per_px) {
-            (true, Some(um)) => format_chart_value(px * um),
-            _ => format_chart_value(px),
+    /// A length in the unit shown - "–" for none (not measured).
+    fn length(&self, track: &TrackSummary, px: Option<f64>) -> String {
+        match (px, self.um, track.um_per_px) {
+            (None, ..) => "–".to_string(),
+            (Some(px), true, Some(um)) => format_chart_value(px * um),
+            (Some(px), ..) => format_chart_value(px),
         }
     }
 
@@ -131,6 +141,15 @@ impl Shown {
             SpeedUnit::UmPerMin => "µm/min",
             SpeedUnit::UmPerS => "µm/s",
         }
+    }
+}
+
+/// `value` and its unit - "–" alone for none.
+fn with_unit(value: String, unit: &str) -> String {
+    if value == "–" {
+        value
+    } else {
+        format!("{value} {unit}")
     }
 }
 
@@ -179,11 +198,22 @@ impl Model for TracksAllModel {
             image: track.image.clone().into(),
             span: format!("{}–{}", track.first_t, track.last_t).into(),
             points: track.points.to_string().into(),
-            moved: self.shown.length(track, track.displacement_px).into(),
+            moved: self.shown.length(track, track.motion.displacement).into(),
             speed: self.shown.speed(track).into(),
             straightness: track
                 .straightness()
                 .map_or_else(|| "–".to_string(), |s| format!("{s:.2}"))
+                .into(),
+            turning: track
+                .motion
+                .turning
+                .map_or_else(|| "–".to_string(), |a| format!("{a:+.1}"))
+                .into(),
+            max_distance: self.shown.length(track, track.motion.max_distance).into(),
+            msd_alpha: track
+                .motion
+                .msd_alpha
+                .map_or_else(|| "–".to_string(), |a| format!("{a:.2}"))
                 .into(),
             area: track
                 .values
@@ -532,16 +562,30 @@ impl ResultsStateController {
             class_name: track.class_name.clone().into(),
             image: track.image.clone().into(),
             span: format!("{}–{} ({})", track.first_t, track.last_t, track.points).into(),
-            moved: format!(
-                "{} {}",
-                shown.length(&track, track.displacement_px),
-                shown.length_unit()
+            moved: with_unit(
+                shown.length(&track, track.motion.displacement),
+                shown.length_unit(),
             )
             .into(),
-            speed: format!("{} {}", shown.speed(&track), shown.speed_unit()).into(),
+            speed: with_unit(shown.speed(&track), shown.speed_unit()).into(),
             straightness: track
                 .straightness()
                 .map_or_else(|| "–".to_string(), |s| format!("{s:.2}"))
+                .into(),
+            turning: track
+                .motion
+                .turning
+                .map_or_else(|| "–".to_string(), |a| format!("{a:+.1}° / time point"))
+                .into(),
+            max_distance: with_unit(
+                shown.length(&track, track.motion.max_distance),
+                shown.length_unit(),
+            )
+            .into(),
+            msd_alpha: track
+                .motion
+                .msd_alpha
+                .map_or_else(|| "–".to_string(), |a| format!("{a:.2}"))
                 .into(),
             curve: curve.into(),
             area_min: if points.is_empty() {
@@ -613,15 +657,22 @@ impl ResultsStateController {
 mod tests {
     use super::*;
 
+    /// A track with Measure Track Motion's path length and displacement,
+    /// its VCL and LIN from them.
     fn track(id: u64, image: &str, points: u32, path: f64, moved: f64) -> TrackSummary {
+        let frames = f64::from(points.saturating_sub(1));
+        let mut motion = TrackMotion::default();
+        motion.path_length = Some(path);
+        motion.displacement = Some(moved);
+        motion.vcl = (frames > 0.0).then(|| path / frames);
+        motion.lin = (path > 0.0).then(|| moved / path);
         TrackSummary {
             image: image.into(),
             track_id: id,
             first_t: 0,
             last_t: points.saturating_sub(1),
             points,
-            path_px: path,
-            displacement_px: moved,
+            motion,
             ..TrackSummary::default()
         }
     }
@@ -665,9 +716,10 @@ mod tests {
         let b = track(2, "a", 3, 10.0, 4.0);
         let shown = Shown::new(&[a.clone()], SpeedUnit::UmPerMin);
         assert_eq!(
-            (shown.length_unit(), shown.length(&a, 4.0)),
+            (shown.length_unit(), shown.length(&a, Some(4.0))),
             ("µm", "2".to_string())
         );
+        assert_eq!(shown.length(&a, None), "–");
         assert_eq!(shown.speed(&a), "2.50");
         let mixed = Shown::new(&[a, b], SpeedUnit::UmPerMin);
         assert_eq!(

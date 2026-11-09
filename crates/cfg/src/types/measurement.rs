@@ -31,14 +31,27 @@ pub enum MeasurementUnit {
     Micrometers,
     SquareMicrometers,
     Count,
+    /// A speed in pixels per time point (Measure Track Motion) - the
+    /// results show it per minute with a pixel size and frame interval.
+    PixelsPerFrame,
+    /// Square pixels per time point (a diffusion coefficient).
+    SquarePixelsPerFrame,
+    /// An angle, -180..180 or 0..180.
+    Degrees,
+    /// Degrees per time point (an angular speed).
+    DegreesPerFrame,
+    /// Events per time point (e.g. beat-cross frequency).
+    PerFrame,
 }
 
-/// Whose values they are: one per object, or one per image (or the pixels
-/// of a class in it).
+/// Whose values they are: one per object, one per image (or the pixels
+/// of a class in it), or one per track (a dataset step's, e.g. Measure
+/// Track Motion - `measurements.region = 'track'` with its `track_id`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MeasurementTarget {
     Object,
     Image,
+    Track,
 }
 
 /// One measurement of a step, e.g. "Pearson (channel 0 × channel 1)" of the

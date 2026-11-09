@@ -67,6 +67,7 @@ pub fn generate_preview_job_from_project_settings(
     let memory_storage = Arc::new(MemoryExporter {
         out_objects: output.objects.clone(),
         out_measurements: output.measurements.clone(),
+        ..Default::default()
     });
 
     let output_path = project_path.join("results").join("preview");

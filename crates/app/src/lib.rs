@@ -121,6 +121,7 @@ pub mod results {
     pub use crate::api::ImageHeatmapFilter;
     pub use crate::api::ListFilter;
     pub use crate::api::MeasurementColumn;
+    pub use crate::api::MotionKind;
     pub use crate::api::Pagination;
     pub use crate::api::PlaneFilter;
     pub use crate::api::PlateFilter;
@@ -141,7 +142,7 @@ pub mod results {
     pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
     pub use crate::api::{
         ImageObjectsFilter, ImageTracks, ImageTracksFilter, LineageEvent, ResultObject,
-        TrackLineage, TrackPath, TrackPoint,
+        TrackLineage, TrackMotion, TrackPath, TrackPoint,
     };
     pub use crate::api::{
         ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint,

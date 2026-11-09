@@ -377,6 +377,7 @@ mod tests {
                 })
                 .collect(),
             parent_track_ids: Vec::new(),
+            motion: Default::default(),
         };
         ResultsOverlay {
             sources: Vec::new(),
@@ -437,6 +438,7 @@ mod tests {
                         })
                         .collect(),
                     parent_track_ids: Vec::new(),
+                    motion: Default::default(),
                 }
             })
             .collect();

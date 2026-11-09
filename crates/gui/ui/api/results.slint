@@ -76,6 +76,11 @@ export struct TrackAllRow {
     moved: string,
     speed: string,
     straightness: string,
+    // Measure Track Motion's mean turning angle, max distance from the
+    // start and MSD exponent - "–" without it.
+    turning: string,
+    max-distance: string,
+    msd-alpha: string,
     area: string,
     // The area over its time points (0 0 100 20) - empty until read.
     curve: string,
@@ -99,6 +104,11 @@ export struct TrackDetail {
     moved: string,
     speed: string,
     straightness: string,
+    // Measure Track Motion's: "+34.2° / time point" (mean turning angle),
+    // max distance from the start, MSD α - "–" without it.
+    turning: string,
+    max-distance: string,
+    msd-alpha: string,
     // The area over time (0 0 100 40), its range and the time points'.
     curve: string,
     area-min: string,
@@ -114,6 +124,10 @@ export struct TrackCard {
     span: string,
     displacement: string,
     speed: string,
+    // Measure Track Motion's LIN and mean turning angle ("+34°") - "–"
+    // without that step.
+    straightness: string,
+    turning: string,
     // Its parents and children ("#3 (division)") - empty without.
     from: string,
     into: string,
@@ -329,8 +343,8 @@ export global ResultsState {
     in-out property <string> tracks-all-min: "1";
     in-out property <bool> tracks-all-from-start: false;
     in-out property <bool> tracks-all-no-edge: false;
-    // Sorted by 0 track, 1 time points, 2 moved, 3 speed, 4 straightness
-    // (descending but the track).
+    // Sorted by 0 track, 1 time points, 2 moved, 3 speed, 4 straightness,
+    // 5 turning, 6 max distance, 7 MSD α (descending but the track).
     in-out property <int> tracks-all-sort: 0;
     in-out property <string> tracks-length-unit: "px";
     // `tracks-um` / `tracks-speed-unit` of the table of every track: a unit

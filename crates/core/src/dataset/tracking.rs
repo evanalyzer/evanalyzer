@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+pub mod measure_track_motion;
 pub mod track_kalman;
 pub mod track_lap;
 pub mod track_nearest_neighbor;

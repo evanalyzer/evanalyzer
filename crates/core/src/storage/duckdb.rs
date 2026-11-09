@@ -12,7 +12,9 @@ use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, MeasurementValues};
 use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
-use crate::storage::{DatasetStore, ImageSummary, PipelineResultExporter};
+use crate::storage::{
+    DatasetStore, DatasetValue, DatasetValueAbout, ImageSummary, PipelineResultExporter,
+};
 use duckdb::arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, FixedSizeBinaryBuilder, Float64Builder,
     Int32Builder, ListBuilder, MapBuilder, StringBuilder, UInt8Builder, UInt32Builder,
@@ -276,6 +278,8 @@ pub const RESULTS_SCHEMA_VERSION: u32 = 2;
 // 2: profile measurements - `measurement_info.profile` and
 //    `measurements.position` (a value per position, e.g. per Sholl ring);
 //    an older build would read a profile's rows as one value each.
+//    Also values per track (Measure Track Motion): `measurements.track_id`,
+//    `region = 'track'`, `measurement_info.target = 'Track'`.
 
 /// The format `conn`'s results file was written in - 0 for a file from before
 /// it was recorded (no `run` table or no `schema_version`).
@@ -489,6 +493,7 @@ impl DuckDbExporter {
                 "ALTER TABLE measurement_info ADD COLUMN IF NOT EXISTS \
                      profile BOOLEAN DEFAULT false;
                  ALTER TABLE measurements ADD COLUMN IF NOT EXISTS position DOUBLE;
+                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS track_id UBIGINT;
                  UPDATE run SET schema_version = 2;",
             )
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -500,8 +505,10 @@ impl DuckDbExporter {
         }
         // Added after version 1 shipped, without a version bump: files
         // written before it get it here, at the end as in `CREATE_TABLES`.
+        // `measurements.track_id` came to format 2 before it was released.
         conn.execute_batch(
-            "ALTER TABLE objects ADD COLUMN IF NOT EXISTS parent_track_ids UBIGINT[]",
+            "ALTER TABLE objects ADD COLUMN IF NOT EXISTS parent_track_ids UBIGINT[];
+             ALTER TABLE measurements ADD COLUMN IF NOT EXISTS track_id UBIGINT;",
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         let object_indices = existing_object_indices(&conn)?;
@@ -1211,6 +1218,7 @@ struct MeasurementColumns {
     key: StringBuilder,
     value: Float64Builder,
     position: Float64Builder,
+    track_id: UInt64Builder,
 }
 
 impl MeasurementColumns {
@@ -1231,6 +1239,7 @@ impl MeasurementColumns {
             key: StringBuilder::new(),
             value: Float64Builder::new(),
             position: Float64Builder::new(),
+            track_id: UInt64Builder::new(),
         }
     }
 
@@ -1255,6 +1264,7 @@ impl MeasurementColumns {
             ("key", arr(&mut self.key)),
             ("value", arr(&mut self.value)),
             ("position", arr(&mut self.position)),
+            ("track_id", arr(&mut self.track_id)),
         ])
         .map_err(|e| InternalErrors::Io(e.to_string()))
         .and_then(|batch| with_uuid_columns(batch, &["object_id", "related_object_id"]))
@@ -1345,6 +1355,7 @@ impl<'a> MeasurementRows<'a> {
         c.key.append_value(row.key);
         c.value.append_option(value.is_finite().then_some(value));
         c.position.append_option(position.filter(|p| p.is_finite()));
+        c.track_id.append_null();
     }
 
     fn flush_if_full(&mut self, app: &mut duckdb::Appender<'_>) -> Result<(), InternalErrors> {
@@ -1557,7 +1568,11 @@ CREATE TABLE IF NOT EXISTS measurements (
     value              DOUBLE,
     -- Where on the object's profile the value is (e.g. a Sholl ring's
     -- radius in pixels); NULL but for a profile measurement (since format 2).
-    position           DOUBLE
+    position           DOUBLE,
+    -- The track a value is about (region 'track', e.g. Measure Track
+    -- Motion's speeds; its objects: `objects.track_id` in the same image);
+    -- NULL for the others (since format 2).
+    track_id           UBIGINT
 );
 
 -- How the analysis run that wrote this file ended: 'running' from its start
@@ -2118,6 +2133,126 @@ impl DatasetStore for DuckDbExporter {
             .map_err(io)?;
         tx.commit().map_err(io)
     }
+
+    /// The step's earlier rows go first (all or nothing): a run again may
+    /// have other tracks. The values go in through the Arrow appender - a
+    /// value per track and measurement can be millions of rows.
+    fn write_measurements(
+        &self,
+        step: &str,
+        infos: &[MeasurementInfo],
+        values: &[DatasetValue],
+    ) -> Result<(), InternalErrors> {
+        let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = self.lock_conn();
+        // `unchecked_transaction` is safe as in `export`.
+        let tx = conn.unchecked_transaction().map_err(io)?;
+        tx.execute("DELETE FROM measurements WHERE step = ?", [step])
+            .map_err(io)?;
+        tx.execute("DELETE FROM measurement_info WHERE step = ?", [step])
+            .map_err(io)?;
+        {
+            let mut info = tx
+                .prepare(
+                    "INSERT INTO measurement_info \
+                     (key, measurement, step, unit, target, range_min, range_max, aggregatable, \
+                     object_index, related_objects, profile) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                )
+                .map_err(io)?;
+            for i in infos {
+                info.execute(params![
+                    i.key,
+                    i.name,
+                    i.step,
+                    format!("{:?}", i.unit),
+                    format!("{:?}", i.target),
+                    i.range.map(|r| r.0),
+                    i.range.map(|r| r.1),
+                    i.aggregatable,
+                    i.related_objects,
+                    i.profile
+                ])
+                .map_err(io)?;
+            }
+        }
+        // The classes' names as the run named them (`classes`), else a label.
+        let mut class_names: HashMap<u32, String> = HashMap::new();
+        {
+            let mut stmt = tx
+                .prepare("SELECT class_id, name FROM classes")
+                .map_err(io)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(io)?;
+            for row in rows {
+                let (id, name) = row.map_err(io)?;
+                if let Ok(id) = u32::try_from(id) {
+                    class_names.insert(id, name);
+                }
+            }
+        }
+        let units: Vec<String> = infos.iter().map(|i| format!("{:?}", i.unit)).collect();
+        let mut columns = MeasurementColumns::new();
+        let mut app = tx.appender("measurements").map_err(io)?;
+        let mut image_names: HashMap<&str, String> = HashMap::new();
+        for value in values {
+            let info = infos.get(value.info).ok_or_else(|| {
+                InternalErrors::InvalidArgument(format!("{step}: no measurement {}", value.info))
+            })?;
+            let image_name = image_names
+                .entry(value.image_rel_path.as_str())
+                .or_insert_with(|| image_display_name(Path::new(&value.image_rel_path)));
+            let c = &mut columns;
+            c.image_name.append_value(image_name.as_str());
+            c.image_rel_path.append_value(&value.image_rel_path);
+            c.z_stack.append_value(value.z_stack);
+            c.t_stack.append_value(value.t_stack);
+            append_uuid(&mut c.object_id, None);
+            append_uuid(&mut c.related_object_id, None);
+            match value.about {
+                DatasetValueAbout::Track { track_id, class } => {
+                    c.region.append_value("track");
+                    let name = match class {
+                        ObjectClass::Global(n) => class_names
+                            .get(&n)
+                            .cloned()
+                            .unwrap_or_else(|| self.class_label(&class)),
+                        _ => self.class_label(&class),
+                    };
+                    c.object_class_name.append_value(json_string_array(&[name]));
+                    if let ObjectClass::Global(n) = class {
+                        c.object_class_id.values().append_value(n as i32);
+                    }
+                    c.object_class_id.append(true);
+                    c.track_id.append_value(track_id);
+                }
+                DatasetValueAbout::Image => {
+                    c.region.append_value("image");
+                    c.object_class_name.append_null();
+                    c.object_class_id.append(false);
+                    c.track_id.append_null();
+                }
+            }
+            c.step.append_value(&info.step);
+            c.measurement.append_value(&info.name);
+            c.unit.append_value(&units[value.info]);
+            c.key.append_value(&info.key);
+            c.value
+                .append_option(value.value.is_finite().then_some(value.value));
+            c.position.append_null();
+            if c.value.len() >= ARROW_BATCH_ROWS {
+                app.append_record_batch(columns.finish()?).map_err(io)?;
+            }
+        }
+        if columns.value.len() > 0 {
+            app.append_record_batch(columns.finish()?).map_err(io)?;
+        }
+        drop(app);
+        tx.commit().map_err(io)
+    }
 }
 
 /// The items of a DuckDB list value (none for NULL).
@@ -2655,6 +2790,7 @@ mod tests {
             conn.execute_batch(
                 "ALTER TABLE measurement_info DROP COLUMN profile;
                  ALTER TABLE measurements DROP COLUMN position;
+                 ALTER TABLE measurements DROP COLUMN track_id;
                  UPDATE run SET schema_version = 1;",
             )
             .unwrap();
@@ -2666,12 +2802,135 @@ mod tests {
             .query_row(
                 "SELECT count(*) FROM information_schema.columns WHERE \
                  (table_name = 'measurement_info' AND column_name = 'profile') OR \
-                 (table_name = 'measurements' AND column_name = 'position')",
+                 (table_name = 'measurements' AND column_name = 'position') OR \
+                 (table_name = 'measurements' AND column_name = 'track_id')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(columns, 2);
+        assert_eq!(columns, 3);
+    }
+
+    /// A format 2 file from before `measurements.track_id` (format 2 wasn't
+    /// released then) gets it when opened to add to.
+    #[test]
+    fn a_format_2_file_without_track_ids_gets_the_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        drop(test_exporter(&path));
+        shared_connection(&path)
+            .unwrap()
+            .execute_batch("ALTER TABLE measurements DROP COLUMN track_id;")
+            .unwrap();
+        let exporter = DuckDbExporter::open_existing(&path).unwrap();
+        let has: bool = exporter
+            .lock_conn()
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.columns \
+                 WHERE table_name = 'measurements' AND column_name = 'track_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(has);
+    }
+
+    /// A dataset step's values: a row per track (with its track id and
+    /// class) or per image time point, its measurements' descriptions once -
+    /// and a second run replaces the first's.
+    #[test]
+    fn dataset_values_are_rows_per_track_and_replace_a_run_before() {
+        use crate::storage::{DatasetValue, DatasetValueAbout};
+        use evanalyzer_cfg::core_types::{MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let names = HashMap::from([(ObjectClass::Global(1), ("Sperm".to_string(), 0))]);
+        let exporter = DuckDbExporter::new(&path, names, &MetaData::default()).unwrap();
+        let info = |id: &str, target| MeasurementInfo {
+            key: format!("motion_01/{id}"),
+            name: id.to_uppercase(),
+            step: "motion_01".into(),
+            unit: MeasurementUnit::PixelsPerFrame,
+            target,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+            profile: false,
+        };
+        let infos = [
+            info("vcl", MeasurementTarget::Track),
+            info("drift_x", MeasurementTarget::Image),
+        ];
+        let track = |track_id, value| DatasetValue {
+            image_rel_path: "well_A1/img.tif".into(),
+            z_stack: 0,
+            t_stack: 3,
+            about: DatasetValueAbout::Track {
+                track_id,
+                class: ObjectClass::Global(1),
+            },
+            info: 0,
+            value,
+        };
+        let drift = DatasetValue {
+            t_stack: 5,
+            about: DatasetValueAbout::Image,
+            info: 1,
+            value: 2.5,
+            ..track(0, 0.0)
+        };
+        let store = exporter.dataset_store().unwrap();
+        store
+            .write_measurements(
+                "motion_01",
+                &infos,
+                &[track(7, 4.0), track(8, f64::NAN), drift.clone()],
+            )
+            .unwrap();
+        // Again, with other tracks: only these remain.
+        store
+            .write_measurements("motion_01", &infos, &[track(9, 1.5), drift])
+            .unwrap();
+        let conn = exporter.lock_conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT image_name, region, track_id, object_class_name, object_class_id::VARCHAR AS object_class_id, t_stack, \
+                 measurement, unit, value FROM measurements ORDER BY region, track_id",
+            )
+            .unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |r| {
+                Ok(format!(
+                    "{} {} {:?} {:?} {:?} {} {} {} {:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<u64>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, i32>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, Option<f64>>(8)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                "img.tif image None None None 5 DRIFT_X PixelsPerFrame Some(2.5)",
+                "img.tif track Some(9) Some(\"[\\\"Sperm\\\"]\") Some(\"[1]\") 3 VCL PixelsPerFrame Some(1.5)",
+            ]
+        );
+        let targets: Vec<String> = conn
+            .prepare("SELECT target FROM measurement_info ORDER BY key")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(targets, ["Image", "Track"]);
     }
 
     /// Each image's analysed time points and z-planes are kept - also ones

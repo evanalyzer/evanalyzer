@@ -73,4 +73,12 @@ impl<'a> Outputs<'a> {
             ..self.image(id, name, unit)
         }
     }
+
+    /// One value per track (a dataset step's) - like [`Self::image`] otherwise.
+    pub fn track(&self, id: &str, name: &str, unit: MeasurementUnit) -> MeasurementInfo {
+        MeasurementInfo {
+            target: MeasurementTarget::Track,
+            ..self.image(id, name, unit)
+        }
+    }
 }

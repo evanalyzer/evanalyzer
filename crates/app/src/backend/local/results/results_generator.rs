@@ -2970,10 +2970,11 @@ impl ResultsGenerator {
         if !exists {
             return Ok(Vec::new());
         }
-        // Profiles (a curve per object, since format 2) are no single value:
-        // not offered here.
+        // Profiles (a curve per object, since format 2) are no single value,
+        // track values (Measure Track Motion) no object's or image's - the
+        // tracks' views show those: not offered here.
         let not_profile = if self.has_profiles()? {
-            "WHERE NOT coalesce(profile, false)"
+            "AND NOT coalesce(profile, false)"
         } else {
             ""
         };
@@ -2981,7 +2982,7 @@ impl ResultsGenerator {
             .database
             .prepare(&format!(
                 "SELECT key, step, measurement, target = 'Object' FROM measurement_info \
-                 {not_profile} ORDER BY step, measurement, key"
+                 WHERE target <> 'Track' {not_profile} ORDER BY step, measurement, key"
             ))
             .map_err(err)?;
         let columns = stmt

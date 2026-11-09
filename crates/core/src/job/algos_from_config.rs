@@ -1078,6 +1078,19 @@ impl From<MeasureObjectTextureSettings> for MeasureObjectTexture {
     }
 }
 
+impl From<MeasureTrackMotionSettings> for MeasureTrackMotion {
+    fn from(_s: MeasureTrackMotionSettings) -> Self {
+        MeasureTrackMotion {
+            id: _s.id,
+            objects: _s.objects,
+            min_step: _s.min_step.clamp(0.0, 100000.0),
+            unit: _s.unit,
+            average_over: _s.average_over,
+            drift_reference: _s.drift_reference,
+        }
+    }
+}
+
 impl From<MedianSubtractSettings> for MedianSubtract {
     fn from(_s: MedianSubtractSettings) -> Self {
         MedianSubtract { radius: _s.radius }
@@ -1545,6 +1558,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::MeasureObjectTexture(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MeasureObjectTexture::from(settings),
+        ))),
+        PipelineCommand::MeasureTrackMotion(settings) => Ok(PipelineStep::Dataset(Box::new(
+            crate::dataset::MeasureTrackMotion::from(settings),
         ))),
         PipelineCommand::MedianSubtract(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MedianSubtract::from(settings),

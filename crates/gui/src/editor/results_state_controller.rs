@@ -9607,7 +9607,42 @@ pub(crate) mod tests {
         assert_eq!(per_time_point, rows);
     }
 
-    /// `opened_time_series` with tracks: each object and its T1 copy one.
+    /// What Measure Track Motion stores of each track (`region = 'track'`
+    /// rows): its path length, displacement, VCL and LIN - from the
+    /// centroids, as the step would; run after the tracks are set up.
+    const STORED_MOTION: &str = "
+        CREATE TABLE IF NOT EXISTS measurements (image_name VARCHAR, image_rel_path VARCHAR,
+            z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID,
+            related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[],
+            step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE,
+            position DOUBLE);
+        ALTER TABLE measurements ADD COLUMN IF NOT EXISTS track_id UBIGINT;
+        CREATE TEMP TABLE motion AS
+            WITH s AS (SELECT image_name, image_rel_path, track_id, t_stack,
+                    centroid_x_px AS x, centroid_y_px AS y,
+                    sqrt(power(centroid_x_px - lag(centroid_x_px) OVER w, 2)
+                        + power(centroid_y_px - lag(centroid_y_px) OVER w, 2)) AS step
+                FROM objects WHERE COALESCE(track_id, 0) <> 0
+                WINDOW w AS (PARTITION BY image_rel_path, track_id ORDER BY t_stack))
+            SELECT any_value(image_name) AS image_name, image_rel_path, track_id,
+                min(t_stack) AS t0, coalesce(sum(step), 0) AS path,
+                sqrt(power(arg_max(x, t_stack) - arg_min(x, t_stack), 2)
+                    + power(arg_max(y, t_stack) - arg_min(y, t_stack), 2)) AS moved,
+                max(t_stack) - min(t_stack) AS frames
+            FROM s GROUP BY image_rel_path, track_id;
+        INSERT INTO measurements (image_name, image_rel_path, z_stack, t_stack, region, step,
+                measurement, unit, key, value, track_id)
+            SELECT image_name, image_rel_path, 0, t0, 'track', 'motion_01', id, 'Pixels',
+                'motion_01/' || id, value, track_id
+            FROM (SELECT *, 'path_length' AS id, path AS value FROM motion
+                UNION ALL SELECT *, 'displacement', moved FROM motion
+                UNION ALL SELECT *, 'vcl', CASE WHEN frames > 0 THEN path / frames END FROM motion
+                UNION ALL SELECT *, 'lin', CASE WHEN path > 0 THEN moved / path END FROM motion)
+            WHERE value IS NOT NULL;
+        DROP TABLE motion;";
+
+    /// `opened_time_series` with tracks: each object and its T1 copy one,
+    /// measured by Measure Track Motion.
     fn opened_tracked() -> Opened {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
@@ -9622,6 +9657,7 @@ pub(crate) mod tests {
                  UPDATE images SET t_stacks = 2;",
             )
             .unwrap();
+            conn.execute_batch(STORED_MOTION).unwrap();
         }
         let ui = test_ui_window();
         let ui_state = ui_state_with_window(&ui, Default::default());
@@ -11491,6 +11527,7 @@ pub(crate) mod tests {
                  UPDATE images SET frame_interval_s = 30;",
             )
             .unwrap();
+            conn.execute_batch(STORED_MOTION).unwrap();
             conn.execute_batch(sql).unwrap();
         }
         let ui = test_ui_window();

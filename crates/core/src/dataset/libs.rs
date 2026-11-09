@@ -15,3 +15,6 @@ pub(crate) mod lap;
 /// The two linking steps of the LAP trackers (Jaqaman et al.): frame to
 /// frame, then gap closing, merging and splitting.
 pub(crate) mod linking;
+/// How a track moved (speeds, CASA ratios, turning, MSD) and the drift of
+/// an image from reference tracks - Measure Track Motion.
+pub(crate) mod track_motion;

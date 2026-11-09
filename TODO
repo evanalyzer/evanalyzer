@@ -817,6 +817,12 @@ Today (2026-10-29): Track Nearest Neighbor (greedy), Track LAP, Track Kalman and
 - [ ] Divisions/fusions per well as a value of the plate/charts (today: per image in Results › Tracks, per well by pivoting the track export).
 - [x] Track Nearest Neighbor: image by image like the LAP trackers (2026-10-29).
 - [x] Track measurements: displacement, speed, lifetime. - done: moved (displacement), mean speed and straightness per track (Results › Tracks, track export); the lifetime is its time points.
+- [x] Measure Track Motion (2026-11-09, dataset step, `dataset/tracking/measure_track_motion.rs`, math in `dataset/libs/track_motion.rs`): per track path length, displacement, max distance from start, CASA VCL/VSL/VAP/LIN/STR/WOB/ALH/BCF, turning angle (signed, absolute), angular speed, MSD α and D (log-spaced lags up to T/4); optional drift correction (median step of a reference class, stored as Drift X/Y image values). Stored as `measurements` rows with `region = 'track'` + new `track_id` column (folded into the unreleased format 2). The results only read them: Moved/Speed/Straightness = displacement/VCL/LIN, empty without the step. Design: https://claude.ai/artifact/BquNP22YTZuzDwh4SMXE39.
+- [ ] Measure Track Motion: check the CASA definitions against the WHO manual (ALH = 2 × mean distance to the average path here - vendors also use the max; VAP smoothing window; BCF counting).
+- [ ] Measure Track Motion: benchmark the tracks table/export with the stored values on a big results file (one extra query per image on `measurements`) and the step itself (small images + many tracks).
+- [ ] Tracks, Full: column picker (all stored values), the details panel's path-from-start and MSD-over-lag plots (design board 2).
+- [ ] Paths view (spider plot + motion map), design board 3 - later.
+- [ ] Track values per well in plate/charts.
 - ~1 week. ilastik's conservation tracking (ILP solver, learned division/merger classifiers) is not planned - LAP is enough for most users.
 
 ### Measurements (CellProfiler level)

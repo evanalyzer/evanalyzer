@@ -235,6 +235,24 @@ export component ResultsTracksAllView inherits Rectangle {
                                 key: 4;
                                 align: TextHorizontalAlignment.right;
                             }
+                            SortHead {
+                                width: root.num-w;
+                                text: "Turning °";
+                                key: 5;
+                                align: TextHorizontalAlignment.right;
+                            }
+                            SortHead {
+                                width: root.num-w;
+                                text: "Max dist. " + ResultsState.tracks-length-unit;
+                                key: 6;
+                                align: TextHorizontalAlignment.right;
+                            }
+                            SortHead {
+                                width: root.num-w;
+                                text: "MSD α";
+                                key: 7;
+                                align: TextHorizontalAlignment.right;
+                            }
                             Text {
                                 width: root.num-w;
                                 text: "Area px";
@@ -321,6 +339,9 @@ export component ResultsTracksAllView inherits Rectangle {
                                     { w: root.num-w, t: track.moved, mono: true, right: true },
                                     { w: root.num-w + 30px, t: track.speed, mono: true, right: true },
                                     { w: root.num-w, t: track.straightness, mono: true, right: true },
+                                    { w: root.num-w, t: track.turning, mono: true, right: true },
+                                    { w: root.num-w, t: track.max-distance, mono: true, right: true },
+                                    { w: root.num-w, t: track.msd-alpha, mono: true, right: true },
                                     { w: root.num-w, t: track.area, mono: true, right: true },
                                 ]: Text {
                                     width: cell.w;
@@ -418,6 +439,21 @@ export component ResultsTracksAllView inherits Rectangle {
                         Fact {
                             label: "Straightness";
                             value: ResultsState.track-detail.straightness;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 16px;
+                        Fact {
+                            label: "Turning";
+                            value: ResultsState.track-detail.turning;
+                        }
+                        Fact {
+                            label: "Max distance";
+                            value: ResultsState.track-detail.max-distance;
+                        }
+                        Fact {
+                            label: "MSD α";
+                            value: ResultsState.track-detail.msd-alpha;
                         }
                     }
                     VerticalLayout {

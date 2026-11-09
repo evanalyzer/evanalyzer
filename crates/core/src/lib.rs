@@ -82,7 +82,8 @@ pub use crate::algos::{
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
 
 /// What `command` measures (its `ImageAlgorithm::measurement_outputs`) -
-/// none for a step that doesn't measure. The settings become the step for
+/// none for a step that doesn't measure, nor for a dataset step (its values
+/// come after every image: no image step can use them). The settings become the step for
 /// it: a plain copy, nothing is loaded.
 pub fn measurement_outputs(
     command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
@@ -118,7 +119,7 @@ pub use crate::storage::{ImageSummary, PipelineResultExporter};
 pub use crate::dataset::DatasetAlgorithm;
 pub use crate::dataset::DatasetContext;
 pub use crate::dataset::{
-    MergeSplitAmount, TrackKalman, TrackLap, TrackNearestNeighbor, TrackOverlap,
+    MeasureTrackMotion, MergeSplitAmount, TrackKalman, TrackLap, TrackNearestNeighbor, TrackOverlap,
 };
 pub use crate::storage::DatasetStore;
 pub use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};

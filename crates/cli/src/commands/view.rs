@@ -190,8 +190,9 @@ fn tracks_table(
                     track.first_t, track.last_t
                 ))),
                 plane_cell(track.points),
-                number(Some(track.path_px)),
-                number(Some(track.displacement_px)),
+                // Measure Track Motion's stored values: empty without it.
+                number(track.motion.path_length),
+                number(track.motion.displacement),
                 number(track.speed_in(unit)),
                 number(track.straightness()),
             ]

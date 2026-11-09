@@ -32,34 +32,36 @@ pub(super) const TRACK_PALETTE: [u32; 10] = [
     0x4ADE80,
 ];
 
-/// A track's numbers for the table and its card.
+/// A track's numbers for the table and its card: its time points, and how
+/// it moved as Measure Track Motion stored it (`None` without that step -
+/// nothing is computed here).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct TrackStats {
     first_t: u32,
     last_t: u32,
     points: usize,
     /// From its first point to its last, in pixels.
-    displacement_px: f64,
-    /// Its path's length over its time points - `None` with one point.
+    displacement_px: Option<f64>,
+    /// VCL: its path's length over its time points.
     speed_px_per_frame: Option<f64>,
+    /// LIN.
+    straightness: Option<f64>,
+    /// Mean turning angle, degrees (+ counter-clockwise).
+    turning: Option<f64>,
 }
 
 impl TrackStats {
     pub(super) fn of(track: &TrackPath) -> Self {
         let first = track.points.first().copied().unwrap_or_default();
         let last = track.points.last().copied().unwrap_or_default();
-        let length: f64 = track
-            .points
-            .windows(2)
-            .map(|pair| f64::from(pair[1].x - pair[0].x).hypot(f64::from(pair[1].y - pair[0].y)))
-            .sum();
-        let frames = last.t.saturating_sub(first.t);
         Self {
             first_t: first.t,
             last_t: last.t,
             points: track.points.len(),
-            displacement_px: f64::from(last.x - first.x).hypot(f64::from(last.y - first.y)),
-            speed_px_per_frame: (frames > 0).then(|| length / f64::from(frames)),
+            displacement_px: track.motion.displacement,
+            speed_px_per_frame: track.motion.vcl,
+            straightness: track.motion.lin,
+            turning: track.motion.turning,
         }
     }
 }
@@ -662,7 +664,18 @@ impl ResultsStateController {
                 into: lineage_text(&tracks, selected.unwrap_or_default()).1.into(),
                 id: format!("#{}", track.track_id).into(),
                 span: format!("{}–{} ({})", stats.first_t, stats.last_t, stats.points).into(),
-                displacement: units.distance(stats.displacement_px).into(),
+                displacement: stats
+                    .displacement_px
+                    .map_or_else(|| "–".to_string(), |d| units.distance(d))
+                    .into(),
+                straightness: stats
+                    .straightness
+                    .map_or_else(|| "–".to_string(), format_chart_value)
+                    .into(),
+                turning: stats
+                    .turning
+                    .map_or_else(|| "–".to_string(), |a| format!("{a:+.1}°"))
+                    .into(),
                 speed: stats
                     .speed_px_per_frame
                     .map_or_else(
@@ -851,7 +864,20 @@ mod tests {
     use super::*;
     use evanalyzer_app::results::TrackPoint;
 
+    /// A track at `points` (t, x, y), with what Measure Track Motion would
+    /// store of it: displacement and VCL.
     fn track(id: u64, points: &[(u32, f32, f32)]) -> TrackPath {
+        let mut motion = evanalyzer_app::results::TrackMotion::default();
+        if let (Some(first), Some(last)) = (points.first(), points.last()) {
+            let path: f64 = points
+                .windows(2)
+                .map(|w| f64::from(w[1].1 - w[0].1).hypot(f64::from(w[1].2 - w[0].2)))
+                .sum();
+            let frames = f64::from(last.0 - first.0);
+            motion.displacement =
+                Some(f64::from(last.1 - first.1).hypot(f64::from(last.2 - first.2)));
+            motion.vcl = (frames > 0.0).then(|| path / frames);
+        }
         TrackPath {
             track_id: id,
             class_id: 1,
@@ -865,6 +891,7 @@ mod tests {
                 })
                 .collect(),
             parent_track_ids: Vec::new(),
+            motion,
         }
     }
 
@@ -912,15 +939,28 @@ mod tests {
         );
     }
 
+    /// Its time points from its path; how it moved only as Measure Track
+    /// Motion stored it - nothing is computed from the path.
     #[test]
-    fn a_tracks_stats_are_from_its_path() {
-        let stats = TrackStats::of(&track(1, &[(2, 0.0, 0.0), (3, 3.0, 4.0), (5, 3.0, 0.0)]));
+    fn a_tracks_stats_are_its_time_points_and_stored_motion() {
+        let mut path = track(1, &[(2, 0.0, 0.0), (3, 3.0, 4.0), (5, 3.0, 0.0)]);
+        path.motion = Default::default();
+        let stats = TrackStats::of(&path);
         assert_eq!((stats.first_t, stats.last_t, stats.points), (2, 5, 3));
-        assert_eq!(stats.displacement_px, 3.0);
-        assert_eq!(stats.speed_px_per_frame, Some(9.0 / 3.0));
         assert_eq!(
-            TrackStats::of(&track(2, &[(4, 1.0, 1.0)])).speed_px_per_frame,
-            None
+            (stats.displacement_px, stats.speed_px_per_frame),
+            (None, None)
+        );
+        path.motion.displacement = Some(3.0);
+        path.motion.vcl = Some(3.0);
+        path.motion.lin = Some(1.0 / 3.0);
+        path.motion.turning = Some(-12.5);
+        let stats = TrackStats::of(&path);
+        assert_eq!(stats.displacement_px, Some(3.0));
+        assert_eq!(stats.speed_px_per_frame, Some(3.0));
+        assert_eq!(
+            (stats.straightness, stats.turning),
+            (Some(1.0 / 3.0), Some(-12.5))
         );
     }
 

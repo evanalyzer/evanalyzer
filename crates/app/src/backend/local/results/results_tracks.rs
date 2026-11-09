@@ -16,7 +16,7 @@ use super::results_generator::{
     ResultsGenerator, class_filter_sql, column_aggregate_expr, sql_string_in_list,
 };
 use super::results_time_course::stat_sql;
-use crate::api::{Column, TrackLineage, TrackSummary, TrackSummaryFilter};
+use crate::api::{Column, TrackLineage, TrackMotion, TrackSummary, TrackSummaryFilter};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use std::collections::{BTreeMap, HashMap};
 
@@ -35,6 +35,8 @@ pub(super) struct TrackSummaryHead {
     pub group_label: &'static str,
     /// A tracking step recorded divisions or fusions: the rows' lineage.
     pub lineage: bool,
+    /// Measure Track Motion measured tracks: the rows' motion values.
+    pub motion: bool,
 }
 
 /// An image whose tracks are read.
@@ -176,22 +178,19 @@ impl<'a> TrackSummaryQuery<'a> {
         if filter.no_edge {
             having.push("NOT bool_or(edge)".to_string());
         }
-        // A track's steps: from each point to the next (per z-plane - the
-        // tracker links within one).
+        // How a track moved isn't computed here: Measure Track Motion
+        // stored it (read apart, per image).
         let sql = format!(
             "WITH o AS (SELECT track_id, t_stack AS t, z_stack AS z, \
-                    centroid_x_px AS x, centroid_y_px AS y, COALESCE(touches_edge, false) AS edge, \
+                    COALESCE(touches_edge, false) AS edge, \
                     COALESCE(object_class_id[1], -1) AS cls, NULLIF(pixel_size_x_nm, 0) AS nm{values_sql} \
-                FROM objects WHERE image_rel_path = ? AND {object_where}), \
-             s AS (SELECT *, sqrt(power(x - lag(x) OVER w, 2) + power(y - lag(y) OVER w, 2)) AS step \
-                FROM o WINDOW w AS (PARTITION BY track_id, z ORDER BY t)) \
+                FROM objects WHERE image_rel_path = ? AND {object_where}) \
              SELECT track_id::UBIGINT, MIN(z)::BIGINT, arg_min(cls, t)::BIGINT, MIN(t)::BIGINT, \
-                MAX(t)::BIGINT, COUNT(*)::BIGINT, COALESCE(SUM(step), 0)::DOUBLE, \
-                sqrt(power(arg_max(x, t) - arg_min(x, t), 2) + power(arg_max(y, t) - arg_min(y, t), 2))::DOUBLE, \
-                bool_or(edge), MIN(nm)::DOUBLE{stats_sql} \
-             FROM s GROUP BY track_id HAVING {} ORDER BY track_id",
+                MAX(t)::BIGINT, COUNT(*)::BIGINT, bool_or(edge), MIN(nm)::DOUBLE{stats_sql} \
+             FROM o GROUP BY track_id HAVING {} ORDER BY track_id",
             having.join(" AND ")
         );
+        let motion = database.has_track_motion()?;
         Ok(Self {
             database,
             head: TrackSummaryHead {
@@ -204,6 +203,7 @@ impl<'a> TrackSummaryQuery<'a> {
                     _ => "Well",
                 },
                 lineage,
+                motion,
             },
             images,
             class_names: classes
@@ -248,22 +248,28 @@ impl<'a> TrackSummaryQuery<'a> {
                         first_t,
                         last_t: row.get::<_, i64>(4)? as u32,
                         points: row.get::<_, i64>(5)? as u32,
-                        path_px: row.get(6)?,
-                        displacement_px: row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
-                        touches_edge: row.get(8)?,
+                        motion: TrackMotion::default(),
+                        touches_edge: row.get(6)?,
                         from_start: first_t == self.first_t,
-                        um_per_px: row.get::<_, Option<f64>>(9)?.map(|nm| nm / 1000.0),
+                        um_per_px: row.get::<_, Option<f64>>(7)?.map(|nm| nm / 1000.0),
                         s_per_frame: image.s_per_frame,
                         values: (0..self.n_values)
-                            .map(|k| row.get::<_, Option<f64>>(10 + k))
+                            .map(|k| row.get::<_, Option<f64>>(8 + k))
                             .collect::<Result<_, _>>()?,
                         lineage: TrackLineage::default(),
                     })
                 })
                 .map_err(err)?;
+            let mut motions = match self.head.motion {
+                true => self.database.track_motion(&image.rel_path)?,
+                false => HashMap::new(),
+            };
             for track in rows {
                 let mut track = track.map_err(err)?;
                 track.lineage = lineages.of(track.track_id);
+                if let Some(motion) = motions.remove(&track.track_id) {
+                    track.motion = motion;
+                }
                 visit(&track)?;
             }
         }
@@ -353,6 +359,53 @@ impl Lineages {
 }
 
 impl ResultsGenerator {
+    /// Measure Track Motion stored values (`measurements` rows with
+    /// `region = 'track'`) - not in results without it or from before it.
+    pub fn has_track_motion(&self) -> Result<bool, InternalErrors> {
+        if !self.has_column("measurements", "track_id")? {
+            return Ok(false);
+        }
+        self.connection()
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM measurements WHERE region = 'track')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    /// What Measure Track Motion stored of each track of `image_rel_path`,
+    /// by track id - none without it. Two such steps on one track: either's
+    /// value.
+    pub(super) fn track_motion(
+        &self,
+        image_rel_path: &str,
+    ) -> Result<HashMap<u64, TrackMotion>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .connection()
+            .prepare(
+                "SELECT track_id, split_part(key, '/', 2), value FROM measurements \
+                 WHERE region = 'track' AND image_rel_path = ? AND track_id IS NOT NULL",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([image_rel_path], |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                ))
+            })
+            .map_err(err)?;
+        let mut motions: HashMap<u64, TrackMotion> = HashMap::new();
+        for row in rows {
+            let (track, id, value) = row.map_err(err)?;
+            motions.entry(track).or_default().set(&id, value);
+        }
+        Ok(motions)
+    }
+
     /// The results hold divisions or fusions (`objects.parent_track_ids`,
     /// set by a tracking step) - not in results from before it.
     pub fn has_lineage(&self) -> Result<bool, InternalErrors> {
@@ -517,9 +570,9 @@ mod tests {
         }
     }
 
-    /// A row per track - image by image, by id: its time points, path
-    /// point to point, distance first to last, speed, straightness and
-    /// its measurements' statistics. Untracked objects aren't one.
+    /// A row per track - image by image, by id: its time points and its
+    /// measurements' statistics. Untracked objects aren't one. Without
+    /// Measure Track Motion it has no motion values (none is computed here).
     #[test]
     fn a_track_is_summed_up_from_its_points() {
         let db = open(&tracks(), 3, "");
@@ -532,23 +585,69 @@ mod tests {
             ("img1.tif", "ClassA")
         );
         assert_eq!((seven.first_t, seven.last_t, seven.points), (0, 2, 3));
-        assert_eq!((seven.path_px, seven.displacement_px), (9.0, 3.0));
-        assert_eq!(seven.speed_px_per_frame(), Some(4.5));
-        assert_eq!(seven.straightness(), Some(3.0 / 9.0));
+        assert!(!seven.motion.is_measured());
+        assert_eq!(
+            (seven.speed_px_per_frame(), seven.straightness()),
+            (None, None)
+        );
         assert_eq!(seven.values, [Some(20.0), Some(30.0)]);
         assert!(seven.from_start && !seven.touches_edge);
         // The fixture's pixel size: 1 nm; no frame interval.
         assert_eq!((seven.um_per_px, seven.s_per_frame), (Some(0.001), None));
         assert_eq!(rows[1].class_name, "ClassB");
         let eight = &rows[2];
-        assert_eq!(
-            (eight.points, eight.path_px, eight.from_start),
-            (1, 0.0, false)
+        assert_eq!((eight.points, eight.from_start), (1, false));
+    }
+
+    /// Measure Track Motion's stored values (`region = 'track'` rows) are
+    /// each track's motion - the head says there are some.
+    #[test]
+    fn a_track_shows_the_motion_measure_track_motion_stored() {
+        let db = open(
+            &tracks(),
+            3,
+            "CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+             z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+             related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+             step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE, \
+             position DOUBLE, track_id UBIGINT);
+             INSERT INTO measurements VALUES
+                 ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                  'VCL', 'PixelsPerFrame', 'motion_01/vcl', 4.5, NULL, 7),
+                 ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                  'LIN', 'Fraction', 'motion_01/lin', 0.25, NULL, 7),
+                 ('img2.tif', 'img2.tif', 0, 1, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                  'Path length', 'Pixels', 'motion_01/path_length', 0.0, NULL, 8),
+                 ('img1.tif', 'img1.tif', 0, 0, 'image', NULL, NULL, NULL, NULL, 'motion_01', \
+                  'Drift X', 'Pixels', 'motion_01/drift_x', 3.0, NULL, NULL);",
         );
+        let query = TrackSummaryQuery::prepare(&db, &filter()).unwrap();
+        assert!(query.head.motion);
+        let rows = query.collect().unwrap();
+        let seven = rows.iter().find(|r| r.track_id == 7).unwrap();
         assert_eq!(
-            (eight.speed_px_per_frame(), eight.straightness()),
-            (None, None)
+            (seven.speed_px_per_frame(), seven.straightness()),
+            (Some(4.5), Some(0.25))
         );
+        assert_eq!(seven.motion.path_length, None);
+        let eight = rows.iter().find(|r| r.track_id == 8).unwrap();
+        assert_eq!(eight.motion.path_length, Some(0.0));
+        assert!(
+            !rows
+                .iter()
+                .find(|r| r.track_id == 9)
+                .unwrap()
+                .motion
+                .is_measured()
+        );
+        // µm per minute: 1 nm pixels, a frame every 30 s.
+        let um_per_min = seven.motion.in_units(
+            TrackMotion::VCL,
+            crate::workspace::settings::SpeedUnit::UmPerMin,
+            Some(0.001),
+            Some(30.0),
+        );
+        assert!((um_per_min.unwrap() - 4.5 * 0.001 * 2.0).abs() < 1e-12);
     }
 
     /// At least N time points, from the first time point, not touching the

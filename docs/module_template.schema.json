@@ -2084,6 +2084,48 @@
         }
       ]
     },
+    "MeasureTrackMotionSettings": {
+      "description": "How each track moved: path, displacement, the CASA speeds and ratios\n(VCL, VSL, VAP, LIN, STR, WOB, ALH, BCF), turning angle and mean\nsquared displacement (α, D) - per track, in pixels and time points.\n\n[Track LAP / Kalman / ...] -> [Measure Track Motion]\n\nWith a drift reference (objects that don't swim, e.g. immotile cells or\nbeads, tracked too) the drift of the image is taken away first: the\nmedian step of the reference tracks from one time point to the next.",
+      "type": "object",
+      "properties": {
+        "averageOver": {
+          "description": "The average path (for VAP, STR, WOB, ALH, BCF): each position is\nthe mean of the positions this many time points before and after it.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "maximum": 100,
+          "minimum": 0
+        },
+        "driftReference": {
+          "description": "Objects that don't move by themselves (e.g. immotile cells, beads),\ntracked too: their median step is the image's drift and is taken\naway first. Unset: no drift correction.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "id": {
+          "description": "The step's ID, unique in the project - its values' keys start with\nit (\"motion_01/...\").",
+          "type": "string",
+          "default": ""
+        },
+        "minStep": {
+          "description": "Steps shorter than this are joined with the next ones before the\nturning angle is taken - jitter of the centre isn't turning. The\npath and speeds use every step.",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "objects": {
+          "description": "The tracked objects measured (a tracking step must come before).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "unit": {
+          "description": "Unit of the minimum step.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        }
+      }
+    },
     "MedianSubtractSettings": {
       "description": "A background subtraction filter that uses a median rank operator.\n\nThis algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
       "type": "object",
@@ -3413,6 +3455,19 @@
             }
           },
           "$ref": "#/$defs/MeasureObjectTextureSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEASURE_TRACK_MOTION"
+            }
+          },
+          "$ref": "#/$defs/MeasureTrackMotionSettings",
           "required": [
             "type"
           ]

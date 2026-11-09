@@ -9,9 +9,11 @@
 
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
-use crate::storage::{DatasetStore, PipelineResultExporter};
+use crate::storage::{DatasetStore, DatasetValue, PipelineResultExporter};
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, ObjectClass, ObjectId, PipelineMeasurements, TrackId},
+    core_types::{
+        InternalErrors, MeasurementInfo, ObjectClass, ObjectId, PipelineMeasurements, TrackId,
+    },
     settings::object_settings::ObjectMetricSettings,
 };
 use std::sync::{Arc, Mutex};
@@ -30,6 +32,9 @@ pub struct MemoryExporter {
     pub out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>>,
     /// The measurements, per plane - like the objects, for a preview.
     pub out_measurements: Arc<Mutex<Vec<PipelineMeasurements>>>,
+    /// The dataset steps' values (e.g. per track), by step ID - a step's
+    /// later write replaces its earlier one.
+    pub out_dataset_measurements: Arc<Mutex<Vec<(MeasurementInfo, DatasetValue)>>>,
 }
 
 impl PipelineResultExporter for MemoryExporter {
@@ -128,6 +133,26 @@ impl DatasetStore for MemoryExporter {
                 object.track.id = TrackId(track.track_id);
                 object.track.parent_track = track.parent_track_ids.first().map(|id| TrackId(*id));
             }
+        }
+        Ok(())
+    }
+
+    fn write_measurements(
+        &self,
+        step: &str,
+        infos: &[MeasurementInfo],
+        values: &[DatasetValue],
+    ) -> Result<(), InternalErrors> {
+        let mut out = self
+            .out_dataset_measurements
+            .lock()
+            .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
+        out.retain(|(info, _)| info.step != step);
+        for value in values {
+            let info = infos.get(value.info).ok_or_else(|| {
+                InternalErrors::InvalidArgument(format!("{step}: no measurement {}", value.info))
+            })?;
+            out.push((info.clone(), value.clone()));
         }
         Ok(())
     }

@@ -3677,6 +3677,54 @@ impl Default for MeasureObjectTextureSettings {
 
 // ============ DATASET ============
 
+/// How each track moved: path, displacement, the CASA speeds and ratios
+/// (VCL, VSL, VAP, LIN, STR, WOB, ALH, BCF), turning angle and mean
+/// squared displacement (α, D) - per track, in pixels and time points.
+///
+/// [Track LAP / Kalman / ...] -> [Measure Track Motion]
+///
+/// With a drift reference (objects that don't swim, e.g. immotile cells or
+/// beads, tracked too) the drift of the image is taken away first: the
+/// median step of the reference tracks from one time point to the next.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasureTrackMotionSettings {
+    /// The step's ID, unique in the project - its values' keys start with
+    /// it ("motion_01/...").
+    pub id: String,
+    /// The tracked objects measured (a tracking step must come before).
+    pub objects: ObjectClass,
+    /// Steps shorter than this are joined with the next ones before the
+    /// turning angle is taken - jitter of the centre isn't turning. The
+    /// path and speeds use every step.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_step: f32,
+    /// Unit of the minimum step.
+    pub unit: SizeUnits,
+    /// The average path (for VAP, STR, WOB, ALH, BCF): each position is
+    /// the mean of the positions this many time points before and after it.
+    #[schemars(range(min = 0, max = 100))]
+    pub average_over: usize,
+    /// Objects that don't move by themselves (e.g. immotile cells, beads),
+    /// tracked too: their median step is the image's drift and is taken
+    /// away first. Unset: no drift correction.
+    pub drift_reference: ObjectClass,
+}
+
+impl Default for MeasureTrackMotionSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            objects: ObjectClass::default(),
+            min_step: 1.0f32,
+            unit: SizeUnits::Pixels,
+            average_over: 2usize,
+            drift_reference: ObjectClass::Unset,
+        }
+    }
+}
+
 /// Links objects into tracks by the globally best assignment, predicting
 /// each track's next position from its velocity (directed motion).
 ///

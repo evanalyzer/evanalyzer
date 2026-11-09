@@ -11,7 +11,7 @@ use crate::{
     pipeline::pipeline_cache::GlobalPipelineCache,
     storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment},
 };
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use evanalyzer_cfg::core_types::{InternalErrors, MeasurementInfo, ObjectClass};
 pub mod duckdb;
 pub mod file;
 pub mod mask_codec;
@@ -98,4 +98,37 @@ pub trait DatasetStore: Send + Sync {
     /// if none is tracked - so a step tracking `class` can number its
     /// tracks after theirs without reading every object.
     fn max_track_id_except(&self, class: ObjectClass) -> Result<u64, InternalErrors>;
+
+    /// The values of the dataset step with ID `step` (each about a track or
+    /// an image's plane), described by `infos` - the step's earlier values
+    /// (of a run before) are replaced: its tracks may have changed.
+    fn write_measurements(
+        &self,
+        step: &str,
+        infos: &[MeasurementInfo],
+        values: &[DatasetValue],
+    ) -> Result<(), InternalErrors>;
+}
+
+/// A value a dataset step measured (see [`DatasetStore::write_measurements`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DatasetValue {
+    pub image_rel_path: String,
+    pub z_stack: i32,
+    /// A track's first time point; an image value's own.
+    pub t_stack: i32,
+    pub about: DatasetValueAbout,
+    /// Which of the step's measurements: an index into its `infos`.
+    pub info: usize,
+    /// Not a number (NaN): stored as NULL.
+    pub value: f64,
+}
+
+/// What a [`DatasetValue`] is about.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DatasetValueAbout {
+    /// A track of objects of `class`.
+    Track { track_id: u64, class: ObjectClass },
+    /// The whole image plane (e.g. the drift at a time point).
+    Image,
 }

@@ -18,11 +18,11 @@ use crate::api::{
     WellsBatchFilterMulti,
 };
 use crate::api::{ExportFormat, ExportProgress, ResultExport};
-use crate::api::{ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint};
 use crate::api::{
-    TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCoursePoint, TimeCourseResult,
-    TrackSummary, TrackSummaryFilter,
+    MotionKind, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCoursePoint,
+    TimeCourseResult, TrackMotion, TrackSummary, TrackSummaryFilter,
 };
+use crate::api::{ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint};
 use crate::workspace::settings::SpeedUnit;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};
@@ -337,11 +337,11 @@ impl<'a> TimeCourseLong<'a> {
 }
 
 /// The tracks table: who (image, well, class, track), when (time points,
-/// duration), how it moved (path, distance, speed, straightness), whether
-/// it touches the edge or is there from the start, then the measurements.
-/// Lengths in µm with a pixel size, else px; durations in minutes with a
-/// frame interval, else time points; the speed in the unit asked for when
-/// it can be.
+/// duration), how it moved (Measure Track Motion's values, only with that
+/// step), whether it touches the edge or is there from the start, then the
+/// measurements. Lengths in µm with a pixel size, else px; durations in
+/// minutes with a frame interval, else time points; speeds (and the other
+/// values per time) in the unit asked for when it can be.
 struct TrackColumns<'a> {
     head: &'a TrackSummaryHead,
     speed_unit: SpeedUnit,
@@ -390,10 +390,40 @@ impl<'a> TrackColumns<'a> {
         } else {
             "Duration [time points]"
         })?;
-        out.text(&format!("Path length [{length}]"))?;
-        out.text(&format!("Distance moved [{length}]"))?;
-        out.text(&format!("Mean speed [{speed}]"))?;
-        for column in ["Straightness", "Touches edge", "From first T"] {
+        if self.head.motion {
+            let time = match self.speed_unit {
+                SpeedUnit::PxPerFrame => "time point",
+                SpeedUnit::UmPerMin => "min",
+                SpeedUnit::UmPerS => "s",
+            };
+            let area = if self.head.um && self.speed_unit != SpeedUnit::PxPerFrame {
+                "µm²"
+            } else {
+                "px²"
+            };
+            for (id, _, _) in TrackMotion::VALUES {
+                out.text(&match id {
+                    "path_length" => format!("Path length [{length}]"),
+                    "displacement" => format!("Distance moved [{length}]"),
+                    "max_distance" => format!("Max distance from start [{length}]"),
+                    "vcl" => format!("VCL (mean speed) [{speed}]"),
+                    "vsl" => format!("VSL [{speed}]"),
+                    "vap" => format!("VAP [{speed}]"),
+                    "lin" => "LIN (straightness)".to_string(),
+                    "str" => "STR".to_string(),
+                    "wob" => "WOB".to_string(),
+                    "alh" => format!("ALH [{length}]"),
+                    "bcf" => format!("BCF [1/{time}]"),
+                    "turning" => "Turning angle mean [°]".to_string(),
+                    "turning_abs" => "Turning angle mean absolute [°]".to_string(),
+                    "angular_speed" => format!("Angular speed [°/{time}]"),
+                    "msd_alpha" => "MSD alpha".to_string(),
+                    "msd_d" => format!("MSD D [{area}/{time}]"),
+                    other => other.to_string(),
+                })?;
+            }
+        }
+        for column in ["Touches edge", "From first T"] {
             out.text(column)?;
         }
         for name in &self.head.value_names {
@@ -429,10 +459,20 @@ impl<'a> TrackColumns<'a> {
             Some(s) => out.number(frames * s / 60.0)?,
             None => out.number(frames)?,
         }
-        out.number(length(track.path_px))?;
-        out.number(length(track.displacement_px))?;
-        out.optional(track.speed_in(self.speed_unit))?;
-        out.optional(track.straightness())?;
+        if self.head.motion {
+            for (i, (_, _, kind)) in TrackMotion::VALUES.iter().enumerate() {
+                out.optional(match kind {
+                    // Lengths in µm whenever the pixel size is known.
+                    MotionKind::Length => track.motion.get(i).map(length),
+                    _ => track.motion.in_units(
+                        i,
+                        self.speed_unit,
+                        track.um_per_px,
+                        track.s_per_frame,
+                    ),
+                })?;
+            }
+        }
         out.text(if track.touches_edge { "TRUE" } else { "FALSE" })?;
         out.text(if track.from_start { "TRUE" } else { "FALSE" })?;
         for value in &track.values {
@@ -4487,24 +4527,11 @@ mod tests {
         assert!(error.to_string().contains("export it as CSV"), "{error}");
     }
 
-    /// Tracks: a row per track - who, when, how it moved (µm with the
-    /// fixture's pixel size; time points without a frame interval: the
-    /// speed per time point, whatever unit was asked for), its values.
+    /// Tracks: a row per track - who, when, its values. How it moved only
+    /// with Measure Track Motion (see the next test).
     #[test]
     fn the_tracks_export_has_a_row_per_track() {
-        let (database, out_dir) = open_analysed(
-            &[
-                ObjectSpec::new("img1.tif", "ClassA", 1, 10)
-                    .in_track(7)
-                    .at_centroid(0.0, 0.0),
-                ObjectSpec::new("img1.tif", "ClassA", 1, 30)
-                    .in_track(7)
-                    .at_plane(0, 1)
-                    .at_centroid(3.0, 4.0),
-                ObjectSpec::new("img1.tif", "ClassA", 1, 99),
-            ],
-            2,
-        );
+        let (database, out_dir) = open_analysed(&track_seven(), 2);
         ResultExport {
             output_dir: out_dir.clone(),
             format: ExportFormat::CSV,
@@ -4519,19 +4546,76 @@ mod tests {
         assert_eq!(
             lines[0],
             "Image,Well,Class,Track,First T,Last T,Time points,Duration [time points],\
-             Path length [µm],Distance moved [µm],Mean speed [px/time point],Straightness,\
              Touches edge,From first T,Area [px] mean"
         );
         let row: Vec<&str> = lines[1].split(',').collect();
         assert_eq!(row[0], "img1.tif");
         assert_eq!(
             row[2..],
-            [
-                "ClassA", "7", "0", "1", "2", "1", "0.005", "0.005", "5", "1", "FALSE", "TRUE",
-                "20"
-            ]
+            ["ClassA", "7", "0", "1", "2", "1", "FALSE", "TRUE", "20"]
         );
         assert_eq!(lines.len(), 2, "the untracked object isn't a track");
+    }
+
+    fn track_seven() -> Vec<ObjectSpec> {
+        vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .in_track(7)
+                .at_centroid(0.0, 0.0),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 30)
+                .in_track(7)
+                .at_plane(0, 1)
+                .at_centroid(3.0, 4.0),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 99),
+        ]
+    }
+
+    /// With Measure Track Motion: its values after the duration - lengths
+    /// in µm with the fixture's pixel size (1 nm), the rest per time point
+    /// without a frame interval, whatever unit was asked for; a value it
+    /// couldn't have is empty.
+    #[test]
+    fn the_tracks_export_has_the_stored_motion() {
+        let (database, out_dir) = open_analysed(&track_seven(), 2);
+        database
+            .connection()
+            .execute_batch(
+                "CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+                 z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+                 related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+                 step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE, \
+                 position DOUBLE, track_id UBIGINT);
+                 INSERT INTO measurements VALUES
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'Path length', 'Pixels', 'motion_01/path_length', 5.0, NULL, 7),
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'VCL', 'PixelsPerFrame', 'motion_01/vcl', 5.0, NULL, 7),
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'LIN', 'Fraction', 'motion_01/lin', 1.0, NULL, 7);",
+            )
+            .unwrap();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_track_summary: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("tracks export");
+        let csv = std::fs::read_to_string(out_dir.join("tracks.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "Image,Well,Class,Track,First T,Last T,Time points,Duration [time points],\
+             Path length [µm],Distance moved [µm],Max distance from start [µm],\
+             VCL (mean speed) [px/time point],VSL [px/time point],VAP [px/time point],\
+             LIN (straightness),STR,WOB,ALH [µm],BCF [1/time point],Turning angle mean [°],\
+             Turning angle mean absolute [°],Angular speed [°/time point],MSD alpha,\
+             MSD D [px²/time point],Touches edge,From first T"
+        );
+        let row: Vec<&str> = lines[1].split(',').collect();
+        assert_eq!(row[8..12], ["0.005", "", "", "5"]);
+        assert_eq!(row[14], "1");
     }
 
     /// With divisions: after "Track" its family - parents, children (ids

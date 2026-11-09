@@ -631,6 +631,7 @@ impl ResultCharts {
                     class_id: row.get(5).map_err(err)?,
                     points: vec![point],
                     parent_track_ids: Vec::new(),
+                    motion: Default::default(),
                 }),
             }
         }
@@ -640,6 +641,15 @@ impl ResultCharts {
             for track in &mut tracks {
                 if let Some(of) = parents.remove(&track.track_id) {
                     track.parent_track_ids = of;
+                }
+            }
+        }
+        // How each moved: Measure Track Motion's stored values.
+        if database.has_track_motion()? {
+            let mut motions = database.track_motion(path)?;
+            for track in &mut tracks {
+                if let Some(motion) = motions.remove(&track.track_id) {
+                    track.motion = motion;
                 }
             }
         }

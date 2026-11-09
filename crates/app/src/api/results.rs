@@ -210,6 +210,10 @@ pub struct TrackPath {
     /// lineage).
     #[serde(default)]
     pub parent_track_ids: Vec<u64>,
+    /// What Measure Track Motion measured of it - all `None` without that
+    /// step.
+    #[serde(default)]
+    pub motion: TrackMotion,
 }
 
 /// See [`ImageTracksFilter`].
@@ -535,10 +539,10 @@ pub struct TrackSummary {
     pub last_t: u32,
     /// Time points it has an object on.
     pub points: u32,
-    /// The length of its path, point to point.
-    pub path_px: f64,
-    /// From its first position to its last.
-    pub displacement_px: f64,
+    /// What Measure Track Motion measured of it - all `None` without that
+    /// step.
+    #[serde(default)]
+    pub motion: TrackMotion,
     pub touches_edge: bool,
     /// There from the first analysed time point.
     pub from_start: bool,
@@ -613,29 +617,177 @@ impl TrackLineage {
 }
 
 impl TrackSummary {
-    /// Its path's length over its time points (`None` with one).
+    /// Its speed (VCL: path length over its time points) in px per time
+    /// point - `None` without Measure Track Motion or with one time point.
     pub fn speed_px_per_frame(&self) -> Option<f64> {
-        let frames = self.last_t.saturating_sub(self.first_t);
-        (frames > 0).then(|| self.path_px / f64::from(frames))
+        self.motion.vcl
     }
 
-    /// Its speed in `unit` - `None` with one time point, or µm without a
-    /// pixel size or frame interval.
+    /// Its speed (VCL) in `unit` - `None` also for µm without a pixel size
+    /// or frame interval.
     pub fn speed_in(&self, unit: crate::workspace::settings::SpeedUnit) -> Option<f64> {
-        use crate::workspace::settings::SpeedUnit;
-        let px = self.speed_px_per_frame()?;
-        match (unit, self.um_per_px, self.s_per_frame) {
-            (SpeedUnit::PxPerFrame, ..) => Some(px),
-            (SpeedUnit::UmPerMin, Some(um), Some(s)) => Some(px * um / s * 60.0),
-            (SpeedUnit::UmPerS, Some(um), Some(s)) => Some(px * um / s),
-            _ => None,
-        }
+        self.motion
+            .in_units(TrackMotion::VCL, unit, self.um_per_px, self.s_per_frame)
     }
 
-    /// Distance moved over path length: 1 a straight line, near 0 wandering
-    /// (`None` without a path).
+    /// Distance moved over path length (LIN): 1 a straight line, near 0
+    /// wandering.
     pub fn straightness(&self) -> Option<f64> {
-        (self.path_px > 0.0).then(|| self.displacement_px / self.path_px)
+        self.motion.lin
+    }
+}
+
+/// What Measure Track Motion stored for a track (`measurements` rows with
+/// `region = 'track'`), in pixels and time points - see that step for what
+/// each is. `None`: not measured (no such step) or not measurable (one time
+/// point, too short for the MSD).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackMotion {
+    pub path_length: Option<f64>,
+    pub displacement: Option<f64>,
+    pub max_distance: Option<f64>,
+    pub vcl: Option<f64>,
+    pub vsl: Option<f64>,
+    pub vap: Option<f64>,
+    pub lin: Option<f64>,
+    pub str_: Option<f64>,
+    pub wob: Option<f64>,
+    pub alh: Option<f64>,
+    pub bcf: Option<f64>,
+    pub turning: Option<f64>,
+    pub turning_abs: Option<f64>,
+    pub angular_speed: Option<f64>,
+    pub msd_alpha: Option<f64>,
+    pub msd_d: Option<f64>,
+}
+
+/// What a [`TrackMotion`] value is: how it converts to the units shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotionKind {
+    /// Pixels: µm with a pixel size.
+    Length,
+    /// Pixels per time point: as the speed unit says.
+    Speed,
+    /// Without a unit (a ratio, the MSD exponent).
+    Ratio,
+    /// Degrees.
+    Angle,
+    /// Degrees per time point: per the speed unit's time.
+    AngularSpeed,
+    /// Events per time point: per the speed unit's time.
+    Frequency,
+    /// Square pixels per time point: µm² per the speed unit's time.
+    Diffusion,
+}
+
+impl TrackMotion {
+    /// The values: (id - the end of Measure Track Motion's keys -, name,
+    /// kind), in the order [`Self::get`] takes.
+    pub const VALUES: [(&'static str, &'static str, MotionKind); 16] = [
+        ("path_length", "Path length", MotionKind::Length),
+        ("displacement", "Moved", MotionKind::Length),
+        ("max_distance", "Max distance", MotionKind::Length),
+        ("vcl", "VCL", MotionKind::Speed),
+        ("vsl", "VSL", MotionKind::Speed),
+        ("vap", "VAP", MotionKind::Speed),
+        ("lin", "LIN", MotionKind::Ratio),
+        ("str", "STR", MotionKind::Ratio),
+        ("wob", "WOB", MotionKind::Ratio),
+        ("alh", "ALH", MotionKind::Length),
+        ("bcf", "BCF", MotionKind::Frequency),
+        ("turning", "Turning", MotionKind::Angle),
+        ("turning_abs", "Turning abs", MotionKind::Angle),
+        ("angular_speed", "Angular speed", MotionKind::AngularSpeed),
+        ("msd_alpha", "MSD alpha", MotionKind::Ratio),
+        ("msd_d", "MSD D", MotionKind::Diffusion),
+    ];
+    pub const PATH_LENGTH: usize = 0;
+    pub const DISPLACEMENT: usize = 1;
+    pub const VCL: usize = 3;
+    pub const LIN: usize = 6;
+
+    /// Its value number `index` (see [`Self::VALUES`]).
+    pub fn get(&self, index: usize) -> Option<f64> {
+        [
+            self.path_length,
+            self.displacement,
+            self.max_distance,
+            self.vcl,
+            self.vsl,
+            self.vap,
+            self.lin,
+            self.str_,
+            self.wob,
+            self.alh,
+            self.bcf,
+            self.turning,
+            self.turning_abs,
+            self.angular_speed,
+            self.msd_alpha,
+            self.msd_d,
+        ]
+        .get(index)
+        .copied()
+        .flatten()
+    }
+
+    /// Sets the value whose id (a key's end) is `id` - an unknown one is
+    /// ignored (a later version's).
+    pub fn set(&mut self, id: &str, value: Option<f64>) {
+        let slot = match id {
+            "path_length" => &mut self.path_length,
+            "displacement" => &mut self.displacement,
+            "max_distance" => &mut self.max_distance,
+            "vcl" => &mut self.vcl,
+            "vsl" => &mut self.vsl,
+            "vap" => &mut self.vap,
+            "lin" => &mut self.lin,
+            "str" => &mut self.str_,
+            "wob" => &mut self.wob,
+            "alh" => &mut self.alh,
+            "bcf" => &mut self.bcf,
+            "turning" => &mut self.turning,
+            "turning_abs" => &mut self.turning_abs,
+            "angular_speed" => &mut self.angular_speed,
+            "msd_alpha" => &mut self.msd_alpha,
+            "msd_d" => &mut self.msd_d,
+            _ => return,
+        };
+        *slot = value;
+    }
+
+    /// Any value at all: Measure Track Motion measured the track.
+    pub fn is_measured(&self) -> bool {
+        (0..Self::VALUES.len()).any(|i| self.get(i).is_some())
+    }
+
+    /// Value `index` in the units `unit` shows (lengths in µm with µm
+    /// speeds, times per minute / second / time point as its time) - `None`
+    /// also when µm or seconds are asked for but unknown.
+    pub fn in_units(
+        &self,
+        index: usize,
+        unit: crate::workspace::settings::SpeedUnit,
+        um_per_px: Option<f64>,
+        s_per_frame: Option<f64>,
+    ) -> Option<f64> {
+        use crate::workspace::settings::SpeedUnit;
+        let value = self.get(index)?;
+        let um = matches!(unit, SpeedUnit::UmPerMin | SpeedUnit::UmPerS);
+        let length = if um { um_per_px? } else { 1.0 };
+        // Frames per unit of time.
+        let per_time = match unit {
+            SpeedUnit::PxPerFrame => 1.0,
+            SpeedUnit::UmPerMin => s_per_frame?.recip() * 60.0,
+            SpeedUnit::UmPerS => s_per_frame?.recip(),
+        };
+        Some(match Self::VALUES.get(index)?.2 {
+            MotionKind::Length => value * length,
+            MotionKind::Speed => value * length * per_time,
+            MotionKind::Ratio | MotionKind::Angle => value,
+            MotionKind::AngularSpeed | MotionKind::Frequency => value * per_time,
+            MotionKind::Diffusion => value * length * length * per_time,
+        })
     }
 }
 

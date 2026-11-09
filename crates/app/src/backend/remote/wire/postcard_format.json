@@ -1,5 +1,5 @@
 {
-  "protocol_version": 35,
+  "protocol_version": 36,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -2137,6 +2137,90 @@
         }
       ]
     },
+    "TrackMotion": {
+      "STRUCT": [
+        {
+          "path_length": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "displacement": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "max_distance": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "vcl": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "vsl": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "vap": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "lin": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "str_": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "wob": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "alh": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "bcf": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "turning": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "turning_abs": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "angular_speed": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "msd_alpha": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "msd_d": {
+            "OPTION": "F64"
+          }
+        }
+      ]
+    },
     "TrackPath": {
       "STRUCT": [
         {
@@ -2155,6 +2239,11 @@
         {
           "parent_track_ids": {
             "SEQ": "U64"
+          }
+        },
+        {
+          "motion": {
+            "TYPENAME": "TrackMotion"
           }
         }
       ]
@@ -2205,10 +2294,9 @@
           "points": "U32"
         },
         {
-          "path_px": "F64"
-        },
-        {
-          "displacement_px": "F64"
+          "motion": {
+            "TYPENAME": "TrackMotion"
+          }
         },
         {
           "touches_edge": "BOOL"
