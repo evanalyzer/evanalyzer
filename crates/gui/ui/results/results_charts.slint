@@ -334,7 +334,9 @@ component OverTimeChart inherits Rectangle {
                 small: true;
                 kind: InkButtonKind.secondary;
                 text: "Export data…";
-                tip: "The time course as CSV or XLSX - long and/or wide tables";
+                tip: ResultsState.chart-kind == ResultsChartKind2.profile
+                    ? "The profile as CSV or XLSX - the lines or each object, long and/or wide"
+                    : "The time course as CSV or XLSX - long and/or wide tables";
                 clicked => {
                     ResultsState.chart-time-export();
                 }
@@ -425,6 +427,37 @@ component OverTimeChart inherits Rectangle {
                     stroke: line.color;
                     stroke-width: 2px;
                 }
+                // Profile: the marker (the selected curve's highest value)
+                // and the selected object's own curve on top.
+                if ResultsState.chart-time-marker != "": Path {
+                    width: plot.width;
+                    height: plot.height;
+                    viewbox-width: 1000;
+                    viewbox-height: 1000;
+                    fit: fill;
+                    commands: ResultsState.chart-time-marker;
+                    stroke: Ink.focus;
+                    stroke-width: 1px;
+                    opacity: 0.7;
+                }
+                if ResultsState.chart-time-highlight != "": Path {
+                    width: plot.width;
+                    height: plot.height;
+                    viewbox-width: 1000;
+                    viewbox-height: 1000;
+                    fit: fill;
+                    commands: ResultsState.chart-time-highlight;
+                    stroke: Ink.focus;
+                    stroke-width: 2.5px;
+                }
+                if ResultsState.chart-time-marker-label != "": Text {
+                    x: 8px;
+                    y: 6px;
+                    text: ResultsState.chart-time-marker-label;
+                    font-size: Ink.fs-caption;
+                    font-family: Ink.font-mono;
+                    color: Ink.focus;
+                }
             }
         }
 
@@ -444,6 +477,31 @@ component OverTimeChart inherits Rectangle {
                 font-size: Ink.fs-caption;
                 font-family: Ink.font-mono;
                 color: Ink.text-mute;
+            }
+        }
+
+        // Profile: the selected object's values.
+        if ResultsState.chart-profile-cards.length > 0: HorizontalLayout {
+            padding-left: 70px;
+            spacing: 10px;
+            alignment: start;
+            for card in ResultsState.chart-profile-cards: Rectangle {
+                background: Ink.raised;
+                border-radius: Ink.radius-md;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 2px;
+                    Text {
+                        text: card.label;
+                        font-size: Ink.fs-caption;
+                        color: Ink.text-mute;
+                    }
+                    Text {
+                        text: card.value;
+                        font-size: Ink.fs-body;
+                        color: Ink.text;
+                    }
+                }
             }
         }
     }
@@ -523,12 +581,44 @@ export component ResultsChartsView inherits Rectangle {
                             }
                         }
                     }
+                    // A value per radius (e.g. the Sholl profile) - with
+                    // profile measurements in the results.
+                    if ResultsState.has-profiles: HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        ChartTile {
+                            glyph: "╭─╮_";
+                            text: "Profile";
+                            selected: ResultsState.chart-kind == ResultsChartKind2.profile;
+                            clicked => {
+                                ResultsState.chart-kind = ResultsChartKind2.profile;
+                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                            }
+                        }
+                    }
                     }
                 }
 
                 SettingsGroup {
                     title: "VALUE";
-                    InkMultiSelect {
+                    // Only profile measurements (a value per radius).
+                    if ResultsState.chart-kind == ResultsChartKind2.profile: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "Profile";
+                            font-size: Ink.fs-caption;
+                            color: Ink.text-dim;
+                        }
+                        ComboBox {
+                            model: ResultsState.chart-profile-names;
+                            current-index: ResultsState.chart-profile-index;
+                            selected(v) => {
+                                ResultsState.chart-profile-index = self.current-index;
+                                ResultsState.chart-profile-selected(self.current-index);
+                            }
+                        }
+                    }
+                    if ResultsState.chart-kind != ResultsChartKind2.profile: InkMultiSelect {
                         label: ResultsState.chart-kind == ResultsChartKind2.scatter ? "X" : "Property";
                         summary-text: ResultsState.chart-column-summary;
                         items <=> ResultsState.chart-column-items;
@@ -566,7 +656,8 @@ export component ResultsChartsView inherits Rectangle {
                             }
                         }
                     }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time: VerticalLayout {
+                    // Over time and Profile: one box, their own choices.
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: VerticalLayout {
                         spacing: 4px;
                         Text {
                             text: "A line per";
@@ -574,17 +665,25 @@ export component ResultsChartsView inherits Rectangle {
                             color: Ink.text-dim;
                         }
                         ComboBox {
-                            model: ["Class", "Image", "Well", "Track"];
-                            current-index: ResultsState.chart-time-lines;
+                            model: ResultsState.chart-kind == ResultsChartKind2.profile
+                                ? ["Class", "Image", "Well", "Plate"]
+                                : ["Class", "Image", "Well", "Track"];
+                            current-index: ResultsState.chart-kind == ResultsChartKind2.profile
+                                ? ResultsState.chart-profile-lines : ResultsState.chart-time-lines;
                             selected(v) => {
-                                ResultsState.chart-time-lines = self.current-index;
+                                if ResultsState.chart-kind == ResultsChartKind2.profile {
+                                    ResultsState.chart-profile-lines = self.current-index;
+                                } else {
+                                    ResultsState.chart-time-lines = self.current-index;
+                                }
                                 ResultsState.chart-time-changed();
                             }
                         }
                     }
                     // A line per class: every class - else the class picked.
                     if ResultsState.chart-kind != ResultsChartKind2.boxplot
-                        && !(ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0): InkMultiSelect {
+                        && !(ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
+                        && !(ResultsState.chart-kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0): InkMultiSelect {
                         label: "Class";
                         summary-text: ResultsState.chart-class-summary;
                         items <=> ResultsState.chart-class-items;
@@ -642,7 +741,7 @@ export component ResultsChartsView inherits Rectangle {
                     if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
                         text: "Click a point to see its object on its image.";
                     }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSegmented {
+                    if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSegmented {
                         label: "Summary";
                         model: ["Mean ± SD", "Median + IQR"];
                         tips: ["Mean ± standard deviation", "Median and interquartile range"];
@@ -655,6 +754,25 @@ export component ResultsChartsView inherits Rectangle {
                             ResultsState.chart-time-summary = i;
                             ResultsState.chart-time-changed();
                         }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                        text: "The selected object's curve";
+                        checked: ResultsState.chart-profile-curve;
+                        toggled(on) => {
+                            ResultsState.chart-profile-curve = on;
+                            ResultsState.chart-time-changed();
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                        text: "Mark its highest value";
+                        checked: ResultsState.chart-profile-mark;
+                        toggled(on) => {
+                            ResultsState.chart-profile-mark = on;
+                            ResultsState.chart-time-changed();
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkHint {
+                        text: "Select an object in the split view or the List to see its curve. A position an object doesn't reach counts as 0.";
                     }
                     if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
                         text: "Relative to the first time point";
@@ -715,7 +833,8 @@ export component ResultsChartsView inherits Rectangle {
                 if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
                     vertical-stretch: 1;
                 }
-                if ResultsState.chart-kind == ResultsChartKind2.over-time: OverTimeChart {
+                // One chart for both: lines over a position (time or radius).
+                if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: OverTimeChart {
                     vertical-stretch: 1;
                 }
             }

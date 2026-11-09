@@ -15,6 +15,7 @@ pub use drawn_images::{colorize, colorize_thumbnail};
 mod results_charts;
 mod results_exporter;
 mod results_generator;
+mod results_profile;
 mod results_time_course;
 mod results_tracks;
 #[cfg(test)]
@@ -153,6 +154,25 @@ impl ResultsSource for LocalResults {
 
     fn time_course(&self, filter: &TimeCourseFilter) -> Result<TimeCourseResult, InternalErrors> {
         self.with(|db| results_time_course::time_course(db, filter))
+    }
+
+    fn profile_columns(&self) -> Result<Vec<crate::api::MeasurementColumn>, InternalErrors> {
+        self.with(results_profile::profile_columns)
+    }
+
+    fn profile(
+        &self,
+        filter: &crate::api::ProfileFilter,
+    ) -> Result<crate::api::ProfileResult, InternalErrors> {
+        self.with(|db| results_profile::profile(db, filter))
+    }
+
+    fn object_profile(
+        &self,
+        key: &str,
+        object_id: &str,
+    ) -> Result<Vec<(f64, f64)>, InternalErrors> {
+        self.with(|db| results_profile::object_profile(db, key, object_id))
     }
 
     fn image_objects(

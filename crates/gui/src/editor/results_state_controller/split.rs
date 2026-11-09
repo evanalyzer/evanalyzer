@@ -569,7 +569,7 @@ impl ResultsStateController {
 
     /// An image was opened: the split's own (it was being opened for a row
     /// or a well) - its objects and the selection go on it now.
-    fn split_image_opened(&self) {
+    fn split_image_opened(self: &Arc<Self>) {
         let (shown, image) = {
             let split = self.split.lock().expect("Poisoned");
             (split.shown, split.image.clone())
@@ -916,7 +916,11 @@ impl ResultsStateController {
 
     /// The selected object's ring and card, "n / total" - and, `fly`, the
     /// view to it.
-    pub(super) fn split_push_selection(&self, fly: bool) {
+    pub(super) fn split_push_selection(self: &Arc<Self>, fly: bool) {
+        // The profile chart draws the selected object's curve.
+        if self.chart_filter.lock().expect("Poisoned").kind == ChartKind::Profile {
+            self.queue_refresh(|m| &m.charts_generation, |m| m.refresh_charts_now());
+        }
         let (title_image, object, total, index, channel, region) = {
             let split = self.split.lock().expect("Poisoned");
             let object = split.selected.and_then(|i| split.objects.get(i).cloned());

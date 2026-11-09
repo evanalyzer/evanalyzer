@@ -16,7 +16,7 @@ mod tracks;
 mod tracks_all;
 mod views;
 use crate::{
-    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ChartTimeLine,
+    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartCard, ChartScatterPoint, ChartTimeLine,
     ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2,
     ResultsRailMode, ResultsState, UiState,
 };
@@ -42,6 +42,10 @@ use evanalyzer_app::results::{BoxplotBox, Cell};
 use evanalyzer_app::results::{BoxplotFilter, BoxplotGroup, ScatterResult};
 use evanalyzer_app::results::{ChildColumn, ChildValue};
 use evanalyzer_app::results::{Grouping, PlateSize};
+use evanalyzer_app::results::{
+    MeasurementColumn, ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines,
+    ProfileResult,
+};
 use evanalyzer_app::results::{ParentColumn, ParentValue};
 use evanalyzer_app::results::{
     TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
@@ -200,6 +204,8 @@ enum ChartKind {
     Scatter,
     Boxplot,
     OverTime,
+    /// A profile measurement over its position (e.g. the Sholl profile).
+    Profile,
 }
 
 #[derive(Clone)]
@@ -228,6 +234,13 @@ struct ChartFilter {
     pub time_tracks: bool,
     /// Track lines across divisions and fusions.
     pub time_history: TrackHistory,
+    /// Profile: the profile measurement's key ("" the first), a line per
+    /// class / image / well / all, the selected object's curve, its highest
+    /// value marked (summary: `time_median`).
+    pub profile_key: String,
+    pub profile_lines: ProfileLines,
+    pub profile_curve: bool,
+    pub profile_mark: bool,
 }
 
 impl Default for ChartFilter {
@@ -246,8 +259,47 @@ impl Default for ChartFilter {
             time_relative: false,
             time_tracks: false,
             time_history: TrackHistory::Own,
+            profile_key: String::new(),
+            profile_lines: ProfileLines::Class,
+            profile_curve: true,
+            profile_mark: true,
         }
     }
+}
+
+/// The profile chart's / export dialog's "A line per" (0..3).
+fn profile_lines_of(index: i32) -> ProfileLines {
+    match index {
+        1 => ProfileLines::Image,
+        2 => ProfileLines::Well,
+        3 => ProfileLines::All,
+        _ => ProfileLines::Class,
+    }
+}
+
+fn profile_lines_index(lines: ProfileLines) -> i32 {
+    match lines {
+        ProfileLines::Class => 0,
+        ProfileLines::Image => 1,
+        ProfileLines::Well => 2,
+        ProfileLines::All => 3,
+    }
+}
+
+/// The profile measurements' labels for a ComboBox: "sholl_01 ·
+/// Intersections".
+fn profile_names(columns: &[MeasurementColumn]) -> ModelRc<slint::SharedString> {
+    let names: Vec<slint::SharedString> = columns
+        .iter()
+        .map(|column| format!("{} · {}", column.step, column.name).into())
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(names)))
+}
+
+/// The index of the profile measurement `key` among `columns` (0: the
+/// first, also for "" or a key not there).
+fn profile_index(columns: &[MeasurementColumn], key: &str) -> i32 {
+    columns.iter().position(|c| c.key == key).unwrap_or(0) as i32
 }
 
 /// The chart's / export dialog's "A line per" (0..3).
@@ -472,6 +524,8 @@ pub struct ResultsStateController {
     classes: Mutex<Vec<Class>>,
     images: Mutex<Vec<ImageEntry>>,
     available_columns: Mutex<Vec<ColumnEntry>>,
+    /// The results' profile measurements (Charts › Profile, its export).
+    profile_columns: Mutex<Vec<MeasurementColumn>>,
     // Last-rendered plate cells, by well key (e.g. "C12") — so
     // `on_plate_cell_clicked` can look up what to show in the sidebar
     // without re-querying the database.
@@ -581,6 +635,7 @@ impl ResultsStateController {
             classes: Mutex::new(Vec::new()),
             images: Mutex::new(Vec::new()),
             available_columns: Mutex::new(Vec::new()),
+            profile_columns: Mutex::new(Vec::new()),
             matrix_cells: Mutex::new(HashMap::new()),
             well_cells: Mutex::new(HashMap::new()),
             image_heatmap_cells: Mutex::new(HashMap::new()),
@@ -1830,6 +1885,7 @@ impl ResultsStateController {
                         ResultsChartKind2::Scatter => ChartKind::Scatter,
                         ResultsChartKind2::Boxplot => ChartKind::Boxplot,
                         ResultsChartKind2::OverTime => ChartKind::OverTime,
+                        ResultsChartKind2::Profile => ChartKind::Profile,
                     };
                     manager.chart_filter.lock().expect("Poisened").kind = kind;
                     manager.refresh_charts();
@@ -1867,13 +1923,35 @@ impl ResultsStateController {
                         1 => TrackHistory::WithParents,
                         _ => TrackHistory::Own,
                     };
+                    filter.profile_lines = profile_lines_of(state.get_chart_profile_lines());
+                    filter.profile_curve = state.get_chart_profile_curve();
+                    filter.profile_mark = state.get_chart_profile_mark();
                 }
                 manager.refresh_charts();
             });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_chart_time_export(move || manager.export_chart_time_course());
+                .on_chart_profile_selected(move |index| {
+                    let key = manager
+                        .profile_columns
+                        .lock()
+                        .expect("Poisened")
+                        .get(index.max(0) as usize)
+                        .map(|c| c.key.clone())
+                        .unwrap_or_default();
+                    manager.chart_filter.lock().expect("Poisened").profile_key = key;
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_chart_time_export(move || {
+                let kind = manager.chart_filter.lock().expect("Poisened").kind;
+                match kind {
+                    ChartKind::Profile => manager.export_chart_profile(),
+                    _ => manager.export_chart_time_course(),
+                }
+            });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -2719,6 +2797,7 @@ impl ResultsStateController {
             state.set_has_tracks(false);
             state.set_has_lineage(false);
             state.set_has_measurements(false);
+            state.set_has_profiles(false);
             state.set_list_rows(ModelRc::default());
             state.set_list_selected_row(-1);
             state.set_peek(false);
@@ -2834,6 +2913,23 @@ impl ResultsStateController {
                         error!("{}", err);
                     }
                 };
+                // The profile measurements (results format 2): Charts ›
+                // Profile and its export.
+                let profiles = results.profile_columns().unwrap_or_else(|err| {
+                    error!("{}", err);
+                    Vec::new()
+                });
+                *self.profile_columns.lock().expect("Poisened") = profiles.clone();
+                let ui_weak = self.ui.clone();
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let state = ui.global::<ResultsState>();
+                        state.set_has_profiles(!profiles.is_empty());
+                        state.set_chart_profile_names(profile_names(&profiles));
+                        state.set_chart_profile_index(0);
+                    }
+                })
+                .ok();
                 match results.get_images() {
                     Ok(images) => {
                         // The images panel's plate marks these as analysed.
@@ -3261,7 +3357,253 @@ impl ResultsStateController {
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
+            ChartKind::Profile => {
+                let profiles = self.profile_columns.lock().expect("Poisened").clone();
+                let Some(profile) = profiles
+                    .iter()
+                    .find(|c| c.key == chart_filter.profile_key)
+                    .or(profiles.first())
+                else {
+                    self.push_chart_error(
+                        "No profile measurements in these results. A profile is a value per \
+                         radius, e.g. the Sholl intersections: add Measure Object Sholl after \
+                         Skeletonize Objects and run the analysis again."
+                            .to_string(),
+                    );
+                    return;
+                };
+                let filter = ProfileFilter {
+                    key: profile.key.clone(),
+                    lines: chart_filter.profile_lines,
+                    grouping: self.current_grouping(),
+                    images: None,
+                    object_classes: match chart_filter.profile_lines {
+                        ProfileLines::Class => None,
+                        _ => object_classes.clone(),
+                    },
+                    max_lines: CHART_TIME_MAX_LINES,
+                };
+                // The selected object's curve (the split view's object).
+                let selected = chart_filter
+                    .profile_curve
+                    .then(|| {
+                        let split = self.split.lock().expect("Poisoned");
+                        split
+                            .selected
+                            .and_then(|i| split.objects.get(i))
+                            .map(|o| o.object_id.clone())
+                    })
+                    .flatten();
+                let curve = selected
+                    .and_then(|id| db.object_profile(&profile.key, &id).ok())
+                    .unwrap_or_default();
+                let label = format!("{} · {}", profile.step, profile.name);
+                match db.profile(&filter) {
+                    Ok(result) => {
+                        self.push_profile_in_slint(&result, &curve, &label, &chart_filter)
+                    }
+                    Err(err) => self.push_chart_error(err.to_string()),
+                }
+            }
         }
+    }
+
+    /// The profile chart: its lines and bands (in the "Over time" chart's
+    /// 1000 x 1000 box, x the position), the selected object's curve, its
+    /// highest value marked, its values as cards.
+    fn push_profile_in_slint(
+        &self,
+        result: &ProfileResult,
+        curve: &[(f64, f64)],
+        label: &str,
+        filter: &ChartFilter,
+    ) {
+        let classes = self.classes.lock().expect("Poisened").clone();
+        // A series per line, in the result's order: its name, its legend
+        // ("name · objects"), color, points (position, center, low, high).
+        type Series = (
+            String,
+            String,
+            u32,
+            Vec<(f64, Option<f64>, Option<f64>, Option<f64>)>,
+        );
+        let mut built: Vec<Series> = Vec::new();
+        for point in &result.points {
+            let name = match filter.profile_lines {
+                ProfileLines::Class => point.class_name.clone(),
+                ProfileLines::All => "All objects".to_string(),
+                _ => point.line.clone(),
+            };
+            let (center, low, high) = match filter.time_median {
+                true => (point.median, point.q1, point.q3),
+                false => (
+                    point.mean,
+                    point.mean.zip(point.sd).map(|(m, s)| (m - s).max(0.0)),
+                    point.mean.zip(point.sd).map(|(m, s)| m + s),
+                ),
+            };
+            match built.last_mut() {
+                Some((last, _, _, points)) if *last == name => {
+                    points.push((point.position, center, low, high))
+                }
+                _ => {
+                    let color = match filter.profile_lines {
+                        ProfileLines::Class => classes
+                            .iter()
+                            .find(|c| c.id == point.class_id)
+                            .map(|c| c.color)
+                            .filter(|c| *c != 0)
+                            .unwrap_or(CHART_TIME_PALETTE[0]),
+                        _ => CHART_TIME_PALETTE[built.len() % CHART_TIME_PALETTE.len()],
+                    };
+                    let legend = format!("{name} · {}", point.n_objects);
+                    built.push((
+                        name,
+                        legend,
+                        color,
+                        vec![(point.position, center, low, high)],
+                    ));
+                }
+            }
+        }
+        let series: Vec<(
+            String,
+            u32,
+            Vec<(f64, Option<f64>, Option<f64>, Option<f64>)>,
+        )> = built
+            .into_iter()
+            .map(|(_, legend, color, points)| (legend, color, points))
+            .collect();
+        let positions = series
+            .iter()
+            .flat_map(|(_, _, points)| points.iter().map(|p| p.0))
+            .chain(curve.iter().map(|c| c.0));
+        let (x_lo, x_hi) = positions.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+            (lo.min(x), hi.max(x))
+        });
+        if !x_lo.is_finite() {
+            self.push_chart_error(format!("{label}: no values for these objects."));
+            return;
+        }
+        let x_lo = x_lo.min(0.0);
+        let x_hi = if x_hi > x_lo { x_hi } else { x_lo + 1.0 };
+        let values = series
+            .iter()
+            .flat_map(|(_, _, points)| points.iter().flat_map(|(_, c, l, h)| [*c, *l, *h]))
+            .flatten()
+            .chain(curve.iter().map(|c| c.1));
+        let high = values.fold(0.0f64, f64::max);
+        let high = if high > 0.0 { high * 1.05 } else { 1.0 };
+        let x = |v: f64| (v - x_lo) / (x_hi - x_lo) * 1000.0;
+        let y = |v: f64| 1000.0 - v / high * 1000.0;
+        let lines: Vec<(String, u32, String, String)> = series
+            .iter()
+            .map(|(name, color, points)| {
+                let line = chart_path(points.iter().map(|(p, c, _, _)| c.map(|c| (x(*p), y(c)))));
+                let band = chart_band(
+                    &points
+                        .iter()
+                        .map(|(p, _, l, h)| (x(*p), l.map(y), h.map(y)))
+                        .collect::<Vec<_>>(),
+                );
+                (name.clone(), *color, line, band)
+            })
+            .collect();
+        let highlight = chart_path(curve.iter().map(|(p, v)| Some((x(*p), y(*v)))));
+        // The selected curve's highest value (the first at it) and its
+        // values: the most, where, how far it reaches, the mean up to there.
+        let peak = curve
+            .iter()
+            .copied()
+            .fold(None::<(f64, f64)>, |best, (p, v)| match best {
+                Some((_, bv)) if bv >= v => best,
+                _ => Some((p, v)),
+            })
+            .filter(|(_, v)| *v > 0.0);
+        let reach = curve.iter().rev().find(|(_, v)| *v > 0.0).map(|c| c.0);
+        let (marker, marker_label) = match (filter.profile_mark, peak) {
+            (true, Some((p, v))) => (
+                format!("M {:.1} 0 L {:.1} 1000", x(p), x(p)),
+                format!(
+                    "highest {} at {}",
+                    format_chart_value(v),
+                    format_chart_value(p)
+                ),
+            ),
+            _ => (String::new(), String::new()),
+        };
+        let cards: Vec<(String, String)> = match (peak, reach) {
+            (Some((p, v)), Some(reach)) => {
+                let within: Vec<f64> = curve.iter().filter(|c| c.0 <= reach).map(|c| c.1).collect();
+                let mean = within.iter().sum::<f64>() / within.len().max(1) as f64;
+                vec![
+                    (
+                        "SELECTED · MAX".to_string(),
+                        format!("{} at {} px", format_chart_value(v), format_chart_value(p)),
+                    ),
+                    (
+                        "REACHES".to_string(),
+                        format!("{} px", format_chart_value(reach)),
+                    ),
+                    ("MEAN UP TO THERE".to_string(), format_chart_value(mean)),
+                ]
+            }
+            _ => Vec::new(),
+        };
+        let title = format!(
+            "{label} · {}",
+            if filter.time_median {
+                "median + IQR"
+            } else {
+                "mean ± SD"
+            }
+        );
+        let note = match result.lines_total > series.len() {
+            true => format!("{} of {} lines shown", series.len(), result.lines_total),
+            false => String::new(),
+        };
+        let (x_min, x_max) = (
+            format!("{} px", format_chart_value(x_lo)),
+            format!("{} px", format_chart_value(x_hi)),
+        );
+        let (y_min, y_max) = ("0".to_string(), format_chart_value(high));
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                let data: Vec<ChartTimeLine> = lines
+                    .into_iter()
+                    .map(|(label, color, line, band)| ChartTimeLine {
+                        label: label.into(),
+                        color: bg_color_to_slint(color),
+                        line: line.into(),
+                        band: band.into(),
+                    })
+                    .collect();
+                state.set_chart_error("".into());
+                state.set_chart_time_data(ModelRc::from(Rc::new(VecModel::from(data))));
+                state.set_chart_time_faint(ModelRc::default());
+                state.set_chart_time_y_min(y_min.into());
+                state.set_chart_time_y_max(y_max.into());
+                state.set_chart_time_x_min(x_min.into());
+                state.set_chart_time_x_max(x_max.into());
+                state.set_chart_time_y_title(title.into());
+                state.set_chart_time_note(note.into());
+                state.set_chart_time_highlight(highlight.into());
+                state.set_chart_time_marker(marker.into());
+                state.set_chart_time_marker_label(marker_label.into());
+                state.set_chart_profile_cards(ModelRc::from(Rc::new(VecModel::from(
+                    cards
+                        .into_iter()
+                        .map(|(label, value)| ChartCard {
+                            label: label.into(),
+                            value: value.into(),
+                        })
+                        .collect::<Vec<_>>(),
+                ))));
+            }
+        })
+        .ok();
     }
 
     /// The "Over time" chart: lines, bands, faint tracks as paths in a
@@ -3405,9 +3747,47 @@ impl ResultsStateController {
                 state.set_chart_time_x_max(x_max.into());
                 state.set_chart_time_y_title(title.into());
                 state.set_chart_time_note(note.into());
+                // The profile's layers aren't the time course's.
+                state.set_chart_time_highlight("".into());
+                state.set_chart_time_marker("".into());
+                state.set_chart_time_marker_label("".into());
+                state.set_chart_profile_cards(ModelRc::default());
             }
         })
         .ok();
+    }
+
+    /// "Export data…" of the profile chart: the export dialog with only the
+    /// profile, as the chart has it - its measurement and lines.
+    fn export_chart_profile(&self) {
+        let Some(ui_ready) = self.ui.upgrade() else {
+            return;
+        };
+        let populated =
+            std::mem::replace(&mut *self.export_populated.lock().expect("Poisened"), true);
+        if !populated {
+            self.populate_export_defaults(&ui_ready);
+        }
+        let filter = self.chart_filter.lock().expect("Poisened").clone();
+        let profiles = self.profile_columns.lock().expect("Poisened").clone();
+        let state = ui_ready.global::<ExportDialogState>();
+        state.set_with_list_view(false);
+        state.set_with_grouped_by_image_list(false);
+        state.set_with_plate_heatmap_view(false);
+        state.set_with_well_heatmap_view(false);
+        state.set_with_plate_list(false);
+        state.set_with_well_list(false);
+        state.set_with_heatmap(false);
+        state.set_with_drawn_images(false);
+        state.set_with_time_course(false);
+        state.set_with_measurements(false);
+        state.set_with_tracks(false);
+        state.set_with_profile(true);
+        state.set_profile_names(profile_names(&profiles));
+        state.set_profile_index(profile_index(&profiles, &filter.profile_key));
+        state.set_profile_lines(profile_lines_index(filter.profile_lines));
+        state.set_profile_content(0);
+        state.set_active(true);
     }
 
     /// "Export data…" of the "Over time" chart: the export dialog with only
@@ -4909,6 +5289,13 @@ impl ResultsStateController {
     // from a Slint callback), so it pushes into `ExportDialogState` right
     // away rather than through `invoke_from_event_loop`.
     fn populate_export_defaults(&self, ui_ready: &AppWindow) {
+        {
+            // The profile measurements (the first preselected).
+            let profiles = self.profile_columns.lock().expect("Poisened");
+            let state = ui_ready.global::<ExportDialogState>();
+            state.set_profile_names(profile_names(&profiles));
+            state.set_profile_index(0);
+        }
         let rail_mode = ui_ready.global::<ResultsState>().get_rail_mode();
         let z_stack_max = ui_ready.global::<ResultsState>().get_z_stack_max().max(0) as u32;
         let t_stack_max = ui_ready.global::<ResultsState>().get_t_stack_max().max(0) as u32;
@@ -5349,6 +5736,26 @@ impl ResultsStateController {
             },
             with_track_summary: state.get_with_tracks(),
             with_measurements: state.get_with_measurements(),
+            with_profile: state.get_with_profile(),
+            profile: ProfileExport {
+                key: self
+                    .profile_columns
+                    .lock()
+                    .expect("Poisened")
+                    .get(state.get_profile_index().max(0) as usize)
+                    .map(|c| c.key.clone())
+                    .unwrap_or_default(),
+                lines: profile_lines_of(state.get_profile_lines()),
+                content: match state.get_profile_content() {
+                    1 => ProfileExportContent::Objects,
+                    _ => ProfileExportContent::Lines,
+                },
+                layout: match state.get_profile_layout() {
+                    0 => TimeCourseLayout::Long,
+                    1 => TimeCourseLayout::Wide,
+                    _ => TimeCourseLayout::Both,
+                },
+            },
             track_summary: evanalyzer_app::results::TrackSummaryExport {
                 statistics: TIME_STATS
                     .iter()
@@ -9311,6 +9718,195 @@ pub(crate) mod tests {
             s.get_chart_error()
         );
         assert_eq!(s.get_chart_time_data().row_count(), 0);
+    }
+
+    /// The test database with a Sholl profile (results format 2) for its
+    /// first three objects - radii 10, 20, 30 - and the first object's id.
+    fn opened_with_profiles() -> (Opened, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let first = {
+            let conn = duckdb::Connection::open(&path).expect("open test db");
+            let objects: Vec<(String, String, i32)> = conn
+                .prepare(
+                    "SELECT object_id::VARCHAR, image_rel_path, object_class_id[1] FROM objects \
+                     ORDER BY object_id LIMIT 3",
+                )
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            let mut rows = Vec::new();
+            for (i, (id, image, class)) in objects.iter().enumerate() {
+                for (r, v) in [(10.0, 2.0 + i as f64), (20.0, 4.0), (30.0, i as f64)] {
+                    rows.push(format!(
+                        "('{image}', '{image}', 0, 0, 'object', '{id}', NULL, NULL, [{class}], \
+                         'sholl_01', 'Intersections', 'Count', 'sholl_01/intersections', {v}, {r})"
+                    ));
+                }
+            }
+            conn.execute_batch(&format!(
+                "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
+                 step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, range_max DOUBLE, \
+                 aggregatable BOOLEAN, object_index INTEGER, related_objects BOOLEAN, \
+                 profile BOOLEAN);
+                 CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+                 z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+                 related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+                 step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE, \
+                 position DOUBLE);
+                 INSERT INTO measurement_info VALUES ('sholl_01/intersections', 'Intersections', \
+                 'sholl_01', 'Count', 'Object', NULL, NULL, true, NULL, false, true);
+                 INSERT INTO measurements VALUES {};",
+                rows.join(", ")
+            ))
+            .unwrap();
+            objects[0].0.clone()
+        };
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        (
+            Opened {
+                ui,
+                controller,
+                _dir: dir,
+            },
+            first,
+        )
+    }
+
+    /// Profile measurements: the Profile chart is offered and draws its
+    /// lines - a line per class, its title the profile.
+    #[test]
+    fn the_profile_chart_draws_the_lines() {
+        let (o, _) = opened_with_profiles();
+        let s = o.state();
+        assert!(s.get_has_profiles());
+        assert_eq!(
+            s.get_chart_profile_names().row_data(0).unwrap(),
+            "sholl_01 · Intersections"
+        );
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.set_chart_kind(ResultsChartKind2::Profile);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
+        drain_ui_queue();
+        assert_eq!(s.get_chart_error(), "");
+        assert!(s.get_chart_time_data().row_count() >= 1);
+        assert!(
+            s.get_chart_time_y_title()
+                .contains("sholl_01 · Intersections")
+        );
+        assert_eq!(s.get_chart_time_x_max(), "30 px");
+        // Nothing selected: no curve, no cards.
+        assert_eq!(s.get_chart_time_highlight(), "");
+        assert_eq!(s.get_chart_profile_cards().row_count(), 0);
+    }
+
+    /// Without profile measurements the chart says how to get one.
+    #[test]
+    fn the_profile_chart_without_profiles_says_how_to_get_one() {
+        let o = opened();
+        let s = o.state();
+        assert!(!s.get_has_profiles());
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
+        drain_ui_queue();
+        assert!(
+            s.get_chart_error().contains("Measure Object Sholl"),
+            "{}",
+            s.get_chart_error()
+        );
+    }
+
+    /// The selected object's curve, its highest value marked, its values
+    /// as cards.
+    #[test]
+    fn the_profile_chart_draws_the_selected_objects_curve() {
+        let (o, first) = opened_with_profiles();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
+        {
+            let mut split = o.controller.split.lock().unwrap();
+            split.objects = Arc::new(vec![evanalyzer_app::results::ResultObject {
+                object_id: first,
+                class_id: 1,
+                bbox_px: [0, 0, 9, 9],
+                centroid_px: [5.0, 5.0],
+                area_px: 100,
+                means: Vec::new(),
+                value: None,
+                track_id: None,
+                parent_ids: Vec::new(),
+                mask: Vec::new(),
+            }]);
+            split.selected = Some(0);
+        }
+        s.invoke_chart_time_changed();
+        drain_ui_queue();
+        assert_ne!(s.get_chart_time_highlight(), "");
+        assert_ne!(s.get_chart_time_marker(), "");
+        // The first object: 2 at r 10, 4 at r 20, 0 at r 30.
+        assert_eq!(s.get_chart_time_marker_label(), "highest 4 at 20");
+        let cards: Vec<String> = s
+            .get_chart_profile_cards()
+            .iter()
+            .map(|c| c.value.to_string())
+            .collect();
+        assert_eq!(cards, ["4 at 20 px", "20 px", "3"]);
+        // Switched off: no curve.
+        s.set_chart_profile_curve(false);
+        s.invoke_chart_time_changed();
+        drain_ui_queue();
+        assert_eq!(s.get_chart_time_highlight(), "");
+    }
+
+    /// The profile chart's settings are the view's: kept when switching.
+    #[test]
+    fn the_profile_charts_settings_are_saved_with_the_view() {
+        let (o, _) = opened_with_profiles();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.set_chart_kind(ResultsChartKind2::Profile);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
+        s.set_chart_profile_lines(3);
+        s.set_chart_profile_mark(false);
+        s.invoke_chart_time_changed();
+        drain_ui_queue();
+        let settings = active_view(&o).settings;
+        assert_eq!(settings["chart"]["kind"], "profile");
+        assert_eq!(settings["chart"]["profileLines"], "All");
+        assert_eq!(settings["chart"]["profileMark"], false);
+    }
+
+    /// "Export data…" of the profile chart: the export dialog with only the
+    /// profile, its measurement and lines.
+    #[test]
+    fn exporting_the_profile_chart_presets_the_dialog() {
+        let (o, _) = opened_with_profiles();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
+        s.set_chart_profile_lines(1);
+        s.invoke_chart_time_changed();
+        drain_ui_queue();
+        s.invoke_chart_time_export();
+        let export = o.export();
+        assert!(export.get_active());
+        assert!(export.get_with_profile());
+        assert!(!export.get_with_time_course() && !export.get_with_list_view());
+        export.set_output_dir("/tmp".into());
+        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
+        assert!(settings.with_profile);
+        assert_eq!(settings.profile.key, "sholl_01/intersections");
+        assert_eq!(settings.profile.lines, ProfileLines::Image);
+        assert_eq!(settings.profile.content, ProfileExportContent::Lines);
     }
 
     /// "Export data…": the export dialog with only the time course - the

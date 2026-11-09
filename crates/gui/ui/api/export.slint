@@ -72,6 +72,15 @@ export global ExportDialogState {
     in-out property <bool> with-tracks: false;
     // One row per measurement value (`measurements.csv`).
     in-out property <bool> with-measurements: false;
+    // A profile (e.g. the Sholl intersections per radius): which one, a
+    // line per class / image / well / all (0..3), the lines' statistics or
+    // each object's values (0 / 1), its tables long / wide / both (0..2).
+    in-out property <bool> with-profile: false;
+    in property <[string]> profile-names: [];
+    in-out property <int> profile-index: 0;
+    in-out property <int> profile-lines: 0;
+    in-out property <int> profile-content: 0;
+    in-out property <int> profile-layout: 2;
     in-out property <[MultiSelectItem]> track-stat-items: [];
     in-out property <string> track-stat-summary: "";
     in-out property <string> track-min-points: "1";

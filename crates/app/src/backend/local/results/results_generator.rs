@@ -58,6 +58,8 @@ pub struct ResultsGenerator {
     object_columns_cache: RefCell<Option<HashSet<String>>>,
     /// Whether the results hold a volume's objects (`has_volumes`).
     volumes_cache: RefCell<Option<bool>>,
+    /// Whether the results can hold profiles (format 2, `has_profiles`).
+    profiles_cache: RefCell<Option<bool>>,
 }
 
 impl ResultsGenerator {
@@ -71,7 +73,29 @@ impl ResultsGenerator {
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
+            profiles_cache: RefCell::new(None),
         })
+    }
+
+    /// Whether the results can hold profiles (format 2:
+    /// `measurement_info.profile` and `measurements.position`) - one query,
+    /// cached: the columns of a results file don't change.
+    pub(super) fn has_profiles(&self) -> Result<bool, InternalErrors> {
+        if let Some(cached) = *self.profiles_cache.borrow() {
+            return Ok(cached);
+        }
+        let both: bool = self
+            .database
+            .query_row(
+                "SELECT count(*) = 2 FROM information_schema.columns WHERE \
+                 (table_name = 'measurement_info' AND column_name = 'profile') OR \
+                 (table_name = 'measurements' AND column_name = 'position')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        *self.profiles_cache.borrow_mut() = Some(both);
+        Ok(both)
     }
 
     /// The regex `grouping` uses on this database's images - for
@@ -216,6 +240,7 @@ impl ResultsGenerator {
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
+            profiles_cache: RefCell::new(None),
         })
     }
 
@@ -2947,7 +2972,7 @@ impl ResultsGenerator {
         }
         // Profiles (a curve per object, since format 2) are no single value:
         // not offered here.
-        let not_profile = if self.has_column("measurement_info", "profile")? {
+        let not_profile = if self.has_profiles()? {
             "WHERE NOT coalesce(profile, false)"
         } else {
             ""
@@ -4867,6 +4892,7 @@ mod tests {
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
+            profiles_cache: RefCell::new(None),
         }
     }
 

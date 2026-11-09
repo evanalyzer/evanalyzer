@@ -14,7 +14,7 @@ export enum ResultsRailMode { list, matrix, charts, tracks }
 // object (single image + detected objects).
 export enum MatrixLevel { plate, well, object }
 
-export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time }
+export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time, profile }
 
 // One of the project's results views (the bar's tabs).
 export struct ResultsViewTab {
@@ -206,6 +206,13 @@ export struct ChartTimeLine {
     color: color,
     line: string,
     band: string,
+}
+
+// A summary card under the profile chart (the selected object's values):
+// "MAX" / "12 at 50 px".
+export struct ChartCard {
+    label: string,
+    value: string,
 }
 
 export struct ChartBoxplotBox {
@@ -773,8 +780,30 @@ export global ResultsState {
     // "24 of 80 lines shown", else "".
     in property <string> chart-time-note: "";
     callback chart-time-changed();
-    // "Export data…": the export dialog, set to the chart's time course.
+    // "Export data…": the export dialog, set to the chart's time course
+    // (Profile: its profile).
     callback chart-time-export();
+    // The selected object's curve (Profile) and a marker (the critical
+    // radius: a vertical line) with its label - paths in the same box, ""
+    // none.
+    in property <string> chart-time-highlight: "";
+    in property <string> chart-time-marker: "";
+    in property <string> chart-time-marker-label: "";
+
+    // -- Profile (e.g. the Sholl profile): the profile measurement, a line
+    // per class / image / well / all (0..3; summary as `chart-time-summary`),
+    // the selected object's curve, the critical radius marked, its values
+    // as cards --
+    in property <bool> has-profiles: false;
+    // The profile measurements' labels ("sholl_01 · Intersections") and
+    // the one shown (a ComboBox: always one).
+    in property <[string]> chart-profile-names: [];
+    in-out property <int> chart-profile-index: 0;
+    callback chart-profile-selected(int);
+    in-out property <int> chart-profile-lines: 0;
+    in-out property <bool> chart-profile-curve: true;
+    in-out property <bool> chart-profile-mark: true;
+    in property <[ChartCard]> chart-profile-cards: [];
 
     // Set whenever the selected column(s) can't be charted yet (identity
     // columns, per-channel intensity — see `chart_value_expr` in

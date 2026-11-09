@@ -1,5 +1,5 @@
 {
-  "protocol_version": 34,
+  "protocol_version": 35,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1008,6 +1008,148 @@
         }
       }
     },
+    "ProfileExport": {
+      "STRUCT": [
+        {
+          "key": "STR"
+        },
+        {
+          "lines": {
+            "TYPENAME": "ProfileLines"
+          }
+        },
+        {
+          "content": {
+            "TYPENAME": "ProfileExportContent"
+          }
+        },
+        {
+          "layout": {
+            "TYPENAME": "TimeCourseLayout"
+          }
+        }
+      ]
+    },
+    "ProfileExportContent": {
+      "ENUM": {
+        "0": {
+          "Lines": "UNIT"
+        },
+        "1": {
+          "Objects": "UNIT"
+        }
+      }
+    },
+    "ProfileFilter": {
+      "STRUCT": [
+        {
+          "key": "STR"
+        },
+        {
+          "lines": {
+            "TYPENAME": "ProfileLines"
+          }
+        },
+        {
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "max_lines": "U64"
+        }
+      ]
+    },
+    "ProfileLines": {
+      "ENUM": {
+        "0": {
+          "Class": "UNIT"
+        },
+        "1": {
+          "Image": "UNIT"
+        },
+        "2": {
+          "Well": "UNIT"
+        },
+        "3": {
+          "All": "UNIT"
+        }
+      }
+    },
+    "ProfilePoint": {
+      "STRUCT": [
+        {
+          "line": "STR"
+        },
+        {
+          "class_id": "U32"
+        },
+        {
+          "class_name": "STR"
+        },
+        {
+          "position": "F64"
+        },
+        {
+          "n_objects": "U64"
+        },
+        {
+          "mean": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "sd": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "median": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "q1": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "q3": {
+            "OPTION": "F64"
+          }
+        }
+      ]
+    },
+    "ProfileResult": {
+      "STRUCT": [
+        {
+          "points": {
+            "SEQ": {
+              "TYPENAME": "ProfilePoint"
+            }
+          }
+        },
+        {
+          "lines_total": "U64"
+        }
+      ]
+    },
     "RelatedTo": {
       "ENUM": {
         "0": {
@@ -1175,6 +1317,14 @@
         },
         {
           "with_measurements": "BOOL"
+        },
+        {
+          "with_profile": "BOOL"
+        },
+        {
+          "profile": {
+            "TYPENAME": "ProfileExport"
+          }
         },
         {
           "track_summary": {
@@ -1365,13 +1515,41 @@
           }
         },
         "14": {
+          "ProfileColumns": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "MeasurementColumn"
+              }
+            }
+          }
+        },
+        "15": {
+          "Profile": {
+            "NEWTYPE": {
+              "TYPENAME": "ProfileResult"
+            }
+          }
+        },
+        "16": {
+          "ObjectProfile": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TUPLEARRAY": {
+                  "CONTENT": "F64",
+                  "SIZE": 2
+                }
+              }
+            }
+          }
+        },
+        "17": {
           "Tracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracks"
             }
           }
         },
-        "15": {
+        "18": {
           "TrackSummary": {
             "NEWTYPE": {
               "SEQ": {
@@ -1496,37 +1674,59 @@
           }
         },
         "17": {
+          "ProfileColumns": "UNIT"
+        },
+        "18": {
+          "Profile": {
+            "NEWTYPE": {
+              "TYPENAME": "ProfileFilter"
+            }
+          }
+        },
+        "19": {
+          "ObjectProfile": {
+            "STRUCT": [
+              {
+                "key": "STR"
+              },
+              {
+                "object_id": "STR"
+              }
+            ]
+          }
+        },
+        "20": {
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
             }
           }
         },
-        "18": {
+        "21": {
           "ImageObjects": {
             "NEWTYPE": {
               "TYPENAME": "ImageObjectsFilter"
             }
           }
         },
-        "19": {
+        "22": {
           "ImageTracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracksFilter"
             }
           }
         },
-        "20": {
+        "23": {
           "HasTracks": "UNIT"
         },
-        "21": {
+        "24": {
           "TrackSummary": {
             "NEWTYPE": {
               "TYPENAME": "TrackSummaryFilter"
             }
           }
         },
-        "22": {
+        "25": {
           "HasLineage": "UNIT"
         }
       }

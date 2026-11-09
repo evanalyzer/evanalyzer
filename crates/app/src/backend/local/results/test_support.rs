@@ -476,3 +476,53 @@ mod tests {
         assert_eq!(objects, (2 * 3 * 4, 2 * 3 * 4), "unique object ids");
     }
 }
+
+/// Three neurons: two of class A in image A01 (one reaching radius 20,
+/// one radius 30), one of class B in B01 (radius 10), with their
+/// intersections per radius - and an ordinary measurement.
+pub(super) fn profile_database() -> super::results_generator::ResultsGenerator {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("A01_1.tif", "A", 1, 10),
+            ObjectSpec::new("A01_1.tif", "A", 1, 10),
+            ObjectSpec::new("B01_1.tif", "B", 2, 10),
+        ],
+    );
+    std::mem::forget(dir);
+    let db = super::results_generator::ResultsGenerator::open_database(path).unwrap();
+    let id = |i: usize| format!("00000000-0000-0000-0000-{i:012}");
+    let row = |object: usize, image: &str, class: u32, position: f64, value: f64| {
+        format!(
+            "('{image}', '{image}', 0, 0, 'object', '{}', NULL, NULL, [{class}], 'sholl_01', \
+             'Intersections', 'Count', 'sholl_01/intersections', {value}, {position})",
+            id(object)
+        )
+    };
+    db.connection()
+        .execute_batch(&format!(
+            "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
+             step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, range_max DOUBLE, \
+             aggregatable BOOLEAN, object_index INTEGER, related_objects BOOLEAN, \
+             profile BOOLEAN);
+             CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+             z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+             related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+             step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE, \
+             position DOUBLE);
+             INSERT INTO measurement_info VALUES
+                 ('sholl_01/intersections', 'Intersections', 'sholl_01', 'Count', 'Object', NULL, NULL, true, NULL, false, true),
+                 ('sholl_01/max_intersections', 'Max intersections', 'sholl_01', 'Count', 'Object', NULL, NULL, true, 1, false, false);
+             INSERT INTO measurements VALUES {}, {}, {}, {}, {}, {};",
+            row(0, "A01_1.tif", 1, 10.0, 2.0),
+            row(0, "A01_1.tif", 1, 20.0, 4.0),
+            row(1, "A01_1.tif", 1, 10.0, 4.0),
+            row(1, "A01_1.tif", 1, 20.0, 6.0),
+            row(1, "A01_1.tif", 1, 30.0, 2.0),
+            row(2, "B01_1.tif", 2, 10.0, 1.0),
+        ))
+        .unwrap();
+    db
+}

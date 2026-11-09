@@ -211,6 +211,18 @@ pub trait ResultsSource: Send + Sync {
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors>;
     /// Per time point, statistics over each line's objects (`TimeCourseFilter`).
     fn time_course(&self, filter: &TimeCourseFilter) -> Result<TimeCourseResult, InternalErrors>;
+    /// The profile measurements (a value per object and position, e.g. the
+    /// Sholl intersections per radius) - Charts › Profile's picker.
+    fn profile_columns(&self) -> Result<Vec<crate::api::MeasurementColumn>, InternalErrors>;
+    /// Per position, statistics of a profile over each line's objects
+    /// (`ProfileFilter`).
+    fn profile(
+        &self,
+        filter: &crate::api::ProfileFilter,
+    ) -> Result<crate::api::ProfileResult, InternalErrors>;
+    /// One object's profile: (position, value), by position.
+    fn object_profile(&self, key: &str, object_id: &str)
+    -> Result<Vec<(f64, f64)>, InternalErrors>;
     /// The objects of one image (Results › Split with image).
     fn image_objects(
         &self,

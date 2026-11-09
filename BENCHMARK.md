@@ -2135,6 +2135,21 @@ before in a worktree, alternated, 10 s apart, 4 rounds:
 
 CPU and peak RAM unchanged; the wall time within the runs' spread (~2 %).
 
+## Charts › Profile (the Sholl profile chart, 2026-11-09)
+
+Opening results: one more query (the profile measurements; whether the
+file has the profile columns is checked once and cached). On the 1.7 GB
+reference results (format 1, a copy), release, 7 runs: open 12-18 ms,
+the columns 22-45 ms (both unchanged paths), `profile_columns` 1.0-2.0 ms
+(median 1.45). Once per results opened - never during an analysis.
+
+Generated UI code (`evanalyzer_gui_slint` `main.rs`, debug): 59 439 919
+bytes before, 59 935 587 after (+496 KB, +0.83 %) - the Profile tile and
+settings, the chart's curve / marker / cards layers and the export
+dialog's Profile section. The pickers are plain ComboBoxes and the "A
+line per" box is shared with Over time (an InkMultiSelect each cost
+24 KB more).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

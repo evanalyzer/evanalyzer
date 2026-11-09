@@ -817,6 +817,11 @@ fn answer_query(
         ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
         ResultsQuery::Scatter(filter) => ResultsAnswer::Scatter(source.scatter(&filter)?),
         ResultsQuery::TimeCourse(filter) => ResultsAnswer::TimeCourse(source.time_course(&filter)?),
+        ResultsQuery::ProfileColumns => ResultsAnswer::ProfileColumns(source.profile_columns()?),
+        ResultsQuery::Profile(filter) => ResultsAnswer::Profile(source.profile(&filter)?),
+        ResultsQuery::ObjectProfile { key, object_id } => {
+            ResultsAnswer::ObjectProfile(source.object_profile(&key, &object_id)?)
+        }
         ResultsQuery::ImageObjects(filter) => {
             ResultsAnswer::Objects(source.image_objects(&filter)?)
         }

@@ -165,6 +165,69 @@ export component ExportDialog inherits InkDialog {
                         checked <=> ExportDialogState.time-with-parents;
                     }
                 }
+                // With profile measurements (e.g. the Sholl profile).
+                if ResultsState.has-profiles: CheckBox {
+                    text: "Profile - per radius (e.g. Sholl)";
+                    checked <=> ExportDialogState.with-profile;
+                }
+                if ResultsState.has-profiles && ExportDialogState.with-profile: VerticalLayout {
+                    padding-left: 24px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "Profile";
+                        }
+                        ComboBox {
+                            width: root.field-w - 24px;
+                            model: ExportDialogState.profile-names;
+                            current-index: ExportDialogState.profile-index;
+                            selected(v) => {
+                                ExportDialogState.profile-index = self.current-index;
+                            }
+                        }
+                    }
+                    InkSegmented {
+                        label: "What";
+                        model: ["The lines", "Each object"];
+                        tips: ["Per line and radius: n, mean, SD, median, Q1, Q3", "Per object and radius: its value"];
+                        selected: ExportDialogState.profile-content;
+                        picked(i) => {
+                            ExportDialogState.profile-content = i;
+                        }
+                    }
+                    if ExportDialogState.profile-content == 0: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "A line per";
+                        }
+                        ComboBox {
+                            width: root.field-w - 24px;
+                            model: ["Class", "Image", "Well", "Plate"];
+                            current-index: ExportDialogState.profile-lines;
+                            selected(v) => {
+                                ExportDialogState.profile-lines = self.current-index;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        InkLabel {
+                            text: "Tables";
+                        }
+                        InkSegmented {
+                            label: "Tables";
+                            model: ["Long", "Wide", "Both"];
+                            selected: ExportDialogState.profile-layout;
+                            picked(i) => {
+                                ExportDialogState.profile-layout = i;
+                            }
+                        }
+                    }
+                }
                 // With measurement steps: a row per value, like the database.
                 if ResultsState.has-measurements: CheckBox {
                     text: "Measurements - one row per value";

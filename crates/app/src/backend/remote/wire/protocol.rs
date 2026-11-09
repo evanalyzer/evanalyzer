@@ -69,7 +69,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 34;
+pub const PROTOCOL_VERSION: u32 = 35;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -191,6 +191,12 @@ pub(crate) enum ResultsQuery {
     Histogram(HistogramFilter),
     Scatter(ScatterFilter),
     TimeCourse(crate::api::TimeCourseFilter),
+    ProfileColumns,
+    Profile(crate::api::ProfileFilter),
+    ObjectProfile {
+        key: String,
+        object_id: String,
+    },
     GroupingRegex(crate::api::Grouping),
     ImageObjects(crate::api::ImageObjectsFilter),
     ImageTracks(crate::api::ImageTracksFilter),
@@ -217,6 +223,9 @@ pub(crate) enum ResultsAnswer {
     Objects(Vec<crate::api::ResultObject>),
     Planes(Vec<crate::api::PlaneFilter>),
     TimeCourse(crate::api::TimeCourseResult),
+    ProfileColumns(Vec<crate::api::MeasurementColumn>),
+    Profile(crate::api::ProfileResult),
+    ObjectProfile(Vec<(f64, f64)>),
     Tracks(crate::api::ImageTracks),
     TrackSummary(Vec<crate::api::TrackSummary>),
 }
@@ -785,6 +794,12 @@ mod tests {
             .unwrap();
         tracer
             .trace_simple_type::<crate::api::TrackHistory>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::ProfileLines>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::ProfileExportContent>()
             .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();

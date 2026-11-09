@@ -96,6 +96,7 @@ fn chart_kind_key(kind: ChartKind) -> &'static str {
         ChartKind::Scatter => "scatter",
         ChartKind::Boxplot => "boxplot",
         ChartKind::OverTime => "overTime",
+        ChartKind::Profile => "profile",
     }
 }
 
@@ -104,6 +105,7 @@ fn chart_kind_of_key(key: &str) -> ChartKind {
         "scatter" => ChartKind::Scatter,
         "boxplot" => ChartKind::Boxplot,
         "overTime" => ChartKind::OverTime,
+        "profile" => ChartKind::Profile,
         _ => ChartKind::Histogram,
     }
 }
@@ -404,6 +406,10 @@ impl ResultsStateController {
             chart.time_relative = view.time_relative;
             chart.time_tracks = view.time_tracks;
             chart.time_history = view.time_history;
+            chart.profile_key = view.profile_key.clone().unwrap_or_default();
+            chart.profile_lines = view.profile_lines;
+            chart.profile_curve = view.profile_curve;
+            chart.profile_mark = view.profile_mark;
         }
         *self.view_unavailable.lock().expect("Poisoned") = Some(unavailable);
         missing.dedup();
@@ -492,6 +498,10 @@ impl ResultsStateController {
                 time_relative: filter.time_relative,
                 time_tracks: filter.time_tracks,
                 time_history: filter.time_history,
+                profile_key: (!filter.profile_key.is_empty()).then(|| filter.profile_key.clone()),
+                profile_lines: filter.profile_lines,
+                profile_curve: filter.profile_curve,
+                profile_mark: filter.profile_mark,
             }
         };
         Some(ViewSettings { list, plate, chart })
@@ -868,6 +878,13 @@ impl ResultsStateController {
             )
         });
         let chart_items = chart_column_items(&available, &classes, &chart.column);
+        let (profile_list, profile_shown) = {
+            let profiles = self.profile_columns.lock().expect("Poisoned");
+            (
+                profiles.clone(),
+                profile_index(&profiles, &chart.profile_key),
+            )
+        };
         let chart_y_items = chart_column_items(&available, &classes, &chart.y_column);
         let chart_class_items: Vec<MultiSelectItem> = class_filter_items(&classes, false)
             .into_iter()
@@ -959,7 +976,13 @@ impl ResultsStateController {
                 ChartKind::Scatter => ResultsChartKind2::Scatter,
                 ChartKind::Boxplot => ResultsChartKind2::Boxplot,
                 ChartKind::OverTime => ResultsChartKind2::OverTime,
+                ChartKind::Profile => ResultsChartKind2::Profile,
             });
+            state.set_chart_profile_names(profile_names(&profile_list));
+            state.set_chart_profile_index(profile_shown);
+            state.set_chart_profile_lines(profile_lines_index(chart.profile_lines));
+            state.set_chart_profile_curve(chart.profile_curve);
+            state.set_chart_profile_mark(chart.profile_mark);
             state.set_chart_column_items(model(chart_items));
             state.set_chart_column_summary(chart_ui.0.into());
             state.set_chart_y_column_items(model(chart_y_items));

@@ -17,7 +17,7 @@
 
 use crate::api::{
     Aggregation, BoxplotGroup, ChildColumn, ChildValue, ColorSchema, Column, ColumnEntry,
-    ParentColumn, ParentValue, TimeCourseLines, TrackHistory,
+    ParentColumn, ParentValue, ProfileLines, TimeCourseLines, TrackHistory,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -200,7 +200,7 @@ pub struct PlateView {
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChartView {
-    /// "histogram", "scatter", "boxplot" or "overTime".
+    /// "histogram", "scatter", "boxplot", "overTime" or "profile".
     pub kind: String,
     pub column: Option<String>,
     pub y_column: Option<String>,
@@ -216,6 +216,12 @@ pub struct ChartView {
     pub time_tracks: bool,
     /// Track lines across divisions and fusions.
     pub time_history: TrackHistory,
+    /// Profile: its measurement's key (`None`: the first), a line per what,
+    /// the selected object's curve, its highest value marked.
+    pub profile_key: Option<String>,
+    pub profile_lines: ProfileLines,
+    pub profile_curve: bool,
+    pub profile_mark: bool,
 }
 
 impl Default for ChartView {
@@ -234,6 +240,10 @@ impl Default for ChartView {
             time_relative: false,
             time_tracks: false,
             time_history: TrackHistory::Own,
+            profile_key: None,
+            profile_lines: ProfileLines::Class,
+            profile_curve: true,
+            profile_mark: true,
         }
     }
 }

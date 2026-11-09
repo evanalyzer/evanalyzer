@@ -144,6 +144,10 @@ pub mod results {
         TrackLineage, TrackPath, TrackPoint,
     };
     pub use crate::api::{
+        ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint,
+        ProfileResult,
+    };
+    pub use crate::api::{
         TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
         TimeCoursePoint, TimeCourseResult, TimeCourseStat, TrackHistory, TrackSummary,
         TrackSummaryExport, TrackSummaryFilter,

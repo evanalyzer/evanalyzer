@@ -246,6 +246,37 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn profile_columns(&self) -> Result<Vec<crate::api::MeasurementColumn>, InternalErrors> {
+        match self.query(ResultsQuery::ProfileColumns)? {
+            ResultsAnswer::ProfileColumns(columns) => Ok(columns),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn profile(
+        &self,
+        filter: &crate::api::ProfileFilter,
+    ) -> Result<crate::api::ProfileResult, InternalErrors> {
+        match self.query(ResultsQuery::Profile(filter.clone()))? {
+            ResultsAnswer::Profile(result) => Ok(result),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn object_profile(
+        &self,
+        key: &str,
+        object_id: &str,
+    ) -> Result<Vec<(f64, f64)>, InternalErrors> {
+        match self.query(ResultsQuery::ObjectProfile {
+            key: key.to_string(),
+            object_id: object_id.to_string(),
+        })? {
+            ResultsAnswer::ObjectProfile(curve) => Ok(curve),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn image_objects(
         &self,
         filter: &crate::api::ImageObjectsFilter,
@@ -669,6 +700,18 @@ mod tests {
         }
         fn time_course(&self, _: &TimeCourseFilter) -> Result<TimeCourseResult, InternalErrors> {
             Err(broken("time course"))
+        }
+        fn profile_columns(&self) -> Result<Vec<crate::api::MeasurementColumn>, InternalErrors> {
+            Err(broken("profile columns"))
+        }
+        fn profile(
+            &self,
+            _: &crate::api::ProfileFilter,
+        ) -> Result<crate::api::ProfileResult, InternalErrors> {
+            Err(broken("profile"))
+        }
+        fn object_profile(&self, _: &str, _: &str) -> Result<Vec<(f64, f64)>, InternalErrors> {
+            Err(broken("object profile"))
         }
         fn image_objects(
             &self,

@@ -7,7 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use super::results_generator::{ResultsGenerator, class_display_label, sql_string_in_list};
+use super::results_generator::{
+    ResultsGenerator, class_display_label, class_filter_sql, sql_string_in_list,
+};
 use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
 use super::results_tracks::{TrackSummaryHead, TrackSummaryQuery};
 use crate::api::{
@@ -16,6 +18,7 @@ use crate::api::{
     WellsBatchFilterMulti,
 };
 use crate::api::{ExportFormat, ExportProgress, ResultExport};
+use crate::api::{ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint};
 use crate::api::{
     TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCoursePoint, TimeCourseResult,
     TrackSummary, TrackSummaryFilter,
@@ -529,6 +532,33 @@ fn time_course_wide(
         .collect()
 }
 
+/// Each object's profile wide: a row per object, a column per position
+/// (all the objects' positions, by value; one an object doesn't reach: 0).
+fn profile_objects_wide(header: &[&str; 4], objects: &[([String; 4], Vec<(f64, f64)>)]) -> Fields {
+    let mut positions: Vec<f64> = objects
+        .iter()
+        .flat_map(|(_, values)| values.iter().map(|v| v.0))
+        .collect();
+    positions.sort_by(f64::total_cmp);
+    positions.dedup();
+    let mut rows: Fields = vec![
+        header
+            .iter()
+            .map(|h| Field::Text(h.to_string()))
+            .chain(positions.iter().map(|p| Field::Text(format!("r_{p}"))))
+            .collect(),
+    ];
+    for (id, values) in objects {
+        let mut row: Vec<Field> = id.iter().map(|t| Field::Text(t.clone())).collect();
+        for &position in &positions {
+            let value = values.iter().find(|v| v.0 == position).map_or(0.0, |v| v.1);
+            row.push(Field::Number(value));
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 fn write_fields_csv(table: &Fields, path: &Path) -> Result<(), InternalErrors> {
     let mut out = FieldsCsv::create(path)?;
     table.iter().try_for_each(|row| out.row(row))
@@ -786,6 +816,9 @@ impl ResultExport {
         }
         if self.with_measurements {
             self.export_measurements(database, cancel, &mut *on_progress)?;
+        }
+        if self.with_profile {
+            self.export_profile(database, cancel, &mut *on_progress)?;
         }
         if self.with_plate_view_heatmap || self.with_well_view_heatmap {
             self.export_plate_and_well(database, cancel, &mut *on_progress)?;
@@ -1388,6 +1421,316 @@ impl ResultExport {
             }
         }
         on_progress("Exporting Time course", 1, 1);
+        Ok(())
+    }
+
+    /// A profile measurement (`ProfileExport`, e.g. the Sholl
+    /// intersections), of the chosen images and classes:
+    /// - the chart's lines: `profile_lines.csv` (long: a row per line ×
+    ///   position with n, mean, SD, median, Q1, Q3) and/or
+    ///   `profile_lines_<statistic>.csv` (wide: a row per position, a column
+    ///   per line); XLSX: a sheet each,
+    /// - each object's profile: `profile_objects.csv` (long: a row per
+    ///   object × position, streamed) and/or `profile_objects_wide.csv` (a
+    ///   row per object, a column per position, a position it doesn't reach
+    ///   as 0 - as in the chart).
+    fn export_profile(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        check_cancelled(cancel)?;
+        on_progress("Exporting Profile", 0, 1);
+        let settings = &self.profile;
+        if settings.key.is_empty() {
+            return Err(InternalErrors::InvalidArgument(
+                "Choose the profile measurement to export".to_string(),
+            ));
+        }
+        let images = (!self.image_rel_paths.is_empty()).then(|| self.image_rel_paths.clone());
+        let classes = (!self.object_classes.is_empty()).then(|| self.object_classes.clone());
+        let write_long = settings.layout != TimeCourseLayout::Wide;
+        let write_wide = settings.layout != TimeCourseLayout::Long;
+        let mut tables: Vec<(String, Fields)> = Vec::new();
+        let mut long_rows: Option<Fields> = None;
+        match settings.content {
+            ProfileExportContent::Lines => {
+                let filter = ProfileFilter {
+                    key: settings.key.clone(),
+                    lines: settings.lines,
+                    grouping: self.grouping.clone(),
+                    images,
+                    object_classes: classes,
+                    max_lines: usize::MAX,
+                };
+                let result = super::results_profile::profile(database, &filter)?;
+                let label = |p: &ProfilePoint| match settings.lines {
+                    ProfileLines::Class => p.class_name.clone(),
+                    ProfileLines::All => "all".to_string(),
+                    _ => p.line.clone(),
+                };
+                if write_long {
+                    let mut rows: Fields = vec![
+                        [
+                            "line",
+                            "position",
+                            "n_objects",
+                            "mean",
+                            "sd",
+                            "median",
+                            "q1",
+                            "q3",
+                        ]
+                        .map(|h| Field::Text(h.to_string()))
+                        .to_vec(),
+                    ];
+                    for p in &result.points {
+                        let opt = |v: Option<f64>| v.map_or(Field::Empty, Field::Number);
+                        rows.push(vec![
+                            Field::Text(label(p)),
+                            Field::Number(p.position),
+                            Field::Number(p.n_objects as f64),
+                            opt(p.mean),
+                            opt(p.sd),
+                            opt(p.median),
+                            opt(p.q1),
+                            opt(p.q3),
+                        ]);
+                    }
+                    long_rows = Some(rows);
+                }
+                if write_wide {
+                    let mut lines: Vec<String> = Vec::new();
+                    let mut positions: Vec<f64> = Vec::new();
+                    for p in &result.points {
+                        if !lines.contains(&label(p)) {
+                            lines.push(label(p));
+                        }
+                        if !positions.contains(&p.position) {
+                            positions.push(p.position);
+                        }
+                    }
+                    positions.sort_by(f64::total_cmp);
+                    type Stat = fn(&ProfilePoint) -> Option<f64>;
+                    let stats: [(&str, Stat); 6] = [
+                        ("mean", |p| p.mean),
+                        ("sd", |p| p.sd),
+                        ("median", |p| p.median),
+                        ("q1", |p| p.q1),
+                        ("q3", |p| p.q3),
+                        ("n_objects", |p| Some(p.n_objects as f64)),
+                    ];
+                    for (name, stat) in stats {
+                        let mut rows: Fields = vec![
+                            std::iter::once(Field::Text("position".to_string()))
+                                .chain(lines.iter().map(|l| Field::Text(l.clone())))
+                                .collect(),
+                        ];
+                        for &position in &positions {
+                            let mut row = vec![Field::Number(position)];
+                            for line in &lines {
+                                let value = result
+                                    .points
+                                    .iter()
+                                    .find(|p| p.position == position && label(p) == *line)
+                                    .and_then(stat);
+                                row.push(value.map_or(Field::Empty, Field::Number));
+                            }
+                            rows.push(row);
+                        }
+                        tables.push((format!("profile_lines_{name}"), rows));
+                    }
+                }
+                self.write_profile_tables("profile_lines", long_rows, tables)?;
+            }
+            ProfileExportContent::Objects => {
+                self.export_profile_objects(
+                    database, images, classes, write_long, write_wide, cancel,
+                )?;
+            }
+        }
+        on_progress("Exporting Profile", 1, 1);
+        Ok(())
+    }
+
+    /// Each object's profile (see `export_profile`): long streamed, wide
+    /// a row per object.
+    #[allow(clippy::too_many_arguments)]
+    fn export_profile_objects(
+        &self,
+        database: &ResultsGenerator,
+        images: Option<Vec<String>>,
+        classes: Option<Vec<ObjectClass>>,
+        write_long: bool,
+        write_wide: bool,
+        cancel: &AtomicBool,
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if !database.has_column("measurements", "position")? {
+            return Err(InternalErrors::InvalidArgument(
+                "These results hold no profiles (written before format 2)".to_string(),
+            ));
+        }
+        let mut conditions = vec![
+            format!("m.key = '{}'", self.profile.key.replace('\'', "''")),
+            "m.region = 'object'".to_string(),
+            "m.position IS NOT NULL".to_string(),
+            "NOT i.disabled".to_string(),
+            "i.successful".to_string(),
+        ];
+        if let Some(images) = &images {
+            conditions.push(format!(
+                "m.image_rel_path IN ({})",
+                sql_string_in_list(images)
+            ));
+        }
+        if let Some(classes) = &classes {
+            let ids: Vec<u32> = classes
+                .iter()
+                .filter_map(|c| match c {
+                    ObjectClass::Global(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            conditions.push(class_filter_sql("m.object_class_id", &ids));
+        }
+        let sql = format!(
+            "SELECT m.image_name, m.image_rel_path, m.object_id::VARCHAR, m.object_class_name, \
+             m.position, m.value FROM measurements m \
+             JOIN images i ON i.image_rel_path = m.image_rel_path WHERE {} \
+             ORDER BY m.image_name, m.object_id, m.position",
+            conditions.join(" AND ")
+        );
+        let mut stmt = database.connection().prepare(&sql).map_err(err)?;
+        let header = [
+            "image_name",
+            "image_rel_path",
+            "object_id",
+            "object_class_name",
+        ];
+        // Wide: per object its values by position.
+        let mut wide: Vec<([String; 4], Vec<(f64, f64)>)> = Vec::new();
+        let mut each_row = |out: &mut dyn FieldSink| -> Result<(), InternalErrors> {
+            for name in header.iter().chain(&["position", "value"]) {
+                out.text(name)?;
+            }
+            out.end_row()?;
+            let mut rows = stmt.query([]).map_err(err)?;
+            let mut n = 0usize;
+            while let Some(row) = rows.next().map_err(err)? {
+                n += 1;
+                if n.is_multiple_of(65_536) {
+                    check_cancelled(cancel)?;
+                }
+                let text = |i: usize| -> Result<String, InternalErrors> {
+                    Ok(row
+                        .get::<_, Option<String>>(i)
+                        .map_err(err)?
+                        .unwrap_or_default())
+                };
+                let id = [text(0)?, text(1)?, text(2)?, text(3)?];
+                let position: f64 = row.get(4).map_err(err)?;
+                let value: Option<f64> = row.get(5).map_err(err)?;
+                for field in &id {
+                    out.text(field)?;
+                }
+                out.number(position)?;
+                out.optional(value)?;
+                out.end_row()?;
+                if write_wide {
+                    match wide.last_mut() {
+                        Some((last, values)) if *last == id => {
+                            values.push((position, value.unwrap_or(0.0)))
+                        }
+                        _ => wide.push((id, vec![(position, value.unwrap_or(0.0))])),
+                    }
+                }
+            }
+            Ok(())
+        };
+        let long_name = "profile_objects";
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                let mut names = SheetNamer::new();
+                if write_long {
+                    let worksheet = workbook
+                        .add_worksheet_with_constant_memory()
+                        .map_err(xlsx_err)?;
+                    worksheet.set_name(names.unique("Long")).map_err(xlsx_err)?;
+                    each_row(&mut FieldsSheet::new(worksheet))?;
+                } else {
+                    each_row(&mut Discard)?;
+                }
+                if write_wide {
+                    let sheet = workbook.add_worksheet();
+                    sheet.set_name(names.unique("Wide")).map_err(xlsx_err)?;
+                    write_fields_sheet(sheet, &profile_objects_wide(&header, &wide))?;
+                }
+                workbook
+                    .save(self.output_path(&format!("{long_name}.xlsx")))
+                    .map_err(xlsx_err)?;
+            }
+            ExportFormat::CSV => {
+                if write_long {
+                    each_row(&mut FieldsCsv::create(
+                        &self.output_path(&format!("{long_name}.csv")),
+                    )?)?;
+                } else {
+                    each_row(&mut Discard)?;
+                }
+                if write_wide {
+                    write_fields_csv(
+                        &profile_objects_wide(&header, &wide),
+                        &self.output_path(&format!("{long_name}_wide.csv")),
+                    )?;
+                }
+            }
+            // Written with the objects (`export_as_parquet`): the raw
+            // `measurements` table, its `position` column included.
+            ExportFormat::Parquet => {}
+        }
+        Ok(())
+    }
+
+    /// The profile's line tables: `name.csv` (long) and a CSV per wide
+    /// table, or one workbook with a sheet each.
+    fn write_profile_tables(
+        &self,
+        name: &str,
+        long: Option<Fields>,
+        wide: Vec<(String, Fields)>,
+    ) -> Result<(), InternalErrors> {
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                let mut names = SheetNamer::new();
+                if let Some(long) = &long {
+                    let sheet = workbook.add_worksheet();
+                    sheet.set_name(names.unique("Long")).map_err(xlsx_err)?;
+                    write_fields_sheet(sheet, long)?;
+                }
+                for (table, rows) in &wide {
+                    let sheet = workbook.add_worksheet();
+                    let short = table.trim_start_matches("profile_lines_");
+                    sheet.set_name(names.unique(short)).map_err(xlsx_err)?;
+                    write_fields_sheet(sheet, rows)?;
+                }
+                workbook
+                    .save(self.output_path(&format!("{name}.xlsx")))
+                    .map_err(xlsx_err)?;
+            }
+            ExportFormat::CSV => {
+                if let Some(long) = &long {
+                    write_fields_csv(long, &self.output_path(&format!("{name}.csv")))?;
+                }
+                for (table, rows) in &wide {
+                    write_fields_csv(rows, &self.output_path(&format!("{table}.csv")))?;
+                }
+            }
+            ExportFormat::Parquet => {}
+        }
         Ok(())
     }
 
@@ -5265,6 +5608,90 @@ mod tests {
                     "img1.tif,img1.tif,0,0,object,{object},,,s_01,Intersections,Count,s_01/i,4,2000"
                 ),
             ]
+        );
+    }
+
+    fn profile_export(
+        content: crate::api::ProfileExportContent,
+        layout: TimeCourseLayout,
+    ) -> (PathBuf, ResultExport) {
+        let dir = tempfile::tempdir().unwrap().keep();
+        let export = ResultExport {
+            output_dir: dir.clone(),
+            format: ExportFormat::CSV,
+            with_profile: true,
+            profile: crate::api::ProfileExport {
+                key: "sholl_01/intersections".into(),
+                lines: crate::api::ProfileLines::Class,
+                content,
+                layout,
+            },
+            ..Default::default()
+        };
+        (dir, export)
+    }
+
+    /// The chart's lines: long a row per line × radius (a missing radius
+    /// counted as 0), wide a file per statistic.
+    #[test]
+    fn the_profile_lines_export_long_and_wide() {
+        let db = super::super::test_support::profile_database();
+        let (dir, export) = profile_export(
+            crate::api::ProfileExportContent::Lines,
+            TimeCourseLayout::Both,
+        );
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let long = std::fs::read_to_string(dir.join("profile_lines.csv")).unwrap();
+        let lines: Vec<&str> = long.lines().collect();
+        assert_eq!(lines[0], "line,position,n_objects,mean,sd,median,q1,q3");
+        assert!(lines.iter().any(|l| l.starts_with("A,30,2,1,")), "{long}");
+        assert_eq!(lines.len(), 1 + 3 + 1, "{long}");
+        let mean = std::fs::read_to_string(dir.join("profile_lines_mean.csv")).unwrap();
+        assert_eq!(
+            mean.lines().collect::<Vec<_>>(),
+            ["position,A,B", "10,3,1", "20,5,", "30,1,"]
+        );
+    }
+
+    /// Each neuron's profile: long its rows as stored, wide a row per
+    /// neuron with 0 where it doesn't reach.
+    #[test]
+    fn the_profile_objects_export_long_and_wide() {
+        let db = super::super::test_support::profile_database();
+        let (dir, export) = profile_export(
+            crate::api::ProfileExportContent::Objects,
+            TimeCourseLayout::Both,
+        );
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let long = std::fs::read_to_string(dir.join("profile_objects.csv")).unwrap();
+        assert_eq!(long.lines().count(), 1 + 6, "{long}");
+        let wide = std::fs::read_to_string(dir.join("profile_objects_wide.csv")).unwrap();
+        let rows: Vec<&str> = wide.lines().collect();
+        assert_eq!(
+            rows[0],
+            "image_name,image_rel_path,object_id,object_class_name,r_10,r_20,r_30"
+        );
+        // The first neuron doesn't reach r 30: 0 there.
+        assert!(rows[1].ends_with(",2,4,0"), "{wide}");
+        assert!(rows[3].ends_with(",1,0,0"), "{wide}");
+    }
+
+    #[test]
+    fn a_profile_export_needs_its_measurement() {
+        let db = super::super::test_support::profile_database();
+        let (_, mut export) = profile_export(
+            crate::api::ProfileExportContent::Lines,
+            TimeCourseLayout::Long,
+        );
+        export.profile.key.clear();
+        assert!(
+            export
+                .start_export(&db, &no_cancel(), &mut no_progress())
+                .is_err()
         );
     }
 

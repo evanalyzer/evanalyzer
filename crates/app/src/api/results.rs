@@ -810,6 +810,90 @@ pub struct TimeCourseResult {
     pub points: Vec<TimeCoursePoint>,
 }
 
+/// What one line of a profile chart (Charts › Profile, e.g. the Sholl
+/// profile) follows: the objects of a class, of an image, of a well (by
+/// `ProfileFilter::grouping`'s first capture group) or all of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileLines {
+    #[default]
+    Class,
+    Image,
+    Well,
+    All,
+}
+
+/// A profile chart's lines: per position (e.g. a Sholl ring's radius) the
+/// statistics of a profile measurement over each line's objects. An object
+/// without a value at a position of its line counts as 0 there (a neuron
+/// not reaching a radius crosses it 0 times) - so a line's mean doesn't
+/// jump where its smaller objects end.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfileFilter {
+    /// The profile measurement's key ("sholl_01/intersections").
+    pub key: String,
+    pub lines: ProfileLines,
+    /// Which part of the image name is the well: capture group 1.
+    pub grouping: Grouping,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// At most this many lines (the first by name); the rest are counted in
+    /// `ProfileResult::lines_total`.
+    pub max_lines: usize,
+}
+
+/// One point of a profile chart: a line at one position.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfilePoint {
+    /// The image / well; empty for class lines and "all".
+    pub line: String,
+    /// The class of a class line (0 otherwise).
+    pub class_id: u32,
+    pub class_name: String,
+    /// The position (e.g. the ring radius in pixels).
+    pub position: f64,
+    /// The line's objects (with a value at any position).
+    pub n_objects: u64,
+    pub mean: Option<f64>,
+    /// `None` for a single object.
+    pub sd: Option<f64>,
+    pub median: Option<f64>,
+    pub q1: Option<f64>,
+    pub q3: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileResult {
+    /// Line by line (class, then name), position by position.
+    pub points: Vec<ProfilePoint>,
+    /// The lines there were in all (more than drawn with `max_lines`).
+    pub lines_total: usize,
+}
+
+/// What a profile export holds (`ResultExport::with_profile`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileExportContent {
+    /// The chart's lines: per line and position n, mean, SD, median, Q1, Q3.
+    #[default]
+    Lines,
+    /// Each object's profile: per object and position its value (wide: a
+    /// row per object, a column per position, a position it doesn't reach
+    /// as 0).
+    Objects,
+}
+
+/// How a profile is exported (`ResultExport::with_profile`): images,
+/// classes and wells from the export's own settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileExport {
+    /// The profile measurement's key ("sholl_01/intersections").
+    pub key: String,
+    pub lines: ProfileLines,
+    pub content: ProfileExportContent,
+    pub layout: TimeCourseLayout,
+}
+
 /// One scatter plot: every matched object's `(x_column, y_column)` pair,
 /// one point per object.
 #[derive(Clone, Serialize, Deserialize)]
@@ -993,6 +1077,12 @@ pub struct ResultExport {
     /// (none chosen: all), of the chosen images and planes.
     #[serde(default)]
     pub with_measurements: bool,
+    /// `profile_lines.{csv,xlsx}` / `profile_objects.{csv,xlsx}`: a profile
+    /// measurement (e.g. the Sholl intersections) - see `ProfileExport`.
+    #[serde(default)]
+    pub with_profile: bool,
+    #[serde(default)]
+    pub profile: ProfileExport,
     pub track_summary: TrackSummaryExport,
     pub with_plate_view_heatmap: bool,
     pub with_well_view_heatmap: bool,
