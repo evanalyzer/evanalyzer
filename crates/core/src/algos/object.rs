@@ -17,5 +17,6 @@ pub mod propagation;
 pub mod relate_objects;
 pub mod skeletonize_objects;
 pub(crate) mod tile_merge;
+pub mod trace_filaments;
 pub mod transform_objects;
 pub mod voronoi;

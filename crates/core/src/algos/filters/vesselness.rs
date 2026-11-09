@@ -107,22 +107,16 @@ impl ImageAlgorithm for Vesselness {
             });
         };
         let (width, height) = (input.width(), input.height());
-        let out = output.data.as_slice_mut();
-        out.fill(0.0);
-        if width == 0 || height == 0 {
-            return Ok(());
-        }
-        let params = Params {
-            beta: self.blob_suppression.max(1e-3),
-            noise: self.noise_level,
-            bright: self.polarity == LinePolarity::Bright,
-        };
-        let mut rows = RowDerivatives::new(width * height);
-        for sigma in sigmas {
-            let kernels = Kernels::new(sigma);
-            rows.compute(input.data.as_slice(), width, &kernels);
-            vesselness_at_scale(&rows, width, height, &kernels, sigma, params, out);
-        }
+        vesselness_into(
+            input.data.as_slice(),
+            width,
+            height,
+            &sigmas,
+            self.blob_suppression,
+            self.noise_level,
+            self.polarity == LinePolarity::Bright,
+            output.data.as_slice_mut(),
+        );
         output.tile_offset = input.tile_offset;
         output.plane = input.plane;
         output.dimensionality = input.dimensionality;
@@ -177,20 +171,61 @@ impl Vesselness {
             SizeUnits::NanoMeter if pixel_size_nm > 0.0 => w / pixel_size_nm,
             _ => w,
         };
-        let (a, b) = (to_px(self.min_width), to_px(self.max_width));
-        let (lo, hi) = (a.min(b).max(0.5), a.max(b).max(0.5));
-        let steps = self.width_steps.max(1);
-        (0..steps)
-            .map(|i| {
-                let t = if steps == 1 {
-                    0.0
-                } else {
-                    i as f32 / (steps - 1) as f32
-                };
-                let width = lo * (hi / lo).powf(t);
-                width / 6f32.sqrt()
-            })
-            .collect()
+        sigmas_for_widths(
+            to_px(self.min_width),
+            to_px(self.max_width),
+            self.width_steps,
+        )
+    }
+}
+
+/// The scales σ for fibre widths `a`..`b` (pixels), `steps` of them
+/// log-spaced: σ = width / √6 (see [`Vesselness`]'s widths).
+pub(crate) fn sigmas_for_widths(a: f32, b: f32, steps: usize) -> Vec<f32> {
+    let (lo, hi) = (a.min(b).max(0.5), a.max(b).max(0.5));
+    let steps = steps.max(1);
+    (0..steps)
+        .map(|i| {
+            let t = if steps == 1 {
+                0.0
+            } else {
+                i as f32 / (steps - 1) as f32
+            };
+            let width = lo * (hi / lo).powf(t);
+            width / 6f32.sqrt()
+        })
+        .collect()
+}
+
+/// The vesselness of `input` (`width` × `height`, 0..1) at the scales
+/// `sigmas` into `out` (cleared first): the largest over the scales. With
+/// `noise` 0 the noise level is automatic (half the strongest structure of
+/// `input`). Also what Trace Filaments follows.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn vesselness_into(
+    input: &[f32],
+    width: usize,
+    height: usize,
+    sigmas: &[f32],
+    blob_suppression: f32,
+    noise: f32,
+    bright: bool,
+    out: &mut [f32],
+) {
+    out.fill(0.0);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let params = Params {
+        beta: blob_suppression.max(1e-3),
+        noise,
+        bright,
+    };
+    let mut rows = RowDerivatives::new(width * height);
+    for &sigma in sigmas {
+        let kernels = Kernels::new(sigma);
+        rows.compute(input, width, &kernels);
+        vesselness_at_scale(&rows, width, height, &kernels, sigma, params, out);
     }
 }
 

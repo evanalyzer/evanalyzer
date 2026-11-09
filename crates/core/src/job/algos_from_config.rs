@@ -1270,6 +1270,23 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
     }
 }
 
+impl From<TraceFilamentsSettings> for TraceFilaments {
+    fn from(_s: TraceFilamentsSettings) -> Self {
+        TraceFilaments {
+            seeds: _s.seeds,
+            targets: _s.targets,
+            output_class: _s.output_class,
+            channel: _s.channel,
+            follow_fibres: _s.follow_fibres,
+            min_width: _s.min_width.clamp(0.5, 1000.0),
+            max_width: _s.max_width.clamp(0.5, 1000.0),
+            max_reach: _s.max_reach.clamp(1.0, 100000.0),
+            min_branch_length: _s.min_branch_length.clamp(0.0, 100000.0),
+            unit: _s.unit,
+        }
+    }
+}
+
 impl From<TrackKalmanSettings> for TrackKalman {
     fn from(_s: TrackKalmanSettings) -> Self {
         TrackKalman {
@@ -1603,6 +1620,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::Threshold(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Threshold::from(settings),
+        ))),
+        PipelineCommand::TraceFilaments(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::TraceFilaments::from(settings),
         ))),
         PipelineCommand::TrackKalman(settings) => Ok(PipelineStep::Dataset(Box::new(
             crate::dataset::TrackKalman::from(settings),

@@ -45,3 +45,15 @@ view draws the selected skeleton's circles around its parent on the image
 (the soma Relate Objects linked it to), else around the skeleton itself -
 the same centre when "Centre from" was the soma class Relate linked, an
 approximation otherwise. The profile's values are not affected.
+
+### Trace Filaments: crossing neurites (2D)
+Where two neurites cross in the image, the cheapest path can turn off at
+the crossing onto the other one - the known weakness of 2D tracers. A
+direction-aware cost would lift it.
+
+### Trace Filaments: competition within a soma's window
+A tip goes to the soma that reaches it most cheaply among the somata in
+the tracing soma's window (its box grown by the maximum reach). A soma
+outside that window doesn't compete - with a reach smaller than the
+distance between neighbouring neurons a tip near the window's edge can go
+to the wrong one. A larger reach lifts it (more RAM per window).

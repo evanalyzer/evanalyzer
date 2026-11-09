@@ -581,7 +581,11 @@ fn nearest_to_centre(pixels: &[usize], width: usize) -> usize {
 
 /// A new object of `pixels` (image coordinates, not empty) on `source`'s
 /// plane, with its segmentation class.
-fn object_from_pixels(pixels: &[(u32, u32)], source: &Object, full: ImageSize) -> Object {
+pub(crate) fn object_from_pixels(
+    pixels: &[(u32, u32)],
+    source: &Object,
+    full: ImageSize,
+) -> Object {
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
     for &(x, y) in pixels {
         (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));

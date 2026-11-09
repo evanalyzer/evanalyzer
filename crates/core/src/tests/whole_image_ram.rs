@@ -202,6 +202,16 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
             end_point_class: NUCLEUS,
             ..Default::default()
         }),
+        // From the nuclei to the spots through channel 0: each soma's
+        // window bounded by the reach, never the slide.
+        C::TraceFilaments(_) => C::TraceFilaments(TraceFilamentsSettings {
+            seeds: NUCLEUS,
+            targets: SPOT,
+            output_class: OUTPUT,
+            channel: ImageChannelIdx(0),
+            max_reach: 40.0,
+            ..Default::default()
+        }),
         C::TransformObjects(_) => C::TransformObjects(TransformObjectsSettings {
             input_class: CELL,
             output_class: OUTPUT,

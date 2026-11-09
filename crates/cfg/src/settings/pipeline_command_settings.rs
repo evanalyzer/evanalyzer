@@ -3218,6 +3218,66 @@ impl Default for SkeletonizeObjectsSettings {
     }
 }
 
+/// Traces each neuron as a tree from its soma to its tips (the end points
+/// of Skeletonize Objects) along the cheapest paths - bridging dim gaps and
+/// giving each tip to the soma reaching it most cheaply - and splits it
+/// into segments at its branch points.
+///
+/// [Skeletonize Objects (end points)] -> [Trace Filaments] -> [Measure Filament Tree]
+///
+/// Each segment is a 1-pixel-wide object of the output class, linked to the
+/// next segment towards the soma (a root segment: none) and to its soma.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceFilamentsSettings {
+    /// The somata: each the root of one tree.
+    pub seeds: ObjectClass,
+    /// The tips to reach (e.g. the end points of Skeletonize Objects).
+    pub targets: ObjectClass,
+    /// The class the segments get.
+    pub output_class: ObjectClass,
+    /// The channel the neurites are in (their stain).
+    pub channel: ImageChannelIdx,
+    /// Follow tube-shaped structures (vesselness of the channel at the
+    /// fibre widths) - else the brightness alone, which also follows blobs
+    /// and debris.
+    pub follow_fibres: bool,
+    /// The thinnest fibres to follow.
+    #[schemars(range(min = 0.5, max = 1000))]
+    pub min_width: f32,
+    /// The widest fibres to follow.
+    #[schemars(range(min = 0.5, max = 1000))]
+    pub max_width: f32,
+    /// How far from its soma a tip may be: the search window (soma box grown
+    /// by this) - its RAM grows with its area (about 25 bytes per pixel,
+    /// a window per thread).
+    #[schemars(range(min = 1, max = 100000))]
+    pub max_reach: f32,
+    /// Side branches shorter than this are removed.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_branch_length: f32,
+    /// Unit of the widths, the reach and the branch length.
+    pub unit: SizeUnits,
+}
+
+impl Default for TraceFilamentsSettings {
+    fn default() -> Self {
+        Self {
+            seeds: ObjectClass::default(),
+            targets: ObjectClass::default(),
+            output_class: ObjectClass::default(),
+            channel: ImageChannelIdx::default(),
+            follow_fibres: true,
+            min_width: 2.0f32,
+            max_width: 6.0f32,
+            max_reach: 300.0f32,
+            min_branch_length: 5.0f32,
+            unit: SizeUnits::Pixels,
+        }
+    }
+}
+
 /// Transforms given ROIs and either replaces the old ones or creates new ones.
 ///
 /// This command applies a geometric transform (scale, circle, fitted ellipse) to every object

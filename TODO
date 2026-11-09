@@ -879,8 +879,10 @@ Phase 1 - automatic, on a segmentation (~3-4 weeks):
 - [ ] Tests: synthetic trees with known lengths/branches/crossings; `tile_ram` / `whole_image_ram` for the new commands. Template "Neurite analysis" (soma + neurites + skeleton + Sholl).
 - Already there, no change: "Color by value" (e.g. skeletons by length), object cards, relation views, class filters.
 Phase 2 - tracing from the soma (~2 weeks):
-- [ ] Object command "Trace Filaments": seeds = soma class, shortest path (Dijkstra) on a cost image (raw or Vesselness) to the end points - a correct tree where the threshold breaks a neurite. One object per segment, parent = the next segment towards the soma (`parent_ids`), branch level (primary, secondary, …) as a measurement. No database change.
-- [ ] Results: tree view (neuron → segments), shared design with the planned lineage tree view of tracks.
+Decided 2026-11-09: targets = the end points of Skeletonize Objects; cost from the channel (option 1: "Follow fibres" = built-in Vesselness at the fibre widths, else brightness; no "image from earlier" input; the cost image is internal, never stored or shown); tree values in a separate Measure Filament Tree step; no SWC export.
+- [x] Object command "Trace Filaments" (`object/trace_filaments.rs`, 2026-11-09): per soma a window (box + max reach), one shortest-path search from all somata in it (touching neurons compete for tips), paths back from its tips form the tree, short branches pruned (their branch point joins the two segments), segments between branch points as 1-px objects; parents: the next segment (output class) and the soma (seed class) - the exception in LIMITATIONS. Somata traced in parallel (20 neurons, reach 300, 2048²: 263 ms all cores / 1.9 s one thread); whole_image_ram 0.26 b/px.
+- [ ] Measurement step "Measure Filament Tree": per segment branch level, Strahler order, path distance to the soma, length, straightness; per neuron (on the soma) total length, primary neurites, branch points, tips, max branch level, longest path.
+- [ ] Results: tree view (neuron → segments), shared design with the planned lineage tree view of tracks - design canvas first; stored values only.
 Phase 3 - later:
 - [ ] Spines: small objects with the dendrite segment as parent, density per µm, shape classes. No database / results change.
 

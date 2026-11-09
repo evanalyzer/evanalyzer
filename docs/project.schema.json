@@ -4244,6 +4244,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "TRACE_FILAMENTS"
+            }
+          },
+          "$ref": "#/$defs/TraceFilamentsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "TRACK_KALMAN"
             }
           },
@@ -5550,6 +5563,74 @@
           "format": "uint32",
           "default": 10000,
           "minimum": 0
+        }
+      }
+    },
+    "TraceFilamentsSettings": {
+      "description": "Traces each neuron as a tree from its soma to its tips (the end points\nof Skeletonize Objects) along the cheapest paths - bridging dim gaps and\ngiving each tip to the soma reaching it most cheaply - and splits it\ninto segments at its branch points.\n\n[Skeletonize Objects (end points)] -> [Trace Filaments] -> [Measure Filament Tree]\n\nEach segment is a 1-pixel-wide object of the output class, linked to the\nnext segment towards the soma (a root segment: none) and to its soma.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The channel the neurites are in (their stain).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "followFibres": {
+          "description": "Follow tube-shaped structures (vesselness of the channel at the\nfibre widths) - else the brightness alone, which also follows blobs\nand debris.",
+          "type": "boolean",
+          "default": true
+        },
+        "maxReach": {
+          "description": "How far from its soma a tip may be: the search window (soma box grown\nby this) - its RAM grows with its area (about 25 bytes per pixel,\na window per thread).",
+          "type": "number",
+          "format": "float",
+          "default": 300.0,
+          "maximum": 100000,
+          "minimum": 1
+        },
+        "maxWidth": {
+          "description": "The widest fibres to follow.",
+          "type": "number",
+          "format": "float",
+          "default": 6.0,
+          "maximum": 1000,
+          "minimum": 0.5
+        },
+        "minBranchLength": {
+          "description": "Side branches shorter than this are removed.",
+          "type": "number",
+          "format": "float",
+          "default": 5.0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "minWidth": {
+          "description": "The thinnest fibres to follow.",
+          "type": "number",
+          "format": "float",
+          "default": 2.0,
+          "maximum": 1000,
+          "minimum": 0.5
+        },
+        "outputClass": {
+          "description": "The class the segments get.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "seeds": {
+          "description": "The somata: each the root of one tree.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "targets": {
+          "description": "The tips to reach (e.g. the end points of Skeletonize Objects).",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "unit": {
+          "description": "Unit of the widths, the reach and the branch length.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
         }
       }
     },
