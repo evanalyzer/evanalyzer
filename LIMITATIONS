@@ -1,0 +1,40 @@
+# Limitations
+
+Known, deliberate limitations and exceptions to the project's own rules -
+what a user or a contributor should know before relying on a result. Each
+entry: what it is, why it is accepted, and what would lift it.
+
+## Rules with an exception
+
+### Trace Filaments links its segments to parents itself (decided 2026-11-09)
+Rule: only Relate Objects links objects (`Object::set_parent`, crate-only;
+"new links only come from Relate Objects").
+Exception: Trace Filaments (filaments, phase 2) creates one object per
+segment of the traced tree and links each segment to the next segment
+towards the soma itself.
+Why: the tree is known exactly while tracing; Relate Objects would have to
+infer it again from overlap, which fails for segments that touch or cross.
+Effect: the segments' `parent_ids` come from the tracing, not from a Relate
+step - a later Relate Objects on the same classes can still add links of
+other parent classes.
+
+## Whole slides: tiles without a halo
+
+### Find Maxima, Watershed: a spot or split on a tile seam
+Tile commands get no overlap with their neighbours. A peak exactly on a
+seam can be found in both tiles (two spots, merged by the tile merge only
+if their pixels touch); Watershed can split differently at a seam.
+Small images are one tile - not affected.
+Would lift it: tiles with a halo for the commands that need one.
+
+### Vesselness: automatic noise level per tile
+With "Noise level" 0 (automatic, Frangi's suggestion: half the strongest
+structure) the level is computed per tile on a whole slide, so neighbouring
+tiles can be scaled slightly differently. Small images are one tile - not
+affected. A fixed noise level gives the same result on every tile.
+
+## Approximations
+
+### Measure Object Skeleton: longest path on skeletons with loops
+The longest path is found with two sweeps along the skeleton - exact for a
+tree, an approximation (a lower bound) when the skeleton has loops.
