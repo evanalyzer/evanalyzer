@@ -120,6 +120,8 @@ pub struct ViewSettings {
     pub list: ListView,
     pub plate: PlateView,
     pub chart: ChartView,
+    pub tracks: TracksView,
+    pub paths: PathsView,
 }
 
 impl ViewSettings {
@@ -141,6 +143,63 @@ impl ViewSettings {
             list: section(value, "list"),
             plate: section(value, "plate"),
             chart: section(value, "chart"),
+            tracks: section(value, "tracks"),
+            paths: section(value, "paths"),
+        }
+    }
+}
+
+/// Results › Tracks, Full: what its table shows.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TracksView {
+    /// The motion columns (Measure Track Motion's value ids, e.g. "vcl"),
+    /// in order; `None`: the default ones.
+    pub columns: Option<Vec<String>>,
+}
+
+impl TracksView {
+    /// The columns shown without a choice: moved, speed, straightness,
+    /// turning, max distance, MSD α.
+    pub const DEFAULT_COLUMNS: [&'static str; 6] = [
+        "displacement",
+        "vcl",
+        "lin",
+        "turning",
+        "max_distance",
+        "msd_alpha",
+    ];
+}
+
+/// Results › Paths: which tracks (as Tracks, Full filters them) and how
+/// they are drawn.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PathsView {
+    /// `None`: every class.
+    pub class: Option<u32>,
+    /// An image's relative path; `None`: every image.
+    pub image: Option<String>,
+    pub min_points: u32,
+    pub from_start: bool,
+    pub no_edge: bool,
+    /// "track", "group" or "class".
+    pub color_by: String,
+    /// The motion map's y axis: a Measure Track Motion value id ("turning"
+    /// or "msd_alpha"); x is always the straightness (LIN).
+    pub y_axis: String,
+}
+
+impl Default for PathsView {
+    fn default() -> Self {
+        Self {
+            class: None,
+            image: None,
+            min_points: 10,
+            from_start: false,
+            no_edge: true,
+            color_by: "track".into(),
+            y_axis: "turning".into(),
         }
     }
 }

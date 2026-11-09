@@ -14,11 +14,12 @@
 
 use super::tracks::{TRACK_PALETTE, area_curve};
 use super::*;
-use crate::{TrackAllRow, TrackDetail, TrackFrame};
+use crate::{MultiSelectItem, TrackAllRow, TrackColumnHead, TrackDetail, TrackFrame};
 use evanalyzer_app::global::SpeedUnit;
-#[cfg(test)]
-use evanalyzer_app::results::TrackMotion;
-use evanalyzer_app::results::{ImageTracks, ImageTracksFilter, TrackSummary, TrackSummaryFilter};
+use evanalyzer_app::results::{
+    ImageTracks, ImageTracksFilter, MotionKind, TrackMotion, TrackPoint, TrackSummary,
+    TrackSummaryFilter, drift_at,
+};
 use slint::{Model, ModelNotify, ModelTracker};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -52,28 +53,62 @@ pub(super) struct TracksAllState {
     /// Images' tracks for the curves, the oldest first.
     curves: Arc<Mutex<VecDeque<(CurveKey, Arc<ImageTracks>)>>>,
     loading: HashSet<CurveKey>,
+    /// The motion columns shown (indices into `TrackMotion::VALUES`), in
+    /// order - `None`: the view's default ones.
+    columns: Option<Vec<usize>>,
 }
 
-/// The table's order: by image and track, else descending by time points,
-/// distance moved, speed, straightness, turning, max distance or MSD α
-/// (none last).
+impl TracksAllState {
+    /// The motion columns shown.
+    pub(super) fn columns(&self) -> Vec<usize> {
+        self.columns.clone().unwrap_or_else(default_columns)
+    }
+
+    /// Sets the columns from a view's ids ("vcl", ...) - unknown ones
+    /// (a later version's) are left out; `None`: the default ones.
+    pub(super) fn set_column_ids(&mut self, ids: Option<&[String]>) {
+        self.columns = ids.map(|ids| ids.iter().filter_map(|id| motion_index(id)).collect());
+    }
+
+    /// The columns as a view stores them: their ids, `None` for the default.
+    pub(super) fn column_ids(&self) -> Option<Vec<String>> {
+        self.columns.as_ref().map(|columns| {
+            columns
+                .iter()
+                .map(|&i| TrackMotion::VALUES[i].0.to_string())
+                .collect()
+        })
+    }
+}
+
+/// The index of Measure Track Motion's value `id` in `TrackMotion::VALUES`.
+fn motion_index(id: &str) -> Option<usize> {
+    TrackMotion::VALUES.iter().position(|(v, _, _)| *v == id)
+}
+
+fn default_columns() -> Vec<usize> {
+    evanalyzer_app::results::view_settings::TracksView::DEFAULT_COLUMNS
+        .iter()
+        .filter_map(|id| motion_index(id))
+        .collect()
+}
+
+/// Sort key of motion column `i` (0: track, 1: time points).
+const MOTION_SORT: i32 = 10;
+
+/// The table's order: by image and track, else descending by time points
+/// or by a motion value (`MOTION_SORT` + its index; none last).
 fn order_of(rows: &[TrackSummary], sort: i32) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
     let key = |track: &TrackSummary| -> f64 {
-        let m = &track.motion;
         match sort {
             1 => Some(f64::from(track.points)),
-            2 => m.displacement,
-            3 => m.vcl,
-            4 => m.lin,
-            5 => m.turning,
-            6 => m.max_distance,
-            _ => m.msd_alpha,
+            _ => track.motion.get((sort - MOTION_SORT).max(0) as usize),
         }
         .unwrap_or(f64::NEG_INFINITY)
     };
     match sort {
-        1..=7 => order.sort_by(|&a, &b| key(&rows[b]).total_cmp(&key(&rows[a]))),
+        1 | MOTION_SORT.. => order.sort_by(|&a, &b| key(&rows[b]).total_cmp(&key(&rows[a]))),
         _ => order.sort_by(|&a, &b| {
             (&rows[a].image, rows[a].track_id).cmp(&(&rows[b].image, rows[b].track_id))
         }),
@@ -135,6 +170,52 @@ impl Shown {
         if self.um { "µm" } else { "px" }
     }
 
+    /// The speed unit's time: "frame", "min" or "s".
+    fn time_unit(&self) -> &'static str {
+        match self.speed {
+            SpeedUnit::PxPerFrame => "frame",
+            SpeedUnit::UmPerMin => "min",
+            SpeedUnit::UmPerS => "s",
+        }
+    }
+
+    /// Motion column `i`'s head: its name and unit ("VCL µm/min").
+    fn column_head(&self, i: usize) -> String {
+        let (_, name, kind) = TrackMotion::VALUES[i];
+        let unit = match kind {
+            MotionKind::Length => self.length_unit().to_string(),
+            MotionKind::Speed => self.speed_unit().to_string(),
+            MotionKind::Ratio => String::new(),
+            MotionKind::Angle => "°".to_string(),
+            MotionKind::AngularSpeed => format!("°/{}", self.time_unit()),
+            MotionKind::Frequency => format!("/{}", self.time_unit()),
+            MotionKind::Diffusion => format!("{}²/{}", self.length_unit(), self.time_unit()),
+        };
+        match unit.is_empty() {
+            true => name.to_string(),
+            false => format!("{name} {unit}"),
+        }
+    }
+
+    /// Motion column `i` of `track` in the unit shown - "–" for none.
+    fn column_cell(&self, i: usize, track: &TrackSummary) -> String {
+        let value = match TrackMotion::VALUES[i].2 {
+            MotionKind::Length => return self.length(track, track.motion.get(i)),
+            _ => track
+                .motion
+                .in_units(i, self.speed, track.um_per_px, track.s_per_frame),
+        };
+        let Some(value) = value else {
+            return "–".to_string();
+        };
+        match (TrackMotion::VALUES[i].0, TrackMotion::VALUES[i].2) {
+            ("turning", _) => format!("{value:+.1}"),
+            (_, MotionKind::Angle) => format!("{value:.1}"),
+            (_, MotionKind::Ratio) => format!("{value:.2}"),
+            _ => format_chart_value(value),
+        }
+    }
+
     fn speed_unit(&self) -> &'static str {
         match self.speed {
             SpeedUnit::PxPerFrame => "px/frame",
@@ -142,6 +223,94 @@ impl Shown {
             SpeedUnit::UmPerS => "µm/s",
         }
     }
+}
+
+/// A track's positions from its first, minus the image's stored drift (as
+/// Measure Track Motion measured them), px.
+fn path_from_start(points: &[TrackPoint], drift: &[(u32, f64, f64)]) -> Vec<(f64, f64)> {
+    let corrected: Vec<(f64, f64)> = points
+        .iter()
+        .map(|p| {
+            let (dx, dy) = drift_at(drift, p.t);
+            (f64::from(p.x) - dx, f64::from(p.y) - dy)
+        })
+        .collect();
+    let Some(&(x0, y0)) = corrected.first() else {
+        return Vec::new();
+    };
+    corrected.iter().map(|(x, y)| (x - x0, y - y0)).collect()
+}
+
+/// `path` (from [`path_from_start`]) in 0 0 100 100 with its start at
+/// 50 50, the farthest it got (in x or y) at the edge - and that distance,
+/// px. Empty for none.
+fn path_commands(path: &[(f64, f64)]) -> (String, f64) {
+    let extent = path
+        .iter()
+        .map(|(x, y)| x.abs().max(y.abs()))
+        .fold(0.0, f64::max);
+    if path.is_empty() {
+        return (String::new(), 0.0);
+    }
+    let scale = if extent > 0.0 { 48.0 / extent } else { 0.0 };
+    let commands = path
+        .iter()
+        .enumerate()
+        .map(|(k, (x, y))| {
+            format!(
+                "{}{:.2} {:.2} ",
+                if k == 0 { "M" } else { "L" },
+                50.0 + x * scale,
+                50.0 + y * scale
+            )
+        })
+        .collect();
+    (commands, extent)
+}
+
+/// The MSD points (lag, MSD) log-log in 0 0 100 60, and the slopes 1 and 2
+/// through the first point (as two lines) - empty for fewer than two.
+fn msd_commands(curve: &[(usize, f64)]) -> (String, String) {
+    if curve.len() < 2 {
+        return (String::new(), String::new());
+    }
+    let xs: Vec<f64> = curve.iter().map(|(lag, _)| (*lag as f64).ln()).collect();
+    let ys: Vec<f64> = curve.iter().map(|(_, msd)| msd.ln()).collect();
+    let (x0, x1) = (xs[0], xs[xs.len() - 1]);
+    let slope = |a: f64, x: f64| ys[0] + a * (x - x0);
+    let (lo, hi) = ys
+        .iter()
+        .copied()
+        .chain([slope(1.0, x1), slope(2.0, x1)])
+        .fold((f64::MAX, f64::MIN), |(lo, hi), y| (lo.min(y), hi.max(y)));
+    let px = |x: f64| (x - x0) / (x1 - x0).max(1e-12) * 100.0;
+    let py = |y: f64| 58.0 - (y - lo) / (hi - lo).max(1e-12) * 56.0;
+    let line = xs
+        .iter()
+        .zip(&ys)
+        .enumerate()
+        .map(|(k, (x, y))| {
+            format!(
+                "{}{:.2} {:.2} ",
+                if k == 0 { "M" } else { "L" },
+                px(*x),
+                py(*y)
+            )
+        })
+        .collect();
+    let refs = [1.0, 2.0]
+        .iter()
+        .map(|a| {
+            format!(
+                "M{:.2} {:.2} L{:.2} {:.2} ",
+                px(x0),
+                py(ys[0]),
+                px(x1),
+                py(slope(*a, x1))
+            )
+        })
+        .collect();
+    (line, refs)
 }
 
 /// `value` and its unit - "–" alone for none.
@@ -159,6 +328,8 @@ struct TracksAllModel {
     order: Arc<Vec<usize>>,
     curves: Arc<Mutex<VecDeque<(CurveKey, Arc<ImageTracks>)>>>,
     shown: Shown,
+    /// The motion columns (indices into `TrackMotion::VALUES`).
+    columns: Vec<usize>,
     notify: ModelNotify,
 }
 
@@ -198,23 +369,12 @@ impl Model for TracksAllModel {
             image: track.image.clone().into(),
             span: format!("{}–{}", track.first_t, track.last_t).into(),
             points: track.points.to_string().into(),
-            moved: self.shown.length(track, track.motion.displacement).into(),
-            speed: self.shown.speed(track).into(),
-            straightness: track
-                .straightness()
-                .map_or_else(|| "–".to_string(), |s| format!("{s:.2}"))
-                .into(),
-            turning: track
-                .motion
-                .turning
-                .map_or_else(|| "–".to_string(), |a| format!("{a:+.1}"))
-                .into(),
-            max_distance: self.shown.length(track, track.motion.max_distance).into(),
-            msd_alpha: track
-                .motion
-                .msd_alpha
-                .map_or_else(|| "–".to_string(), |a| format!("{a:.2}"))
-                .into(),
+            cells: ModelRc::from(Rc::new(VecModel::from(
+                self.columns
+                    .iter()
+                    .map(|&i| slint::SharedString::from(self.shown.column_cell(i, track)))
+                    .collect::<Vec<_>>(),
+            ))),
             area: track
                 .values
                 .first()
@@ -249,6 +409,30 @@ impl ResultsStateController {
         });
         let manager = self.clone();
         state.on_track_show_in_image(move || manager.tracks_all_show_in_image());
+        let manager = self.clone();
+        state.on_tracks_all_column_picked(move |id, on| {
+            manager.tracks_all_pick_column(&id, on);
+        });
+    }
+
+    /// A motion column ticked or not: shown in the order of
+    /// `TrackMotion::VALUES`, and the view remembers it.
+    fn tracks_all_pick_column(&self, id: &str, on: bool) {
+        let Some(index) = motion_index(id) else {
+            return;
+        };
+        {
+            let mut all = self.tracks_all.lock().expect("Poisoned");
+            let mut columns = all.columns();
+            columns.retain(|&i| i != index);
+            if on {
+                columns.push(index);
+                columns.sort_unstable();
+            }
+            all.columns = Some(columns);
+        }
+        self.tracks_all_push_table();
+        self.remember_view();
     }
 
     /// Full shown: the filters' choices, then the tracks.
@@ -361,17 +545,42 @@ impl ResultsStateController {
     /// The table in its order, how many, the units.
     pub(super) fn tracks_all_push_table(&self) {
         let speed = self._app_state.load_app_settings().results_split.speed_unit;
-        let (rows, order, curves, row) = {
+        let (rows, order, curves, row, columns) = {
             let mut all = self.tracks_all.lock().expect("Poisoned");
             let order = Arc::new(order_of(&all.rows, all.sort));
             all.order = order.clone();
             let row = all
                 .selected
                 .and_then(|i| order.iter().position(|&o| o == i));
-            (all.rows.clone(), order, all.curves.clone(), row)
+            (
+                all.rows.clone(),
+                order,
+                all.curves.clone(),
+                row,
+                all.columns(),
+            )
         };
         let shown = Shown::new(&rows, speed);
         let summary = summary_of(&rows);
+        let heads: Vec<TrackColumnHead> = columns
+            .iter()
+            .map(|&i| TrackColumnHead {
+                label: shown.column_head(i).into(),
+                key: MOTION_SORT + i as i32,
+            })
+            .collect();
+        let column_items: Vec<MultiSelectItem> = TrackMotion::VALUES
+            .iter()
+            .enumerate()
+            .map(|(i, (id, name, _))| MultiSelectItem {
+                key: (*id).into(),
+                value: (*name).into(),
+                color: slint::Color::default(),
+                group: "".into(),
+                selected: columns.contains(&i),
+            })
+            .collect();
+        let columns_summary = format!("{} of {}", columns.len(), TrackMotion::VALUES.len());
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -382,11 +591,15 @@ impl ResultsStateController {
             state.set_tracks_length_unit(shown.length_unit().into());
             state.set_tracks_all_speed_unit(shown.speed_unit().into());
             state.set_tracks_all_um(shown.um);
+            state.set_tracks_all_heads(ModelRc::from(Rc::new(VecModel::from(heads))));
+            state.set_tracks_all_column_items(ModelRc::from(Rc::new(VecModel::from(column_items))));
+            state.set_tracks_all_columns_summary(columns_summary.into());
             let model = Rc::new(TracksAllModel {
                 rows,
                 order,
                 curves,
                 shown,
+                columns,
                 notify: ModelNotify::default(),
             });
             TABLE.with(|table| *table.borrow_mut() = Some(model.clone()));
@@ -509,7 +722,7 @@ impl ResultsStateController {
     /// The selected track's numbers, area over time and time points.
     pub(super) fn tracks_all_push_detail(&self) {
         let speed = self._app_state.load_app_settings().results_split.speed_unit;
-        let (track, points, shown) = {
+        let (track, points, drift, shown) = {
             let all = self.tracks_all.lock().expect("Poisoned");
             let shown = Shown::new(&all.rows, speed);
             let Some(track) = all.selected.and_then(|i| all.rows.get(i)).cloned() else {
@@ -526,7 +739,7 @@ impl ResultsStateController {
                 return;
             };
             let curves = all.curves.lock().expect("Poisoned");
-            let points = curves
+            let (points, drift) = curves
                 .iter()
                 .find(|(k, _)| *k == (track.image.clone(), track.z))
                 .and_then(|(_, tracks)| {
@@ -534,10 +747,38 @@ impl ResultsStateController {
                         .tracks
                         .binary_search_by_key(&track.track_id, |t| t.track_id)
                         .ok()?;
-                    Some(tracks.tracks[i].points.clone())
+                    Some((tracks.tracks[i].points.clone(), tracks.drift.clone()))
                 })
                 .unwrap_or_default();
-            (track, points, shown)
+            (track, points, drift, shown)
+        };
+        // How it moved: its path from its start and the MSD points, both
+        // without the drift - as the step measured them.
+        let path = path_from_start(&points, &drift);
+        let (path_commands, extent) = path_commands(&path);
+        let msd = evanalyzer_app::results::msd_curve(
+            &points
+                .iter()
+                .zip(&path)
+                .map(|(p, (x, y))| evanalyzer_app::results::MotionPoint {
+                    t: p.t as i32,
+                    x: *x,
+                    y: *y,
+                })
+                .collect::<Vec<_>>(),
+        );
+        let (msd_line, msd_ref) = msd_commands(&msd);
+        let msd_label = match (msd.first(), msd.last()) {
+            (Some(first), Some(last)) if msd.len() >= 2 => format!(
+                "α {} · lags {}–{}",
+                track
+                    .motion
+                    .msd_alpha
+                    .map_or_else(|| "–".to_string(), |a| format!("{a:.2}")),
+                first.0,
+                last.0
+            ),
+            _ => String::new(),
         };
         let (lo, hi) = points.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
             (lo.min(p.area_px), hi.max(p.area_px))
@@ -587,6 +828,20 @@ impl ResultsStateController {
                 .msd_alpha
                 .map_or_else(|| "–".to_string(), |a| format!("{a:.2}"))
                 .into(),
+            path: path_commands.into(),
+            path_scale: if extent > 0.0 {
+                format!(
+                    "± {} {}",
+                    shown.length(&track, Some(extent)),
+                    shown.length_unit()
+                )
+            } else {
+                String::new()
+            }
+            .into(),
+            msd: msd_line.into(),
+            msd_ref: msd_ref.into(),
+            msd_label: msd_label.into(),
             curve: curve.into(),
             area_min: if points.is_empty() {
                 String::new()
@@ -677,8 +932,8 @@ mod tests {
         }
     }
 
-    /// By image and track; by time points, distance, speed, straightness
-    /// (most first, none last).
+    /// By image and track; by time points or a motion value (most first,
+    /// none last).
     #[test]
     fn the_table_is_sorted_as_asked() {
         let rows = [
@@ -688,9 +943,11 @@ mod tests {
         ];
         assert_eq!(order_of(&rows, 0), [2, 1, 0]);
         assert_eq!(order_of(&rows, 1), [1, 0, 2]);
-        assert_eq!(order_of(&rows, 2), [1, 0, 2]);
-        assert_eq!(order_of(&rows, 3), [0, 1, 2]);
-        assert_eq!(order_of(&rows, 4), [1, 0, 2]);
+        // Moved, speed (VCL), straightness (LIN): `MOTION_SORT` + index.
+        let key = |id: &str| MOTION_SORT + motion_index(id).unwrap() as i32;
+        assert_eq!(order_of(&rows, key("displacement")), [1, 0, 2]);
+        assert_eq!(order_of(&rows, key("vcl")), [0, 1, 2]);
+        assert_eq!(order_of(&rows, key("lin")), [1, 0, 2]);
     }
 
     #[test]
@@ -705,6 +962,48 @@ mod tests {
             "3 tracks · 17 objects · median 5 time points"
         );
         assert_eq!(summary_of(&[]), "No tracks");
+    }
+
+    /// The path from its start takes the stored drift away; drawn with its
+    /// start in the middle, as far as it got at the edge.
+    #[test]
+    fn the_path_from_its_start_is_without_the_drift() {
+        let points: Vec<TrackPoint> = [(0, 10.0, 10.0), (1, 14.0, 10.0), (2, 18.0, 13.0)]
+            .iter()
+            .map(|&(t, x, y)| TrackPoint {
+                t,
+                x,
+                y,
+                area_px: 1.0,
+            })
+            .collect();
+        let drift = [(0, 0.0, 0.0), (1, 2.0, 0.0), (2, 4.0, 0.0)];
+        let path = path_from_start(&points, &drift);
+        assert_eq!(path, [(0.0, 0.0), (2.0, 0.0), (4.0, 3.0)]);
+        let (commands, extent) = path_commands(&path);
+        assert_eq!(extent, 4.0);
+        assert_eq!(commands, "M50.00 50.00 L74.00 50.00 L98.00 86.00 ");
+        assert_eq!(path_commands(&[]), (String::new(), 0.0));
+    }
+
+    /// The MSD points log-log, with the slopes 1 and 2 through the first:
+    /// a directed track (MSD ∝ lag²) lies on the slope 2.
+    #[test]
+    fn the_msd_plot_shows_the_points_and_the_slopes() {
+        let directed: Vec<(usize, f64)> = [1usize, 2, 4, 8]
+            .iter()
+            .map(|&l| (l, (l * l) as f64))
+            .collect();
+        let (line, refs) = msd_commands(&directed);
+        assert!(
+            line.starts_with("M0.00 58.00") && line.ends_with("L100.00 2.00 "),
+            "{line}"
+        );
+        assert!(
+            refs.contains("L100.00 2.00"),
+            "slope 2 ends where the points do: {refs}"
+        );
+        assert_eq!(msd_commands(&directed[..1]), (String::new(), String::new()));
     }
 
     /// µm and the speed unit only when every track can show them.

@@ -142,7 +142,8 @@ pub mod results {
     pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
     pub use crate::api::{
         ImageObjectsFilter, ImageTracks, ImageTracksFilter, LineageEvent, ResultObject,
-        TrackLineage, TrackMotion, TrackPath, TrackPoint,
+        TrackFromStart, TrackLineage, TrackMotion, TrackPath, TrackPaths, TrackPathsFilter,
+        TrackPoint, drift_at,
     };
     pub use crate::api::{
         ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint,
@@ -157,6 +158,9 @@ pub mod results {
     pub use crate::workspace::analysis_folders::{
         AnalysisFolder, analysis_folder, delete_analysis,
     };
+    /// A track's MSD over lag as Measure Track Motion fits it (the details
+    /// panel's plot: the same points the step fitted).
+    pub use evanalyzer_core::{MotionPoint, msd_curve};
 
     pub use crate::backend::local::ResultsGenerator as LocalResultsGenerator;
 }

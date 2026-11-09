@@ -217,6 +217,7 @@ pub enum ResultsViewKind {
     Plate,
     Charts,
     Tracks,
+    Paths,
 }
 
 /// See `ProjectSettings::editor`.

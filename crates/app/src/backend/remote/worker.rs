@@ -831,6 +831,7 @@ fn answer_query(
         ResultsQuery::TrackSummary(filter) => {
             ResultsAnswer::TrackSummary(source.track_summary(&filter)?)
         }
+        ResultsQuery::TrackPaths(filter) => ResultsAnswer::TrackPaths(source.track_paths(&filter)?),
         ResultsQuery::GroupingRegex(grouping) => {
             ResultsAnswer::Text(source.grouping_regex(&grouping)?)
         }

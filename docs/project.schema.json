@@ -4742,7 +4742,8 @@
         "list",
         "plate",
         "charts",
-        "tracks"
+        "tracks",
+        "paths"
       ]
     },
     "ResultsViews": {

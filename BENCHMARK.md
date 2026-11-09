@@ -2150,6 +2150,52 @@ dialog's Profile section. The pickers are plain ComboBoxes and the "A
 line per" box is shared with Over time (an InkMultiSelect each cost
 24 KB more).
 
+## Measure Track Motion and the tracks it measured (2026-11-09)
+
+Old = 853d8a9c (motion computed when the results are read: path, distance,
+speed, straightness), new = the step stores 16 values per track and the
+results only read them. Datasets from `make_time_series` (generated with
+the new build): large = 96 images × 48 time points, 6.56M objects, 144,000
+tracks (971 MB); small = 8 images × 48 time points, 73,000 objects, 1,600
+tracks (13 MB). "+step" = Measure Track Motion run for all three classes.
+22 cores, alternating order, 8-10 s pauses, median of 5-7.
+
+```sh
+cargo build --release -p evanalyzer_core --example make_time_series --example bench_track_motion
+cargo build --release -p evanalyzer_app --example bench_time_course
+./target/release/examples/bench_track_motion <copy.evadb> --class 1 [--id motion_02] [--no-write]
+./target/release/examples/bench_time_course <db.evadb> --iters 5 --case 13|14|15
+```
+
+The step itself (one class; peak RSS mostly DuckDB's cache of the file):
+
+| Dataset | Time | Rows | Peak RSS |
+|---|---|---|---|
+| small, class 1 | 70 ms | 10,256 | 49-64 MB |
+| large, class 1 | 4.5-4.7 s | 921,149 | 730 MB |
+| large, class 1, without the write (`--no-write`) | 3.5 s | - | 555 MB |
+| for comparison: Track LAP, large, class 1 | 6.2 s | - | 848 MB |
+
+Reading (ms / peak RSS of the query process):
+
+| Case | Dataset | Old | New |
+|---|---|---|---|
+| 14 tracks CSV | large | 1,119-1,173 / 468 MB | 686-735 / 250 MB (no motion columns) |
+| 14 tracks CSV | large+step | 1,138-1,160 / 476 MB | 1,111-1,143 / 314 MB (16 motion columns) |
+| 15 Tracks, Full | large | 920-927 / 385 MB | 553-554 / 212 MB |
+| 15 Tracks, Full | large+step | 925-933 / 392 MB | 843-866 / 234 MB |
+| 14 tracks CSV | small | 45-46 / 93 MB | 23-25 / 45 MB |
+| 14 tracks CSV | small+step | 45-53 / 91 MB | 33-37 / 48 MB |
+| 15 Tracks, Full | small+step | 28 / 93 MB | 24-25 / 56 MB |
+| 13 one image's tracks | small | 4.0-4.2 / 47 MB | 4.0 / 49 MB |
+| 13 one image's tracks | small+step | 4.1-4.3 / 47 MB | 5.0-5.5 / 51 MB |
+| 13 one image's tracks | large+step | 15.0-15.7 / 70 MB | 19.3-21.1 / 81 MB |
+
+Without the step nothing is slower (the path isn't computed any more).
+With it, one image's tracks cost about 1 ms (200 tracks) to 5 ms (1,500
+tracks) more: their stored values and drift, read in one query
+(`has_track_motion` is asked once per opened file).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2171,6 +2217,8 @@ graphics driver).
 | Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
 | Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |
+| Measure Track Motion, 144,000 tracks (6.56M objects) | ~770 MB | 2026-11-09 | Measure Track Motion |
+| Track LAP, 2.6M objects of a class | ~850 MB | 2026-11-09 | Measure Track Motion |
 | Cellpose-SAM, one 1024² image, CPU | ~1.9 GB | 2026-10-19 | AI models |
 | Running a pipeline: 200 images 2048², 8 threads | ~1 GB (1.05 GB with masks) | 2026-10-23 | Object masks in the results |
 | Running a pipeline: 50 images 2048², 8 threads, with the z columns | 860-963 MB | 2026-10-25 | 3D-ready results |

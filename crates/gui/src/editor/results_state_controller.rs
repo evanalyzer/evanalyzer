@@ -11,6 +11,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::delayed_indicator::DelayedIndicator;
 
+mod paths;
 pub(crate) mod split;
 mod tracks;
 mod tracks_all;
@@ -618,6 +619,8 @@ pub struct ResultsStateController {
     tracks: Mutex<tracks::TracksState>,
     /// Results › Tracks, Full - see [`tracks_all`].
     tracks_all: Mutex<tracks_all::TracksAllState>,
+    /// Results › Paths: its view's settings and what it shows.
+    paths: Mutex<paths::PathsState>,
 }
 
 impl ResultsStateController {
@@ -667,6 +670,7 @@ impl ResultsStateController {
             split: Mutex::new(split::SplitState::default()),
             tracks: Mutex::new(tracks::TracksState::default()),
             tracks_all: Mutex::new(tracks_all::TracksAllState::default()),
+            paths: Mutex::new(paths::PathsState::default()),
         }
     }
 
@@ -677,6 +681,7 @@ impl ResultsStateController {
             self.attach_views_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
+            self.attach_paths_callbacks(&ui);
 
             // -------- ResultsState (api/results.slint) --------
             // Prototypes only for now - wire up the real behavior next.
@@ -728,6 +733,9 @@ impl ResultsStateController {
                             true => manager.tracks_show(),
                             false => manager.tracks_all_show(),
                         }
+                    }
+                    if mode == ResultsRailMode::Paths {
+                        manager.paths_show();
                     }
                 });
 
@@ -2773,6 +2781,7 @@ impl ResultsStateController {
         *self.split.lock().expect("Poisoned") = split::SplitState::default();
         *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
         *self.tracks_all.lock().expect("Poisoned") = tracks_all::TracksAllState::default();
+        *self.paths.lock().expect("Poisoned") = paths::PathsState::default();
         self.viewport().set_results_overlay(None);
         *self.matrix_filter.lock().expect("Poisoned") = None;
         self.classes.lock().expect("Poisoned").clear();
@@ -2856,7 +2865,12 @@ impl ResultsStateController {
                     let state = ui.global::<ResultsState>();
                     state.set_has_tracks(has_tracks);
                     state.set_has_lineage(has_lineage);
-                    if !has_tracks && state.get_rail_mode() == ResultsRailMode::Tracks {
+                    if !has_tracks
+                        && matches!(
+                            state.get_rail_mode(),
+                            ResultsRailMode::Tracks | ResultsRailMode::Paths
+                        )
+                    {
                         state.set_rail_mode(ResultsRailMode::List);
                         state.invoke_rail_mode_selected(ResultsRailMode::List);
                     }
@@ -9637,7 +9651,8 @@ pub(crate) mod tests {
             FROM (SELECT *, 'path_length' AS id, path AS value FROM motion
                 UNION ALL SELECT *, 'displacement', moved FROM motion
                 UNION ALL SELECT *, 'vcl', CASE WHEN frames > 0 THEN path / frames END FROM motion
-                UNION ALL SELECT *, 'lin', CASE WHEN path > 0 THEN moved / path END FROM motion)
+                UNION ALL SELECT *, 'lin', CASE WHEN path > 0 THEN moved / path END FROM motion
+                UNION ALL SELECT *, 'turning', CASE WHEN frames > 0 THEN 12.5 END FROM motion)
             WHERE value IS NOT NULL;
         DROP TABLE motion;";
 
@@ -9672,6 +9687,98 @@ pub(crate) mod tests {
         }
     }
 
+    /// Tracks, Full: the motion columns picked are the table's (in the
+    /// values' order) and the view keeps them.
+    #[test]
+    fn the_full_tracks_columns_are_picked_and_kept_by_the_view() {
+        let o = opened_tracked();
+        let s = o.state();
+        s.set_split(false);
+        s.set_rail_mode(ResultsRailMode::Tracks);
+        s.invoke_rail_mode_selected(ResultsRailMode::Tracks);
+        drain_ui_queue();
+        let heads = |s: &ResultsState| -> Vec<String> {
+            s.get_tracks_all_heads()
+                .iter()
+                .map(|h| h.label.to_string())
+                .collect()
+        };
+        assert_eq!(heads(&s).len(), 6, "the default columns: {:?}", heads(&s));
+        assert_eq!(s.get_tracks_all_columns_summary(), "6 of 16");
+        s.invoke_tracks_all_column_picked("path_length".into(), true);
+        s.invoke_tracks_all_column_picked("msd_alpha".into(), false);
+        drain_ui_queue();
+        let now = heads(&s);
+        assert_eq!(now.len(), 6);
+        assert!(now[0].starts_with("Path length"), "{now:?}");
+        assert!(!now.iter().any(|h| h.starts_with("MSD")));
+        let row = s.get_tracks_all_rows().row_data(0).unwrap();
+        assert_eq!(row.cells.row_count(), 6);
+        assert_eq!(row.cells.row_data(0).unwrap(), "5", "path length 5 px");
+        let kept = o.controller.capture_view_settings().unwrap();
+        assert_eq!(
+            kept.tracks.columns.unwrap(),
+            [
+                "path_length",
+                "displacement",
+                "max_distance",
+                "vcl",
+                "lin",
+                "turning"
+            ]
+        );
+    }
+
+    /// Paths: every track from its start, the motion map's dots (tracks
+    /// with a straightness and a turning); a click on a dot selects its
+    /// track - its ring, its path on top, its values.
+    #[test]
+    fn the_paths_view_draws_the_tracks_and_their_motion_map() {
+        let o = opened_tracked();
+        let s = o.state();
+        s.set_rail_mode(ResultsRailMode::Paths);
+        s.invoke_rail_mode_selected(ResultsRailMode::Paths);
+        drain_ui_queue();
+        // The default view: at least 10 time points - the fixture's have 2.
+        assert_eq!(s.get_paths_empty(), "No tracks for these filters");
+        s.set_paths_min("1".into());
+        s.set_paths_no_edge(false);
+        s.invoke_paths_filter_changed();
+        drain_ui_queue();
+        assert_eq!(s.get_paths_empty(), "");
+        assert!(
+            s.get_paths_header().ends_with("tracks"),
+            "{}",
+            s.get_paths_header()
+        );
+        assert!(s.get_paths_lines().row_count() > 0);
+        assert!(!s.get_paths_extent().is_empty());
+        let dots = s.get_paths_dots();
+        assert!(dots.row_count() > 0);
+        let dot = dots.row_data(0).unwrap();
+        assert_eq!(dot.x, 1.0, "LIN 1");
+        assert!(
+            (dot.y - 42.5 / 60.0).abs() < 1e-6,
+            "turning +12.5 of ±30: {}",
+            dot.y
+        );
+        assert_eq!(
+            (s.get_paths_y_max(), s.get_paths_y_min()),
+            ("+30".into(), "-30".into())
+        );
+        s.invoke_paths_map_clicked(dot.x, dot.y, 400.0, 300.0);
+        drain_ui_queue();
+        assert!(s.get_paths_has_selected());
+        assert!(!s.get_paths_highlight().is_empty(), "its path on top");
+        assert!(
+            s.get_paths_selected().contains("turning +12.5°"),
+            "{}",
+            s.get_paths_selected()
+        );
+        let kept = o.controller.capture_view_settings().unwrap();
+        assert_eq!((kept.paths.min_points, kept.paths.no_edge), (1, false));
+    }
+
     /// Tracks, Full: every track as a row - how many, sorted; a row's
     /// details with its time points; "Show in image" the split at it.
     #[test]
@@ -9693,7 +9800,11 @@ pub(crate) mod tests {
         );
         let first = rows.row_data(0).unwrap();
         assert_eq!(first.points, "2");
-        assert_eq!(first.moved, "5", "3, 4 apart: 5 px");
+        assert_eq!(
+            first.cells.row_data(0).unwrap(),
+            "5",
+            "moved (the first default column): 3, 4 apart, 5 px"
+        );
 
         s.invoke_tracks_all_row_clicked(0);
         drain_ui_queue();

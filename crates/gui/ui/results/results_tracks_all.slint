@@ -7,7 +7,7 @@
 // "Show in image" goes to the split layout at that track.
 
 import { ResultsState } from "../api/results.slint";
-import { Ink, InkButton, InkButtonKind, InkSegmented } from "../ink/ink.slint";
+import { Ink, InkButton, InkButtonKind, InkMultiSelect, InkSegmented } from "../ink/ink.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -144,6 +144,16 @@ export component ResultsTracksAllView inherits Rectangle {
                         ResultsState.tracks-all-filter-changed();
                     }
                 }
+                InkMultiSelect {
+                    label: "Columns";
+                    summary-text: ResultsState.tracks-all-columns-summary;
+                    items <=> ResultsState.tracks-all-column-items;
+                    multi-select: true;
+                    pill-width: 170px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.tracks-all-column-picked(key, selected);
+                    }
+                }
                 Rectangle {
                     horizontal-stretch: 1;
                 }
@@ -183,190 +193,68 @@ export component ResultsTracksAllView inherits Rectangle {
                 border-width: 1px;
                 border-color: Ink.border;
                 clip: true;
-                VerticalLayout {
-                    Rectangle {
-                        height: 30px;
-                        background: Ink.field;
-                        HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
-                            spacing: 12px;
-                            SortHead {
-                                width: root.id-w;
-                                text: "Track";
-                                key: 0;
-                            }
-                            Text {
-                                width: root.class-w;
-                                text: "Class";
-                                font-size: Ink.fs-secondary;
-                                font-weight: 600;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                width: root.image-w;
-                                text: "Image";
-                                font-size: Ink.fs-secondary;
-                                font-weight: 600;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
-                            }
-                            SortHead {
-                                width: root.span-w;
-                                text: "Time points";
-                                key: 1;
-                            }
-                            SortHead {
-                                width: root.num-w;
-                                text: "Moved " + ResultsState.tracks-length-unit;
-                                key: 2;
-                                align: TextHorizontalAlignment.right;
-                            }
-                            SortHead {
-                                width: root.num-w + 30px;
-                                text: "Speed " + ResultsState.tracks-all-speed-unit;
-                                key: 3;
-                                align: TextHorizontalAlignment.right;
-                            }
-                            SortHead {
-                                width: root.num-w;
-                                text: "Straightness";
-                                key: 4;
-                                align: TextHorizontalAlignment.right;
-                            }
-                            SortHead {
-                                width: root.num-w;
-                                text: "Turning °";
-                                key: 5;
-                                align: TextHorizontalAlignment.right;
-                            }
-                            SortHead {
-                                width: root.num-w;
-                                text: "Max dist. " + ResultsState.tracks-length-unit;
-                                key: 6;
-                                align: TextHorizontalAlignment.right;
-                            }
-                            SortHead {
-                                width: root.num-w;
-                                text: "MSD α";
-                                key: 7;
-                                align: TextHorizontalAlignment.right;
-                            }
-                            Text {
-                                width: root.num-w;
-                                text: "Area px";
-                                font-size: Ink.fs-secondary;
-                                font-weight: 600;
-                                color: Ink.text-dim;
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                horizontal-stretch: 1;
-                                text: "Area over time";
-                                font-size: Ink.fs-secondary;
-                                font-weight: 600;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
-                            }
-                        }
+                // Many columns scroll sideways: the details stay in view.
+                table-scroll := ScrollView {
+                    content-width: max(self.visible-width, table.min-width);
+                    content-height: self.visible-height;
+                    table := VerticalLayout {
+                        width: table-scroll.content-width;
+                        height: table-scroll.visible-height;
                         Rectangle {
-                            y: parent.height - 1px;
-                            height: 1px;
-                            background: Ink.border-soft;
-                        }
-                    }
-
-                    // The rows in view: their area curves are read (an
-                    // image's tracks at a time).
-                    property <int> first-shown: max(0, floor(-list.content-y / root.row-h));
-                    property <int> last-shown: self.first-shown + ceil(list.visible-height / root.row-h);
-                    property <int> rows: ResultsState.tracks-all-rows.length;
-                    changed first-shown => {
-                        ResultsState.tracks-all-rows-shown(self.first-shown, self.last-shown);
-                    }
-                    changed rows => {
-                        ResultsState.tracks-all-rows-shown(self.first-shown, self.last-shown);
-                    }
-
-                    list := ListView {
-                        vertical-stretch: 1;
-                        accessible-label: "Tracks";
-                        for track[index] in ResultsState.tracks-all-rows: Rectangle {
-                            height: root.row-h;
-                            background: index == ResultsState.tracks-all-selected ? Ink.selection : row-ta.has-hover ? Ink.hover : transparent;
-                            accessible-role: list-item;
-                            accessible-label: "Track " + track.id + ", " + track.class-name + ", " + track.image;
-                            accessible-item-selected: index == ResultsState.tracks-all-selected;
-                            accessible-action-default => {
-                                ResultsState.tracks-all-row-clicked(index);
-                            }
-                            if index == ResultsState.tracks-all-selected: Rectangle {
-                                x: 0;
-                                width: 3px;
-                                background: Ink.focus;
-                            }
+                            height: 30px;
+                            background: Ink.field;
                             HorizontalLayout {
                                 padding-left: 14px;
                                 padding-right: 14px;
                                 spacing: 12px;
-                                HorizontalLayout {
+                                SortHead {
                                     width: root.id-w;
-                                    spacing: 6px;
-                                    Rectangle {
-                                        width: 8px;
-                                        Rectangle {
-                                            width: 8px;
-                                            height: 8px;
-                                            border-radius: 4px;
-                                            background: track.color;
-                                        }
-                                    }
-                                    Text {
-                                        text: track.id;
-                                        font-size: Ink.fs-body;
-                                        font-family: Ink.font-mono;
-                                        color: Ink.text;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
+                                    text: "Track";
+                                    key: 0;
                                 }
-                                for cell in [
-                                    { w: root.class-w, t: track.class-name, mono: false, right: false },
-                                    { w: root.image-w, t: track.image, mono: true, right: false },
-                                    { w: root.span-w, t: track.span + " (" + track.points + ")", mono: true, right: false },
-                                    { w: root.num-w, t: track.moved, mono: true, right: true },
-                                    { w: root.num-w + 30px, t: track.speed, mono: true, right: true },
-                                    { w: root.num-w, t: track.straightness, mono: true, right: true },
-                                    { w: root.num-w, t: track.turning, mono: true, right: true },
-                                    { w: root.num-w, t: track.max-distance, mono: true, right: true },
-                                    { w: root.num-w, t: track.msd-alpha, mono: true, right: true },
-                                    { w: root.num-w, t: track.area, mono: true, right: true },
-                                ]: Text {
-                                    width: cell.w;
-                                    text: cell.t;
-                                    font-size: Ink.fs-body;
-                                    font-family: cell.mono ? Ink.font-mono : Ink.font-sans;
-                                    color: Ink.text;
-                                    horizontal-alignment: cell.right ? right : left;
+                                Text {
+                                    width: root.class-w;
+                                    text: "Class";
+                                    font-size: Ink.fs-secondary;
+                                    font-weight: 600;
+                                    color: Ink.text-dim;
                                     vertical-alignment: center;
-                                    overflow: elide;
                                 }
-                                Rectangle {
+                                Text {
+                                    width: root.image-w;
+                                    text: "Image";
+                                    font-size: Ink.fs-secondary;
+                                    font-weight: 600;
+                                    color: Ink.text-dim;
+                                    vertical-alignment: center;
+                                }
+                                SortHead {
+                                    width: root.span-w;
+                                    text: "Time points";
+                                    key: 1;
+                                }
+                                for head in ResultsState.tracks-all-heads: SortHead {
+                                    width: root.num-w + 16px;
+                                    text: head.label;
+                                    key: head.key;
+                                    align: TextHorizontalAlignment.right;
+                                }
+                                Text {
+                                    width: root.num-w;
+                                    text: "Area px";
+                                    font-size: Ink.fs-secondary;
+                                    font-weight: 600;
+                                    color: Ink.text-dim;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                                Text {
                                     horizontal-stretch: 1;
-                                    Path {
-                                        x: 0;
-                                        y: 6px;
-                                        width: min(parent.width, 180px);
-                                        height: parent.height - 12px;
-                                        viewbox-width: 100;
-                                        viewbox-height: 20;
-                                        fit: fill;
-                                        commands: track.curve;
-                                        stroke: track.color;
-                                        stroke-width: 1.4px;
-                                    }
+                                    text: "Area over time";
+                                    font-size: Ink.fs-secondary;
+                                    font-weight: 600;
+                                    color: Ink.text-dim;
+                                    vertical-alignment: center;
                                 }
                             }
                             Rectangle {
@@ -374,10 +262,122 @@ export component ResultsTracksAllView inherits Rectangle {
                                 height: 1px;
                                 background: Ink.border-soft;
                             }
-                            row-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
+                        }
+
+                        // The rows in view: their area curves are read (an
+                        // image's tracks at a time).
+                        property <int> first-shown: max(0, floor(-list.content-y / root.row-h));
+                        property <int> last-shown: self.first-shown + ceil(list.visible-height / root.row-h);
+                        property <int> rows: ResultsState.tracks-all-rows.length;
+                        changed first-shown => {
+                            ResultsState.tracks-all-rows-shown(self.first-shown, self.last-shown);
+                        }
+                        changed rows => {
+                            ResultsState.tracks-all-rows-shown(self.first-shown, self.last-shown);
+                        }
+
+                        list := ListView {
+                            vertical-stretch: 1;
+                            accessible-label: "Tracks";
+                            for track[index] in ResultsState.tracks-all-rows: Rectangle {
+                                height: root.row-h;
+                                background: index == ResultsState.tracks-all-selected ? Ink.selection : row-ta.has-hover ? Ink.hover : transparent;
+                                accessible-role: list-item;
+                                accessible-label: "Track " + track.id + ", " + track.class-name + ", " + track.image;
+                                accessible-item-selected: index == ResultsState.tracks-all-selected;
+                                accessible-action-default => {
                                     ResultsState.tracks-all-row-clicked(index);
+                                }
+                                if index == ResultsState.tracks-all-selected: Rectangle {
+                                    x: 0;
+                                    width: 3px;
+                                    background: Ink.focus;
+                                }
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    spacing: 12px;
+                                    HorizontalLayout {
+                                        width: root.id-w;
+                                        spacing: 6px;
+                                        Rectangle {
+                                            width: 8px;
+                                            Rectangle {
+                                                width: 8px;
+                                                height: 8px;
+                                                border-radius: 4px;
+                                                background: track.color;
+                                            }
+                                        }
+                                        Text {
+                                            text: track.id;
+                                            font-size: Ink.fs-body;
+                                            font-family: Ink.font-mono;
+                                            color: Ink.text;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    for cell in [
+                                        { w: root.class-w, t: track.class-name, mono: false, right: false },
+                                        { w: root.image-w, t: track.image, mono: true, right: false },
+                                        { w: root.span-w, t: track.span + " (" + track.points + ")", mono: true, right: false },
+                                    ]: Text {
+                                        width: cell.w;
+                                        text: cell.t;
+                                        font-size: Ink.fs-body;
+                                        font-family: cell.mono ? Ink.font-mono : Ink.font-sans;
+                                        color: Ink.text;
+                                        horizontal-alignment: cell.right ? right : left;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    for value in track.cells: Text {
+                                        width: root.num-w + 16px;
+                                        text: value;
+                                        font-size: Ink.fs-body;
+                                        font-family: Ink.font-mono;
+                                        color: Ink.text;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        width: root.num-w;
+                                        text: track.area;
+                                        font-size: Ink.fs-body;
+                                        font-family: Ink.font-mono;
+                                        color: Ink.text;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        Path {
+                                            x: 0;
+                                            y: 6px;
+                                            width: min(parent.width, 180px);
+                                            height: parent.height - 12px;
+                                            viewbox-width: 100;
+                                            viewbox-height: 20;
+                                            fit: fill;
+                                            commands: track.curve;
+                                            stroke: track.color;
+                                            stroke-width: 1.4px;
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    y: parent.height - 1px;
+                                    height: 1px;
+                                    background: Ink.border-soft;
+                                }
+                                row-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        ResultsState.tracks-all-row-clicked(index);
+                                    }
                                 }
                             }
                         }
@@ -436,16 +436,12 @@ export component ResultsTracksAllView inherits Rectangle {
                             label: "Speed";
                             value: ResultsState.track-detail.speed;
                         }
-                        Fact {
-                            label: "Straightness";
-                            value: ResultsState.track-detail.straightness;
-                        }
                     }
                     HorizontalLayout {
                         spacing: 16px;
                         Fact {
-                            label: "Turning";
-                            value: ResultsState.track-detail.turning;
+                            label: "Straightness";
+                            value: ResultsState.track-detail.straightness;
                         }
                         Fact {
                             label: "Max distance";
@@ -454,6 +450,118 @@ export component ResultsTracksAllView inherits Rectangle {
                         Fact {
                             label: "MSD α";
                             value: ResultsState.track-detail.msd-alpha;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 16px;
+                        Fact {
+                            label: "Turning";
+                            value: ResultsState.track-detail.turning;
+                        }
+                    }
+                    // How it moved, as Measure Track Motion measured it:
+                    // its path from its start (drift taken away) and the
+                    // MSD points α was fitted through.
+                    if ResultsState.track-detail.path != "" || ResultsState.track-detail.msd != "": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "Path from its start";
+                                font-size: Ink.fs-caption;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                            }
+                            path-box := Rectangle {
+                                height: 120px;
+                                border-width: 1px;
+                                border-color: Ink.border-soft;
+                                border-radius: 4px;
+                                accessible-role: image;
+                                accessible-label: "The track's path from its start";
+                                // The start, in the middle.
+                                Rectangle {
+                                    x: parent.width / 2;
+                                    width: 1px;
+                                    background: Ink.border-soft;
+                                }
+                                Rectangle {
+                                    y: parent.height / 2;
+                                    height: 1px;
+                                    background: Ink.border-soft;
+                                }
+                                Path {
+                                    x: 4px;
+                                    y: 4px;
+                                    width: parent.width - 8px;
+                                    height: parent.height - 8px;
+                                    viewbox-width: 100;
+                                    viewbox-height: 100;
+                                    fit: contain;
+                                    commands: ResultsState.track-detail.path != "" ? ResultsState.track-detail.path : "M 50 50";
+                                    stroke: Ink.focus;
+                                    stroke-width: 1.5px;
+                                }
+                                Text {
+                                    x: 4px;
+                                    y: parent.height - self.height - 2px;
+                                    text: ResultsState.track-detail.path-scale;
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-dim;
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "MSD over lag (log–log)";
+                                font-size: Ink.fs-caption;
+                                font-weight: 600;
+                                color: Ink.text-dim;
+                            }
+                            Rectangle {
+                                height: 120px;
+                                border-width: 1px;
+                                border-color: Ink.border-soft;
+                                border-radius: 4px;
+                                accessible-role: image;
+                                accessible-label: "Mean squared displacement over lag; " + ResultsState.track-detail.msd-label;
+                                if ResultsState.track-detail.msd != "": Path {
+                                    x: 4px;
+                                    y: 4px;
+                                    width: parent.width - 8px;
+                                    height: parent.height - 8px;
+                                    viewbox-width: 100;
+                                    viewbox-height: 60;
+                                    fit: fill;
+                                    commands: ResultsState.track-detail.msd-ref;
+                                    stroke: Ink.text-mute;
+                                    stroke-width: 1px;
+                                    opacity: 0.5;
+                                }
+                                if ResultsState.track-detail.msd != "": Path {
+                                    x: 4px;
+                                    y: 4px;
+                                    width: parent.width - 8px;
+                                    height: parent.height - 8px;
+                                    viewbox-width: 100;
+                                    viewbox-height: 60;
+                                    fit: fill;
+                                    commands: ResultsState.track-detail.msd;
+                                    stroke: Ink.focus;
+                                    stroke-width: 2px;
+                                }
+                                Text {
+                                    x: 4px;
+                                    y: 2px;
+                                    text: ResultsState.track-detail.msd != "" ? ResultsState.track-detail.msd-label : "Too short for the MSD";
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-dim;
+                                }
+                            }
                         }
                     }
                     VerticalLayout {

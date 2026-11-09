@@ -1,5 +1,5 @@
 {
-  "protocol_version": 36,
+  "protocol_version": 37,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -768,6 +768,17 @@
         {
           "frame_interval_s": {
             "OPTION": "F64"
+          }
+        },
+        {
+          "drift": {
+            "SEQ": {
+              "TUPLE": [
+                "U32",
+                "F64",
+                "F64"
+              ]
+            }
           }
         }
       ]
@@ -1557,6 +1568,13 @@
               }
             }
           }
+        },
+        "19": {
+          "TrackPaths": {
+            "NEWTYPE": {
+              "TYPENAME": "TrackPaths"
+            }
+          }
         }
       }
     },
@@ -1728,6 +1746,13 @@
         },
         "25": {
           "HasLineage": "UNIT"
+        },
+        "26": {
+          "TrackPaths": {
+            "NEWTYPE": {
+              "TYPENAME": "TrackPathsFilter"
+            }
+          }
         }
       }
     },
@@ -2104,6 +2129,37 @@
         }
       }
     },
+    "TrackFromStart": {
+      "STRUCT": [
+        {
+          "image": "STR"
+        },
+        {
+          "group": "STR"
+        },
+        {
+          "class_id": "I32"
+        },
+        {
+          "track_id": "U64"
+        },
+        {
+          "um_per_px": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "points": {
+            "SEQ": {
+              "TUPLEARRAY": {
+                "CONTENT": "F32",
+                "SIZE": 2
+              }
+            }
+          }
+        }
+      ]
+    },
     "TrackHistory": {
       "ENUM": {
         "0": {
@@ -2245,6 +2301,32 @@
           "motion": {
             "TYPENAME": "TrackMotion"
           }
+        }
+      ]
+    },
+    "TrackPaths": {
+      "STRUCT": [
+        {
+          "tracks": {
+            "SEQ": {
+              "TYPENAME": "TrackFromStart"
+            }
+          }
+        },
+        {
+          "total_tracks": "U64"
+        }
+      ]
+    },
+    "TrackPathsFilter": {
+      "STRUCT": [
+        {
+          "summary": {
+            "TYPENAME": "TrackSummaryFilter"
+          }
+        },
+        {
+          "max_tracks": "U64"
         }
       ]
     },

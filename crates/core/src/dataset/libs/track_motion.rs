@@ -41,7 +41,7 @@
 
 /// A track's position at a time point, in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TrackPoint {
+pub struct TrackPoint {
     pub t: i32,
     pub x: f64,
     pub y: f64,
@@ -257,37 +257,12 @@ fn turning_angles(p: &[(f64, f64)], min_step: f64) -> Vec<f64> {
 /// α and D of MSD = 4 D n^α, fitted over n = 1 .. T / 4 - NaN with fewer
 /// than `MSD_MIN_POINTS` points or `MSD_MIN_LAGS` lags.
 fn msd_fit(points: &[TrackPoint]) -> (f64, f64) {
-    let (Some(first), Some(last)) = (points.first(), points.last()) else {
-        return (f64::NAN, f64::NAN);
-    };
-    let span = (last.t - first.t) as usize;
-    let max_lag = span / 4;
-    if points.len() < MSD_MIN_POINTS || max_lag < MSD_MIN_LAGS {
+    let curve = msd_curve(points);
+    if curve.len() < MSD_MIN_LAGS {
         return (f64::NAN, f64::NAN);
     }
-    // By time point (a gap: none there).
-    let mut at: Vec<Option<(f64, f64)>> = vec![None; span + 1];
-    for p in points {
-        at[(p.t - first.t) as usize] = Some((p.x, p.y));
-    }
-    let mut xs = Vec::new();
-    let mut ys = Vec::new();
-    for lag in log_spaced_lags(max_lag) {
-        let (mut sum, mut pairs) = (0.0, 0usize);
-        for i in 0..=span - lag {
-            if let (Some(a), Some(b)) = (at[i], at[i + lag]) {
-                sum += (b.0 - a.0).powi(2) + (b.1 - a.1).powi(2);
-                pairs += 1;
-            }
-        }
-        if pairs > 0 && sum > 0.0 {
-            xs.push((lag as f64).ln());
-            ys.push((sum / pairs as f64).ln());
-        }
-    }
-    if xs.len() < MSD_MIN_LAGS {
-        return (f64::NAN, f64::NAN);
-    }
+    let xs: Vec<f64> = curve.iter().map(|(lag, _)| (*lag as f64).ln()).collect();
+    let ys: Vec<f64> = curve.iter().map(|(_, msd)| msd.ln()).collect();
     let n = xs.len() as f64;
     let mean_x = xs.iter().sum::<f64>() / n;
     let mean_y = ys.iter().sum::<f64>() / n;
@@ -300,6 +275,41 @@ fn msd_fit(points: &[TrackPoint]) -> (f64, f64) {
     let alpha = sxy / sxx;
     let intercept = mean_y - alpha * mean_x;
     (alpha, intercept.exp() / 4.0)
+}
+
+/// The points α and D are fitted through: (lag, MSD in px²) for the lags
+/// up to T / 4, log-spaced, that have pairs and an MSD above 0 - empty for
+/// a track too short for the fit (fewer than `MSD_MIN_POINTS` points or
+/// `MSD_MIN_LAGS` lags). Public for the results' MSD plot: the same values
+/// the step fitted.
+pub fn msd_curve(points: &[TrackPoint]) -> Vec<(usize, f64)> {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return Vec::new();
+    };
+    let span = (last.t - first.t) as usize;
+    let max_lag = span / 4;
+    if points.len() < MSD_MIN_POINTS || max_lag < MSD_MIN_LAGS {
+        return Vec::new();
+    }
+    // By time point (a gap: none there).
+    let mut at: Vec<Option<(f64, f64)>> = vec![None; span + 1];
+    for p in points {
+        at[(p.t - first.t) as usize] = Some((p.x, p.y));
+    }
+    let mut curve = Vec::new();
+    for lag in log_spaced_lags(max_lag) {
+        let (mut sum, mut pairs) = (0.0, 0usize);
+        for i in 0..=span - lag {
+            if let (Some(a), Some(b)) = (at[i], at[i + lag]) {
+                sum += (b.0 - a.0).powi(2) + (b.1 - a.1).powi(2);
+                pairs += 1;
+            }
+        }
+        if pairs > 0 && sum > 0.0 {
+            curve.push((lag, sum / pairs as f64));
+        }
+    }
+    curve
 }
 
 /// 1 .. `max`, each ×1.25 the one before (rounded, each once).

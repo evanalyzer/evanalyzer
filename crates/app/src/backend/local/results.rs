@@ -189,6 +189,13 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.track_summary(filter))
     }
 
+    fn track_paths(
+        &self,
+        filter: &crate::api::TrackPathsFilter,
+    ) -> Result<crate::api::TrackPaths, InternalErrors> {
+        self.with(|db| db.track_paths(filter))
+    }
+
     fn has_tracks(&self) -> Result<bool, InternalErrors> {
         self.with(|db| ResultCharts {}.has_tracks(db))
     }

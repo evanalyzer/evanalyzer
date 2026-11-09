@@ -16,7 +16,10 @@ use super::results_generator::{
     ResultsGenerator, class_filter_sql, column_aggregate_expr, sql_string_in_list,
 };
 use super::results_time_course::stat_sql;
-use crate::api::{Column, TrackLineage, TrackMotion, TrackSummary, TrackSummaryFilter};
+use crate::api::{
+    Column, TrackFromStart, TrackLineage, TrackMotion, TrackPaths, TrackPathsFilter, TrackSummary,
+    TrackSummaryFilter, drift_at,
+};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use std::collections::{BTreeMap, HashMap};
 
@@ -222,6 +225,14 @@ impl<'a> TrackSummaryQuery<'a> {
         &self,
         mut visit: impl FnMut(&TrackSummary) -> Result<(), InternalErrors>,
     ) -> Result<(), InternalErrors> {
+        self.for_each_in_image(|_, track| visit(track))
+    }
+
+    /// [`Self::for_each`] with each track's image's path.
+    fn for_each_in_image(
+        &self,
+        mut visit: impl FnMut(&str, &TrackSummary) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self.database.connection().prepare(&self.sql).map_err(err)?;
         for image in &self.images {
@@ -270,7 +281,7 @@ impl<'a> TrackSummaryQuery<'a> {
                 if let Some(motion) = motions.remove(&track.track_id) {
                     track.motion = motion;
                 }
-                visit(&track)?;
+                visit(&image.rel_path, &track)?;
             }
         }
         Ok(())
@@ -284,6 +295,89 @@ impl<'a> TrackSummaryQuery<'a> {
             Ok(())
         })?;
         Ok(tracks)
+    }
+
+    /// At most `max_tracks` of the tracks, an even sample (every k-th, the
+    /// same each time), each from its start minus its image's stored drift
+    /// - see [`TrackPathsFilter`]. Only the sample's points are read, an
+    /// image at a time.
+    pub fn paths(&self, max_tracks: usize) -> Result<TrackPaths, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        // Every track's key (small: no values), then the sample.
+        let mut all: Vec<(String, TrackFromStart, u32)> = Vec::new();
+        self.for_each_in_image(|path, track| {
+            all.push((
+                path.to_string(),
+                TrackFromStart {
+                    image: track.image.clone(),
+                    group: track.group.clone(),
+                    class_id: track.class_id,
+                    track_id: track.track_id,
+                    um_per_px: track.um_per_px,
+                    points: Vec::new(),
+                },
+                track.z,
+            ));
+            Ok(())
+        })?;
+        let total_tracks = all.len();
+        let keep = max_tracks.min(total_tracks);
+        let mut sample: Vec<(String, TrackFromStart, u32)> = match keep < total_tracks {
+            true => (0..keep)
+                .map(|i| all[i * total_tracks / keep].clone())
+                .collect(),
+            false => all,
+        };
+        let mut stmt = self
+            .database
+            .connection()
+            .prepare(
+                "SELECT track_id, t_stack, centroid_x_px, centroid_y_px FROM objects \
+                 WHERE image_rel_path = ? AND z_stack = ? AND track_id = ANY(?::UBIGINT[]) \
+                 ORDER BY track_id, t_stack",
+            )
+            .map_err(err)?;
+        // By image and plane: the sample is in image order already.
+        let mut start = 0;
+        while start < sample.len() {
+            let (path, z) = (sample[start].0.clone(), sample[start].2);
+            let end = start
+                + sample[start..]
+                    .iter()
+                    .take_while(|(p, _, tz)| *p == path && *tz == z)
+                    .count();
+            let ids: Vec<String> = sample[start..end]
+                .iter()
+                .map(|(_, t, _)| t.track_id.to_string())
+                .collect();
+            let index: HashMap<u64, usize> =
+                (start..end).map(|i| (sample[i].1.track_id, i)).collect();
+            let drift = self.database.stored_drift(&path, z)?;
+            let mut first: HashMap<u64, (f64, f64)> = HashMap::new();
+            let mut rows = stmt
+                .query(duckdb::params![path, z, format!("[{}]", ids.join(","))])
+                .map_err(err)?;
+            while let Some(row) = rows.next().map_err(err)? {
+                let track_id: u64 = row.get(0).map_err(err)?;
+                let t = row.get::<_, i64>(1).map_err(err)? as u32;
+                let (dx, dy) = drift_at(&drift, t);
+                let x = row.get::<_, Option<f64>>(2).map_err(err)?.unwrap_or(0.0) - dx;
+                let y = row.get::<_, Option<f64>>(3).map_err(err)?.unwrap_or(0.0) - dy;
+                let Some(&i) = index.get(&track_id) else {
+                    continue;
+                };
+                let origin = *first.entry(track_id).or_insert((x, y));
+                sample[i]
+                    .1
+                    .points
+                    .push(((x - origin.0) as f32, (y - origin.1) as f32));
+            }
+            start = end;
+        }
+        Ok(TrackPaths {
+            tracks: sample.into_iter().map(|(_, track, _)| track).collect(),
+            total_tracks,
+        })
     }
 }
 
@@ -361,17 +455,81 @@ impl Lineages {
 impl ResultsGenerator {
     /// Measure Track Motion stored values (`measurements` rows with
     /// `region = 'track'`) - not in results without it or from before it.
+    /// Asked once per opened file: the values are written by the run, not
+    /// while the results are open.
     pub fn has_track_motion(&self) -> Result<bool, InternalErrors> {
-        if !self.has_column("measurements", "track_id")? {
-            return Ok(false);
+        if let Some(cached) = *self.track_motion_cache.borrow() {
+            return Ok(cached);
         }
-        self.connection()
-            .query_row(
-                "SELECT EXISTS (SELECT 1 FROM measurements WHERE region = 'track')",
-                [],
-                |row| row.get(0),
+        let has = self.has_column("measurements", "track_id")?
+            && self
+                .connection()
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM measurements WHERE region = 'track')",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        *self.track_motion_cache.borrow_mut() = Some(has);
+        Ok(has)
+    }
+
+    /// [`Self::track_motion`] and [`Self::stored_drift`] of an image plane
+    /// in one query (Results › Tracks reads both for every image shown).
+    pub(super) fn track_motion_and_drift(
+        &self,
+        image_rel_path: &str,
+        z: u32,
+    ) -> Result<(HashMap<u64, TrackMotion>, Vec<(u32, f64, f64)>), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if !self.has_track_motion()? {
+            return Ok((HashMap::new(), Vec::new()));
+        }
+        let mut stmt = self
+            .connection()
+            .prepare_cached(
+                "SELECT track_id, t_stack, step, key, value FROM measurements \
+                 WHERE image_rel_path = ? AND (region = 'track' OR (region = 'image' \
+                     AND z_stack = ? AND (key LIKE '%/drift_x' OR key LIKE '%/drift_y')))",
             )
-            .map_err(|e| InternalErrors::Io(e.to_string()))
+            .map_err(err)?;
+        let mut rows = stmt
+            .query(duckdb::params![image_rel_path, z])
+            .map_err(err)?;
+        let mut motions: HashMap<u64, TrackMotion> = HashMap::new();
+        // Drift by step, then only the steps that measured tracks here.
+        let mut drift: HashMap<String, BTreeMap<u32, (f64, f64)>> = HashMap::new();
+        let mut track_steps: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().map_err(err)? {
+            let track: Option<u64> = row.get(0).map_err(err)?;
+            let step: String = row.get(2).map_err(err)?;
+            let key: String = row.get(3).map_err(err)?;
+            // "motion_01/vcl": the value's id after the step's.
+            let id = key.split_once('/').map_or(key.as_str(), |(_, id)| id);
+            let value: Option<f64> = row.get(4).map_err(err)?;
+            match track {
+                Some(track) => {
+                    motions.entry(track).or_default().set(id, value);
+                    if !track_steps.contains(&step) {
+                        track_steps.push(step);
+                    }
+                }
+                None => {
+                    let t = row.get::<_, i64>(1).map_err(err)? as u32;
+                    let at = drift.entry(step).or_default().entry(t).or_default();
+                    match id {
+                        "drift_x" => at.0 = value.unwrap_or(0.0),
+                        _ => at.1 = value.unwrap_or(0.0),
+                    }
+                }
+            }
+        }
+        let drift = track_steps
+            .iter()
+            .find_map(|step| drift.remove(step))
+            .map(|by_t| by_t.into_iter().map(|(t, (x, y))| (t, x, y)).collect())
+            .unwrap_or_default();
+        Ok((motions, drift))
     }
 
     /// What Measure Track Motion stored of each track of `image_rel_path`,
@@ -500,6 +658,53 @@ impl ResultsGenerator {
         filter: &TrackSummaryFilter,
     ) -> Result<Vec<TrackSummary>, InternalErrors> {
         TrackSummaryQuery::prepare(self, filter)?.collect()
+    }
+
+    /// A sample of the tracks, each from its start - see [`TrackPathsFilter`].
+    pub fn track_paths(&self, filter: &TrackPathsFilter) -> Result<TrackPaths, InternalErrors> {
+        let summary = TrackSummaryFilter {
+            columns: Vec::new(),
+            ..filter.summary.clone()
+        };
+        TrackSummaryQuery::prepare(self, &summary)?.paths(filter.max_tracks)
+    }
+
+    /// The drift Measure Track Motion stored for an image plane (the
+    /// `drift_x` / `drift_y` image values of the step that measured its
+    /// tracks): (t, x, y) by time - empty without drift correction.
+    pub(super) fn stored_drift(
+        &self,
+        image_rel_path: &str,
+        z: u32,
+    ) -> Result<Vec<(u32, f64, f64)>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if !self.has_track_motion()? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .connection()
+            .prepare(
+                "SELECT t_stack, \
+                     max(value) FILTER (WHERE key LIKE '%/drift_x'), \
+                     max(value) FILTER (WHERE key LIKE '%/drift_y') \
+                 FROM measurements \
+                 WHERE region = 'image' AND image_rel_path = ? AND z_stack = ? \
+                     AND (key LIKE '%/drift_x' OR key LIKE '%/drift_y') \
+                     AND step IN (SELECT DISTINCT step FROM measurements \
+                         WHERE region = 'track' AND image_rel_path = ?) \
+                 GROUP BY t_stack ORDER BY t_stack",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(duckdb::params![image_rel_path, z, image_rel_path], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u32,
+                    row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
+                    row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                ))
+            })
+            .map_err(err)?;
+        rows.collect::<Result<_, _>>().map_err(err)
     }
 }
 
@@ -648,6 +853,56 @@ mod tests {
             Some(30.0),
         );
         assert!((um_per_min.unwrap() - 4.5 * 0.001 * 2.0).abs() < 1e-12);
+    }
+
+    /// Paths: each picked track from its start, minus the drift the step
+    /// stored for its image; beyond `max_tracks` an even sample.
+    #[test]
+    fn paths_start_at_zero_without_the_stored_drift() {
+        let db = open(
+            &tracks(),
+            3,
+            "CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+             z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+             related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+             step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE, \
+             position DOUBLE, track_id UBIGINT);
+             INSERT INTO measurements VALUES
+                 ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                  'VCL', 'PixelsPerFrame', 'motion_01/vcl', 4.5, NULL, 7),
+                 ('img1.tif', 'img1.tif', 0, 0, 'image', NULL, NULL, NULL, NULL, 'motion_01', \
+                  'Drift X', 'Pixels', 'motion_01/drift_x', 0.0, NULL, NULL),
+                 ('img1.tif', 'img1.tif', 0, 1, 'image', NULL, NULL, NULL, NULL, 'motion_01', \
+                  'Drift X', 'Pixels', 'motion_01/drift_x', 1.0, NULL, NULL),
+                 ('img1.tif', 'img1.tif', 0, 2, 'image', NULL, NULL, NULL, NULL, 'motion_01', \
+                  'Drift X', 'Pixels', 'motion_01/drift_x', 2.0, NULL, NULL);",
+        );
+        // As the step stores it: from 0 at the references' first time point.
+        assert_eq!(
+            db.stored_drift("img1.tif", 0).unwrap(),
+            [(0, 0.0, 0.0), (1, 1.0, 0.0), (2, 2.0, 0.0)]
+        );
+        let (motions, drift) = db.track_motion_and_drift("img1.tif", 0).unwrap();
+        assert_eq!(motions[&7].vcl, Some(4.5));
+        assert_eq!(drift, [(0, 0.0, 0.0), (1, 1.0, 0.0), (2, 2.0, 0.0)]);
+        let filter = |max_tracks| TrackPathsFilter {
+            summary: filter(),
+            max_tracks,
+        };
+        let paths = db.track_paths(&filter(10)).unwrap();
+        assert_eq!(paths.total_tracks, 3);
+        let seven = paths.tracks.iter().find(|t| t.track_id == 7).unwrap();
+        // (0,0) (3,4) (3,0), minus drift x 0, 1, 2.
+        assert_eq!(seven.points, [(0.0, 0.0), (2.0, 4.0), (1.0, 0.0)]);
+        let eight = paths.tracks.iter().find(|t| t.track_id == 8).unwrap();
+        assert_eq!(eight.points, [(0.0, 0.0)], "no drift in its image");
+        let sampled = db.track_paths(&filter(2)).unwrap();
+        assert_eq!((sampled.tracks.len(), sampled.total_tracks), (2, 3));
+        assert_eq!(
+            sampled,
+            db.track_paths(&filter(2)).unwrap(),
+            "the same sample each time"
+        );
     }
 
     /// At least N time points, from the first time point, not touching the

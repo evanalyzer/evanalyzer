@@ -357,6 +357,14 @@ export component ResultsBarNav inherits HorizontalLayout {
                 }
             }
 
+            InkMenuItem {
+                text: "Paths";
+                enabled: ResultsState.has-tracks;
+                clicked => {
+                    ResultsState.view-new("paths");
+                }
+            }
+
             InkMenuSeparator { }
 
             InkMenuItem {
@@ -409,6 +417,15 @@ export component ResultsBarNav inherits HorizontalLayout {
                 enabled: ResultsState.has-tracks;
                 clicked => {
                     ResultsState.view-show-as(root.menu-id, "tracks");
+                }
+            }
+
+            InkMenuItem {
+                text: "Paths";
+                checked: root.menu-tab.kind == "PATHS";
+                enabled: ResultsState.has-tracks;
+                clicked => {
+                    ResultsState.view-show-as(root.menu-id, "paths");
                 }
             }
 

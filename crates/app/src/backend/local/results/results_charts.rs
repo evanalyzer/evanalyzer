@@ -644,9 +644,9 @@ impl ResultCharts {
                 }
             }
         }
-        // How each moved: Measure Track Motion's stored values.
-        if database.has_track_motion()? {
-            let mut motions = database.track_motion(path)?;
+        // How each moved and the drift: Measure Track Motion's stored values.
+        let (mut motions, drift) = database.track_motion_and_drift(path, z)?;
+        if !motions.is_empty() {
             for track in &mut tracks {
                 if let Some(motion) = motions.remove(&track.track_id) {
                     track.motion = motion;
@@ -658,6 +658,7 @@ impl ResultCharts {
             total_tracks: n_tracks as usize,
             pixel_size_nm,
             frame_interval_s,
+            drift,
         })
     }
 }

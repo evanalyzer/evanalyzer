@@ -118,11 +118,13 @@ pub use crate::storage::{ImageSummary, PipelineResultExporter};
 // Dataset
 pub use crate::dataset::DatasetAlgorithm;
 pub use crate::dataset::DatasetContext;
+/// A track's MSD over lag as Measure Track Motion fits it (Results' MSD plot).
+pub use crate::dataset::libs::track_motion::{TrackPoint as MotionPoint, msd_curve};
 pub use crate::dataset::{
     MeasureTrackMotion, MergeSplitAmount, TrackKalman, TrackLap, TrackNearestNeighbor, TrackOverlap,
 };
-pub use crate::storage::DatasetStore;
 pub use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
+pub use crate::storage::{DatasetStore, DatasetValue, DatasetValueAbout};
 
 // AI classifier training
 pub use crate::ai_learning::model::SavedClassifier;

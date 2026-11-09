@@ -227,6 +227,54 @@ pub struct ImageTracks {
     pub pixel_size_nm: Option<f64>,
     /// Seconds between time points - `None` when unknown.
     pub frame_interval_s: Option<f64>,
+    /// The image plane's drift as Measure Track Motion stored it: per time
+    /// point (t, x, y) how far everything moved since the first, px -
+    /// empty without drift correction. A track drawn from its start takes
+    /// it away (the values were measured so).
+    #[serde(default)]
+    pub drift: Vec<(u32, f64, f64)>,
+}
+
+/// `drift` (as [`ImageTracks::drift`]) at time point `t`: none before its
+/// first, its last after it - as Measure Track Motion takes it.
+pub fn drift_at(drift: &[(u32, f64, f64)], t: u32) -> (f64, f64) {
+    match drift.binary_search_by_key(&t, |d| d.0) {
+        Ok(i) => (drift[i].1, drift[i].2),
+        Err(0) => drift.first().map_or((0.0, 0.0), |d| (d.1, d.2)),
+        Err(i) => (drift[i - 1].1, drift[i - 1].2),
+    }
+}
+
+/// Results › Paths: a sample of the tracks `summary` picks (every
+/// image's), each from its start - see [`TrackPaths`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackPathsFilter {
+    pub summary: TrackSummaryFilter,
+    /// At most this many tracks - an even sample of them beyond (the same
+    /// each time).
+    pub max_tracks: usize,
+}
+
+/// See [`TrackPathsFilter`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackPaths {
+    pub tracks: Vec<TrackFromStart>,
+    /// The tracks the filter picks - more than `tracks` when sampled.
+    pub total_tracks: usize,
+}
+
+/// A track drawn from its start: its positions by time relative to its
+/// first, minus the image's stored drift (Measure Track Motion's).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackFromStart {
+    pub image: String,
+    /// Its well / group, empty for none.
+    pub group: String,
+    pub class_id: i32,
+    pub track_id: u64,
+    pub um_per_px: Option<f64>,
+    /// (x, y) in px from its first position, by time.
+    pub points: Vec<(f32, f32)>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

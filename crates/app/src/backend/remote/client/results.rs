@@ -297,6 +297,16 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn track_paths(
+        &self,
+        filter: &crate::api::TrackPathsFilter,
+    ) -> Result<crate::api::TrackPaths, InternalErrors> {
+        match self.query(ResultsQuery::TrackPaths(filter.clone()))? {
+            ResultsAnswer::TrackPaths(paths) => Ok(paths),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn has_tracks(&self) -> Result<bool, InternalErrors> {
         match self.query(ResultsQuery::HasTracks)? {
             ResultsAnswer::Count(n) => Ok(n > 0),
@@ -724,6 +734,12 @@ mod tests {
             _: &TrackSummaryFilter,
         ) -> Result<Vec<TrackSummary>, InternalErrors> {
             Err(broken("track summary"))
+        }
+        fn track_paths(
+            &self,
+            _: &crate::api::TrackPathsFilter,
+        ) -> Result<crate::api::TrackPaths, InternalErrors> {
+            Err(broken("track paths"))
         }
         fn has_tracks(&self) -> Result<bool, InternalErrors> {
             Err(broken("has tracks"))

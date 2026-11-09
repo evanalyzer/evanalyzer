@@ -12,7 +12,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod dataset_context;
-pub(crate) mod libs;
+pub mod libs;
 pub mod tracking;
 
 pub use self::dataset_context::DatasetContext;

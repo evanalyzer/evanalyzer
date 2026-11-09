@@ -8,7 +8,7 @@ import { MultiSelectItem } from "../ink/ink.slint";
 import { ClassItemData } from "classification.slint";
 
 // Tracks: only with tracked objects - one image's tracks, beside it.
-export enum ResultsRailMode { list, matrix, charts, tracks }
+export enum ResultsRailMode { list, matrix, charts, tracks, paths }
 
 // Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
 // object (single image + detected objects).
@@ -65,6 +65,26 @@ export struct TrackRow {
     curve: string,
 }
 
+// Paths: the tracks of one color as one path (0 0 1000 1000, each from
+// the middle).
+export struct PathsLine {
+    commands: string,
+    color: color,
+}
+
+// Paths: a track on the motion map (x, y 0..1 of the plot).
+export struct PathsDot {
+    x: float,
+    y: float,
+    color: color,
+}
+
+// Tracks, Full: a motion column's head.
+export struct TrackColumnHead {
+    label: string,
+    key: int,
+}
+
 // Tracks, Full: a row of the table of every track.
 export struct TrackAllRow {
     id: string,
@@ -73,14 +93,9 @@ export struct TrackAllRow {
     image: string,
     span: string,
     points: string,
-    moved: string,
-    speed: string,
-    straightness: string,
-    // Measure Track Motion's mean turning angle, max distance from the
-    // start and MSD exponent - "–" without it.
-    turning: string,
-    max-distance: string,
-    msd-alpha: string,
+    // The motion columns picked (`tracks-all-heads`), in the units shown -
+    // "–" without Measure Track Motion.
+    cells: [string],
     area: string,
     // The area over its time points (0 0 100 20) - empty until read.
     curve: string,
@@ -109,6 +124,17 @@ export struct TrackDetail {
     turning: string,
     max-distance: string,
     msd-alpha: string,
+    // Its path from its start minus the stored drift (0 0 100 100, the
+    // start at 50 50, as far as it got to the edge) and that distance
+    // ("± 12 µm") - empty without its points.
+    path: string,
+    path-scale: string,
+    // The MSD points α was fitted through, log-log (0 0 100 60), the
+    // slopes 1 and 2 from its first point and "α 0.62 · lags 1–15" -
+    // empty for a track too short.
+    msd: string,
+    msd-ref: string,
+    msd-label: string,
     // The area over time (0 0 100 40), its range and the time points'.
     curve: string,
     area-min: string,
@@ -329,6 +355,43 @@ export global ResultsState {
     callback tracks-only-selected-changed(bool);
     callback tracks-by-track-changed(bool);
 
+    // -- Paths: every track from its start, and the motion map --
+    // Filters as in Tracks, Full: class / image (0: all), at least N time
+    // points, from the first time point, not touching the edge; colored by
+    // 0 track, 1 well / group, 2 class; the map's y 0 turning, 1 MSD α.
+    in-out property <[string]> paths-classes;
+    in-out property <int> paths-class: 0;
+    in-out property <[string]> paths-images;
+    in-out property <int> paths-image: 0;
+    in-out property <string> paths-min: "10";
+    in-out property <bool> paths-from-start: false;
+    in-out property <bool> paths-no-edge: true;
+    in-out property <int> paths-color-by: 0;
+    in-out property <int> paths-y-axis: 0;
+    callback paths-filter-changed();
+    // The paths: a line per color, the selected track's, how far the
+    // farthest got ("± 90 µm" from the middle to the edge), "412 tracks"
+    // or "144 000 tracks · 2 000 drawn".
+    in-out property <[PathsLine]> paths-lines;
+    in-out property <string> paths-highlight;
+    in-out property <string> paths-extent;
+    in-out property <string> paths-header;
+    // The motion map: x straightness (LIN 0..1), y as `paths-y-axis`.
+    in-out property <[PathsDot]> paths-dots;
+    in-out property <string> paths-map-header;
+    in-out property <string> paths-y-title;
+    in-out property <string> paths-y-max;
+    in-out property <string> paths-y-min;
+    // A click on the map (x, y 0..1, the plot's size in px): the nearest
+    // track is selected - its ring, its path, its values.
+    callback paths-map-clicked(float, float, float, float);
+    in-out property <bool> paths-has-selected: false;
+    in-out property <float> paths-selected-x;
+    in-out property <float> paths-selected-y;
+    in-out property <string> paths-selected;
+    // Why nothing is shown ("No tracks" / no Measure Track Motion values).
+    in-out property <string> paths-empty;
+
     // -- Tracks, Full: every track (`split` off) --
     in-out property <[TrackAllRow]> tracks-all-rows;
     in-out property <int> tracks-all-selected: -1;
@@ -343,9 +406,15 @@ export global ResultsState {
     in-out property <string> tracks-all-min: "1";
     in-out property <bool> tracks-all-from-start: false;
     in-out property <bool> tracks-all-no-edge: false;
-    // Sorted by 0 track, 1 time points, 2 moved, 3 speed, 4 straightness,
-    // 5 turning, 6 max distance, 7 MSD α (descending but the track).
+    // Sorted by 0 track, 1 time points, 10 + a motion value's index
+    // (`TrackMotion::VALUES`; descending but the track).
     in-out property <int> tracks-all-sort: 0;
+    // The motion columns shown: head ("VCL µm/min") and sort key; picked
+    // from `tracks-all-column-items` ("Moved, VCL, ...").
+    in-out property <[TrackColumnHead]> tracks-all-heads;
+    in-out property <[MultiSelectItem]> tracks-all-column-items;
+    in-out property <string> tracks-all-columns-summary;
+    callback tracks-all-column-picked(string /* value id */, bool);
     in-out property <string> tracks-length-unit: "px";
     // `tracks-um` / `tracks-speed-unit` of the table of every track: a unit
     // picked fills both tables, whichever one is shown.

@@ -19,7 +19,9 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::*;
-use evanalyzer_app::results::view_settings::{ChartView, ListView, PlateView, ViewSettings};
+use evanalyzer_app::results::view_settings::{
+    ChartView, ListView, PlateView, TracksView, ViewSettings,
+};
 use evanalyzer_cfg::settings::project_settings::{ResultsView, ResultsViewKind};
 
 /// What the view shown named but this analysis lacks - kept, so writing the
@@ -44,7 +46,8 @@ fn view_tabs(views: &[ResultsView], has_tracks: bool) -> Vec<crate::ResultsViewT
             id: view.id as i32,
             name: view.name.as_str().into(),
             kind: kind_label(view.kind).into(),
-            available: view.kind != ResultsViewKind::Tracks || has_tracks,
+            available: !matches!(view.kind, ResultsViewKind::Tracks | ResultsViewKind::Paths)
+                || has_tracks,
             // "List", "Plate 2": the name says it already.
             show_kind: !view.name.to_uppercase().starts_with(kind_label(view.kind)),
         })
@@ -57,6 +60,7 @@ fn kind_label(kind: ResultsViewKind) -> &'static str {
         ResultsViewKind::Plate => "PLATE",
         ResultsViewKind::Charts => "CHART",
         ResultsViewKind::Tracks => "TRACKS",
+        ResultsViewKind::Paths => "PATHS",
     }
 }
 
@@ -66,6 +70,7 @@ fn kind_of_key(key: &str) -> Option<ResultsViewKind> {
         "plate" => Some(ResultsViewKind::Plate),
         "charts" => Some(ResultsViewKind::Charts),
         "tracks" => Some(ResultsViewKind::Tracks),
+        "paths" => Some(ResultsViewKind::Paths),
         _ => None,
     }
 }
@@ -76,6 +81,7 @@ fn rail_mode_of(kind: ResultsViewKind) -> ResultsRailMode {
         ResultsViewKind::Plate => ResultsRailMode::Matrix,
         ResultsViewKind::Charts => ResultsRailMode::Charts,
         ResultsViewKind::Tracks => ResultsRailMode::Tracks,
+        ResultsViewKind::Paths => ResultsRailMode::Paths,
     }
 }
 
@@ -258,6 +264,7 @@ impl ResultsStateController {
             ResultsViewKind::Plate => ResultsRailMode::Matrix,
             ResultsViewKind::Charts => ResultsRailMode::Charts,
             ResultsViewKind::Tracks => ResultsRailMode::Tracks,
+            ResultsViewKind::Paths => ResultsRailMode::Paths,
         };
     }
 
@@ -411,6 +418,11 @@ impl ResultsStateController {
             chart.profile_curve = view.profile_curve;
             chart.profile_mark = view.profile_mark;
         }
+        self.tracks_all
+            .lock()
+            .expect("Poisoned")
+            .set_column_ids(settings.tracks.columns.as_deref());
+        self.paths.lock().expect("Poisoned").view = settings.paths.clone();
         *self.view_unavailable.lock().expect("Poisoned") = Some(unavailable);
         missing.dedup();
         missing
@@ -418,7 +430,7 @@ impl ResultsStateController {
 
     /// The view's settings as the filters hold them now - with what this
     /// analysis lacks kept from the view.
-    fn capture_view_settings(&self) -> Option<ViewSettings> {
+    pub(super) fn capture_view_settings(&self) -> Option<ViewSettings> {
         let guard = self.view_unavailable.lock().expect("Poisoned");
         let unavailable = guard.as_ref()?;
         let classes = self.classes.lock().expect("Poisoned").clone();
@@ -504,7 +516,17 @@ impl ResultsStateController {
                 profile_mark: filter.profile_mark,
             }
         };
-        Some(ViewSettings { list, plate, chart })
+        let tracks = TracksView {
+            columns: self.tracks_all.lock().expect("Poisoned").column_ids(),
+        };
+        let paths = self.paths.lock().expect("Poisoned").view.clone();
+        Some(ViewSettings {
+            list,
+            plate,
+            chart,
+            tracks,
+            paths,
+        })
     }
 
     /// Writes the filters into the view shown, if they changed - the
@@ -614,6 +636,7 @@ impl ResultsStateController {
                         ResultsViewKind::Plate => "Plate",
                         ResultsViewKind::Charts => "Charts",
                         ResultsViewKind::Tracks => "Tracks",
+                        ResultsViewKind::Paths => "Paths",
                     };
                     let name = free_name(&views.views, base);
                     views.views.push(ResultsView {
@@ -1053,6 +1076,7 @@ impl ResultsStateController {
                         ResultsViewKind::Plate => "Plate",
                         ResultsViewKind::Charts => "Charts",
                         ResultsViewKind::Tracks => "Tracks",
+                        ResultsViewKind::Paths => "Paths",
                     };
                     ResultsView {
                         id,

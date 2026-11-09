@@ -60,6 +60,8 @@ pub struct ResultsGenerator {
     volumes_cache: RefCell<Option<bool>>,
     /// Whether the results can hold profiles (format 2, `has_profiles`).
     profiles_cache: RefCell<Option<bool>>,
+    /// Whether Measure Track Motion stored values (`has_track_motion`).
+    pub(super) track_motion_cache: RefCell<Option<bool>>,
 }
 
 impl ResultsGenerator {
@@ -74,6 +76,7 @@ impl ResultsGenerator {
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
             profiles_cache: RefCell::new(None),
+            track_motion_cache: RefCell::new(None),
         })
     }
 
@@ -241,6 +244,7 @@ impl ResultsGenerator {
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
             profiles_cache: RefCell::new(None),
+            track_motion_cache: RefCell::new(None),
         })
     }
 
@@ -4894,6 +4898,7 @@ mod tests {
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
             profiles_cache: RefCell::new(None),
+            track_motion_cache: RefCell::new(None),
         }
     }
 

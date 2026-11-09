@@ -1,0 +1,358 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// results/results_paths.slint — Results › Paths: every track drawn from its
+// start (a sample beyond 2000), and the motion map - a dot per track at its
+// straightness and turning (or MSD α), as Measure Track Motion measured
+// them. A click on the map selects the nearest track. No thresholds and no
+// motion type: the user reads the map.
+
+import { ResultsState } from "../api/results.slint";
+import { Ink, InkSegmented } from "../ink/ink.slint";
+import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
+
+component PanelTitle inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> note;
+    spacing: 8px;
+    Text {
+        text: root.title;
+        font-size: Ink.fs-body;
+        font-weight: 600;
+        color: Ink.text;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.note;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}
+
+component SettingsCaption inherits Text {
+    font-size: Ink.fs-caption;
+    font-weight: 600;
+    color: Ink.text-dim;
+}
+
+export component ResultsPathsView inherits Rectangle {
+    background: Ink.ground;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        // -- The paths and the map --
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+
+            if ResultsState.paths-empty != "": Text {
+                text: ResultsState.paths-empty;
+                font-size: Ink.fs-body;
+                color: Ink.text-mute;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if ResultsState.paths-empty == "": HorizontalLayout {
+                padding: 16px;
+                spacing: 16px;
+
+                VerticalLayout {
+                    spacing: 8px;
+                    horizontal-stretch: 1;
+                    PanelTitle {
+                        title: "Paths from their start";
+                        note: ResultsState.paths-header;
+                    }
+                    paths-box := Rectangle {
+                        vertical-stretch: 1;
+                        background: Ink.raised;
+                        border-radius: 4px;
+                        clip: true;
+                        accessible-role: image;
+                        accessible-label: "Every track drawn from its start, " + ResultsState.paths-header;
+                        // The start: the middle.
+                        Rectangle {
+                            x: parent.width / 2;
+                            width: 1px;
+                            background: Ink.border-soft;
+                        }
+                        Rectangle {
+                            y: parent.height / 2;
+                            height: 1px;
+                            background: Ink.border-soft;
+                        }
+                        for line in ResultsState.paths-lines: Path {
+                            width: paths-box.width;
+                            height: paths-box.height;
+                            viewbox-width: 1000;
+                            viewbox-height: 1000;
+                            // Square: x and y at the same scale.
+                            fit: contain;
+                            commands: line.commands;
+                            stroke: line.color;
+                            stroke-width: 1px;
+                            opacity: ResultsState.paths-has-selected ? 0.35 : 0.8;
+                        }
+                        if ResultsState.paths-highlight != "": Path {
+                            width: paths-box.width;
+                            height: paths-box.height;
+                            viewbox-width: 1000;
+                            viewbox-height: 1000;
+                            fit: contain;
+                            commands: ResultsState.paths-highlight;
+                            stroke: Ink.focus;
+                            stroke-width: 2.5px;
+                        }
+                        Text {
+                            x: 6px;
+                            y: parent.height - self.height - 4px;
+                            text: ResultsState.paths-extent;
+                            font-size: Ink.fs-caption;
+                            font-family: Ink.font-mono;
+                            color: Ink.text-dim;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 8px;
+                    horizontal-stretch: 1;
+                    PanelTitle {
+                        title: "Motion map";
+                        note: ResultsState.paths-map-header;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            width: 48px;
+                            Text {
+                                text: ResultsState.paths-y-max;
+                                font-size: Ink.fs-caption;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-dim;
+                                horizontal-alignment: right;
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                Text {
+                                    width: parent.width;
+                                    text: ResultsState.paths-y-title;
+                                    font-size: Ink.fs-caption;
+                                    color: Ink.text-dim;
+                                    horizontal-alignment: right;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            Text {
+                                text: ResultsState.paths-y-min;
+                                font-size: Ink.fs-caption;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-dim;
+                                horizontal-alignment: right;
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            horizontal-stretch: 1;
+                            map := Rectangle {
+                                vertical-stretch: 1;
+                                background: Ink.raised;
+                                border-radius: 4px;
+                                clip: true;
+                                accessible-role: image;
+                                accessible-label: "Straightness against " + ResultsState.paths-y-title + ", a dot per track";
+                                // 0 on the y axis (turning: no turn).
+                                if ResultsState.paths-y-axis == 0: Rectangle {
+                                    y: parent.height / 2;
+                                    height: 1px;
+                                    background: Ink.border-soft;
+                                }
+                                for dot in ResultsState.paths-dots: Rectangle {
+                                    width: 5px;
+                                    height: 5px;
+                                    border-radius: 2.5px;
+                                    background: dot.color;
+                                    opacity: 0.75;
+                                    x: dot.x * (map.width - self.width);
+                                    y: (1.0 - dot.y) * (map.height - self.height);
+                                }
+                                if ResultsState.paths-has-selected: Rectangle {
+                                    width: 13px;
+                                    height: 13px;
+                                    border-radius: 6.5px;
+                                    border-width: 2px;
+                                    border-color: Ink.focus;
+                                    x: ResultsState.paths-selected-x * (map.width - 5px) - 4px;
+                                    y: (1.0 - ResultsState.paths-selected-y) * (map.height - 5px) - 4px;
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        ResultsState.paths-map-clicked(
+                                            (self.mouse-x - 2.5px) / max(1px, map.width - 5px),
+                                            1.0 - (self.mouse-y - 2.5px) / max(1px, map.height - 5px),
+                                            (map.width - 5px) / 1px,
+                                            (map.height - 5px) / 1px);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                Text {
+                                    text: "0";
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-dim;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: "Straightness (LIN)";
+                                    font-size: Ink.fs-caption;
+                                    color: Ink.text-dim;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: "1";
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-dim;
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        text: ResultsState.paths-has-selected ? ResultsState.paths-selected : "Click a dot: its track.";
+                        font-size: Ink.fs-secondary;
+                        font-family: ResultsState.paths-has-selected ? Ink.font-mono : Ink.font-sans;
+                        color: ResultsState.paths-has-selected ? Ink.text : Ink.text-mute;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // -- What is drawn and how --
+        Rectangle {
+            width: 280px;
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                alignment: start;
+                SettingsCaption {
+                    text: "DATA";
+                }
+                ComboBox {
+                    model: ResultsState.paths-classes;
+                    current-index: ResultsState.paths-class;
+                    selected(v) => {
+                        ResultsState.paths-class = self.current-index;
+                        ResultsState.paths-filter-changed();
+                    }
+                }
+                ComboBox {
+                    model: ResultsState.paths-images;
+                    current-index: ResultsState.paths-image;
+                    selected(v) => {
+                        ResultsState.paths-image = self.current-index;
+                        ResultsState.paths-filter-changed();
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "At least";
+                        vertical-alignment: center;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                    }
+                    LineEdit {
+                        width: 56px;
+                        horizontal-alignment: center;
+                        input-type: number;
+                        text <=> ResultsState.paths-min;
+                        accepted => {
+                            ResultsState.paths-filter-changed();
+                        }
+                        edited => {
+                            ResultsState.paths-filter-changed();
+                        }
+                    }
+                    Text {
+                        text: "time points";
+                        vertical-alignment: center;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                    }
+                }
+                CheckBox {
+                    text: "From the first time point";
+                    checked <=> ResultsState.paths-from-start;
+                    toggled => {
+                        ResultsState.paths-filter-changed();
+                    }
+                }
+                CheckBox {
+                    text: "Not touching the edge";
+                    checked <=> ResultsState.paths-no-edge;
+                    toggled => {
+                        ResultsState.paths-filter-changed();
+                    }
+                }
+                Rectangle {
+                    height: 6px;
+                }
+                SettingsCaption {
+                    text: "DISPLAY";
+                }
+                Text {
+                    text: "Color by";
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-dim;
+                }
+                InkSegmented {
+                    label: "Color by";
+                    model: ["Track", "Well", "Class"];
+                    selected: ResultsState.paths-color-by;
+                    picked(i) => {
+                        ResultsState.paths-color-by = i;
+                        ResultsState.paths-filter-changed();
+                    }
+                }
+                Text {
+                    text: "Motion map, y axis";
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-dim;
+                }
+                InkSegmented {
+                    label: "Motion map, y axis";
+                    model: ["Turning", "MSD α"];
+                    selected: ResultsState.paths-y-axis;
+                    picked(i) => {
+                        ResultsState.paths-y-axis = i;
+                        ResultsState.paths-filter-changed();
+                    }
+                }
+                Text {
+                    text: "At most 2000 paths are drawn (an even sample) and 5000 dots shown; the header says how many there are.";
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-mute;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

@@ -17,4 +17,4 @@ pub(crate) mod lap;
 pub(crate) mod linking;
 /// How a track moved (speeds, CASA ratios, turning, MSD) and the drift of
 /// an image from reference tracks - Measure Track Motion.
-pub(crate) mod track_motion;
+pub mod track_motion;

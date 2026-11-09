@@ -233,6 +233,11 @@ pub trait ResultsSource: Send + Sync {
         &self,
         filter: &crate::api::TrackSummaryFilter,
     ) -> Result<Vec<crate::api::TrackSummary>, InternalErrors>;
+    /// A sample of the tracks, each from its start (Results › Paths).
+    fn track_paths(
+        &self,
+        filter: &crate::api::TrackPathsFilter,
+    ) -> Result<crate::api::TrackPaths, InternalErrors>;
     /// Some of the objects are tracked (Results › Tracks is offered).
     fn has_tracks(&self) -> Result<bool, InternalErrors>;
     /// A tracking step recorded divisions or fusions (the tracks' history

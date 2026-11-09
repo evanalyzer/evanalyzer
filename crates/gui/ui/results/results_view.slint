@@ -13,6 +13,7 @@ import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
 import { ResultsTracksView } from "results_tracks.slint";
 import { ResultsTracksAllView } from "results_tracks_all.slint";
+import { ResultsPathsView } from "results_paths.slint";
 import { ResultsListPanel } from "../editor/results_list_panel.slint";
 
 export component ResultsView inherits Rectangle {
@@ -73,6 +74,10 @@ export component ResultsView inherits Rectangle {
             vertical-stretch: 1;
         }
         if ResultsState.rail-mode == ResultsRailMode.tracks && !ResultsState.split: ResultsTracksAllView {
+            vertical-stretch: 1;
+        }
+        // Paths: every track from its start, and the motion map.
+        if ResultsState.rail-mode == ResultsRailMode.paths: ResultsPathsView {
             vertical-stretch: 1;
         }
     }
