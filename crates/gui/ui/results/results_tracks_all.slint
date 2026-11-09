@@ -7,7 +7,7 @@
 // "Show in image" goes to the split layout at that track.
 
 import { ResultsState } from "../api/results.slint";
-import { Ink, InkButton, InkButtonKind, InkMultiSelect, InkSegmented } from "../ink/ink.slint";
+import { Ink, InkButton, InkButtonKind, InkIcons, InkMultiSelect, InkSegmented } from "../ink/ink.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 
@@ -68,6 +68,18 @@ export component ResultsTracksAllView inherits Rectangle {
     property <length> span-w: 92px;
     property <length> num-w: 82px;
 
+    // The track filters changed from their defaults (the Filters badge).
+    property <int> active-filters: (ResultsState.tracks-all-min.to-float() > 1 ? 1 : 0)
+        + (ResultsState.tracks-all-from-start ? 1 : 0)
+        + (ResultsState.tracks-all-no-edge ? 1 : 0);
+
+    function reset-filters() {
+        ResultsState.tracks-all-min = "1";
+        ResultsState.tracks-all-from-start = false;
+        ResultsState.tracks-all-no-edge = false;
+        ResultsState.tracks-all-filter-changed();
+    }
+
     background: Ink.ground;
 
     VerticalLayout {
@@ -85,73 +97,204 @@ export component ResultsTracksAllView inherits Rectangle {
                 padding: 10px;
                 padding-left: 14px;
                 spacing: 12px;
-                ComboBox {
-                    width: 150px;
-                    model: ResultsState.tracks-all-classes;
-                    current-index: ResultsState.tracks-all-class;
-                    selected(v) => {
-                        ResultsState.tracks-all-class = self.current-index;
-                        ResultsState.tracks-all-filter-changed();
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 150px;
+                        model: ResultsState.tracks-all-classes;
+                        current-index: ResultsState.tracks-all-class;
+                        selected(v) => {
+                            ResultsState.tracks-all-class = self.current-index;
+                            ResultsState.tracks-all-filter-changed();
+                        }
                     }
                 }
-                ComboBox {
-                    width: 170px;
-                    model: ResultsState.tracks-all-images;
-                    current-index: ResultsState.tracks-all-image;
-                    selected(v) => {
-                        ResultsState.tracks-all-image = self.current-index;
-                        ResultsState.tracks-all-filter-changed();
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 170px;
+                        model: ResultsState.tracks-all-images;
+                        current-index: ResultsState.tracks-all-image;
+                        selected(v) => {
+                            ResultsState.tracks-all-image = self.current-index;
+                            ResultsState.tracks-all-filter-changed();
+                        }
                     }
                 }
+                // The track filters in a dropdown; the badge counts the
+                // ones changed from the default (design canvas "Tracks
+                // toolbar", board 3).
+                filters-pill := Rectangle {
+                    height: Ink.control-h;
+                    width: filters-pill-row.preferred-width;
+                    border-radius: Ink.radius-sm;
+                    background: filters-ta.has-hover ? Ink.hover : Ink.field;
+                    border-width: 1px;
+                    border-color: root.active-filters > 0 ? Ink.focus : (filters-ta.has-hover ? Ink.text-faint : Ink.border);
+                    accessible-role: combobox;
+                    accessible-label: "Track filters";
+                    accessible-value: root.active-filters + " active";
+                    accessible-action-default => {
+                        filters-popup.show();
+                    }
+                    filters-pill-row := HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Text {
+                            text: "Filters";
+                            font-size: Ink.fs-body;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                        }
+                        if root.active-filters > 0: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                height: 16px;
+                                width: max(16px, badge.preferred-width + 10px);
+                                border-radius: 8px;
+                                background: Ink.focus;
+                                badge := Text {
+                                    text: root.active-filters;
+                                    font-size: Ink.fs-caption;
+                                    font-weight: 600;
+                                    color: Ink.panel;
+                                }
+                            }
+                        }
+                        Image {
+                            source: InkIcons.caret-down;
+                            width: 10px;
+                            colorize: Ink.text-mute;
+                        }
+                    }
+                    filters-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            filters-popup.show();
+                        }
+                    }
+                    filters-popup := PopupWindow {
+                        x: 0;
+                        y: filters-pill.height + 4px;
+                        width: 280px;
+                        // Explicit, like InkMultiSelect: an inferred height
+                        // misplaces the popup.
+                        height: 162px;
+                        close-policy: close-on-click-outside;
+                        Rectangle {
+                            width: 280px;
+                            height: 162px;
+                            background: Ink.panel;
+                            border-width: 1px;
+                            border-color: Ink.border;
+                            border-radius: Ink.radius-md;
+                            drop-shadow-color: Ink.shadow;
+                            drop-shadow-blur: 24px;
+                            drop-shadow-offset-y: 8px;
+                            VerticalLayout {
+                                padding: 14px;
+                                padding-top: 12px;
+                                spacing: 10px;
+                                alignment: start;
+                                Text {
+                                    text: "SHOW ONLY TRACKS";
+                                    font-size: Ink.fs-caption;
+                                    font-weight: 600;
+                                    color: Ink.text-mute;
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: start;
+                                    Text {
+                                        text: "At least";
+                                        vertical-alignment: center;
+                                        font-size: Ink.fs-secondary;
+                                        color: Ink.text-dim;
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        LineEdit {
+                                            width: 56px;
+                                            horizontal-alignment: center;
+                                            input-type: number;
+                                            text <=> ResultsState.tracks-all-min;
+                                            accepted => {
+                                                ResultsState.tracks-all-filter-changed();
+                                            }
+                                            edited => {
+                                                ResultsState.tracks-all-filter-changed();
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        text: "time points";
+                                        vertical-alignment: center;
+                                        font-size: Ink.fs-secondary;
+                                        color: Ink.text-dim;
+                                    }
+                                }
+                                CheckBox {
+                                    text: "From the first time point";
+                                    checked <=> ResultsState.tracks-all-from-start;
+                                    toggled => {
+                                        ResultsState.tracks-all-filter-changed();
+                                    }
+                                }
+                                CheckBox {
+                                    text: "Not touching the edge";
+                                    checked <=> ResultsState.tracks-all-no-edge;
+                                    toggled => {
+                                        ResultsState.tracks-all-filter-changed();
+                                    }
+                                }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    reset-ta := TouchArea {
+                                        enabled: root.active-filters > 0;
+                                        mouse-cursor: self.enabled ? pointer : default;
+                                        width: reset-text.preferred-width;
+                                        height: reset-text.preferred-height;
+                                        accessible-role: button;
+                                        accessible-label: "Reset filters";
+                                        accessible-action-default => {
+                                            root.reset-filters();
+                                        }
+                                        clicked => {
+                                            root.reset-filters();
+                                        }
+                                        reset-text := Text {
+                                            text: "Reset filters";
+                                            font-size: Ink.fs-secondary;
+                                            color: reset-ta.enabled ? Ink.focus : Ink.text-mute;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // "Columns" inline, like a label beside its field.
                 HorizontalLayout {
+                    width: columns-label.preferred-width + 6px + 110px;
                     spacing: 6px;
-                    Text {
-                        text: "At least";
+                    columns-label := Text {
+                        text: "Columns";
                         vertical-alignment: center;
                         font-size: Ink.fs-secondary;
                         color: Ink.text-dim;
                     }
-                    LineEdit {
-                        width: 56px;
-                        horizontal-alignment: center;
-                        input-type: number;
-                        text <=> ResultsState.tracks-all-min;
-                        accepted => {
-                            ResultsState.tracks-all-filter-changed();
+                    VerticalLayout {
+                        alignment: center;
+                        InkMultiSelect {
+                            summary-text: ResultsState.tracks-all-columns-summary;
+                            items <=> ResultsState.tracks-all-column-items;
+                            multi-select: true;
+                            pill-width: 110px;
+                            item-selected(key, value, selected) => {
+                                ResultsState.tracks-all-column-picked(key, selected);
+                            }
                         }
-                        edited => {
-                            ResultsState.tracks-all-filter-changed();
-                        }
-                    }
-                    Text {
-                        text: "time points";
-                        vertical-alignment: center;
-                        font-size: Ink.fs-secondary;
-                        color: Ink.text-dim;
-                    }
-                }
-                CheckBox {
-                    text: "From the first time point";
-                    checked <=> ResultsState.tracks-all-from-start;
-                    toggled => {
-                        ResultsState.tracks-all-filter-changed();
-                    }
-                }
-                CheckBox {
-                    text: "Not touching the edge";
-                    checked <=> ResultsState.tracks-all-no-edge;
-                    toggled => {
-                        ResultsState.tracks-all-filter-changed();
-                    }
-                }
-                InkMultiSelect {
-                    label: "Columns";
-                    summary-text: ResultsState.tracks-all-columns-summary;
-                    items <=> ResultsState.tracks-all-column-items;
-                    multi-select: true;
-                    pill-width: 170px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.tracks-all-column-picked(key, selected);
                     }
                 }
                 Rectangle {
@@ -159,6 +302,7 @@ export component ResultsTracksAllView inherits Rectangle {
                 }
                 Text {
                     text: ResultsState.tracks-all-summary;
+                    horizontal-stretch: 0;
                     font-size: Ink.fs-secondary;
                     color: Ink.text-dim;
                     vertical-alignment: center;
@@ -168,6 +312,7 @@ export component ResultsTracksAllView inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     InkSegmented {
+                        horizontal-stretch: 0;
                         label: "Speed unit";
                         model: ["px/frame", "µm/min", "µm/s"];
                         selected: ResultsState.tracks-unit;
