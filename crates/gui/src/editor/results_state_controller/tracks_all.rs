@@ -189,7 +189,12 @@ impl Shown {
             MotionKind::Angle => "°".to_string(),
             MotionKind::AngularSpeed => format!("°/{}", self.time_unit()),
             MotionKind::Frequency => format!("/{}", self.time_unit()),
-            MotionKind::Diffusion => format!("{}²/{}", self.length_unit(), self.time_unit()),
+            // In px² per frame unless a µm speed unit is picked
+            // (`TrackMotion::in_units`), even with the pixel size known.
+            MotionKind::Diffusion => match self.speed {
+                SpeedUnit::PxPerFrame => "px²/frame".to_string(),
+                _ => format!("µm²/{}", self.time_unit()),
+            },
         };
         match unit.is_empty() {
             true => name.to_string(),
@@ -911,6 +916,37 @@ impl ResultsStateController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MSD D's header names the unit its values are in: px²/frame with
+    /// px/frame picked - also when the pixel size is known (lengths are in
+    /// µm then, MSD D isn't converted) - else µm² per the speed's time.
+    #[test]
+    fn the_msd_header_names_the_unit_of_its_values() {
+        let msd = TrackMotion::VALUES
+            .iter()
+            .position(|(id, ..)| *id == "msd_d")
+            .unwrap();
+        let head = |um, speed| Shown { um, speed }.column_head(msd);
+        assert_eq!(head(true, SpeedUnit::PxPerFrame), "MSD D px²/frame");
+        assert_eq!(head(false, SpeedUnit::PxPerFrame), "MSD D px²/frame");
+        assert_eq!(head(true, SpeedUnit::UmPerMin), "MSD D µm²/min");
+        assert_eq!(head(true, SpeedUnit::UmPerS), "MSD D µm²/s");
+
+        // The values: px²/frame stay as measured, µm²/min convert.
+        let motion = TrackMotion {
+            msd_d: Some(2.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            motion.in_units(msd, SpeedUnit::PxPerFrame, Some(0.1), Some(30.0)),
+            Some(2.0)
+        );
+        let per_min = motion
+            .in_units(msd, SpeedUnit::UmPerMin, Some(0.1), Some(30.0))
+            .unwrap();
+        // 2 px²/frame · 0.01 µm²/px² · 2 frames/min = 0.04 µm²/min.
+        assert!((per_min - 0.04).abs() < 1e-12, "{per_min}");
+    }
 
     /// A track with Measure Track Motion's path length and displacement,
     /// its VCL and LIN from them.

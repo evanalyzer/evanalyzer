@@ -303,6 +303,11 @@ impl ResultsStateController {
                     .filter(|id| has_class(**id))
                     .map(|id| ObjectClass::Global(*id))
                     .collect();
+                // None of them (saved after "None", or every one gone):
+                // none shown - an empty list would be every class.
+                if list.object_classes.is_empty() {
+                    list.object_classes = vec![ObjectClass::Unset];
+                }
                 unavailable.list_classes =
                     ids.iter().copied().filter(|id| !has_class(*id)).collect();
                 missing.extend(

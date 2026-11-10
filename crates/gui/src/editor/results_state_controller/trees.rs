@@ -38,7 +38,8 @@ pub(super) struct TreesState {
     pending_segment: Option<String>,
     /// The view's setting (how it's drawn).
     pub(super) by_strahler: bool,
-    sort: i32,
+    /// The list's sort column (as `trees-sort`).
+    pub(super) sort: i32,
     generation: u64,
 }
 
@@ -198,8 +199,10 @@ impl ResultsStateController {
     pub(super) fn trees_show(self: &Arc<Self>) {
         let by_strahler = self.trees.lock().expect("Poisoned").by_strahler;
         if let Some(ui) = self.ui.upgrade() {
-            ui.global::<ResultsState>()
-                .set_trees_color_by(i32::from(by_strahler));
+            let state = ui.global::<ResultsState>();
+            state.set_trees_color_by(i32::from(by_strahler));
+            // Sorted as the list's header shows (Length at first).
+            self.trees.lock().expect("Poisoned").sort = state.get_trees_sort();
         }
         let generation = {
             let mut trees = self.trees.lock().expect("Poisoned");

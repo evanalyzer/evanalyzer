@@ -201,8 +201,10 @@ export component AppWindow inherits Window {
     icon: @image-url("icons/icon.png");
     preferred-width: 1500px;
     preferred-height: 900px;
-    min-width: 1500px;
-    min-height: 900px;
+    // What the views need (the widest, Images and the List, ~1012 px) -
+    // not the preferred size, or a 1440 x 900 screen can't hold the window.
+    min-width: 1024px;
+    min-height: 600px;
     background: Ink.ground;
     default-font-family: Ink.font-sans;
     default-font-size: Ink.fs-body;
