@@ -618,7 +618,7 @@ jobs:
 
   build-macos:
     needs: [templates]
-    runs-on: macos-14   # Apple Silicon (arm64)
+    runs-on: macos-15   # Apple Silicon (arm64); macos-14 retired 2026-11-02
     steps:
       - uses: actions/checkout@v4
 
