@@ -66,27 +66,43 @@ fi
 # also matched a copy fetched 2026-10-26). DuckDB: the "app-deps" release's
 # assets (matched copies from 2026-06). A new LIBTORCH_VERSION / CUDA_VARIANT
 # or DuckDB needs its sums added here.
-declare -A SHA256=(
-    ["libtorch-shared-with-deps-2.13.0+cpu.zip"]="edbf4cbed78433d803e90a65f1752e57783d164bce66c95c0872b2ab8f5c159e"
-    ["libtorch-shared-with-deps-2.13.0+cu130.zip"]="945c5a3d946a28b387ad9dc9fddda7ba03e35fae1375b84ebff15df789436f82"
-    ["libtorch-win-shared-with-deps-2.13.0+cpu.zip"]="e1cd3950adc30c54c364eaaf44c2b0caf1eafee29a6e811c805e6fe1ce912759"
-    ["libtorch-win-shared-with-deps-2.13.0+cu130.zip"]="be25958466f64d551221c3525f5d878200d3e3ef7c6eb36af6a282f6f6076dac"
-    ["libtorch-win-arm64-shared-with-deps-2.13.0+cpu.zip"]="ac5cfca029c6efb14975a9a5b970290f223e1a76f2d588067fe67f463ea6d3da"
-    ["libtorch-macos-arm64-2.13.0.zip"]="1e10c6c4dc2764150c9fb2ad28e1889191302734e7f939108e5d2f22f21a06f8"
-    ["libduckdb-windows-amd64.zip"]="74e73afd3b010c6f310e14a961fff679f876952bc196f82584b0e2e76d11a91f"
-    ["libduckdb-windows-arm64.zip"]="8056a9fc58a7c0ced9ebd5eb804e1bd2caf0e1ffb6711c8bd0c3ac0558a7da7f"
-    ["libduckdb-osx-universal.zip"]="3f3c52970ad1407ec5037062e1a5e575b24bd5b993c889f89fe5876eff47782c"
-)
+#
+# A function, not an associative array: macOS ships bash 3.2, which has none.
+pinned_sha256() {
+    case "$1" in
+        libtorch-shared-with-deps-2.13.0+cpu.zip) echo "edbf4cbed78433d803e90a65f1752e57783d164bce66c95c0872b2ab8f5c159e" ;;
+        libtorch-shared-with-deps-2.13.0+cu130.zip) echo "945c5a3d946a28b387ad9dc9fddda7ba03e35fae1375b84ebff15df789436f82" ;;
+        libtorch-win-shared-with-deps-2.13.0+cpu.zip) echo "e1cd3950adc30c54c364eaaf44c2b0caf1eafee29a6e811c805e6fe1ce912759" ;;
+        libtorch-win-shared-with-deps-2.13.0+cu130.zip) echo "be25958466f64d551221c3525f5d878200d3e3ef7c6eb36af6a282f6f6076dac" ;;
+        libtorch-win-arm64-shared-with-deps-2.13.0+cpu.zip) echo "ac5cfca029c6efb14975a9a5b970290f223e1a76f2d588067fe67f463ea6d3da" ;;
+        libtorch-macos-arm64-2.13.0.zip) echo "1e10c6c4dc2764150c9fb2ad28e1889191302734e7f939108e5d2f22f21a06f8" ;;
+        libduckdb-windows-amd64.zip) echo "74e73afd3b010c6f310e14a961fff679f876952bc196f82584b0e2e76d11a91f" ;;
+        libduckdb-windows-arm64.zip) echo "8056a9fc58a7c0ced9ebd5eb804e1bd2caf0e1ffb6711c8bd0c3ac0558a7da7f" ;;
+        libduckdb-osx-universal.zip) echo "3f3c52970ad1407ec5037062e1a5e575b24bd5b993c889f89fe5876eff47782c" ;;
+        *) echo "" ;;
+    esac
+}
+
+# sha256_check <sha> <path>: the file's SHA-256 is <sha> (sha256sum on Linux
+# and Windows, shasum on macOS, which has no sha256sum).
+sha256_check() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        echo "$1  $2" | sha256sum -c --quiet -
+    else
+        echo "$1  $2" | shasum -a 256 -c --quiet -
+    fi
+}
 
 # verify <path>: the file's SHA-256 is the one pinned for its name.
 verify() {
     local path="$1" name="${1##*/}"
-    local sha="${SHA256[${name}]:-}"
+    local sha
+    sha="$(pinned_sha256 "${name}")"
     if [[ -z "${sha}" ]]; then
-        echo "✗ no SHA-256 pinned for ${name} - add it to SHA256 in $0" >&2
+        echo "✗ no SHA-256 pinned for ${name} - add it to pinned_sha256 in $0" >&2
         exit 1
     fi
-    if ! echo "${sha}  ${path}" | sha256sum -c --quiet -; then
+    if ! sha256_check "${sha}" "${path}"; then
         echo "✗ ${name} is not the archive pinned in $0 - delete it to download it again" >&2
         exit 1
     fi
@@ -160,7 +176,7 @@ fetch_nvidia_libs() {
         read -r path sha libs <<< "${entry}"
         wheel="${NVIDIA_DIR}/${path##*/}"
         fetch "https://files.pythonhosted.org/packages/${path}" "${wheel}"
-        echo "${sha}  ${wheel}" | sha256sum -c --quiet -
+        sha256_check "${sha}" "${wheel}"
         # One argument per library; a pattern (libcudnn*) is unzip's, not the
         # shell's (set -f).
         # shellcheck disable=SC2086
