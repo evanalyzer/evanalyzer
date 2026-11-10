@@ -1,0 +1,154 @@
+# syntax=docker/dockerfile:1.7
+#
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
+#
+# EVAnalyzer without the desktop app, built from this working copy's
+# sources - for an image of unreleased code. The released images are made
+# from the release's packages instead (docker/Dockerfile, no compiling).
+# Linux amd64 and arm64:
+#
+#   docker buildx build -f docker/Dockerfile.source \
+#       --platform linux/amd64,linux/arm64 -t evanalyzer .
+#
+# The build context is the repository root (see .dockerignore). The builder
+# runs on the build machine's own architecture and cross-compiles for the
+# other one - no QEMU emulation, which would take hours for DuckDB's C++.
+#
+# --build-arg AI=cpu adds the AI plugin with libtorch's CPU build (Cellpose,
+# StarDist, U-Net, YOLOv5; ~1 GB more). amd64 only: pytorch.org publishes no
+# libtorch for Linux arm64, there the image is built without it and AI steps
+# report the plugin as not installed - as the arm64 release does.
+#
+# --build-arg AI=cuda (amd64 only) adds the plugin with libtorch's CUDA build
+# and NVIDIA's libraries, as the Linux CUDA release (several GB). The host
+# needs only the NVIDIA driver (>= 580): `docker run --gpus all`, or
+# `apptainer run --nv` on a compute cluster. Without a GPU it runs on the CPU.
+#
+# --build-arg VERSION=1.2.0 sets the version the program reports (default
+# 0.0.0-dev, as any build from a working copy).
+#
+# The bundled templates come from evanalyzer/evanalyzer-templates, which the
+# release fetches: `--build-context templates=<folder>` puts them in the
+# image; without it the image has none (the `templates` stage below).
+#
+# Usage: see docker/README.md.
+
+ARG RUST_IMAGE=rust:1.96-trixie
+# Debian 13 like the builder: same glibc (2.41).
+ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot
+
+# ---------------------------------------------------------------------------
+# No templates unless the build passes them: `--build-context templates=…`
+# replaces this empty stage.
+FROM scratch AS templates
+
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
+
+ARG TARGETARCH
+ARG BUILDARCH
+ARG AI=none
+ARG VERSION=0.0.0-dev
+
+# Rust target and GNU triplet for TARGETARCH; a cross compiler only when the
+# target differs from the build machine.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) echo x86_64-unknown-linux-gnu > /rust-target; echo x86_64-linux-gnu > /gnu-triplet; cross=x86-64-linux-gnu ;; \
+      arm64) echo aarch64-unknown-linux-gnu > /rust-target; echo aarch64-linux-gnu > /gnu-triplet; cross=aarch64-linux-gnu ;; \
+      *) echo "unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    pkgs="mold unzip"; \
+    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then pkgs="${pkgs} gcc-${cross} g++-${cross}"; fi; \
+    apt-get update -qq; \
+    apt-get install -y -qq --no-install-recommends ${pkgs}; \
+    rm -rf /var/lib/apt/lists/*; \
+    rustup target add "$(cat /rust-target)"
+
+WORKDIR /src
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/src/target,id=evanalyzer-target-${TARGETARCH},sharing=locked \
+    set -eux; \
+    target="$(cat /rust-target)"; triplet="$(cat /gnu-triplet)"; \
+    T="$(echo "${target}" | tr 'a-z-' 'A-Z_')"; t="$(echo "${target}" | tr '-' '_')"; \
+    # C/C++ (DuckDB, ring) and the linker for the target; .cargo/config.toml
+    # adds mold and the $ORIGIN rpath.
+    export "CC_${t}=${triplet}-gcc" "CXX_${t}=${triplet}-g++" "AR_${t}=${triplet}-ar"; \
+    export "CARGO_TARGET_${T}_LINKER=${triplet}-gcc"; \
+    # The version the program reports - as `cargo set-version` in the
+    # release: every workspace crate (the only 0.0.0-dev in both files).
+    sed -i "s/\"0\.0\.0-dev\"/\"${VERSION}\"/" Cargo.toml Cargo.lock; \
+    cargo build --release --locked --target "${target}" \
+        -p evanalyzer_bin --no-default-features --features libtorch; \
+    mkdir -p /out; \
+    cp "target/${target}/release/evanalyzer" /out/; \
+    cp LICENSE THIRD-PARTY-NOTICES.txt /out/; \
+    if [ "${AI}" = "cpu" ]; then \
+      if [ "${TARGETARCH}" != "amd64" ]; then \
+        echo "AI=cpu: no libtorch for linux/${TARGETARCH}, building without the AI plugin" >&2; \
+      else \
+        ./libs/download.sh linux-cpu; \
+        unzip -q libs/libtorch-*.zip -d libs; \
+        cargo build-ai-plugin --release --locked --target "${target}"; \
+        # The plugin finds its libtorch next to itself ($ORIGIN rpath); the
+        # program finds the plugin in ai/cpu next to itself.
+        mkdir -p /out/ai/cpu; \
+        cp "target/${target}/release/libevanalyzer_ai.so" /out/ai/cpu/; \
+        cp libs/libtorch/lib/*.so* /out/ai/cpu/; \
+      fi; \
+    elif [ "${AI}" = "cuda" ]; then \
+      if [ "${TARGETARCH}" != "amd64" ]; then \
+        echo "AI=cuda: linux/amd64 only" >&2; exit 1; \
+      fi; \
+      ./libs/download.sh linux-cuda; \
+      unzip -q libs/libtorch-*.zip -d libs; \
+      cargo build-ai-plugin --release --locked --target "${target}"; \
+      # As the Linux CUDA release: the plugin, libtorch and NVIDIA's
+      # libraries in ai/cuda, without what .github/NOT_SHIP_LIST.txt lists.
+      mkdir -p /out/ai/cuda; \
+      cp "target/${target}/release/libevanalyzer_ai.so" /out/ai/cuda/; \
+      cp libs/libtorch/lib/*.so* libs/nvidia-cu13/lib/*.so* /out/ai/cuda/; \
+      grep -v -e '^$' -e '^#' .github/NOT_SHIP_LIST.txt | while IFS= read -r pattern; do \
+        for f in /out/ai/cuda/$pattern; do if [ -e "$f" ]; then rm -f "$f"; fi; done; \
+      done; \
+      [ -f /out/ai/cuda/libtorch_cuda.so ] || { echo "libtorch_cuda.so missing" >&2; exit 1; }; \
+      # The downloads (several GB) stay out of the cache and the layer.
+      rm -rf libs/libtorch libs/nvidia-cu13 libs/*.zip; \
+    elif [ "${AI}" != "none" ]; then \
+      echo "AI must be none, cpu or cuda, not ${AI}" >&2; exit 1; \
+    fi
+
+# The server's container defaults: listen on every interface, state in a
+# volume, users may work in /data. Override with your own --config file.
+COPY docker/server.toml /out/server.toml
+COPY --from=templates / /out/templates/
+
+# Empty folders owned by the nonroot user (uid 65532), to be mounted over.
+RUN mkdir -p /out-dirs/data /out-dirs/var/lib/evanalyzer
+
+# ---------------------------------------------------------------------------
+FROM ${RUNTIME_IMAGE}
+
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="EVAnalyzer" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.source="https://github.com/evanalyzer/evanalyzer" \
+      org.opencontainers.image.description="EVAnalyzer command line and server (no desktop app)" \
+      org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0" \
+      org.opencontainers.image.authors="Joachim Danmayr"
+
+COPY --from=builder /out/ /opt/evanalyzer/
+COPY --from=builder --chown=65532:65532 /out-dirs/ /
+
+USER 65532:65532
+WORKDIR /data
+VOLUME ["/data", "/var/lib/evanalyzer"]
+# `evanalyzer server` (docker/server.toml).
+EXPOSE 7400
+
+ENTRYPOINT ["/opt/evanalyzer/evanalyzer"]
+CMD ["--help"]

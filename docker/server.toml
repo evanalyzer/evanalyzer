@@ -1,0 +1,25 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
+#
+# The container image's server configuration (docker/Dockerfile):
+#
+#   evanalyzer server --config /opt/evanalyzer/server.toml
+#
+# Every other key keeps its default - docs/server.toml documents them all.
+# For your own settings (above all a fixed password) mount a file of your
+# own and pass it with --config instead.
+
+# Every interface of the container: `docker run -p 7400:7400` decides who
+# reaches it.
+listen = "0.0.0.0:7400"
+
+# A volume: keeps the TLS certificate (same fingerprint after a restart) and
+# the running sessions.
+data_dir = "/var/lib/evanalyzer"
+
+[users]
+# One account, "admin". Without a password hash (`evanalyzer hash-password`)
+# the server makes up a random password at every start and logs it.
+source = "single"
+# The user's home and the mounted /data volume with projects and images.
+default_allowed_dirs = ["{home}", "/data"]

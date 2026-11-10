@@ -1,0 +1,140 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
+#
+# The container images (docker/Dockerfile), made from the release's
+# command-line packages - nothing is compiled here:
+#
+#   joda001/evanalyzer:<version>       linux/amd64 (AI plugin, CPU) + linux/arm64
+#   joda001/evanalyzer:<version>-cuda  linux/amd64, AI plugin with CUDA
+#
+# Called by the release (release.yml) after its Linux builds, with their
+# packages from the same run: pushed with the version, plus `latest` /
+# `cuda` unless it is a pre-release (1.2.0-alpha.1).
+# A manual run takes the packages of an existing GitHub release (its tag)
+# and only builds the images, or also pushes them with `push` checked -
+# e.g. to publish a release's images again.
+
+name: docker
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "The release's tag (1.2.0 or v1.2.0)"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag of the GitHub release whose packages go into the images"
+        type: string
+        required: true
+      push:
+        description: "Push the images to Docker Hub"
+        type: boolean
+        default: false
+
+env:
+  IMAGE: joda001/evanalyzer
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavour: cpu
+            platforms: linux/amd64,linux/arm64
+            suffix: ""
+            latest: latest
+          - flavour: cuda
+            platforms: linux/amd64
+            suffix: "-cuda"
+            latest: cuda
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tags
+        id: tags
+        run: |
+          TAG="${{ inputs.version }}"
+          VERSION="${TAG#v}"
+          TAGS="${IMAGE}:${VERSION}${{ matrix.suffix }}"
+          # Pre-releases (a "-" in the version) don't move latest / cuda.
+          if [[ "${VERSION}" != *-* ]]; then
+            TAGS="${TAGS},${IMAGE}:${{ matrix.latest }}"
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PUSH="${{ inputs.push }}"
+          else
+            PUSH=true
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
+
+      # The release run's packages (its build-linux* jobs)...
+      - name: Packages of this release run
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: evanalyzer-cli-linux-*
+          merge-multiple: true
+          path: downloads
+
+      # ...or those of an existing GitHub release.
+      - name: Packages of the GitHub release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.version }}" --dir downloads \
+            --pattern 'evanalyzer-cli-linux-*'
+
+      # One folder per architecture, as docker/Dockerfile expects.
+      - name: Unpack
+        run: |
+          mkdir -p pkg/amd64 pkg/arm64
+          if [[ "${{ matrix.flavour }}" == "cuda" ]]; then
+            tar -xJf downloads/evanalyzer-cli-linux-x86_64-cuda.tar.xz -C pkg/amd64
+          else
+            tar -xzf downloads/evanalyzer-cli-linux-x86_64.tar.gz -C pkg/amd64
+            tar -xzf downloads/evanalyzer-cli-linux-arm64.tar.gz -C pkg/arm64
+          fi
+          rm -rf downloads
+          du -sh pkg/*
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: steps.tags.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build (and push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platforms }}
+          build-contexts: package=pkg
+          build-args: VERSION=${{ steps.tags.outputs.version }}
+          tags: ${{ steps.tags.outputs.tags }}
+          push: ${{ steps.tags.outputs.push == 'true' }}
+
+      # The repository page on Docker Hub: docker/README.md and the short
+      # description, after the images are pushed (once, with the CPU image).
+      # The token needs Read, Write & Delete for this - pushing alone needs
+      # Read & Write.
+      - name: Docker Hub description
+        if: steps.tags.outputs.push == 'true' && matrix.flavour == 'cpu'
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: joda001/evanalyzer
+          readme-filepath: docker/README.md
+          short-description: "EVAnalyzer: find, classify and measure objects in microscopy images - command line and server"

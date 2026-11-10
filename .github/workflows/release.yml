@@ -201,6 +201,34 @@ jobs:
         with:
           files: evanalyzer-linux-x86_64.tar.gz
 
+      # The command line, server and worker without the desktop app (no
+      # font or display libraries): for servers and compute clusters. After
+      # the package above - it overwrites target/…/release/evanalyzer.
+      - name: Build the command-line version
+        run: cargo build-linux-cli
+
+      - name: Package the command-line version
+        run: |
+          mkdir -p dist-cli
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist-cli/
+          cp target/x86_64-unknown-linux-gnu/release/evanalyzer dist-cli/
+          cp -r dist/ai dist/templates dist-cli/
+          tar -czf evanalyzer-cli-linux-x86_64.tar.gz -C dist-cli .
+
+      - name: Check the oldest glibc the command-line version runs on
+        run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-cli-linux-x86_64
+          path: evanalyzer-cli-linux-x86_64.tar.gz
+
+      - name: Add the command-line version to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: evanalyzer-cli-linux-x86_64.tar.gz
+
   build-windows:
     needs: [templates]
     runs-on: ubuntu-latest
@@ -459,6 +487,42 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: evanalyzer-linux-x86_64-cuda.7z
+
+      # The command line, server and worker without the desktop app, with
+      # the CUDA plugin: for GPU compute clusters without a desktop. After
+      # the package above - it overwrites target/…/release/evanalyzer.
+      - name: Build the command-line version
+        run: cargo build-linux-cli
+
+      - name: Package the command-line version
+        run: |
+          mkdir -p dist-cli
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist-cli/
+          cp target/x86_64-unknown-linux-gnu/release/evanalyzer dist-cli/
+          # ai/cuda as packaged above (already without the NOT_SHIP_LIST).
+          cp -r dist/ai dist/templates dist-cli/
+          # tar.xz, not 7z: unpacks with plain tar on servers without 7-Zip.
+          # xz at its highest level keeps it below GitHub's 2 GiB limit like
+          # the 7z above.
+          command -v xz >/dev/null || { apt-get update -qq && apt-get install -y -qq xz-utils; }
+          tar -I 'xz -9 -T0' -cf evanalyzer-cli-linux-x86_64-cuda.tar.xz -C dist-cli .
+          size=$(stat -c %s evanalyzer-cli-linux-x86_64-cuda.tar.xz)
+          echo "evanalyzer-cli-linux-x86_64-cuda.tar.xz: $((size / 1048576)) MiB"
+          [ "$size" -lt 2147483648 ] || { echo "::error::evanalyzer-cli-linux-x86_64-cuda.tar.xz is over GitHub's 2 GiB release asset limit"; exit 1; }
+
+      - name: Check the oldest glibc the command-line version runs on
+        run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-cli-linux-x86_64-cuda
+          path: evanalyzer-cli-linux-x86_64-cuda.tar.xz
+
+      - name: Add the command-line version to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: evanalyzer-cli-linux-x86_64-cuda.tar.xz
 
   build-windows-cuda:
     needs: [templates]
@@ -837,6 +901,33 @@ jobs:
         with:
           files: evanalyzer-linux-arm64.tar.gz
 
+      # The command line, server and worker without the desktop app. After
+      # the package above - it overwrites target/…/release/evanalyzer.
+      - name: Build the command-line version
+        run: cargo build-linux-arm-cli
+
+      - name: Package the command-line version
+        run: |
+          mkdir -p dist-cli
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist/README.txt dist-cli/
+          cp target/aarch64-unknown-linux-gnu/release/evanalyzer dist-cli/
+          cp -r dist/templates dist-cli/
+          tar -czf evanalyzer-cli-linux-arm64.tar.gz -C dist-cli .
+
+      - name: Check the oldest glibc the command-line version runs on
+        run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-cli-linux-arm64
+          path: evanalyzer-cli-linux-arm64.tar.gz
+
+      - name: Add the command-line version to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: evanalyzer-cli-linux-arm64.tar.gz
+
   build-windows-arm64:
     # Cross-compiled with xwin like the x86_64 build, with the CPU libtorch
     # pytorch.org publishes for Windows ARM64.
@@ -972,6 +1063,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: evanalyzer-windows-arm64.zip
+
+  # The container images (docker.yml), from the Linux builds' command-line
+  # packages.
+  docker:
+    needs: [build-linux, build-linux-cuda, build-linux-arm64]
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit
 
   sbom:
     # SBOM for the shipped `evanalyzer` binary (crates/bin), covering its full

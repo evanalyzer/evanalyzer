@@ -1,0 +1,21 @@
+# Copyright 2026 Joachim Danmayr.
+# Licensed under the PolyForm Noncommercial License 1.0.0.
+#
+# Main build context of docker/Dockerfile and docker/Dockerfile.source (the
+# repository root): only what they read. Above all no target/ and no libs/
+# archives (many GB) - Dockerfile.source downloads libtorch itself.
+target/
+# docker.yml's unpacked packages: the build context `package`, not this one.
+pkg/
+downloads/
+dist/
+.git/
+.claude/
+.vscode/
+.devcontainer/
+tests/
+libs/*
+!libs/*.sh
+*.evadb
+*.cdx.json
+CLAUDE.local.md
