@@ -87,6 +87,10 @@ pub struct ProjectTmpSettings {
     pub current_project: Option<PathBuf>,
     /// Absolute path of the image active in the viewport.
     pub current_image: Option<PathBuf>,
+    /// The z-planes and frames of that image (its selected series), once
+    /// its metadata was read - the shown plane never lies beyond them (see
+    /// `ProjectExt::get_shown_plane`).
+    pub current_image_planes: Option<(i32, i32)>,
     pub selected_object_class: ObjectClass,
 
     /// The regions of interest from the preview run
@@ -115,6 +119,7 @@ impl Default for ProjectTmpSettings {
         Self {
             current_project: None,
             current_image: None,
+            current_image_planes: None,
             selected_object_class: ObjectClass::default(),
             preview_objects: Vec::new(),
             preview_measurements: Vec::new(),

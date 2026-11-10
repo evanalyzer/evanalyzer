@@ -327,6 +327,12 @@ impl ImageMetaController {
         };
 
         let image_meta = self.app_state.get_image_meta(&path)?;
+        // The shown plane stays within this image's planes and frames.
+        if let Some(series) = image_meta.series.get(&selected_series) {
+            self.app_state
+                .get_project_write()
+                .set_current_image_planes(series.nr_z_stacks, series.nr_t_stacks);
+        }
         // Whether the project has chosen its series - else an image with
         // several asks once which (see `ImageMetaData.series-chosen`).
         let series_chosen = self

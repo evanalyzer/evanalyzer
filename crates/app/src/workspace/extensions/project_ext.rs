@@ -119,6 +119,10 @@ pub trait ProjectExt {
     fn get_current_rel_image_path_cloned(&self) -> Option<PathBuf>;
     fn set_current_image_path(&mut self, path: &PathBuf);
     fn rest_current_image_path(&mut self);
+    /// The current image's number of z-planes and frames (from its
+    /// metadata): the shown plane is clamped to them, as the image reader
+    /// clamps what it reads.
+    fn set_current_image_planes(&mut self, nr_z_stacks: i32, nr_t_stacks: i32);
     fn find_image(&self, absolute_path: &PathBuf) -> Option<&ImageEntry>;
 
     fn find_image_mut(&mut self, path: &PathBuf) -> Option<&mut ImageEntry>;
@@ -470,12 +474,18 @@ impl ProjectExt for ProjectWithRuntime {
         // Another image: the last one's preview objects aren't its.
         if self.tmp_settings.current_image.as_ref() != Some(path) {
             self.forget_preview_objects();
+            self.tmp_settings.current_image_planes = None;
         }
         self.tmp_settings.current_image = Some(path.into());
     }
 
     fn rest_current_image_path(&mut self) {
         self.tmp_settings.current_image = None;
+        self.tmp_settings.current_image_planes = None;
+    }
+
+    fn set_current_image_planes(&mut self, nr_z_stacks: i32, nr_t_stacks: i32) {
+        self.tmp_settings.current_image_planes = Some((nr_z_stacks, nr_t_stacks));
     }
 
     /// Retrieves a shared pointer to an `ImageEntry` using an absolute file path.
@@ -880,10 +890,20 @@ impl ProjectExt for ProjectWithRuntime {
             .map_or(ZProjection::None, |z| z.z_projection.z_projection())
     }
 
+    /// The plane the viewer shows: the stored z-plane and frame, clamped to
+    /// the current image's - like the image reader, which reads the last
+    /// frame for a frame beyond it (e.g. frame 13 kept from a time-lapse
+    /// while a single-frame image is open). Unclamped until the image's
+    /// metadata was read.
     fn get_shown_plane(&self) -> ShownPlane {
-        ShownPlane {
-            z: self.get_shown_z_plane(),
-            t: self.get_t_stack().map_or(0, |t| t.t_stack),
+        let z = self.get_shown_z_plane();
+        let t = self.get_t_stack().map_or(0, |t| t.t_stack);
+        match self.tmp_settings.current_image_planes {
+            Some((nr_z, nr_t)) => ShownPlane {
+                z: z.map(|z| z.min(nr_z - 1).max(0)),
+                t: t.min(nr_t - 1).max(0),
+            },
+            None => ShownPlane { z, t },
         }
     }
 
@@ -1193,6 +1213,7 @@ impl ProjectExt for ProjectWithRuntime {
         // Reset actual selected image
 
         self.tmp_settings.current_image = None;
+        self.tmp_settings.current_image_planes = None;
 
         info!(
             "Project root changed to {:?}. Image list cleared.",
@@ -3665,6 +3686,40 @@ mod tests {
     }
 
     // -- get_selected_series_idx --------------------------------------------
+
+    /// A frame or plane kept from a bigger image (frame 13 of a time-lapse)
+    /// is shown as the image's last one - as the reader reads it - so the
+    /// objects analysed there (stamped with it) are listed and drawn. Before
+    /// the metadata is read, and for another image, the stored one counts.
+    #[test]
+    fn the_shown_plane_stays_within_the_current_images_frames_and_planes() {
+        use crate::workspace::extensions::object_ext::ShownPlane;
+        use evanalyzer_cfg::settings::images_settings::{TStackSettings, ZStackSettings};
+        let mut project = ProjectWithRuntime::default();
+        project.set_global_t_stack(&TStackSettings {
+            t_stack: 13,
+            ..Default::default()
+        });
+        project.images.settings.z_stack = Some(ZStackSettings {
+            z_projection: ZStackHandling::SingleStack,
+            z_range: Some(4..=4),
+        });
+        project.set_current_image_path(&PathBuf::from("/d/single.vsi"));
+        assert_eq!(project.get_shown_plane(), ShownPlane { z: Some(4), t: 13 });
+
+        project.set_current_image_planes(1, 1);
+        assert_eq!(project.get_shown_plane(), ShownPlane { z: Some(0), t: 0 });
+        project.set_current_image_planes(10, 20);
+        assert_eq!(project.get_shown_plane(), ShownPlane { z: Some(4), t: 13 });
+
+        project.set_current_image_planes(1, 1);
+        project.set_current_image_path(&PathBuf::from("/d/timelapse.tif"));
+        assert_eq!(
+            project.get_shown_plane(),
+            ShownPlane { z: Some(4), t: 13 },
+            "another image: its own counts, once read"
+        );
+    }
 
     /// The preview's objects (and a selection among them) go when another
     /// image or series is shown - they were the last one's; the same image
