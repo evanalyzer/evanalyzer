@@ -17,16 +17,22 @@ component SortHead inherits Rectangle {
     in property <string> text;
     in property <int> column;
     in property <length> col-width;
+    // Numbers right-aligned under their header.
+    in property <bool> numeric: true;
     width: root.col-width;
     height: 24px;
     Text {
+        width: 100%;
         text: root.text + (ResultsState.trees-sort == root.column ? " ▾" : "");
-        font-size: Ink.fs-caption;
-        color: ResultsState.trees-sort == root.column ? Ink.text : Ink.text-mute;
+        font-size: Ink.fs-secondary;
+        font-weight: 600;
+        color: ResultsState.trees-sort == root.column ? Ink.text : Ink.text-dim;
+        horizontal-alignment: root.numeric ? right : left;
         vertical-alignment: center;
         overflow: elide;
     }
     TouchArea {
+        mouse-cursor: pointer;
         clicked => {
             ResultsState.trees-sort = root.column;
             ResultsState.trees-sort-changed();
@@ -34,16 +40,33 @@ component SortHead inherits Rectangle {
     }
 }
 
+// A neuron's value in its column, right-aligned.
+component ValueCell inherits Text {
+    font-size: Ink.fs-body;
+    color: Ink.text-dim;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
 export component ResultsTreesView inherits Rectangle {
     background: Ink.ground;
-    property <length> list-w: 340px;
+    // Wide enough for the full headers and five-digit lengths (design
+    // canvas "Charts sidebar & Trees list", board 5).
+    property <length> list-w: 440px;
+    property <length> col-gap: 8px;
+    property <length> neuron-w: 64px;
+    property <length> length-w: 92px;
+    property <length> primary-w: 60px;
+    property <length> branch-w: 92px;
+    property <length> tips-w: 48px;
     property <float> zoom: 1;
 
     HorizontalLayout {
         padding: 12px;
         spacing: 12px;
 
-        // -- The neurons --
+        // -- The neurons, a group row per image --
         Rectangle {
             width: root.list-w;
             background: Ink.panel;
@@ -54,38 +77,52 @@ export component ResultsTreesView inherits Rectangle {
             VerticalLayout {
                 padding: 12px;
                 spacing: 6px;
-                Text {
-                    text: "NEURONS";
-                    font-size: Ink.fs-caption;
-                    font-weight: 600;
-                    color: Ink.text-dim;
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: "NEURONS";
+                        font-size: Ink.fs-caption;
+                        font-weight: 600;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: ResultsState.trees-count;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-mute;
+                        vertical-alignment: center;
+                    }
                 }
                 HorizontalLayout {
-                    spacing: 6px;
+                    spacing: root.col-gap;
+                    padding-left: 6px;
+                    alignment: start;
                     SortHead {
                         text: "Neuron";
                         column: 0;
-                        col-width: 110px;
+                        numeric: false;
+                        col-width: root.neuron-w;
                     }
                     SortHead {
-                        text: "Length";
+                        text: "Length px";
                         column: 1;
-                        col-width: 70px;
+                        col-width: root.length-w;
                     }
                     SortHead {
-                        text: "Prim.";
+                        text: "Primary";
                         column: 2;
-                        col-width: 40px;
+                        col-width: root.primary-w;
                     }
                     SortHead {
-                        text: "Br.";
+                        text: "Branch points";
                         column: 3;
-                        col-width: 40px;
+                        col-width: root.branch-w;
                     }
                     SortHead {
                         text: "Tips";
                         column: 4;
-                        col-width: 40px;
+                        col-width: root.tips-w;
                     }
                 }
                 ListView {
@@ -93,55 +130,61 @@ export component ResultsTreesView inherits Rectangle {
                     for row[i] in ResultsState.trees-rows: Rectangle {
                         height: 28px;
                         border-radius: 4px;
-                        background: ResultsState.trees-selected == i ? Ink.selection : (row-touch.has-hover ? Ink.hover : transparent);
+                        background: row.group != "" ? Ink.raised
+                            : ResultsState.trees-selected == i ? Ink.info-tint
+                            : (row-touch.has-hover ? Ink.hover : transparent);
                         accessible-role: list-item;
-                        accessible-label: row.label;
+                        accessible-label: row.group != "" ? row.group : row.label;
                         accessible-action-default => {
-                            ResultsState.trees-row-clicked(i);
+                            if row.group == "" {
+                                ResultsState.trees-row-clicked(i);
+                            }
                         }
                         row-touch := TouchArea {
+                            enabled: row.group == "";
                             clicked => {
                                 ResultsState.trees-row-clicked(i);
                             }
                         }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            padding-left: 2px;
+                        // An image: its name.
+                        if row.group != "": Text {
+                            x: 6px;
+                            width: parent.width - 12px;
+                            text: row.group;
+                            font-size: Ink.fs-secondary;
+                            color: Ink.text-mute;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        // A neuron: its number and values.
+                        if row.group == "": HorizontalLayout {
+                            spacing: root.col-gap;
+                            padding-left: 6px;
+                            alignment: start;
                             Text {
-                                width: 110px;
+                                width: root.neuron-w;
                                 text: row.label;
-                                font-size: Ink.fs-secondary;
+                                font-size: Ink.fs-body;
+                                font-weight: ResultsState.trees-selected == i ? 600 : 400;
                                 color: Ink.text;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
-                            Text {
-                                width: 70px;
+                            ValueCell {
+                                width: root.length-w;
                                 text: row.length;
-                                font-size: Ink.fs-secondary;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
                             }
-                            Text {
-                                width: 40px;
+                            ValueCell {
+                                width: root.primary-w;
                                 text: row.primary;
-                                font-size: Ink.fs-secondary;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
                             }
-                            Text {
-                                width: 40px;
+                            ValueCell {
+                                width: root.branch-w;
                                 text: row.branch-points;
-                                font-size: Ink.fs-secondary;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
                             }
-                            Text {
-                                width: 40px;
+                            ValueCell {
+                                width: root.tips-w;
                                 text: row.tips;
-                                font-size: Ink.fs-secondary;
-                                color: Ink.text-dim;
-                                vertical-alignment: center;
                             }
                         }
                     }

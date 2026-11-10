@@ -250,7 +250,10 @@ export struct ChartTimeLine {
 
 // A traced neuron in Results › Trees' list: its name, its Measure
 // Filament Tree values as text ("–" not measured).
+// A row of the Trees list: an image's group row (`group` its name, the
+// rest empty) or a neuron ("#12" and its values).
 export struct TreeRow {
+    group: string,
     label: string,
     length: string,
     primary: string,
@@ -928,6 +931,8 @@ export global ResultsState {
     // measured.
     in property <[ChartCard]> trees-cards: [];
     in property <string> trees-note: "";
+    // "500 in 1 image" beside the list's title.
+    in property <string> trees-count: "";
 
     // Set whenever the selected column(s) can't be charted yet (identity
     // columns, per-channel intensity — see `chart_value_expr` in

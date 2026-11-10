@@ -10002,7 +10002,15 @@ pub(crate) mod tests {
         s.set_rail_mode(ResultsRailMode::Trees);
         s.invoke_rail_mode_selected(ResultsRailMode::Trees);
         drain_ui_queue();
-        assert_eq!(s.get_trees_rows().row_count(), 1);
+        // The image's group row, then its neuron by its number.
+        assert_eq!(s.get_trees_rows().row_count(), 2);
+        let image = s.get_trees_rows().row_data(0).unwrap();
+        assert_ne!(image.group, "");
+        assert_eq!(image.label, "");
+        let neuron = s.get_trees_rows().row_data(1).unwrap();
+        assert_eq!(neuron.group, "");
+        assert_eq!(neuron.label, "#1");
+        assert_eq!(s.get_trees_count(), "1 in 1 image");
         assert!(
             s.get_trees_note().contains("Measure Filament Tree"),
             "{}",
@@ -10010,10 +10018,14 @@ pub(crate) mod tests {
         );
         assert_eq!(s.get_trees_title(), "", "nothing selected yet");
 
+        // A click on the group row selects nothing.
         s.invoke_trees_row_clicked(0);
         drain_ui_queue();
+        assert_eq!(s.get_trees_title(), "");
+        s.invoke_trees_row_clicked(1);
+        drain_ui_queue();
         assert_ne!(s.get_trees_title(), "");
-        assert_eq!(s.get_trees_selected(), 0);
+        assert_eq!(s.get_trees_selected(), 1);
         // Not measured: every branch level 1 - one color.
         assert_eq!(s.get_trees_lines().row_count(), 1);
         assert_ne!(s.get_trees_tips(), "");
@@ -10040,7 +10052,8 @@ pub(crate) mod tests {
         o.controller
             .trees_object_clicked(&ids[3], std::slice::from_ref(&ids[0]));
         drain_ui_queue();
-        assert_eq!(s.get_trees_selected(), 0);
+        // Row 1: the neuron under its image's group row.
+        assert_eq!(s.get_trees_selected(), 1);
         assert_ne!(s.get_trees_selected_segment(), "");
         assert_eq!(s.get_trees_cards().row_count(), 5);
     }

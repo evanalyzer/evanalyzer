@@ -25,8 +25,9 @@ pub(super) struct TreesState {
     neurons: Vec<TreeNeuron>,
     /// A Measure Filament Tree step ran.
     measured: bool,
-    /// The list's rows: indices into `neurons`, sorted.
-    order: Vec<usize>,
+    /// The list's rows: an image's group row (`None`), then its neurons
+    /// (indices into `neurons`), sorted within the image.
+    order: Vec<Option<usize>>,
     /// Index into `neurons`.
     selected: Option<usize>,
     segments: Vec<TreeSegment>,
@@ -152,7 +153,7 @@ impl ResultsStateController {
         state.on_trees_row_clicked(move |row| {
             let neuron = {
                 let trees = manager.trees.lock().expect("Poisoned");
-                trees.order.get(row.max(0) as usize).copied()
+                trees.order.get(row.max(0) as usize).copied().flatten()
             };
             if let Some(neuron) = neuron {
                 manager.trees_select_neuron(neuron, None);
@@ -239,7 +240,7 @@ impl ResultsStateController {
 
     /// The list, sorted, into the window.
     fn trees_push_rows(&self) {
-        let (rows, selected_row, note) = {
+        let (rows, selected_row, note, count) = {
             let mut trees = self.trees.lock().expect("Poisoned");
             let mut order: Vec<usize> = (0..trees.neurons.len()).collect();
             let sort = trees.sort;
@@ -258,34 +259,56 @@ impl ResultsStateController {
                     .flatten()
                     .unwrap_or(f64::NEG_INFINITY)
             };
-            match sort {
-                0 => order.sort_by(|&a, &b| {
-                    (&neurons[a].image_name, &neurons[a].soma_id)
-                        .cmp(&(&neurons[b].image_name, &neurons[b].soma_id))
-                }),
-                _ => order.sort_by(|&a, &b| value(b).total_cmp(&value(a)).then(a.cmp(&b))),
+            // Grouped by image (by name), sorted within it: by the neuron's
+            // number, else by the value, largest first.
+            order.sort_by(|&a, &b| {
+                neurons[a]
+                    .image_name
+                    .cmp(&neurons[b].image_name)
+                    .then_with(|| match sort {
+                        0 => a.cmp(&b),
+                        _ => value(b).total_cmp(&value(a)).then(a.cmp(&b)),
+                    })
+            });
+            let mut rows: Vec<TreeRow> = Vec::with_capacity(order.len() + 1);
+            let mut row_order: Vec<Option<usize>> = Vec::with_capacity(order.len() + 1);
+            let mut images = 0usize;
+            for &i in &order {
+                let n = &trees.neurons[i];
+                if row_order
+                    .last()
+                    .copied()
+                    .flatten()
+                    .is_none_or(|last| trees.neurons[last].image_name != n.image_name)
+                {
+                    images += 1;
+                    rows.push(TreeRow {
+                        group: n.image_name.clone().into(),
+                        ..Default::default()
+                    });
+                    row_order.push(None);
+                }
+                let v = |k: usize| n.values.get(k).copied().flatten();
+                rows.push(TreeRow {
+                    label: format!("#{}", i + 1).into(),
+                    length: format_value(v(0)).into(),
+                    primary: format_value(v(1)).into(),
+                    branch_points: format_value(v(2)).into(),
+                    tips: format_value(v(3)).into(),
+                    ..Default::default()
+                });
+                row_order.push(Some(i));
             }
-            let rows: Vec<TreeRow> = order
-                .iter()
-                .map(|&i| {
-                    let n = &trees.neurons[i];
-                    let v = |k: usize| n.values.get(k).copied().flatten();
-                    TreeRow {
-                        label: format!("{} · {}", n.image_name, i + 1).into(),
-                        length: v(0).map_or("–".into(), |l| {
-                            format!("{} px", format_chart_value(l)).into()
-                        }),
-                        primary: format_value(v(1)).into(),
-                        branch_points: format_value(v(2)).into(),
-                        tips: format_value(v(3)).into(),
-                    }
-                })
-                .collect();
             let selected_row = trees
                 .selected
-                .and_then(|s| order.iter().position(|&i| i == s))
+                .and_then(|s| row_order.iter().position(|&r| r == Some(s)))
                 .map_or(-1, |r| r as i32);
-            trees.order = order;
+            let count = match (trees.neurons.len(), images) {
+                (0, _) => String::new(),
+                (n, 1) => format!("{n} in 1 image"),
+                (n, m) => format!("{n} in {m} images"),
+            };
+            trees.order = row_order;
             let note = match (trees.neurons.is_empty(), trees.measured) {
                 (true, _) => "No traced neurons in these results.".to_string(),
                 (false, false) => {
@@ -293,7 +316,7 @@ impl ResultsStateController {
                 }
                 _ => String::new(),
             };
-            (rows, selected_row, note)
+            (rows, selected_row, note, count)
         };
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -302,6 +325,7 @@ impl ResultsStateController {
                 state.set_trees_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
                 state.set_trees_selected(selected_row);
                 state.set_trees_note(note.into());
+                state.set_trees_count(count.into());
             }
         })
         .ok();
