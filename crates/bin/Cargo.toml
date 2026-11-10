@@ -8,7 +8,7 @@ publish = { workspace = true }
 
 [dependencies]
 evanalyzer_cfg = { workspace = true }
-evanalyzer_gui    = { workspace = true }
+evanalyzer_gui    = { workspace = true, optional = true }
 evanalyzer_cli    = { workspace = true }
 evanalyzer_app    = { workspace = true }
 evanalyzer_server    = { workspace = true }
@@ -18,7 +18,11 @@ clap = { workspace = true, features = ["derive"] }
 rpassword = { workspace = true }
 
 [features]
-default = ["libtorch"]
+default = ["gui", "libtorch"]
+# The desktop app (Slint). Without it (`--no-default-features --features
+# libtorch`): the command line, server and worker only - no font or display
+# libraries needed, e.g. for a container image.
+gui = ["dep:evanalyzer_gui"]
 # AI models (Cellpose, StarDist, U-Net, YOLOv5) through the libtorch plugin,
 # loaded on the first model run - the plugin itself is built on its own:
 # `cargo build-ai-plugin`. `--no-default-features` builds

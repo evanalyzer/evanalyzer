@@ -15,6 +15,13 @@ build-win-arm   = ["xwin", "build", "--target", "aarch64-pc-windows-msvc",   "--
 build-linux     = ["build", "--target", "x86_64-unknown-linux-gnu",          "--release"]
 build-linux-arm = ["build", "--target", "aarch64-unknown-linux-gnu",         "--release"]
 build-mac       = ["build", "--target", "aarch64-apple-darwin",              "--release"]
+# Without the desktop app (command line, server, worker): no font or display
+# libraries needed - for servers, compute clusters and the Docker image.
+# CPU or CUDA is not decided here but by the libtorch the AI plugin is built
+# against: `libs/download.sh linux-cpu` or `linux-cuda`, then this and
+# `build-ai-plugin --release --target x86_64-unknown-linux-gnu`.
+build-linux-cli     = ["build", "--target", "x86_64-unknown-linux-gnu",  "--release", "-p", "evanalyzer_bin", "--no-default-features", "--features", "libtorch"]
+build-linux-arm-cli = ["build", "--target", "aarch64-unknown-linux-gnu", "--release", "-p", "evanalyzer_bin", "--no-default-features", "--features", "libtorch"]
 
 # For Windows (MSVC) — statically linked CRT, lld linker
 [target.x86_64-pc-windows-msvc]

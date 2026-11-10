@@ -17,8 +17,6 @@ use evanalyzer_app::ai::{
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::{LocalBackend, ResourceLimits, set_resource_limits};
 use evanalyzer_app::backends::remote::TlsTrust;
-use evanalyzer_app::global::Frontend;
-use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cli::CliCommand;
 use evanalyzer_server::{ServerConfig, serve};
@@ -33,6 +31,7 @@ static ALLOCATOR: evanalyzer_app::global::AccountingAllocator =
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Startup times (log level debug) are measured from here.
+    #[cfg(feature = "gui")]
     evanalyzer_gui::mark_process_start();
     let args = parse_args();
     // The server's log level may come from its config file, so the logger
@@ -162,15 +161,31 @@ fn generate_backend(
     }
 }
 
+#[cfg(feature = "gui")]
 fn start_gui(
     backend: Arc<dyn Backend>,
     project: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GUI mode (default)
+    use evanalyzer_app::global::Frontend;
+    use evanalyzer_app::project::ProjectOwner;
     let owner = ProjectOwner::with_backend(backend);
     let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create().with_project(project));
     frontend.start(owner);
     Ok(())
+}
+
+/// Built without the desktop app: no command means nothing to do.
+#[cfg(not(feature = "gui"))]
+fn start_gui(
+    _backend: Arc<dyn Backend>,
+    _project: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!(
+        "This build has no desktop app: use `evanalyzer cli ...`, `evanalyzer server` or \
+         `evanalyzer worker` (`evanalyzer --help` lists them)."
+    );
+    std::process::exit(2)
 }
 
 /// Start CLI
