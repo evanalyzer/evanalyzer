@@ -3992,4 +3992,372 @@ mod tests {
             Ok(_) => panic!("a newer schema version must be rejected"),
         }
     }
+
+    // -- Less common paths -------------------------------------------------
+
+    fn fixture_tif() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../core/tests/slice_Z0_C0_T0.tif"
+        ))
+    }
+
+    fn classes_of_first_object(project: &ProjectWithRuntime) -> Vec<ObjectClass> {
+        project.get_objects().unwrap()[0]
+            .object_class
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    /// Replacing an object's classes leaves it with only the new one.
+    #[test]
+    fn replace_classes_of_object_keeps_only_the_new_class() {
+        let mut project = project_with_one_image();
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(1),
+            ..Default::default()
+        });
+        project.add_class_to_object(ObjectId(1), ObjectClass::Global(1));
+        project.add_class_to_object(ObjectId(1), ObjectClass::Global(2));
+
+        project.replace_classes_of_object(ObjectId(1), ObjectClass::Global(3));
+
+        assert_eq!(classes_of_first_object(&project), [ObjectClass::Global(3)]);
+    }
+
+    /// Class changes for an object id the image doesn't have change no
+    /// other object - and without an image they don't panic.
+    #[test]
+    fn class_changes_for_an_unknown_object_change_nothing() {
+        let mut project = project_with_one_image();
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(1),
+            ..Default::default()
+        });
+        project.add_class_to_object(ObjectId(1), ObjectClass::Global(1));
+
+        project.add_class_to_object(ObjectId(9), ObjectClass::Global(2));
+        project.replace_classes_of_object(ObjectId(9), ObjectClass::Global(3));
+        project.remove_class_from_object(ObjectId(9), &ObjectClass::Global(1));
+
+        assert_eq!(classes_of_first_object(&project), [ObjectClass::Global(1)]);
+        let mut empty = ProjectWithRuntime::default();
+        empty.replace_classes_of_object(ObjectId(1), ObjectClass::Global(3));
+        assert!(empty.get_objects().is_none());
+    }
+
+    /// An image entry without any series: channel preferences have nowhere
+    /// to go and change nothing.
+    #[test]
+    fn preferences_for_an_image_without_series_change_nothing() {
+        let mut project = project_with_one_image();
+        project
+            .get_current_image_settings_mut()
+            .unwrap()
+            .series
+            .clear();
+
+        project.set_image_preferences(&BTreeMap::from([(0, false)]));
+
+        assert!(
+            project
+                .get_current_image_settings()
+                .unwrap()
+                .series
+                .is_empty()
+        );
+    }
+
+    /// While a pipeline is focused, a channel switched off for the image
+    /// only changes the focus: the image's own settings stay, and leaving
+    /// the focus shows every channel again.
+    #[test]
+    fn while_focused_image_preferences_change_only_the_focus() {
+        let mut project = project_with_focus_pipelines();
+        project.focus_pipeline(PipelineId(1));
+
+        project.set_image_preferences(&BTreeMap::from([(0, true), (1, false)]));
+
+        assert_eq!(
+            project.get_image_channel_visibilities(),
+            BTreeMap::from([(0, true), (1, false)])
+        );
+        let series = project.get_selected_image_series().unwrap();
+        assert!(series.channels.values().all(|c| c.visible.is_none()));
+        project.clear_pipeline_focus();
+        assert_eq!(
+            project.get_image_channel_visibilities(),
+            BTreeMap::from([(0, true), (1, true)])
+        );
+    }
+
+    /// While focused, a class the focus hides is shown when toggled.
+    #[test]
+    fn toggling_a_hidden_class_while_focused_shows_it() {
+        let mut project = project_with_focus_pipelines();
+        project.focus_pipeline(PipelineId(1)); // shows classes 3 and 4
+        assert!(!project.is_class_visible(&ObjectClass::Global(5)));
+
+        project.toggle_class_visibility(ObjectClass::Global(5));
+
+        assert!(project.is_class_visible(&ObjectClass::Global(5)));
+        assert!(
+            project.tmp_settings.hidden_classes.is_empty(),
+            "the focus only"
+        );
+    }
+
+    /// A class the focus shows keeps being shown under its new id.
+    #[test]
+    fn a_changed_class_id_stays_shown_in_the_focus() {
+        let mut project = project_with_focus_pipelines();
+        project.classification.classes_mut().push(class(3, "Three"));
+        project.focus_pipeline(PipelineId(1)); // shows classes 3 and 4
+
+        project.change_class_id(3, 30).unwrap();
+
+        assert!(project.is_class_visible(&ObjectClass::Global(30)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(3)));
+    }
+
+    /// Resetting the global wave length of a channel the project has no
+    /// entry for leaves it unset: the image's own value shows.
+    #[test]
+    fn resetting_an_unset_global_wave_length_falls_back_to_the_image() {
+        let mut project = project_with_one_image();
+
+        project.reset_global_emission_wavel_length(1);
+
+        assert_eq!(
+            project.images.settings.channels[&1].emission_wave_length,
+            None
+        );
+        assert_eq!(project.get_emission_wave_length(1), 561.0);
+    }
+
+    /// Every assignable colour is already shown: a channel without one
+    /// gets one anyway - the palette starts over.
+    #[test]
+    fn a_missing_wavelength_is_assigned_even_when_every_colour_is_shown() {
+        let mut project = ProjectWithRuntime::default();
+        let mut channels: Vec<(i32, f32)> = ASSIGNED_WAVELENGTHS
+            .iter()
+            .enumerate()
+            .map(|(i, nm)| (i as i32, *nm))
+            .collect();
+        let missing = channels.len() as i32;
+        channels.push((missing, 0.0));
+
+        assert!(project.assign_missing_wavelengths(&channels));
+
+        assert_eq!(
+            project.images.settings.channels[&missing].emission_wave_length,
+            Some(ASSIGNED_WAVELENGTHS[0])
+        );
+        assert_eq!(project.images.settings.channels.len(), 1, "only it");
+    }
+
+    /// Grayscale with the selected channel hidden: the first visible one
+    /// stays visible.
+    #[test]
+    fn grayscale_keeps_the_first_visible_channel_when_the_selected_one_is_hidden() {
+        let mut project = project_with_three_unnamed_channels();
+        project.set_global_preferences(&BTreeMap::from([(0, false), (1, true), (2, true)]));
+        project.set_global_selected_channel(&0);
+
+        project.set_grayscale(true);
+
+        assert_eq!(
+            project.get_image_channel_visibilities(),
+            BTreeMap::from([(0, false), (1, true), (2, false)])
+        );
+    }
+
+    /// Clearing the frame interval of a project without time settings adds
+    /// none.
+    #[test]
+    fn clearing_an_unset_frame_interval_adds_no_time_settings() {
+        let mut project = ProjectWithRuntime::default();
+        project.images.settings.t_stack = None;
+
+        project.set_frame_interval(None);
+
+        assert!(project.images.settings.t_stack.is_none());
+    }
+
+    /// Without an image root, a known image's path is the listed one.
+    #[test]
+    fn without_a_root_a_known_image_path_stays_as_listed() {
+        let mut project = project_with_one_image();
+        project.images.root = None;
+
+        assert_eq!(
+            project.get_image_absolute_path_from_relative(Path::new("img.tif")),
+            Some(PathBuf::from("img.tif"))
+        );
+    }
+
+    /// A readable image is added under its name, its folder the root.
+    #[test]
+    fn add_image_and_read_meta_adds_a_readable_image() {
+        let mut project = ProjectWithRuntime::default();
+        let path = fixture_tif();
+
+        let action = project.add_image_and_read_meta(&backend(), &path);
+
+        assert_eq!(action, ProjectAction::Success);
+        assert_eq!(project.images.root.as_deref(), path.parent());
+        let keys: Vec<&PathBuf> = project.images.list.keys().collect();
+        assert_eq!(keys, [&PathBuf::from("slice_Z0_C0_T0.tif")]);
+    }
+
+    /// A file with an image extension that isn't an image: a failure, not
+    /// added.
+    #[test]
+    fn add_image_and_read_meta_reports_an_unreadable_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.tif");
+        std::fs::write(&path, b"not a real tiff").unwrap();
+        let mut project = ProjectWithRuntime::default();
+
+        let action = project.add_image_and_read_meta(&backend(), &path);
+
+        assert!(matches!(action, ProjectAction::Failure(_)), "{action:?}");
+        assert!(project.images.list.is_empty());
+    }
+
+    /// Metadata without a full-resolution level: the series is added with
+    /// no size.
+    #[test]
+    fn add_image_to_list_without_a_full_resolution_has_no_size() {
+        let mut project = ProjectWithRuntime::default();
+        let mut meta = sample_image_meta("DAPI", 460.0);
+        meta.series.get_mut(&0).unwrap().resolutions.clear();
+
+        project.add_image_to_list(Path::new("a.tif"), Path::new("/x/a.tif"), &meta);
+
+        let entry = project.images.list.get(Path::new("a.tif")).unwrap();
+        let series = &entry.series[&0];
+        assert_eq!((series.image_width, series.image_height), (0, 0));
+        assert_eq!(entry.file_size, 0);
+        assert_eq!(series.channels[&0].name, "DAPI");
+    }
+
+    /// A scan finds the readable image and skips a broken one with an
+    /// image extension.
+    #[test]
+    fn collect_images_at_root_skips_unreadable_images() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(fixture_tif(), dir.path().join("good.tif")).unwrap();
+        std::fs::write(dir.path().join("broken.tif"), b"not a real tiff").unwrap();
+
+        let found: Vec<PathBuf> = collect_images_at_root(&backend(), dir.path())
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+
+        assert_eq!(found, [dir.path().join("good.tif")]);
+    }
+
+    /// A project file that isn't text is refused with a parse error naming
+    /// the file.
+    #[test]
+    fn load_project_rejects_a_file_that_is_not_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binary.evaproj");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x80]).unwrap();
+
+        match load_project(&fs(), &path) {
+            Err(InternalErrors::ParseError(message)) => {
+                assert!(message.contains("is not a text file"), "{message}");
+                assert!(message.contains("binary.evaproj"), "{message}");
+            }
+            Err(other) => panic!("a parse error, got {other:?}"),
+            Ok(_) => panic!("a binary file must be rejected"),
+        }
+    }
+
+    fn module_with_steps(ids: &[u32]) -> evanalyzer_cfg::settings::modules::ModuleDefinition {
+        evanalyzer_cfg::settings::modules::ModuleDefinition {
+            key: "TWICE".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: ids
+                .iter()
+                .map(|id| PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId(*id),
+                    enabled: true,
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Blur(Default::default()),
+                    ),
+                })
+                .collect(),
+            parameters: vec![],
+            origin: None,
+        }
+    }
+
+    /// A module with two steps of one id can't be loaded: its parameters
+    /// couldn't tell which step they set.
+    #[test]
+    fn load_project_rejects_a_module_with_two_steps_of_one_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twice.evaproj");
+        let mut settings = ProjectSettings::default();
+        settings.modules.push(module_with_steps(&[1, 1]));
+        std::fs::write(&path, serde_json::to_string(&settings).unwrap()).unwrap();
+
+        match load_project(&fs(), &path) {
+            Err(err) => assert!(err.to_string().contains("two steps have the id 1"), "{err}"),
+            Ok(_) => panic!("two steps of one id must be rejected"),
+        }
+    }
+
+    /// Module mistakes (a step using a module the project lacks) are only
+    /// logged on load: the project opens with the step as it is.
+    #[test]
+    fn load_project_opens_a_project_with_module_mistakes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mistakes.evaproj");
+        let mut settings = ProjectSettings::default();
+        let mut pipeline = pipeline(1);
+        pipeline.steps.push(PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(1),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(
+                evanalyzer_cfg::settings::modules::ModuleInstance {
+                    key: "MISSING".into(),
+                    values: Default::default(),
+                },
+            ),
+        });
+        settings.pipelines.push(pipeline);
+        std::fs::write(&path, serde_json::to_string(&settings).unwrap()).unwrap();
+
+        let loaded = load_project(&fs(), &path).unwrap();
+
+        let evanalyzer_cfg::settings::pipeline_settings::StepContent::Module(instance) =
+            &loaded.pipelines[0].steps[0].content
+        else {
+            panic!("the module step");
+        };
+        assert_eq!(instance.key, "MISSING");
+    }
+
+    /// A template module with two steps of one id comes along unchanged
+    /// (only logged) - its steps aren't renumbered.
+    #[test]
+    fn a_template_module_with_two_steps_of_one_id_is_kept_as_it_is() {
+        let mut project = ProjectWithRuntime::default();
+        let template = evanalyzer_cfg::settings::templates::ProjectTemplate {
+            modules: vec![module_with_steps(&[1, 1])],
+            ..Default::default()
+        };
+
+        project.apply_project_template(&template);
+
+        let ids: Vec<u32> = project.modules[0].steps.iter().map(|s| s.id.0).collect();
+        assert_eq!(ids, [1, 1]);
+    }
 }

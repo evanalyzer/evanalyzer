@@ -720,6 +720,35 @@ mod tests {
         );
     }
 
+    /// A model with more classes than a byte holds gets no overlay: 255
+    /// classes (indices 0..=254) still fit `class_of_pixel`'s bytes, 256 do
+    /// not.
+    #[test]
+    fn the_overlay_is_not_captured_for_more_classes_than_a_byte_holds() {
+        let many = |n: u32| -> Vec<PixelClassLabel> {
+            (0..n)
+                .map(|i| PixelClassLabel {
+                    class: SegmentationClass(i),
+                    name: format!("c{i}"),
+                })
+                .collect()
+        };
+        let mapping = HashMap::new();
+
+        let too_many = prediction_capture(&[0], &[1.0], &many(256), &mapping, 1, 1);
+        assert_eq!(too_many, PredictionRequest::None);
+
+        let PredictionRequest::Captured(capture) =
+            prediction_capture(&[254], &[0.5], &many(255), &mapping, 1, 1)
+        else {
+            panic!("255 classes fit a byte");
+        };
+        assert_eq!(capture.classes.len(), 255);
+        assert_eq!(capture.class_of_pixel, vec![254]);
+        // 0.5 * 255 = 127.5, rounded half away from zero -> 128.
+        assert_eq!(capture.probability, vec![128]);
+    }
+
     // -- colour (RGB) models and images -----------------------------------------
 
     fn rgb_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {

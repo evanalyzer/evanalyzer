@@ -3154,7 +3154,7 @@ mod tests {
     use super::super::test_support::{ObjectSpec, seed_db};
     use super::*;
     use crate::api::{ColorScale, ColorSchema};
-    use crate::api::{Grouping, PlateSize, TimeCourseExport};
+    use crate::api::{Grouping, PlateSize, TimeCourseExport, TimeCourseStat};
     use crate::api::{PlateFilter, WellsBatchFilter};
     use calamine::Reader as _;
     use std::path::PathBuf;
@@ -5873,5 +5873,631 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows, 4);
+    }
+
+    // -- more documents and their content ---------------------------------
+
+    /// A sheet's cells as text: numbers as Rust prints them ("0.5", "10"),
+    /// empty cells "".
+    fn sheet_rows(path: &Path, sheet: &str) -> Vec<Vec<String>> {
+        let mut workbook: calamine::Xlsx<_> = calamine::open_workbook(path).expect("open xlsx");
+        let range = workbook.worksheet_range(sheet).expect("the sheet");
+        range
+            .rows()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell {
+                        calamine::Data::Float(v) => v.to_string(),
+                        calamine::Data::Int(v) => v.to_string(),
+                        calamine::Data::String(s) => s.clone(),
+                        calamine::Data::Empty => String::new(),
+                        other => panic!("unexpected cell {other:?}"),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A CSV document's lines.
+    fn csv_lines(path: &Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// XLSX: the measurements in a "Measurements" sheet - the same rows as
+    /// the CSV (see `the_measurements_export_has_a_row_per_value`), the
+    /// numbers as numbers.
+    #[test]
+    fn the_measurements_xlsx_has_a_row_per_value() {
+        let (generator, out_dir, object) = with_measurements();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            with_measurements: true,
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let rows = sheet_rows(&out_dir.join("measurements.xlsx"), "Measurements");
+        assert_eq!(rows.len(), 5, "the header and four values");
+        assert_eq!(rows[0][0], "image_name");
+        assert_eq!(rows[0][12], "value");
+        assert_eq!(
+            rows[1],
+            [
+                "img1.tif", "img1.tif", "0", "0", "image", "", "", "", "p_01", "Pearson", "None",
+                "p_01/p", "0.5"
+            ]
+        );
+        assert_eq!(
+            rows[2],
+            [
+                "img1.tif",
+                "img1.tif",
+                "0",
+                "0",
+                "object",
+                &object,
+                &object,
+                "[\"ClassA\"]",
+                "q_01",
+                "Pearson",
+                "None",
+                "q_01/q",
+                "0.25"
+            ]
+        );
+        // T1's value isn't there: empty.
+        assert_eq!(rows[3][3], "1");
+        assert_eq!(rows[3][12], "");
+        assert_eq!(rows[4][0], "img2.tif");
+        assert_eq!(rows[4][12], "0.75");
+    }
+
+    /// Chosen images none of which the results hold: no value - the header
+    /// alone, not every value.
+    #[test]
+    fn the_measurements_of_unknown_images_are_only_the_header() {
+        let (generator, out_dir, _) = with_measurements();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            with_measurements: true,
+            image_rel_paths: vec!["missing.tif".into()],
+            ..Default::default()
+        }
+        .start_export(&generator, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let lines = csv_lines(&out_dir.join("measurements.csv"));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("image_name,"), "{}", lines[0]);
+    }
+
+    /// `track_seven` with a pixel size of 500 nm (0.5 µm) and 30 s between
+    /// time points, and its motion: path length 5 px, VCL 5 px per time
+    /// point, BCF 1 per time point, MSD D 4 px² per time point.
+    fn timed_track_seven() -> (ResultsGenerator, PathBuf) {
+        let (database, out_dir) = open_analysed(&track_seven(), 2);
+        database
+            .connection()
+            .execute_batch(
+                "ALTER TABLE images ADD COLUMN frame_interval_s DOUBLE;
+                 UPDATE images SET frame_interval_s = 30;
+                 UPDATE objects SET pixel_size_x_nm = 500;
+                 CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+                 z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+                 related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+                 step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE, \
+                 position DOUBLE, track_id UBIGINT);
+                 INSERT INTO measurements VALUES
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'Path length', 'Pixels', 'motion_01/path_length', 5.0, NULL, 7),
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'VCL', 'PixelsPerFrame', 'motion_01/vcl', 5.0, NULL, 7),
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'BCF', 'PerFrame', 'motion_01/bcf', 1.0, NULL, 7),
+                     ('img1.tif', 'img1.tif', 0, 0, 'track', NULL, NULL, NULL, [1], 'motion_01', \
+                      'MSD D', 'PixelsSquaredPerFrame', 'motion_01/msd_d', 4.0, NULL, 7);",
+            )
+            .unwrap();
+        (database, out_dir)
+    }
+
+    /// With a pixel size and a frame interval: the duration in minutes
+    /// (one step of 30 s: 0.5 min) and the motion in µm per minute - VCL
+    /// 5 px x 0.5 µm x 2 steps per min = 5, BCF 1 x 2 = 2, MSD D
+    /// 4 x 0.25 µm² x 2 = 2; the median and Q1 of the track's areas 10 and
+    /// 30: 20 and 15. XLSX: a "Tracks" sheet.
+    #[test]
+    fn the_tracks_xlsx_has_the_motion_in_micrometres_per_minute() {
+        let (database, out_dir) = timed_track_seven();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            with_track_summary: true,
+            track_summary: crate::api::TrackSummaryExport {
+                statistics: vec![TimeCourseStat::Median, TimeCourseStat::Q1],
+                speed_unit: SpeedUnit::UmPerMin,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("tracks export");
+        let rows = sheet_rows(&out_dir.join("tracks.xlsx"), "Tracks");
+        assert_eq!(rows.len(), 2, "the header and track 7");
+        let column = |name: &str| {
+            rows[0]
+                .iter()
+                .position(|h| h == name)
+                .unwrap_or_else(|| panic!("no {name} in {:?}", rows[0]))
+        };
+        let value = |name: &str| rows[1][column(name)].clone();
+        assert_eq!(value("Track"), "7");
+        assert_eq!(value("Duration [min]"), "0.5");
+        assert_eq!(value("Path length [µm]"), "2.5");
+        assert_eq!(value("VCL (mean speed) [µm/min]"), "5");
+        assert_eq!(value("BCF [1/min]"), "2");
+        assert_eq!(value("MSD D [µm²/min]"), "2");
+        assert_eq!(value("Angular speed [°/min]"), "");
+        assert_eq!(value("Area [px] median"), "20");
+        assert_eq!(value("Area [px] Q1"), "15");
+    }
+
+    /// In µm per second: VCL 5 x 0.5 µm / 30 s, BCF 1 / 30 s, MSD D
+    /// 4 x 0.25 µm² / 30 s; the Q3 of the areas 10 and 30: 25.
+    #[test]
+    fn the_tracks_export_has_the_motion_in_micrometres_per_second() {
+        let (database, out_dir) = timed_track_seven();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            with_track_summary: true,
+            track_summary: crate::api::TrackSummaryExport {
+                statistics: vec![TimeCourseStat::Q3],
+                speed_unit: SpeedUnit::UmPerS,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("tracks export");
+        let lines = csv_lines(&out_dir.join("tracks.csv"));
+        let header: Vec<&str> = lines[0].split(',').collect();
+        let row: Vec<f64> = lines[1]
+            .split(',')
+            .map(|v| v.parse().unwrap_or(f64::NAN))
+            .collect();
+        let value = |name: &str| {
+            row[header
+                .iter()
+                .position(|h| *h == name)
+                .unwrap_or_else(|| panic!("no {name} in {header:?}"))]
+        };
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(close(value("VCL (mean speed) [µm/s]"), 2.5 / 30.0));
+        assert!(close(value("BCF [1/s]"), 1.0 / 30.0));
+        assert!(close(value("MSD D [µm²/s]"), 1.0 / 30.0));
+        assert!(header.contains(&"Angular speed [°/s]"), "{header:?}");
+        assert_eq!(value("Area [px] Q3"), 25.0);
+    }
+
+    /// Parquet holds no tracks or time course: asked for directly, each is
+    /// refused rather than writing nothing.
+    #[test]
+    fn tracks_and_time_course_are_refused_as_parquet() {
+        let (database, out_dir) = open_analysed(&track_seven(), 2);
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::Parquet,
+            columns: vec![Column::AreaSizePx],
+            ..Default::default()
+        };
+        let tracks = export
+            .export_track_summary(&database, &no_cancel(), &mut no_progress())
+            .expect_err("tracks as parquet");
+        assert!(
+            matches!(&tracks, InternalErrors::Internal(m) if m.contains("doesn't support the tracks")),
+            "{tracks}"
+        );
+        let course = export
+            .export_time_course(&database, &no_cancel(), &mut no_progress())
+            .expect_err("time course as parquet");
+        assert!(
+            matches!(&course, InternalErrors::Internal(m) if m.contains("doesn't support the time course")),
+            "{course}"
+        );
+    }
+
+    /// Well lines: a row per time point, well and class - every class of
+    /// every well, also where none was found; 120 s between time points
+    /// (the series runs 120 s): the time in minutes. Wide: a column per
+    /// well and class.
+    #[test]
+    fn the_time_course_per_well_has_its_wells_and_the_time_in_minutes() {
+        let (database, out_dir) = open_analysed(
+            &[
+                ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+                ObjectSpec::new("A1_01.tif", "ClassB", 2, 40),
+                ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+                ObjectSpec::new("A1_01.tif", "ClassA", 1, 30).at_plane(0, 1),
+            ],
+            2,
+        );
+        database
+            .connection()
+            .execute_batch(
+                "ALTER TABLE images ADD COLUMN frame_interval_s DOUBLE;
+                 UPDATE images SET frame_interval_s = 120;",
+            )
+            .unwrap();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            with_time_course: true,
+            time_course: TimeCourseExport {
+                lines: TimeCourseLines::Well,
+                statistics: vec![TimeCourseStat::Mean],
+                layout: TimeCourseLayout::Both,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("time course export");
+        assert_eq!(
+            csv_lines(&out_dir.join("time_course.csv")),
+            [
+                "T,Time [min],Well,Class,N images,N objects,Area [px] mean",
+                "0,0,A1,ClassA,1,1,10",
+                "0,0,A1,ClassB,1,1,40",
+                "0,0,B2,ClassA,1,1,100",
+                "0,0,B2,ClassB,1,0,",
+                "1,2,A1,ClassA,1,1,30",
+                "1,2,A1,ClassB,1,0,",
+                "1,2,B2,ClassA,1,0,",
+                "1,2,B2,ClassB,1,0,",
+            ]
+        );
+        assert_eq!(
+            csv_lines(&out_dir.join("time_course_Area__px__mean.csv")),
+            [
+                "T,Time [min],A1 · ClassA,A1 · ClassB,B2 · ClassA,B2 · ClassB",
+                "0,0,10,40,100,",
+                "1,2,30,,,",
+            ]
+        );
+    }
+
+    /// Wide only, image lines of one class: no long file; a column per
+    /// image, named by the image alone.
+    #[test]
+    fn a_wide_only_time_course_per_image_names_the_columns_by_image() {
+        let (database, out_dir) = open_analysed(
+            &[
+                ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+                ObjectSpec::new("img2.tif", "ClassA", 1, 200),
+                ObjectSpec::new("img1.tif", "ClassA", 1, 300).at_plane(0, 1),
+            ],
+            2,
+        );
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            with_time_course: true,
+            time_course: TimeCourseExport {
+                lines: TimeCourseLines::Image,
+                statistics: vec![TimeCourseStat::Mean],
+                layout: TimeCourseLayout::Wide,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("time course export");
+        assert!(!out_dir.join("time_course.csv").exists());
+        assert_eq!(
+            csv_lines(&out_dir.join("time_course_Area__px__mean.csv")),
+            ["T,img1.tif,img2.tif", "0,100,200", "1,300,"]
+        );
+    }
+
+    /// Track lines of tracked results: the track and its image, and the
+    /// number of tracks - the untracked object is in no line; SD of one
+    /// object is none.
+    #[test]
+    fn the_time_course_per_track_counts_the_tracks() {
+        let (database, out_dir) = open_analysed(&track_seven(), 2);
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            with_time_course: true,
+            time_course: TimeCourseExport {
+                lines: TimeCourseLines::Track,
+                layout: TimeCourseLayout::Long,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("time course export");
+        assert_eq!(
+            csv_lines(&out_dir.join("time_course.csv")),
+            [
+                "T,Track,Image,Class,N images,N objects,N tracks,Area [px] mean,Area [px] SD",
+                "0,#7,img1.tif,ClassA,1,1,1,10,",
+                "1,#7,img1.tif,ClassA,1,1,1,30,",
+            ]
+        );
+    }
+
+    /// Several z-planes: a "Z" after "T"; a series of 7200 s (an hour
+    /// between time points): the time in hours.
+    #[test]
+    fn the_time_course_of_z_planes_has_z_and_the_time_in_hours() {
+        let (database, out_dir) = open_analysed(
+            &[
+                ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+                ObjectSpec::new("img1.tif", "ClassA", 1, 20).at_plane(1, 0),
+                ObjectSpec::new("img1.tif", "ClassA", 1, 30).at_plane(0, 2),
+            ],
+            3,
+        );
+        database
+            .connection()
+            .execute_batch(
+                "ALTER TABLE images ADD COLUMN frame_interval_s DOUBLE;
+                 UPDATE images SET frame_interval_s = 3600, z_stacks = 2, \
+                     z_stacks_analyzed = [0, 1];",
+            )
+            .unwrap();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            with_time_course: true,
+            time_course: TimeCourseExport {
+                statistics: vec![TimeCourseStat::Mean],
+                layout: TimeCourseLayout::Long,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("time course export");
+        assert_eq!(
+            csv_lines(&out_dir.join("time_course.csv")),
+            [
+                "T,Z,Time [h],Class,N images,N objects,Area [px] mean",
+                "0,0,0,ClassA,1,1,10",
+                "0,1,0,ClassA,1,1,20",
+                "1,0,1,ClassA,1,0,",
+                "1,1,1,ClassA,1,0,",
+                "2,0,2,ClassA,1,1,30",
+                "2,1,2,ClassA,1,0,",
+            ]
+        );
+    }
+
+    /// Plate grids of results with several z-planes: a tab per z-plane,
+    /// named with it.
+    #[test]
+    fn plate_grids_get_a_tab_per_z_plane() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 30).at_plane(1, 0),
+        ]);
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view_heatmap: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("plate export");
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate.xlsx")).expect("open plate.xlsx");
+        assert_eq!(workbook.sheet_names(), ["Z0 ClassA", "Z1 ClassA"]);
+        let z1 = workbook.worksheet_range("Z1 ClassA").unwrap();
+        assert_eq!(data_f64(z1.get_value((2, 1))), 30.0, "A1 on z-plane 1");
+    }
+
+    /// The profile's lines over all objects: one line "all" - at r 10 all
+    /// three neurons, (2 + 4 + 1) / 3; at r 20 (4 + 6 + 0) / 3 and at r 30
+    /// (0 + 2 + 0) / 3, a neuron not reaching a radius counting 0.
+    #[test]
+    fn the_profile_line_of_all_objects_is_named_all() {
+        let db = super::super::test_support::profile_database();
+        let (dir, mut export) = profile_export(
+            crate::api::ProfileExportContent::Lines,
+            TimeCourseLayout::Long,
+        );
+        export.profile.lines = ProfileLines::All;
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let lines = csv_lines(&dir.join("profile_lines.csv"));
+        assert_eq!(lines.len(), 1 + 3, "{lines:?}");
+        let mean_at = |i: usize| -> (String, f64, f64, f64) {
+            let fields: Vec<&str> = lines[i].split(',').collect();
+            (
+                fields[0].to_string(),
+                fields[1].parse().unwrap(),
+                fields[2].parse().unwrap(),
+                fields[3].parse().unwrap(),
+            )
+        };
+        for (i, (position, mean)) in [(10.0, 7.0 / 3.0), (20.0, 10.0 / 3.0), (30.0, 2.0 / 3.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let (line, at, n, value) = mean_at(i + 1);
+            assert_eq!((line.as_str(), at, n), ("all", position, 3.0), "{lines:?}");
+            assert!((value - mean).abs() < 1e-12, "{lines:?}");
+        }
+        assert!(!dir.join("profile_lines_mean.csv").exists(), "long only");
+    }
+
+    /// Image lines, wide: a column per image - A01's two neurons' mean
+    /// per radius, B01's neuron only at r 10, where it is.
+    #[test]
+    fn the_profile_lines_per_image_have_a_column_per_image() {
+        let db = super::super::test_support::profile_database();
+        let (dir, mut export) = profile_export(
+            crate::api::ProfileExportContent::Lines,
+            TimeCourseLayout::Wide,
+        );
+        export.profile.lines = ProfileLines::Image;
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        assert!(!dir.join("profile_lines.csv").exists(), "wide only");
+        assert_eq!(
+            csv_lines(&dir.join("profile_lines_mean.csv")),
+            ["position,A01_1.tif,B01_1.tif", "10,3,1", "20,5,", "30,1,"]
+        );
+        assert_eq!(
+            csv_lines(&dir.join("profile_lines_n_objects.csv")),
+            ["position,A01_1.tif,B01_1.tif", "10,2,1", "20,2,", "30,2,"]
+        );
+    }
+
+    /// XLSX: the profile's lines in one workbook - the long sheet and one
+    /// per statistic, the same values as the CSV.
+    #[test]
+    fn the_profile_lines_xlsx_has_a_sheet_per_table() {
+        let db = super::super::test_support::profile_database();
+        let (dir, mut export) = profile_export(
+            crate::api::ProfileExportContent::Lines,
+            TimeCourseLayout::Both,
+        );
+        export.format = ExportFormat::XLSX;
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let path = dir.join("profile_lines.xlsx");
+        let workbook: calamine::Xlsx<_> = calamine::open_workbook(&path).expect("open");
+        assert_eq!(
+            workbook.sheet_names(),
+            ["Long", "mean", "sd", "median", "q1", "q3", "n_objects"]
+        );
+        assert_eq!(
+            sheet_rows(&path, "mean"),
+            [
+                vec!["position", "A", "B"],
+                vec!["10", "3", "1"],
+                vec!["20", "5", ""],
+                vec!["30", "1", ""],
+            ]
+        );
+        let long = sheet_rows(&path, "Long");
+        assert_eq!(long[0][..4], ["line", "position", "n_objects", "mean"]);
+        assert_eq!(long.len(), 1 + 3 + 1, "A at three radii, B at one");
+    }
+
+    /// XLSX: each object's profile - long its stored rows, wide a row per
+    /// object with 0 where it doesn't reach.
+    #[test]
+    fn the_profile_objects_xlsx_has_a_long_and_a_wide_sheet() {
+        let db = super::super::test_support::profile_database();
+        let (dir, mut export) = profile_export(
+            crate::api::ProfileExportContent::Objects,
+            TimeCourseLayout::Both,
+        );
+        export.format = ExportFormat::XLSX;
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let path = dir.join("profile_objects.xlsx");
+        let workbook: calamine::Xlsx<_> = calamine::open_workbook(&path).expect("open");
+        assert_eq!(workbook.sheet_names(), ["Long", "Wide"]);
+        let long = sheet_rows(&path, "Long");
+        assert_eq!(
+            long[0],
+            [
+                "image_name",
+                "image_rel_path",
+                "object_id",
+                "object_class_name",
+                "position",
+                "value"
+            ]
+        );
+        assert_eq!(long.len(), 1 + 6);
+        assert_eq!(long[1][2], "00000000-0000-0000-0000-000000000000");
+        assert_eq!(long[1][4..], ["10", "2"]);
+        let wide = sheet_rows(&path, "Wide");
+        assert_eq!(wide[0][4..], ["r_10", "r_20", "r_30"]);
+        assert_eq!(wide[1][4..], ["2", "4", "0"]);
+        assert_eq!(wide[2][4..], ["4", "6", "2"]);
+        assert_eq!(wide[3][4..], ["1", "0", "0"]);
+    }
+
+    /// Each object's profile, wide only, of the chosen image and class:
+    /// only A01's two class-A neurons, no long file.
+    #[test]
+    fn the_profile_objects_keep_to_the_chosen_image_and_class() {
+        let db = super::super::test_support::profile_database();
+        let (dir, mut export) = profile_export(
+            crate::api::ProfileExportContent::Objects,
+            TimeCourseLayout::Wide,
+        );
+        export.image_rel_paths = vec!["A01_1.tif".into(), "B01_1.tif".into()];
+        export.object_classes = vec![ObjectClass::Global(1)];
+        export
+            .start_export(&db, &no_cancel(), &mut no_progress())
+            .expect("export");
+        assert!(!dir.join("profile_objects.csv").exists(), "wide only");
+        let wide = csv_lines(&dir.join("profile_objects_wide.csv"));
+        assert_eq!(wide.len(), 1 + 2, "{wide:?}");
+        assert!(
+            wide[1].contains("A01_1.tif") && wide[1].ends_with(",2,4,0"),
+            "{wide:?}"
+        );
+        assert!(
+            wide[2].contains("A01_1.tif") && wide[2].ends_with(",4,6,2"),
+            "{wide:?}"
+        );
+    }
+
+    /// Results without profiles (no `position`, before format 2): each
+    /// object's profile is refused, saying so.
+    #[test]
+    fn profile_objects_of_results_without_profiles_are_refused() {
+        let (generator, _, _) = with_measurements();
+        let (_, export) = profile_export(
+            crate::api::ProfileExportContent::Objects,
+            TimeCourseLayout::Long,
+        );
+        let error = export
+            .start_export(&generator, &no_cancel(), &mut no_progress())
+            .expect_err("no profiles");
+        assert!(
+            matches!(&error, InternalErrors::InvalidArgument(m) if m.contains("hold no profiles")),
+            "{error}"
+        );
+    }
+
+    /// A file that can be neither renamed nor copied: an error naming the
+    /// destination.
+    #[test]
+    fn a_file_that_cannot_be_moved_is_an_error_naming_where_it_should_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("objects.parquet");
+        let error = move_file(&dir.path().join("missing.parquet"), &to).expect_err("no source");
+        assert!(
+            matches!(&error, InternalErrors::Io(m) if m.contains("could not write") && m.contains("objects.parquet")),
+            "{error}"
+        );
     }
 }

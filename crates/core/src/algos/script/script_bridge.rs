@@ -974,4 +974,186 @@ mod tests {
         let err = host().run_command("voronoi", &Map::new()).unwrap_err();
         assert!(err.contains("per tile"), "{err}");
     }
+
+    /// Width, height, mean, min and max of a colour image run over every
+    /// colour value, of a label image over its labels.
+    #[test]
+    fn image_statistics_of_colour_and_label_images() {
+        // 2x1 RGB: values 1..=6 -> mean 21 / 6 = 3.5.
+        let mut rgb = ScriptImage(Arc::new(ImageContainer::F32Rgb(
+            crate::image::ManagedImage {
+                data: Image::new(
+                    ImageSize {
+                        width: 2,
+                        height: 1,
+                    },
+                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                )
+                .unwrap(),
+                tile_offset: Default::default(),
+                plane: None,
+                dimensionality: ImageDimensionality::Planar,
+            },
+        )));
+        assert_eq!((rgb.width(), rgb.height()), (2, 1));
+        assert_eq!((rgb.mean(), rgb.min(), rgb.max()), (3.5, 1.0, 6.0));
+
+        // 1x4 labels 0, 5, 5, 2 -> mean 12 / 4 = 3.
+        let mut labels = ScriptImage(Arc::new(ImageContainer::U32(crate::image::ManagedImage {
+            data: Image::new(
+                ImageSize {
+                    width: 1,
+                    height: 4,
+                },
+                vec![0, 5, 5, 2],
+            )
+            .unwrap(),
+            tile_offset: Default::default(),
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        })));
+        assert_eq!((labels.width(), labels.height()), (1, 4));
+        assert_eq!((labels.mean(), labels.min(), labels.max()), (3.0, 0.0, 5.0));
+    }
+
+    /// An unclosed block comment or string hides everything after it; a
+    /// `"` or `'` string ends at its line's end (a backtick string does
+    /// not), and an escaped quote doesn't end it.
+    #[test]
+    fn referenced_commands_respect_unclosed_comments_and_strings() {
+        assert_eq!(
+            referenced_commands("run(\"threshold\"); /* run(\"gaussian_blur\");"),
+            vec!["threshold"]
+        );
+        assert_eq!(
+            referenced_commands("run(\"threshold\"); let s = \"run(\\\"gaussian_blur\\\")"),
+            vec!["threshold"]
+        );
+        assert_eq!(
+            referenced_commands("let s = \"open\nrun(\"threshold\");"),
+            vec!["threshold"],
+            "a quoted string ends at the line's end"
+        );
+        assert_eq!(
+            referenced_commands("let s = `open\nrun(\"threshold\")`;\nrun(\"gaussian_blur\");"),
+            vec!["gaussian_blur"],
+            "a backtick string spans lines"
+        );
+    }
+
+    /// Names that are no command (or a script step) bring no citation.
+    #[test]
+    fn citations_skip_unknown_commands_and_scripts() {
+        let direct =
+            into_algorithm(PipelineCommand::default_for_key("edge_detection_sobel").unwrap())
+                .unwrap()
+                .cite();
+        let cites = referenced_citations(
+            r#"run("no_such_command"); run("script"); run("edge_detection_sobel");"#,
+        );
+        assert_eq!(cites.len(), direct.len());
+        assert_eq!(cites[0].cite_key, direct[0].cite_key);
+        assert!(referenced_citations(r#"run("no_such_command");"#).is_empty());
+    }
+
+    /// A dotted name only grows a list when its first part is a list and
+    /// its second an index; otherwise it is an unknown parameter.
+    #[test]
+    fn a_dotted_name_that_is_no_list_entry_is_an_unknown_parameter() {
+        for (key, name) in [
+            ("threshold", "thresholds.first.min_threshold"), // index no number
+            ("threshold", "nothing.0.min_threshold"),        // no such list
+            ("gaussian_blur", "kernel_size.0.x"),            // no list at all
+        ] {
+            let err = command_from_script(key, &map(&[(name, Dynamic::from(1_i64))])).unwrap_err();
+            assert!(
+                err.contains(&format!("unknown parameter `{name}`")),
+                "{name}: {err}"
+            );
+        }
+    }
+
+    /// Names equal segment by segment - numbers by value - compare equal.
+    #[test]
+    fn param_names_equal_by_value_compare_equal() {
+        assert_eq!(compare_param_names("m", "m"), Ordering::Equal);
+        assert_eq!(compare_param_names("a.1.x", "a.01.x"), Ordering::Equal);
+    }
+
+    /// A character is its text; a list may hold a module's own class
+    /// ("L1"), but no other kind of entry.
+    #[test]
+    fn chars_and_class_lists_convert_to_param_strings() {
+        assert_eq!(value_to_param_string(&Dynamic::from('x')).unwrap(), "x");
+        let classes: rhai::Array = vec![Dynamic::from(2_i64), Dynamic::from("L1")];
+        assert_eq!(
+            value_to_param_string(&Dynamic::from(classes)).unwrap(),
+            "2,L1"
+        );
+        let decimals: rhai::Array = vec![Dynamic::from(1_i64), Dynamic::from(0.5_f64)];
+        let err = value_to_param_string(&Dynamic::from(decimals)).unwrap_err();
+        assert!(
+            err.starts_with("list entries must be integers, got "),
+            "{err}"
+        );
+    }
+
+    /// A parameter of `param_type` with no range or options.
+    fn def(param_type: ParamType) -> ParameterDef {
+        ParameterDef {
+            name: "p".into(),
+            display_name: "p".into(),
+            description: String::new(),
+            value: String::new(),
+            param_type,
+            options: vec![],
+            min: 0.0,
+            max: 0.0,
+            step: 1.0,
+            groups: vec![],
+            default_value: String::new(),
+            advanced: false,
+            option_advanced: vec![],
+            section: String::new(),
+        }
+    }
+
+    /// Each parameter type takes only values of its kind; lists, labels
+    /// and script sources can't be set at all.
+    #[test]
+    fn values_are_checked_against_every_parameter_type() {
+        let check = |t: ParamType, v: &str| checked_value(&def(t), v);
+
+        assert_eq!(check(ParamType::Toggle, "true").unwrap(), "true");
+        assert_eq!(
+            check(ParamType::Toggle, "yes").unwrap_err(),
+            "expected true or false, got `yes`"
+        );
+
+        assert_eq!(check(ParamType::MultiSegClass, "1, 2,").unwrap(), "1, 2,");
+        assert_eq!(
+            check(ParamType::MultiSegClass, "1,L1").unwrap_err(),
+            "expected a list of class ids, got `1,L1`"
+        );
+
+        assert_eq!(
+            check(ParamType::ImageAddress, "scratchpad").unwrap(),
+            "scratchpad"
+        );
+        assert!(
+            check(ParamType::ImageAddress, "disk:1")
+                .unwrap_err()
+                .starts_with("expected an image like")
+        );
+
+        assert_eq!(
+            check(ParamType::Group, "1").unwrap_err(),
+            "is a list; set its entries as `name.index.field`"
+        );
+        assert_eq!(check(ParamType::Label, "1").unwrap_err(), "is read-only");
+        assert_eq!(
+            check(ParamType::Script, "1").unwrap_err(),
+            "can't be set from a script"
+        );
+    }
 }

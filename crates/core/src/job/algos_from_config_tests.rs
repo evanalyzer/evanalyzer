@@ -1576,3 +1576,219 @@ fn ai_steps_saved_without_a_piece_size_get_auto() {
         serde_json::json!({"type": "FIXED", "side": 1024})
     );
 }
+
+// ---- Enum conversions: every variant reaches its own ---------------
+
+/// Each annotation use setting becomes the same annotation use.
+#[test]
+fn every_annotation_use_setting_converts_to_its_own_variant() {
+    use ObjectLoadAnnotaedObjectsAnnotationUseSettings as S;
+    assert!(matches!(
+        AnnotationUse::from(S::OwnPlane),
+        AnnotationUse::OwnPlane
+    ));
+    assert!(matches!(
+        AnnotationUse::from(S::EveryPlane),
+        AnnotationUse::EveryPlane
+    ));
+    assert!(matches!(
+        AnnotationUse::from(S::EveryPlaneAndTimePoint),
+        AnnotationUse::EveryPlaneAndTimePoint
+    ));
+}
+
+/// Each z-projection setting of Load Image Channel becomes the same
+/// projection.
+#[test]
+fn every_channel_z_projection_setting_converts_to_its_own_variant() {
+    use MathLoadChannelChannelZProjectionSettings as S;
+    assert!(matches!(
+        ChannelZProjection::from(S::Auto),
+        ChannelZProjection::Auto
+    ));
+    assert!(matches!(
+        ChannelZProjection::from(S::None),
+        ChannelZProjection::None
+    ));
+    assert!(matches!(
+        ChannelZProjection::from(S::MaxIntensity),
+        ChannelZProjection::MaxIntensity
+    ));
+    assert!(matches!(
+        ChannelZProjection::from(S::MinIntensity),
+        ChannelZProjection::MinIntensity
+    ));
+    assert!(matches!(
+        ChannelZProjection::from(S::AvgIntensity),
+        ChannelZProjection::AvgIntensity
+    ));
+    assert!(matches!(
+        ChannelZProjection::from(S::SumIntensity),
+        ChannelZProjection::SumIntensity
+    ));
+    assert!(matches!(
+        ChannelZProjection::from(S::TakeTheMiddle),
+        ChannelZProjection::TakeTheMiddle
+    ));
+}
+
+/// Each Costes setting becomes the same Costes method.
+#[test]
+fn every_costes_method_setting_converts_to_its_own_variant() {
+    use MeasureColocalizationCostesMethodSettings as S;
+    assert!(matches!(CostesMethod::from(S::Off), CostesMethod::Off));
+    assert!(matches!(
+        CostesMethod::from(S::Faster),
+        CostesMethod::Faster
+    ));
+    assert!(matches!(CostesMethod::from(S::Fast), CostesMethod::Fast));
+    assert!(matches!(
+        CostesMethod::from(S::Accurate),
+        CostesMethod::Accurate
+    ));
+}
+
+/// Exclude Image's "when" and rule comparison settings convert one to one.
+#[test]
+fn exclude_image_settings_convert_to_their_own_variants() {
+    assert!(matches!(
+        ExcludeWhen::from(MeasureExcludeImageExcludeWhenSettings::AnyRule),
+        ExcludeWhen::AnyRule
+    ));
+    assert!(matches!(
+        ExcludeWhen::from(MeasureExcludeImageExcludeWhenSettings::AllRules),
+        ExcludeWhen::AllRules
+    ));
+    assert!(matches!(
+        RuleComparison::from(MeasureExcludeImageRuleComparisonSettings::Below),
+        RuleComparison::Below
+    ));
+    assert!(matches!(
+        RuleComparison::from(MeasureExcludeImageRuleComparisonSettings::Above),
+        RuleComparison::Above
+    ));
+}
+
+/// Two-way choices convert one to one: line polarity, maxima cutoff,
+/// relate rule, texture directions.
+#[test]
+fn two_way_settings_convert_to_their_own_variants() {
+    assert!(matches!(
+        LinePolarity::from(FiltersVesselnessLinePolaritySettings::Bright),
+        LinePolarity::Bright
+    ));
+    assert!(matches!(
+        LinePolarity::from(FiltersVesselnessLinePolaritySettings::Dark),
+        LinePolarity::Dark
+    ));
+    assert!(matches!(
+        MaximaCutoff::from(SegmentationFindMaximaMaximaCutoffSettings::Manual),
+        MaximaCutoff::Manual
+    ));
+    assert!(matches!(
+        MaximaCutoff::from(SegmentationFindMaximaMaximaCutoffSettings::Otsu),
+        MaximaCutoff::Otsu
+    ));
+    assert!(matches!(
+        RelateRule::from(ObjectRelateObjectsRelateRuleSettings::CentreInside),
+        RelateRule::CentreInside
+    ));
+    assert!(matches!(
+        RelateRule::from(ObjectRelateObjectsRelateRuleSettings::LargestOverlap),
+        RelateRule::LargestOverlap
+    ));
+    assert!(matches!(
+        TextureDirections::from(MeasureTextureTextureDirectionsSettings::Mean),
+        TextureDirections::Mean
+    ));
+    assert!(matches!(
+        TextureDirections::from(MeasureTextureTextureDirectionsSettings::Each),
+        TextureDirections::Each
+    ));
+}
+
+/// Each neighbour method setting becomes the same method.
+#[test]
+fn every_neighbor_method_setting_converts_to_its_own_variant() {
+    use MeasureObjectNeighborsNeighborMethodSettings as S;
+    assert!(matches!(
+        NeighborMethod::from(S::ExpandUntilAdjacent),
+        NeighborMethod::ExpandUntilAdjacent
+    ));
+    assert!(matches!(
+        NeighborMethod::from(S::Adjacent),
+        NeighborMethod::Adjacent
+    ));
+    assert!(matches!(
+        NeighborMethod::from(S::WithinDistance),
+        NeighborMethod::WithinDistance
+    ));
+}
+
+/// Each stain output setting becomes the same stain.
+#[test]
+fn every_stain_output_setting_converts_to_its_own_variant() {
+    use FiltersColorDeconvolutionStainOutputSettings as S;
+    assert!(matches!(StainOutput::from(S::Stain1), StainOutput::Stain1));
+    assert!(matches!(StainOutput::from(S::Stain2), StainOutput::Stain2));
+    assert!(matches!(StainOutput::from(S::Stain3), StainOutput::Stain3));
+}
+
+/// The built-in stain vectors convert one to one; custom vectors keep
+/// their values, each clamped to 0-1 (a stain's optical density share).
+#[test]
+fn stain_vector_settings_convert_and_custom_values_are_clamped_to_0_1() {
+    use FiltersColorDeconvolutionStainVectorsSettings as S;
+    assert!(matches!(StainVectors::from(S::HDab), StainVectors::HDab));
+    assert!(matches!(StainVectors::from(S::HE), StainVectors::HE));
+    assert!(matches!(StainVectors::from(S::HEDab), StainVectors::HEDab));
+    let custom = StainVectors::from(S::Custom {
+        stain_1_red: 0.25,
+        stain_1_green: -0.5,
+        stain_1_blue: 1.5,
+        stain_2_red: 0.0,
+        stain_2_green: 1.0,
+        stain_2_blue: 0.75,
+        stain_3_red: 2.0,
+        stain_3_green: 0.1,
+        stain_3_blue: -3.0,
+    });
+    let StainVectors::Custom {
+        stain_1_red,
+        stain_1_green,
+        stain_1_blue,
+        stain_2_red,
+        stain_2_green,
+        stain_2_blue,
+        stain_3_red,
+        stain_3_green,
+        stain_3_blue,
+    } = custom
+    else {
+        panic!("expected Custom");
+    };
+    assert_eq!([stain_1_red, stain_1_green, stain_1_blue], [0.25, 0.0, 1.0]);
+    assert_eq!([stain_2_red, stain_2_green, stain_2_blue], [0.0, 1.0, 0.75]);
+    assert_eq!([stain_3_red, stain_3_green, stain_3_blue], [1.0, 0.1, 0.0]);
+}
+
+/// Expand without overlap keeps its margin (clamped to 0-65535) and unit.
+#[test]
+fn transform_function_expand_without_overlap_setting_converts_and_clamps_margin() {
+    let convert = |margin| -> TransformFunction {
+        ObjectTransformObjectsTransformFunctionSettings::ExpandWithoutOverlap {
+            margin,
+            unit: SizeUnits::NanoMeter,
+        }
+        .into()
+    };
+    for (given, expected) in [(3.0, 3.0), (-1.0, 0.0), (70_000.0, 65535.0)] {
+        match convert(given) {
+            TransformFunction::ExpandWithoutOverlap { margin, unit } => {
+                assert_eq!(margin, expected);
+                assert_eq!(unit, SizeUnits::NanoMeter);
+            }
+            _ => panic!("expected ExpandWithoutOverlap"),
+        }
+    }
+}

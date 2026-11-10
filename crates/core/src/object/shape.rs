@@ -1089,6 +1089,78 @@ mod tests {
         });
     }
 
+    /// An object without a single pixel has no shape: no Feret diameter,
+    /// no convex area (its area, 0), no part and no hole (Euler 0) and no
+    /// radii.
+    #[test]
+    fn an_object_without_pixels_has_an_empty_shape() {
+        let object = Object::new(ObjectInit {
+            bbox: [4, 6, 6, 8],
+            mask_data: BitVec::<u64, Lsb0>::repeat(false, 9),
+            area: 0,
+            ..Default::default()
+        });
+        assert_eq!(
+            object.shape(),
+            Shape {
+                min_feret: 0.0,
+                max_feret: 0.0,
+                convex_area: 0,
+                euler_number: 0,
+                radii: None,
+            }
+        );
+    }
+
+    /// A mask cut short (fewer bits than its box has pixels) counts only
+    /// the pixels it has: a 3 x 3 box whose mask holds just the first row,
+    /// full - a horizontal line of 3 pixels.
+    #[test]
+    fn a_mask_cut_short_counts_only_its_pixels() {
+        let object = Object::new(ObjectInit {
+            bbox: [10, 20, 12, 22],
+            mask_data: bitvec![u64, Lsb0; 1, 1, 1],
+            area: 3,
+            ..Default::default()
+        });
+        let shape = object.shape();
+        // Pixel centres (10, 20) .. (12, 20): diameter 2, width 0.
+        assert_eq!((shape.min_feret, shape.max_feret), (0.0, 2.0));
+        // The rows below hold no pixel: only the line's 3 centres lie in
+        // the hull.
+        assert_eq!(shape.convex_area, 3);
+        // One part, no hole.
+        assert_eq!(shape.euler_number, 1);
+        // Every pixel has a background pixel right above it: distance 1.
+        assert_eq!(
+            shape.radii,
+            Some(Radii {
+                max: 1.0,
+                mean: 1.0,
+                median: 1.0
+            })
+        );
+    }
+
+    /// Fractions with a zero denominator are -∞ (numerator < 0) and +∞
+    /// (numerator > 0) and compare as such; finite ones compare exactly
+    /// (cross-multiplied).
+    #[test]
+    fn fractions_compare_with_infinities() {
+        let (minus_inf, plus_inf) = ((-1, 0), (1, 0));
+        let half = (1, 2);
+        assert!(frac_le(minus_inf, plus_inf));
+        assert!(frac_le(minus_inf, minus_inf));
+        assert!(!frac_le(plus_inf, minus_inf));
+        assert!(frac_le(minus_inf, half));
+        assert!(!frac_le(plus_inf, half));
+        assert!(frac_le(half, plus_inf));
+        assert!(!frac_le(half, minus_inf));
+        // 1/2 <= 2/4 (equal), 3/4 > 1/2.
+        assert!(frac_le(half, (2, 4)));
+        assert!(!frac_le((3, 4), half));
+    }
+
     /// The rotating calipers give the brute-force diameter and width.
     #[test]
     fn calipers_match_brute_force() {

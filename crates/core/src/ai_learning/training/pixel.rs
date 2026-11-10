@@ -1375,4 +1375,179 @@ mod tests {
             "{message}"
         );
     }
+
+    /// The training samples the job reports in its `Finished` event.
+    fn finished_samples(events: &[TrainingProgressEvent]) -> usize {
+        events
+            .iter()
+            .find_map(|e| match e {
+                TrainingProgressEvent::Finished {
+                    stats: evanalyzer_cfg::core_types::TrainingStats::RandomForest { n_samples, .. },
+                } => Some(*n_samples),
+                _ => None,
+            })
+            .expect("a Finished event with random forest stats")
+    }
+
+    /// A label image (`U32`) has no pixel features: it is refused, not read
+    /// as intensities.
+    #[test]
+    fn compute_pixel_features_refuses_a_label_image() {
+        use crate::ImageDimensionality;
+        use crate::image::Point2d;
+        let ctx = gray_context(1, 1, vec![0.0]);
+        let labels = Arc::new(ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(
+                ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                vec![3],
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        }));
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![]],
+            image_channels: Vec::new(),
+            image_channel_names: Vec::new(),
+        };
+
+        let err = compute_pixel_features_on(&ctx, &spec, &[labels])
+            .err()
+            .unwrap();
+
+        assert!(
+            matches!(&err, InternalErrors::FormatMismatch { expected, .. }
+                if expected == "F32Gray or F32Rgb image for pixel features"),
+            "{err:?}"
+        );
+    }
+
+    /// Training on z-stacks as volumes is refused with a clear message -
+    /// before any image is read (the path does not exist).
+    #[test]
+    fn run_refuses_training_on_z_stacks_as_volumes() {
+        let mut job = two_class_job(&[PathBuf::from("does-not-exist.tif")]);
+        job.z_stack_handling = ZStackHandling::Volume3d;
+        let (tx, _rx) = std::sync::mpsc::channel();
+
+        let err = job.run(tx, Arc::new(AtomicBool::new(false))).err().unwrap();
+
+        let InternalErrors::InvalidArgument(message) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(
+            message.contains("volumes (3D) isn't supported"),
+            "{message}"
+        );
+    }
+
+    /// An annotated image that can't be opened is reported as failed and
+    /// contributes no samples - with no other image, nothing is trained.
+    #[test]
+    fn run_reports_an_unreadable_image_as_failed() {
+        let path = PathBuf::from("does-not-exist.tif");
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let err = two_class_job(std::slice::from_ref(&path))
+            .run(tx, Arc::new(AtomicBool::new(false)))
+            .err()
+            .unwrap();
+
+        assert!(err.to_string().contains("zero samples"), "{err}");
+        let events: Vec<_> = rx.iter().collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::ImageFailed { path: p } if *p == path)),
+            "{events:?}"
+        );
+    }
+
+    /// An image without the series the annotations name is reported as
+    /// failed, not read from another series.
+    #[test]
+    fn run_reports_an_image_without_the_annotated_series_as_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gray.tif");
+        write_gray_tiff(&path);
+        let mut job = two_class_job(std::slice::from_ref(&path));
+        job.images[0].series = 5; // a plain TIFF has series 0 only
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let err = job.run(tx, Arc::new(AtomicBool::new(false))).err().unwrap();
+
+        assert!(err.to_string().contains("zero samples"), "{err}");
+        let events: Vec<_> = rx.iter().collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::ImageFailed { path: p } if *p == path)),
+            "{events:?}"
+        );
+    }
+
+    /// Two greyscale images train one greyscale model on the samples of
+    /// both: 2 annotations of 2x2 pixels each per image = 8, so 16.
+    #[test]
+    fn run_trains_on_several_greyscale_images_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.tif");
+        let second = dir.path().join("second.tif");
+        write_gray_tiff(&first);
+        write_gray_tiff(&second);
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let saved = two_class_job(&[first, second])
+            .run(tx, Arc::new(AtomicBool::new(false)))
+            .unwrap();
+
+        assert_eq!(trained_input_color(&saved), PixelInputColor::Gray);
+        assert_eq!(finished_samples(&rx.iter().collect::<Vec<_>>()), 16);
+    }
+
+    /// A recipe naming its image channel reads that channel: channel 0 of
+    /// a greyscale TIFF gives the same 8 samples as the step's own image.
+    #[test]
+    fn run_reads_the_image_channels_the_recipe_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gray.tif");
+        write_gray_tiff(&path);
+        let mut job = two_class_job(&[path]);
+        job.channel = 7; // ignored: the recipe names its channels
+        if let AiLearningClassifierSettings::Pixel { feature_spec, .. } =
+            &mut job.settings.classifier
+        {
+            feature_spec.image_channels = vec![0];
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        job.run(tx, Arc::new(AtomicBool::new(false))).unwrap();
+
+        assert_eq!(finished_samples(&rx.iter().collect::<Vec<_>>()), 8);
+    }
+
+    /// `run_async` runs the job on its own thread, streams its progress and
+    /// hands back its result through the join handle.
+    #[test]
+    fn run_async_trains_in_the_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gray.tif");
+        write_gray_tiff(&path);
+
+        let (handle, rx, cancel) = two_class_job(&[path]).run_async();
+        let saved = handle.join().unwrap().unwrap();
+
+        assert!(!cancel.load(Ordering::Relaxed));
+        assert_eq!(trained_input_color(&saved), PixelInputColor::Gray);
+        let events: Vec<_> = rx.iter().collect();
+        assert!(matches!(
+            events.first(),
+            Some(TrainingProgressEvent::Started { total: 1 })
+        ));
+        assert_eq!(finished_samples(&events), 8);
+    }
 }

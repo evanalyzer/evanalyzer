@@ -1137,14 +1137,26 @@ impl ResultsGenerator {
                     row.get(3).map_err(err)?,
                 ));
             }
+            let values = &mut current.as_mut().expect("set above").3;
+            // An image measurement is the image's: in every class's block,
+            // also of an image without objects (its row has no class).
+            for (i, (column, _)) in stats.iter().enumerate() {
+                if is_image_measurement(column) {
+                    let value: Option<f64> = row.get(5 + i).map_err(err)?;
+                    for block in 0..blocks.len() {
+                        values[block * n + i] = value;
+                    }
+                }
+            }
             let class_id: Option<u32> = row.get(4).map_err(err)?;
             let Some(block) = class_id.and_then(|id| blocks.iter().position(|b| *b == id)) else {
                 continue;
             };
             seen_classes[block] = true;
-            let values = &mut current.as_mut().expect("set above").3;
-            for i in 0..n {
-                values[block * n + i] = row.get(5 + i).map_err(err)?;
+            for (i, (column, _)) in stats.iter().enumerate() {
+                if !is_image_measurement(column) {
+                    values[block * n + i] = row.get(5 + i).map_err(err)?;
+                }
             }
         }
         if let Some(done) = current.take() {
@@ -9118,5 +9130,189 @@ mod tests {
             Some(RelatedTo::ParentOf(ObjectClass::Global(1), a.clone())),
         );
         assert_eq!(parent.row_names, [c.clone()]);
+    }
+
+    // -- more list, grouped and status cases --------------------------------
+
+    /// A spot's children of every class (no child class): a cell's spots
+    /// all the same - cell 0 has two, cell 1 one.
+    #[test]
+    fn children_of_any_class_are_every_object_linked_to_the_parent() {
+        let generator = cells_with_spots();
+        let any_child = Column::Children(ChildColumn {
+            parent_class: CELL,
+            child_class: ObjectClass::Unset,
+            value: ChildValue::Count,
+        });
+        let result = list_of(&generator, CELL, vec![Column::AreaSizePx, any_child]);
+        let rows: Vec<Vec<Option<f64>>> = result
+            .rows
+            .iter()
+            .map(|row| row.iter().map(number).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            [vec![Some(100.0), Some(2.0)], vec![Some(200.0), Some(1.0)]]
+        );
+    }
+
+    /// A parent's id is a text, not a number: aggregating it is refused.
+    #[test]
+    fn a_parents_id_cannot_be_aggregated() {
+        let error = column_aggregate_expr(&parent(ParentValue::Id)).expect_err("an id");
+        assert!(
+            matches!(&error, InternalErrors::InvalidArgument(m) if m.contains("parent's id")),
+            "{error}"
+        );
+    }
+
+    /// A page without objects - no image of the selection has any - is
+    /// empty, the relation and measurement columns too, not an error.
+    #[test]
+    fn a_page_without_objects_with_relation_and_measurement_columns_is_empty() {
+        let (generator, p, q) = with_measurements();
+        let named = Column::MeasurementObject(MeasurementColumn {
+            key: "q_01/q".into(),
+            step: "q_01".into(),
+            name: "Q".into(),
+            per_object: true,
+        });
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: Some(vec!["missing.tif".into()]),
+                object_classes: None,
+                columns: vec![Column::AreaSizePx, children(ChildValue::Count), p, q, named],
+                with_coloc_details: false,
+                related_to: None,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        assert!(result.rows.is_empty());
+        assert_eq!(result.source_object_count, 0);
+    }
+
+    /// A class selection without a single class id: no rows per image.
+    #[test]
+    fn grouped_by_image_of_a_selection_without_a_class_id_is_empty() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![ObjectClass::Unset]),
+                columns: vec![Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        assert!(result.rows.is_empty());
+    }
+
+    /// Transposed, an image measurement is the image's own value beside
+    /// the objects' average (the values of
+    /// `per_image_an_image_measurement_is_the_images_value`) - the images
+    /// with objects; A1_03 without any is left out here.
+    #[test]
+    fn transposed_grouped_shows_an_image_measurement_beside_the_objects_values() {
+        let (generator, p, q) = with_measurements();
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![p, q],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: true,
+            })
+            .unwrap();
+        assert_eq!(
+            result.column_names.len(),
+            1 + 2,
+            "{:?}",
+            result.column_names
+        );
+        let rows: Vec<(String, Option<f64>, Option<f64>)> = result
+            .rows
+            .iter()
+            .map(|row| {
+                (
+                    match &row[0].value {
+                        CellValue::String(s) => s.clone(),
+                        _ => panic!("the image's name"),
+                    },
+                    rounded(as_float(&row[1].value)),
+                    rounded(as_float(&row[2].value)),
+                )
+            })
+            .collect();
+        // A1_03 has no objects: its image measurement still shows, as in
+        // the normal view (`per_image_an_image_measurement_is_the_images_value`).
+        assert_eq!(
+            rows,
+            [
+                ("A1_01.tif".to_string(), Some(0.2), Some(0.2)),
+                ("A1_02.tif".to_string(), Some(0.4), Some(0.6)),
+                ("A1_03.tif".to_string(), Some(0.9), None),
+                ("B2_01.tif".to_string(), Some(0.5), Some(0.8)),
+            ]
+        );
+    }
+
+    /// A transposed list page of 10 rows over five images of one object
+    /// each: the first four images don't fill it, so more are numbered -
+    /// all five, in order.
+    #[test]
+    fn a_transposed_list_page_reaches_past_the_first_images() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 1),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 2),
+            ObjectSpec::new("img3.tif", "ClassA", 1, 3),
+            ObjectSpec::new("img4.tif", "ClassA", 1, 4),
+            ObjectSpec::new("img5.tif", "ClassA", 1, 5),
+        ]);
+        let page = list_transposed(
+            &generator,
+            None,
+            Pagination {
+                limit: 10,
+                after: None,
+            },
+        );
+        let areas: Vec<Option<u64>> = page.rows.iter().map(|row| area(&row[1])).collect();
+        assert_eq!(areas, [Some(1), Some(2), Some(3), Some(4), Some(5)]);
+        // After the last image's last row: nothing more.
+        let next = list_transposed(
+            &generator,
+            None,
+            Pagination {
+                limit: 10,
+                after: page.row_names.last().cloned(),
+            },
+        );
+        assert!(next.rows.is_empty());
+        assert_eq!(next.column_names, ["image", "Area [px] (ClassA)"]);
+    }
+
+    /// A run table without a row: unknown, like results without one; one
+    /// that can't be read is an error, not a status.
+    #[test]
+    fn an_empty_run_table_is_unknown_and_an_unreadable_one_an_error() {
+        use crate::api::RunStatus;
+        let db = open(&[]);
+        db.database
+            .execute_batch("CREATE TABLE run (status VARCHAR, message VARCHAR);")
+            .unwrap();
+        assert_eq!(db.run_status().unwrap(), RunStatus::Unknown);
+
+        let broken = open(&[]);
+        broken
+            .database
+            .execute_batch("CREATE TABLE run (status VARCHAR);")
+            .unwrap();
+        assert!(matches!(broken.run_status(), Err(InternalErrors::Io(_))));
     }
 }

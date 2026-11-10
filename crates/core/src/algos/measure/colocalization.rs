@@ -1946,6 +1946,228 @@ mod tests {
         assert_eq!(py_floordiv(0.9, 1.0 / 255.0), 229.0);
     }
 
+    /// An 8-bit image `width` × `height` of channels `a` and `b` (values
+    /// 0..1), without objects - for [`cache_of`].
+    fn image_case(width: usize, height: usize, a: Vec<f32>, b: Vec<f32>) -> Case {
+        Case {
+            name: String::new(),
+            width,
+            height,
+            threshold_percent: 15.0,
+            scale: 255,
+            costes: String::new(),
+            labels: vec![0; width * height],
+            a,
+            b,
+            image: Vec::new(),
+            objects: Vec::new(),
+        }
+    }
+
+    fn coloc(channel_a: u32, channel_b: u32) -> Coloc {
+        Coloc {
+            channel_a: ImageChannelIdx(channel_a),
+            channel_b: ImageChannelIdx(channel_b),
+            threshold_percent: 15.0,
+            costes: CostesMethod::Off,
+        }
+    }
+
+    /// A bit depth without a maximum gray value (0, or more than 32 bits)
+    /// is an error, not a division by a made-up maximum.
+    #[test]
+    fn an_implausible_bit_depth_is_an_error() {
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta.nr_of_bits = 8;
+        assert_eq!(coloc(0, 1).scale(&cache).unwrap(), 255.0);
+        for bits in [0, 33] {
+            cache.image_meta.nr_of_bits = bits;
+            match coloc(0, 1).scale(&cache) {
+                Err(InternalErrors::InvalidArgument(message)) => assert_eq!(
+                    message,
+                    format!("Colocalization: implausible bit depth {bits}")
+                ),
+                other => panic!("{bits} bits: expected an invalid argument, got {other:?}"),
+            }
+        }
+    }
+
+    /// A channel the image doesn't have - A or B - is an error naming it.
+    #[test]
+    fn a_missing_channel_is_an_error() {
+        let cache = cache_of(&image_case(2, 1, vec![0.1, 0.2], vec![0.3, 0.4]));
+        assert_eq!(coloc(0, 1).image_tiles(&cache).unwrap().len(), 2);
+        for (a, b, missing) in [(2, 1, 2), (0, 3, 3)] {
+            match coloc(a, b).image_tiles(&cache) {
+                Err(InternalErrors::InvalidArgument(message)) => assert_eq!(
+                    message,
+                    format!("Colocalization: the image has no channel {missing}")
+                ),
+                Err(other) => panic!("channels {a}, {b}: {other:?}"),
+                Ok(_) => panic!("channels {a}, {b}: expected an error"),
+            }
+        }
+    }
+
+    /// A constant channel A: no Pearson (no deviation to correlate), and as
+    /// the slope the least-squares solution of least norm of A·x + B = y:
+    /// every row is (x, 1), so (A, B) ∥ (x, 1) with A·x + B = mean y -
+    /// A = x · mean y / (x² + 1).
+    #[test]
+    fn a_constant_channel_a_has_no_pearson_and_the_least_norm_slope() {
+        let cache = cache_of(&image_case(2, 2, vec![0.5; 4], vec![0.1, 0.2, 0.3, 0.4]));
+        let tiles = coloc(0, 1).image_tiles(&cache).unwrap();
+        let result = image_values(&tiles, 15.0, CostesMethod::Off, 255.0);
+        assert!(result.values[0].is_nan(), "Pearson");
+        // 0.5 · 0.25 / (0.25 + 1) = 0.1 (to f32 rounding of the pixels).
+        assert!(
+            (result.values[SLOPE] - 0.1).abs() < 1e-7,
+            "{}",
+            result.values[SLOPE]
+        );
+    }
+
+    /// Python's `//` where the quotient is below 1: 0, signed like x / y.
+    #[test]
+    fn python_floor_division_of_a_zero_quotient_keeps_the_sign() {
+        assert_eq!(py_floordiv(0.5, 2.0).to_bits(), 0.0f64.to_bits());
+        // -0.0 // 2.0 and 0.0 // -2.0 are -0.0 in Python.
+        assert_eq!(py_floordiv(-0.0, 2.0).to_bits(), (-0.0f64).to_bits());
+        assert_eq!(py_floordiv(0.0, -2.0).to_bits(), (-0.0f64).to_bits());
+    }
+
+    /// Two tiles that each fit the 16-bit levels but put different values
+    /// into the same level (closer than 1/65535): ranked by their values,
+    /// both kept apart.
+    #[test]
+    fn values_sharing_a_level_across_tiles_are_ranked_by_value() {
+        // 0.5 and 0.500001 both round to level 32768.
+        let (low, high) = (0.5f32, 0.500_001f32);
+        assert_eq!(level(low), level(high));
+        let cache = cache_of(&image_case(2, 1, vec![low, high], vec![0.2, 0.2]));
+        let tiles = coloc(0, 1).image_tiles(&cache).unwrap();
+        let DenseRanks::Sorted(values) = DenseRanks::of(&tiles, |x, _| x) else {
+            panic!("not one value per level: ranked by value");
+        };
+        assert_eq!(values, vec![low, high]);
+        let ranks = DenseRanks::Sorted(values);
+        assert_eq!((ranks.rank(low as f64), ranks.rank(high as f64)), (0, 1));
+        assert_eq!(ranks.count(), 2);
+    }
+
+    /// Pearson of the pixels below either threshold (scipy's pearsonr):
+    /// an error for fewer than two pixels, none (NaN) for a constant
+    /// channel, else the correlation of those pixels only.
+    #[test]
+    fn subset_pearson_follows_pearsonr() {
+        // (A, B): (0.1, 0.4) (0.2, 0.3) (0.3, 0.2) (0.4, 0.4).
+        let cache = cache_of(&image_case(
+            2,
+            2,
+            vec![0.1, 0.2, 0.3, 0.4],
+            vec![0.4, 0.3, 0.2, 0.4],
+        ));
+        let tiles = coloc(0, 1).image_tiles(&cache).unwrap();
+        // A < 0.15 or B < 0.15: only (0.1, 0.4).
+        assert_eq!(subset_pearson(&tiles, 0.15, 0.15), (1, Err(())));
+        // B < 0.35: (0.2, 0.3) and (0.3, 0.2) - perfectly anti-correlated.
+        let (n, r) = subset_pearson(&tiles, 0.0, 0.35);
+        assert_eq!(n, 2);
+        assert!((r.unwrap() + 1.0).abs() < 1e-12);
+        // A < 0.45 (B's threshold 0 picks none): (0.1, 0.4) and
+        // (0.4, 0.4) - B constant.
+        let constant_b = cache_of(&image_case(2, 1, vec![0.1, 0.4], vec![0.4, 0.4]));
+        let tiles = coloc(0, 1).image_tiles(&constant_b).unwrap();
+        let (n, r) = subset_pearson(&tiles, 0.45, 0.0);
+        assert_eq!(n, 2);
+        assert!(r.unwrap().is_nan(), "B constant: no correlation");
+    }
+
+    /// The linear Costes search stops when fewer than two pixels are left
+    /// below the candidate (pearsonr's error): A = B = 0.1, 0.5, 0.9 at
+    /// 8 bits. The line is y = x; from 230/255 (above the maximum) down to
+    /// 229/255, then by 10/255 while the two lower pixels correlate
+    /// perfectly, until 119/255 leaves only 0.1.
+    #[test]
+    fn the_linear_costes_search_stops_when_one_pixel_is_left() {
+        let values = vec![0.1, 0.5, 0.9];
+        let cache = cache_of(&image_case(3, 1, values.clone(), values));
+        let tiles = coloc(0, 1).image_tiles(&cache).unwrap();
+        let (cx, cy) = costes_thresholds(&tiles, CostesMethod::Fast, 255.0);
+        let expected = 119.0 / 255.0;
+        assert!((cx - expected).abs() < 1e-9, "{cx} vs {expected}");
+        assert!((cy - expected).abs() < 1e-9, "{cy} vs {expected}");
+    }
+
+    /// The linear Costes search steps by 5 levels while the pixels below
+    /// correlate between 0.35 and 0.45, then by 1 near the bottom, and
+    /// stops where they no longer correlate. Every pixel pair has its
+    /// swapped pair (the line is y = x): seven low pixels (× 0.01) -
+    /// (1, 1) ×2, (3, 3) ×3, (1, 3), (3, 1): Pearson 20/7 / (48/7) = 5/12 -
+    /// and (0.9, 0.9). Below 7/255 only (1, 1) ×2, (1, 3), (3, 1) are
+    /// left: Pearson -1/3 → stop there; with "Accurate" (every level) too.
+    #[test]
+    fn the_linear_costes_search_skips_by_five_for_a_moderate_correlation() {
+        let a = vec![0.01, 0.01, 0.03, 0.03, 0.03, 0.01, 0.03, 0.9];
+        let b = vec![0.01, 0.01, 0.03, 0.03, 0.03, 0.03, 0.01, 0.9];
+        let cache = cache_of(&image_case(4, 2, a, b));
+        let tiles = coloc(0, 1).image_tiles(&cache).unwrap();
+        let expected = 7.0 / 255.0;
+        for method in [CostesMethod::Fast, CostesMethod::Accurate] {
+            let (cx, cy) = costes_thresholds(&tiles, method, 255.0);
+            assert!((cx - expected).abs() < 1e-9, "{method:?}: {cx}");
+            assert!((cy - expected).abs() < 1e-9, "{method:?}: {cy}");
+        }
+    }
+
+    /// A big object (read tile by tile) over two overlapping tiles of
+    /// channel A: each pixel once, from the first tile in reading order -
+    /// the second tile's different values there are ignored.
+    #[test]
+    fn a_big_object_over_overlapping_tiles_reads_each_pixel_once() {
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta.nr_of_bits = 8;
+        let add = |cache: &mut GlobalPipelineCache, channel, x: usize, width, values: Vec<f32>| {
+            let image = ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::from_size_slice(ImageSize { width, height: 9 }, &values)
+                    .unwrap(),
+                tile_offset: Point2d { x, y: 0 },
+                plane: None,
+                dimensionality: ImageDimensionality::Planar,
+            });
+            let tile = ImageTile {
+                offset_x: x,
+                offset_y: 0,
+                width,
+                height: 9,
+            };
+            cache.add_to_channel_cache(Arc::new(image), channel, tile);
+        };
+        // Channel A: x 0..=5 holds 0.25, x 3..=8 holds 0.75 (x 3..=5 the
+        // first tile's: 0.25). Channel B: one tile, 0.5 everywhere.
+        add(&mut cache, 0, 0, 6, vec![0.25; 54]);
+        add(&mut cache, 0, 3, 6, vec![0.75; 54]);
+        add(&mut cache, 1, 0, 9, vec![0.5; 81]);
+        // A 9 × 9 object: 81 pixels, more than LISTED_UP_TO.
+        let object = Object::new(ObjectInit {
+            bbox: [0, 0, 8, 8],
+            area: 81,
+            mask_data: BitVec::repeat(true, 81),
+            ..Default::default()
+        });
+        let coloc = coloc(0, 1);
+        let ObjectPixels::Read(read) = coloc.object_pixels(&object, &cache) else {
+            panic!("more than {LISTED_UP_TO} pixels: read tile by tile");
+        };
+        let mut pixels = Vec::new();
+        read(&mut |a, b| pixels.push((a, b)));
+        assert_eq!(pixels.len(), 81, "each pixel once");
+        // Columns 0..=5 from the first tile (54 pixels), 6..=8 from the second.
+        let low = pixels.iter().filter(|p| **p == (0.25, 0.5)).count();
+        let high = pixels.iter().filter(|p| **p == (0.75, 0.5)).count();
+        assert_eq!((low, high), (54, 27));
+    }
+
     /// Speed and peak RAM on a `BENCH_SIZE`² 16-bit image (default 2048)
     /// in 4 tiles, a 9 × 9 object every 40 px, `BENCH_COSTES` (faster |
     /// fast | off) - release, one per process:

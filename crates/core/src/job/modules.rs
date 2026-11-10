@@ -1760,4 +1760,259 @@ mod tests {
             ObjectClass::Global(8)
         );
     }
+
+    // ---- More checks and renumbering ----
+
+    /// A pipeline handing a module a module memory slot or a module class -
+    /// also inside a list value - is refused: only a module has them.
+    #[test]
+    fn a_module_slot_or_class_a_pipeline_hands_in_is_refused_also_in_a_list() {
+        let error = |value: ParamValue| {
+            expand(
+                &module_step(1, "CELL_RECONSTRUCTION", &[(2, value)]),
+                &[cell_reconstruction()],
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        let err = error(ParamValue::Text("module:2".into()));
+        assert!(err.contains("module memory slot 2"), "{err}");
+        let err = error(ParamValue::List(vec![
+            ParamValue::Int(1),
+            ParamValue::Text("module:3".into()),
+        ]));
+        assert!(err.contains("module memory slot 3"), "{err}");
+        let err = error(ParamValue::List(vec![
+            ParamValue::Int(1),
+            ParamValue::Text("L4".into()),
+        ]));
+        assert!(err.contains("module class L4"), "{err}");
+    }
+
+    /// Modules may nest up to `MAX_MODULE_DEPTH` deep; one more is refused
+    /// (naming the module that would go too deep).
+    #[test]
+    fn modules_nested_deeper_than_the_limit_are_refused() {
+        // M0 contains M1 contains ... contains M<n>, which runs a Blur.
+        let chain = |n: usize| -> Vec<ModuleDefinition> {
+            (0..=n)
+                .map(|i| {
+                    let step = if i == n {
+                        command_step(1, PipelineCommand::Blur(BlurSettings::default()))
+                    } else {
+                        module_step(1, &format!("M{}", i + 1), &[])
+                    };
+                    definition(&format!("M{i}"), vec![step], vec![])
+                })
+                .collect()
+        };
+        // M0..M7: eight modules open at once at most.
+        let ok = chain(MAX_MODULE_DEPTH - 1);
+        assert_eq!(expand(&module_step(1, "M0", &[]), &ok).unwrap().len(), 1);
+        let deep = chain(MAX_MODULE_DEPTH);
+        let err = expand(&module_step(1, "M0", &[]), &deep)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!("M{MAX_MODULE_DEPTH}"))
+                && err.contains(&format!("is nested deeper than {MAX_MODULE_DEPTH} modules")),
+            "{err}"
+        );
+    }
+
+    /// A dataset step on project classes is fine inside a module.
+    #[test]
+    fn a_dataset_step_in_a_module_may_use_project_classes() {
+        let tracker = definition(
+            "TRACK",
+            vec![command_step(
+                1,
+                PipelineCommand::TrackNearestNeighbor(TrackNearestNeighborSettings {
+                    object_class: ObjectClass::Global(3),
+                    ..Default::default()
+                }),
+            )],
+            vec![],
+        );
+        let commands = expand(&module_step(1, "TRACK", &[]), &[tracker]).unwrap();
+        assert_eq!(commands.len(), 1);
+    }
+
+    /// A parameter whose default is a module class the module doesn't
+    /// define is refused, naming the parameter and the class.
+    #[test]
+    fn a_parameter_default_of_an_undefined_module_class_is_refused() {
+        let mut seeds = definition(
+            "SEEDS",
+            vec![command_step(1, voronoi_with_center(ObjectClass::Global(4)))],
+            vec![parameter(
+                1,
+                ParamValue::Text("L3".into()),
+                &[(1, "centers")],
+            )],
+        );
+        seeds.classes = vec![local_class(1)];
+        let err = expand(&module_step(1, "SEEDS", &[]), &[seeds])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "parameter \"Parameter 1\" starts with the module class L3, which the module \
+                 doesn't define"
+            ),
+            "{err}"
+        );
+    }
+
+    /// Renumbering rewrites module classes and slots in the values a module
+    /// gives a module inside it (also in lists) and in parameter defaults;
+    /// other values and numbers not in the tables stay.
+    #[test]
+    fn renumbering_rewrites_nested_module_values_and_parameter_defaults() {
+        let outer = definition(
+            "OUTER",
+            vec![module_step(
+                1,
+                "INNER",
+                &[
+                    (1, ParamValue::Text("L1".into())),
+                    (2, ParamValue::Text("module:1".into())),
+                    (
+                        3,
+                        ParamValue::List(vec![
+                            ParamValue::Text("L2".into()),
+                            ParamValue::Text("L9".into()),
+                            ParamValue::Text("cells".into()),
+                        ]),
+                    ),
+                    (4, ParamValue::Int(1)),
+                    (5, ParamValue::Text("module:8".into())),
+                ],
+            )],
+            vec![parameter(1, ParamValue::Text("L2".into()), &[(1, "1")])],
+        );
+        let classes = BTreeMap::from([(1, 5), (2, 6)]);
+        let slots = BTreeMap::from([(1, 3)]);
+        let done = renumbered(&outer, &classes, &slots);
+
+        let StepContent::Module(inner) = &done.steps[0].content else {
+            panic!("a module step");
+        };
+        let value = |k: u32| inner.values[&ModuleParamKey(k.to_string())].clone();
+        assert_eq!(value(1), ParamValue::Text("L5".into()));
+        assert_eq!(value(2), ParamValue::Text("module:3".into()));
+        assert_eq!(
+            value(3),
+            ParamValue::List(vec![
+                ParamValue::Text("L6".into()),
+                ParamValue::Text("L9".into()),
+                ParamValue::Text("cells".into()),
+            ])
+        );
+        assert_eq!(value(4), ParamValue::Int(1), "a number, not a class");
+        assert_eq!(value(5), ParamValue::Text("module:8".into()), "not its own");
+        assert_eq!(done.parameters[0].default, ParamValue::Text("L6".into()));
+    }
+
+    /// A class list given something that isn't a class is refused, naming
+    /// the list and its step.
+    #[test]
+    fn a_class_list_that_doesnt_take_the_value_is_refused() {
+        let module = definition(
+            "COLOC",
+            vec![command_step(
+                3,
+                PipelineCommand::ClassifyObjects(ClassifyObjectsSettings::default()),
+            )],
+            vec![parameter(
+                1,
+                ParamValue::Text("not a class".into()),
+                &[(3, "input_classes")],
+            )],
+        );
+        let err = expand(&module_step(1, "COLOC", &[]), &[module])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("its parameters can't set input_classes of step 3"),
+            "{err}"
+        );
+    }
+
+    /// A parameter bound to a nested module's parameter that module doesn't
+    /// have can't be shown on the card.
+    #[test]
+    fn a_parameter_bound_to_a_missing_nested_parameter_cant_be_shown() {
+        let outer = definition(
+            "OUTER",
+            vec![module_step(1, "CELL_RECONSTRUCTION", &[])],
+            vec![parameter(1, ParamValue::Int(7), &[(1, "9")])],
+        );
+        let definitions = [cell_reconstruction(), outer];
+        let err = module_parameters(&instance("OUTER", &[]), &definitions)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("parameter \"Parameter 1\" is bound to 9 of step 1, which doesn't exist"),
+            "{err}"
+        );
+    }
+
+    /// The card shows a module parameter's own description when it has one,
+    /// else the bound command parameter's.
+    #[test]
+    fn a_module_parameter_shows_its_own_description_when_it_has_one() {
+        let mut described = cell_reconstruction();
+        described.parameters[0].description = "How much to smooth".into();
+        let shown = module_parameters(&instance("CELL_RECONSTRUCTION", &[]), &[described]).unwrap();
+        assert_eq!(shown[0].description, "How much to smooth");
+        let blur_kernel = find_param(
+            &PipelineCommand::Blur(BlurSettings::default()).to_parameters(),
+            "kernel_size",
+        )
+        .unwrap()
+        .description
+        .clone();
+        let plain = module_parameters(
+            &instance("CELL_RECONSTRUCTION", &[]),
+            &[cell_reconstruction()],
+        )
+        .unwrap();
+        assert_eq!(plain[0].description, blur_kernel);
+    }
+
+    /// Setting a parameter that isn't bound to anything is refused.
+    #[test]
+    fn setting_an_unbound_module_parameter_is_refused() {
+        let mut unbound = cell_reconstruction();
+        unbound.parameters[0].bindings.clear();
+        let mut cells = instance("CELL_RECONSTRUCTION", &[]);
+        let err = set_module_parameter(&mut cells, &[unbound], &ModuleParamKey::from("1"), "5")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("parameter \"Parameter 1\" isn't bound to anything"),
+            "{err}"
+        );
+        assert!(cells.values.is_empty(), "nothing set");
+    }
+
+    /// Text values become typed values: lists at commas (each item typed),
+    /// booleans, whole and decimal numbers, else text.
+    #[test]
+    fn text_becomes_the_typed_value_it_spells() {
+        assert_eq!(value_from_text("false"), ParamValue::Bool(false));
+        assert_eq!(value_from_text("true"), ParamValue::Bool(true));
+        assert_eq!(value_from_text("-3"), ParamValue::Int(-3));
+        assert_eq!(value_from_text("2.5"), ParamValue::Float(2.5));
+        assert_eq!(value_from_text("nm"), ParamValue::Text("nm".into()));
+        assert_eq!(
+            value_from_text("1, 2.5,x"),
+            ParamValue::List(vec![
+                ParamValue::Int(1),
+                ParamValue::Float(2.5),
+                ParamValue::Text("x".into()),
+            ])
+        );
+    }
 }

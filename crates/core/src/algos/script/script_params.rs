@@ -530,3 +530,286 @@ pub fn register(
         },
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An engine with `param` registered and no step values.
+    fn engine() -> Engine {
+        let mut engine = Engine::new();
+        register(&mut engine, |_| None, |_| {});
+        engine
+    }
+
+    /// One `param` line's declaration, or its error.
+    fn decl(source: &str) -> Result<ParamDecl, String> {
+        declared_params(&engine(), source).map(|mut d| {
+            assert_eq!(d.len(), 1, "{source}");
+            d.remove(0)
+        })
+    }
+
+    /// A stored value is read as the param's type: a whole number also
+    /// fits a decimal, -1 is the unset class, a module class is its text
+    /// "L<n>"; anything else names the value and the type.
+    #[test]
+    fn stored_values_are_read_as_the_params_type() {
+        use ScriptValue as S;
+        let ok = |kind, value| from_param_value(kind, &value).unwrap();
+        assert_eq!(ok(ParamKind::Number, ParamValue::Int(-4)), S::Number(-4));
+        assert_eq!(ok(ParamKind::Decimal, ParamValue::Int(3)), S::Decimal(3.0));
+        assert_eq!(
+            ok(ParamKind::Decimal, ParamValue::Float(2.5)),
+            S::Decimal(2.5)
+        );
+        assert_eq!(ok(ParamKind::Bool, ParamValue::Bool(true)), S::Bool(true));
+        assert_eq!(
+            ok(ParamKind::Text, ParamValue::Text("a b".into())),
+            S::Text("a b".into())
+        );
+        assert_eq!(
+            ok(ParamKind::Class, ParamValue::Int(7)),
+            S::Class(ObjectClass::Global(7))
+        );
+        assert_eq!(
+            ok(ParamKind::Class, ParamValue::Int(-1)),
+            S::Class(ObjectClass::Unset)
+        );
+        assert_eq!(
+            ok(ParamKind::Class, ParamValue::Text("L2".into())),
+            S::Class(ObjectClass::Local(2))
+        );
+        assert_eq!(
+            ok(ParamKind::Channel, ParamValue::Int(3)),
+            S::Channel(ImageChannelIdx(3))
+        );
+
+        let err = |kind, value| from_param_value(kind, &value).unwrap_err();
+        assert_eq!(
+            err(ParamKind::Number, ParamValue::Text("x".into())),
+            r#"the step's value Text("x") is no number"#
+        );
+        // A decimal is no whole number - not silently rounded.
+        assert_eq!(
+            err(ParamKind::Number, ParamValue::Float(1.5)),
+            "the step's value Float(1.5) is no number"
+        );
+        assert_eq!(
+            err(ParamKind::Class, ParamValue::Int(-2)),
+            "the step's value Int(-2) is no class"
+        );
+        assert_eq!(
+            err(ParamKind::Class, ParamValue::Text("cells".into())),
+            r#"the step's value Text("cells") is no class"#
+        );
+        assert_eq!(
+            err(ParamKind::Channel, ParamValue::Int(-1)),
+            "the step's value Int(-1) is no channel"
+        );
+        assert_eq!(
+            err(ParamKind::Bool, ParamValue::Int(1)),
+            "the step's value Int(1) is no bool"
+        );
+    }
+
+    /// Every value is stored so that it reads back as itself: classes as
+    /// their number (-1 unset) or a module class as "L<n>".
+    #[test]
+    fn a_stored_value_reads_back_as_itself() {
+        use ScriptValue as S;
+        for (kind, value, stored) in [
+            (ParamKind::Number, S::Number(-9), ParamValue::Int(-9)),
+            (
+                ParamKind::Decimal,
+                S::Decimal(0.25),
+                ParamValue::Float(0.25),
+            ),
+            (ParamKind::Bool, S::Bool(false), ParamValue::Bool(false)),
+            (
+                ParamKind::Text,
+                S::Text("t".into()),
+                ParamValue::Text("t".into()),
+            ),
+            (
+                ParamKind::Class,
+                S::Class(ObjectClass::Global(5)),
+                ParamValue::Int(5),
+            ),
+            (
+                ParamKind::Class,
+                S::Class(ObjectClass::Unset),
+                ParamValue::Int(-1),
+            ),
+            (
+                ParamKind::Class,
+                S::Class(ObjectClass::Local(1)),
+                ParamValue::Text("L1".into()),
+            ),
+            (
+                ParamKind::Channel,
+                S::Channel(ImageChannelIdx(4)),
+                ParamValue::Int(4),
+            ),
+        ] {
+            assert_eq!(to_param_value(&value), stored, "{value:?}");
+            assert_eq!(from_param_value(kind, &stored).unwrap(), value);
+        }
+    }
+
+    /// The editor shows a text param as a text field, a channel param as a
+    /// channel picker, a bool as a toggle - each with its current value;
+    /// decimals step by 0.1, everything else by 1.
+    #[test]
+    fn the_editor_shows_each_param_with_its_control_and_value() {
+        let decls = declared_params(
+            &engine(),
+            r#"param label = "Nuclei";
+               param input: channel = 2;
+               param verbose = false;
+               param sigma = 1.5;
+               param cell: class = 3;"#,
+        )
+        .unwrap();
+        let values = BTreeMap::from([
+            ("label".to_string(), ParamValue::Text("Cells".into())),
+            ("input".to_string(), ParamValue::Int(1)),
+        ]);
+        let shown = script_parameters(&decls, &values);
+        let summary: Vec<(&str, &str, &str, f32)> = shown
+            .iter()
+            .map(|p| {
+                (
+                    p.name.as_str(),
+                    p.value.as_str(),
+                    p.default_value.as_str(),
+                    p.step,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("values.label", "Cells", "Nuclei", 1.0),
+                ("values.input", "1", "2", 1.0),
+                ("values.verbose", "false", "false", 1.0),
+                ("values.sigma", "1.5", "1.5", 0.1),
+                ("values.cell", "3", "3", 1.0),
+            ]
+        );
+        assert!(matches!(shown[0].param_type, ParamType::Text));
+        assert!(matches!(shown[1].param_type, ParamType::ImageChannel));
+        assert!(matches!(shown[2].param_type, ParamType::Toggle));
+        assert!(matches!(shown[3].param_type, ParamType::Number));
+        assert!(matches!(shown[4].param_type, ParamType::ObjClass));
+    }
+
+    /// The editor's text is read as the param's type (trimmed); a decimal
+    /// for a whole number is rounded; a text that's no value of the type is
+    /// refused and stores nothing.
+    #[test]
+    fn the_editors_text_is_stored_as_the_params_type() {
+        let decls = declared_params(
+            &engine(),
+            r#"param rounds = 1;
+               param sigma = 1.0;
+               param verbose = false;
+               param label = "a";
+               param input: channel = 0;"#,
+        )
+        .unwrap();
+        let mut values = BTreeMap::new();
+        let mut set = |name: &str, text: &str| set_script_value(&decls, &mut values, name, text);
+
+        set("rounds", "2.6").unwrap(); // rounds to 3
+        set("sigma", " 2.5 ").unwrap();
+        set("verbose", "true").unwrap();
+        set("label", "  b c ").unwrap();
+        set("input", "3").unwrap();
+        assert_eq!(set("verbose", "yes").unwrap_err(), "`yes` is no bool");
+        assert_eq!(set("sigma", "wide").unwrap_err(), "`wide` is no decimal");
+        assert_eq!(set("input", "-1").unwrap_err(), "`-1` is no channel");
+
+        assert_eq!(
+            values,
+            BTreeMap::from([
+                ("rounds".to_string(), ParamValue::Int(3)),
+                ("sigma".to_string(), ParamValue::Float(2.5)),
+                ("verbose".to_string(), ParamValue::Bool(true)),
+                ("label".to_string(), ParamValue::Text("b c".into())),
+                ("input".to_string(), ParamValue::Int(3)),
+            ])
+        );
+    }
+
+    /// The script sees numbers, channels and global classes as whole
+    /// numbers, the unset class as -1, a module class as its text "L<n>".
+    #[test]
+    fn the_script_sees_each_value_as_a_plain_value() {
+        use ScriptValue as S;
+        assert_eq!(to_dynamic(&S::Number(4)).as_int(), Ok(4));
+        assert_eq!(to_dynamic(&S::Decimal(0.5)).as_float(), Ok(0.5));
+        assert_eq!(to_dynamic(&S::Bool(true)).as_bool(), Ok(true));
+        assert_eq!(to_dynamic(&S::Text("x".into())).into_string().unwrap(), "x");
+        assert_eq!(
+            to_dynamic(&S::Class(ObjectClass::Global(6))).as_int(),
+            Ok(6)
+        );
+        assert_eq!(to_dynamic(&S::Class(ObjectClass::Unset)).as_int(), Ok(-1));
+        assert_eq!(
+            to_dynamic(&S::Class(ObjectClass::Local(3)))
+                .into_string()
+                .unwrap(),
+            "L3"
+        );
+        assert_eq!(to_dynamic(&S::Channel(ImageChannelIdx(2))).as_int(), Ok(2));
+    }
+
+    /// A default that doesn't fit the declared type names the kind of
+    /// default the type needs.
+    #[test]
+    fn a_default_of_the_wrong_kind_names_what_the_type_needs() {
+        for (source, needs) in [
+            (
+                "param n: number = 1.5;",
+                "a number param needs a whole-number default",
+            ),
+            (
+                "param n: decimal = true;",
+                "a decimal param needs a number default",
+            ),
+            ("param n: text = 1;", "a text param needs a text default"),
+            (
+                r#"param n: class = "x";"#,
+                "a class param needs a whole-number default",
+            ),
+            (
+                "param n: channel = false;",
+                "a channel param needs a whole-number default",
+            ),
+        ] {
+            let err = decl(source).unwrap_err();
+            assert!(err.contains(needs), "{source}: {err}");
+        }
+    }
+
+    /// A class default of -1 is the unset class (`ObjectClass::to_text`'s
+    /// form of it).
+    #[test]
+    fn a_class_default_of_minus_one_is_the_unset_class() {
+        assert_eq!(
+            decl("param c: class = -1;").unwrap().default,
+            ScriptValue::Class(ObjectClass::Unset)
+        );
+    }
+
+    /// A `-` written apart from its number still makes the default
+    /// negative.
+    #[test]
+    fn a_minus_apart_from_the_number_makes_the_default_negative() {
+        assert_eq!(
+            decl("param n = - 3;").unwrap().default,
+            ScriptValue::Number(-3)
+        );
+    }
+}

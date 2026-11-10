@@ -1325,4 +1325,115 @@ mod tests {
             [Some(20.0), Some(30.0), Some(40.0)]
         );
     }
+
+    /// Min and max per time point: T0 has 100 and 200, T1 only 300, T2
+    /// nothing - neither is a sum, so none there.
+    #[test]
+    fn min_and_max_per_time_point() {
+        let db = open(&series(), 3, None);
+        let result = time_course(
+            &db,
+            &filter(
+                TimeCourseLines::Class,
+                &[TimeCourseStat::Min, TimeCourseStat::Max],
+            ),
+        )
+        .unwrap();
+        assert_eq!(result.value_names, ["Area [px] min", "Area [px] max"]);
+        let values: Vec<_> = result.points.iter().map(|p| p.values.clone()).collect();
+        assert_eq!(
+            values,
+            [
+                vec![Some(100.0), Some(200.0)],
+                vec![Some(300.0), Some(300.0)],
+                vec![None, None]
+            ]
+        );
+    }
+
+    /// A normalized Q1 alone is divided by the start's median, computed
+    /// for it: T0's Q1 of 100 and 200 is 125, its median 150 - 83.33 %;
+    /// T1's single 300 is 200 %.
+    #[test]
+    fn a_normalized_quartile_alone_is_percent_of_the_starts_median() {
+        let db = open(&series(), 2, None);
+        let mut normalized = filter(TimeCourseLines::Class, &[TimeCourseStat::Q1]);
+        normalized.normalize = TimeCourseNormalize::RelativeToStart;
+        let result = time_course(&db, &normalized).unwrap();
+        assert_eq!(result.value_names, ["Area [px] Q1 [% of start]"]);
+        let values: Vec<_> = result.points.iter().map(|p| rounded(&p.values)).collect();
+        assert_eq!(values, [vec![Some(83.33)], vec![Some(200.0)]]);
+    }
+
+    /// Only the chosen images are counted: img2 left out, T0 has img1's
+    /// 100 alone and one image.
+    #[test]
+    fn an_image_selection_counts_only_those_images() {
+        let db = open(&series(), 2, None);
+        let mut only_img1 = filter(TimeCourseLines::Class, &[TimeCourseStat::Mean]);
+        only_img1.images = Some(vec!["img1.tif".to_string()]);
+        let result = time_course(&db, &only_img1).unwrap();
+        assert_eq!(
+            summary(&result),
+            [
+                (0, String::new(), 1, 1, vec![Some(100.0)]),
+                (1, String::new(), 1, 1, vec![Some(300.0)]),
+            ]
+        );
+    }
+
+    /// Nothing selected - no image, or no class with an id - is no point,
+    /// not an error; the value names are still there.
+    #[test]
+    fn nothing_selected_has_no_points() {
+        let db = open(&series(), 2, None);
+        let mut no_images = filter(TimeCourseLines::Class, &[TimeCourseStat::Mean]);
+        no_images.images = Some(Vec::new());
+        let result = time_course(&db, &no_images).unwrap();
+        assert!(result.points.is_empty());
+        assert_eq!(result.value_names, ["Area [px] mean"]);
+
+        let mut no_class = filter(TimeCourseLines::Class, &[TimeCourseStat::Mean]);
+        no_class.object_classes = Some(vec![ObjectClass::Unset]);
+        assert!(time_course(&db, &no_class).unwrap().points.is_empty());
+    }
+
+    /// At most 64 lines end at one track: a family of seven generations of
+    /// fusions has 128 ways up from its last track, only 64 are lines.
+    #[test]
+    fn lines_ending_at_one_track_stop_at_the_limit() {
+        // A full binary tree: track i fused from 2i and 2i+1, the 128
+        // tracks 128..=255 have no parents.
+        let parents: HashMap<u64, Vec<u64>> =
+            (1..128).map(|i| (i, vec![2 * i, 2 * i + 1])).collect();
+        let lines = lineage_lines(&parents, None);
+        assert_eq!(lines[&1].len(), MAX_LINES_PER_TRACK);
+        assert_eq!(MAX_LINES_PER_TRACK, 64);
+    }
+
+    /// A track's class without a name in the class table is shown by its
+    /// id, "1" - not an empty name.
+    #[test]
+    fn a_class_without_a_name_is_shown_by_its_id() {
+        let db = open(
+            &[ObjectSpec::new("img1.tif", "ClassA", 1, 100).in_track(7)],
+            1,
+            None,
+        );
+        db.connection()
+            .execute_batch("DELETE FROM classes")
+            .unwrap();
+        let result = time_course(
+            &db,
+            &filter(TimeCourseLines::Track, &[TimeCourseStat::Mean]),
+        )
+        .unwrap();
+        let names: Vec<&str> = result
+            .points
+            .iter()
+            .map(|p| p.class_name.as_str())
+            .collect();
+        assert_eq!(names, ["1"]);
+        assert_eq!(result.points[0].values, [Some(100.0)]);
+    }
 }

@@ -1349,12 +1349,13 @@ mod tests {
             let mut idle = Vec::new();
             for _ in 0..200 {
                 let mut client = connect_any(&url);
+                // Refused (or reset before the refusal is read, under
+                // load): try again.
                 if client
                     .read()
-                    .unwrap()
-                    .into_text()
-                    .unwrap()
-                    .starts_with("Welcome")
+                    .ok()
+                    .and_then(|m| m.into_text().ok())
+                    .is_some_and(|t| t.starts_with("Welcome"))
                 {
                     idle.push(client);
                     if idle.len() == 2 {

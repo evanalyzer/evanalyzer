@@ -531,6 +531,11 @@ mod tests {
     const ID_A: u128 = 100_000;
 
     fn make_ctx(size: ImageSize) -> PipelineContext {
+        make_ctx_with_pixel_size(size, 1.0)
+    }
+
+    /// Like `make_ctx`, with `px_size` nm per pixel in x and y.
+    fn make_ctx_with_pixel_size(size: ImageSize, px_size: f32) -> PipelineContext {
         let img = Image::<f32, 1>::new(size, vec![0.0f32; size.width * size.height]).unwrap();
         let managed = ManagedImage {
             data: img,
@@ -551,8 +556,8 @@ mod tests {
                 is_rgb: false,
                 nr_of_bits: 8,
                 pixel_sizes: PixelSizes {
-                    px_size_x: 1.0,
-                    px_size_y: 1.0,
+                    px_size_x: px_size,
+                    px_size_y: px_size,
                     px_size_z: 1.0,
                 },
             },
@@ -565,11 +570,27 @@ mod tests {
     fn make_square_object(id: u128, x: u32, y: u32, side: u32, class: ObjectClass) -> Object {
         let area = (side * side) as usize;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
+        // The pixel sums the moments (fitted ellipse, centroid) come from.
+        let (mut sum_x, mut sum_y, mut sum_x2, mut sum_y2, mut sum_xy) = (0, 0, 0, 0, 0);
+        for py in y as u64..(y + side) as u64 {
+            for px in x as u64..(x + side) as u64 {
+                sum_x += px;
+                sum_y += py;
+                sum_x2 += px * px;
+                sum_y2 += py * py;
+                sum_xy += px * py;
+            }
+        }
         let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
             bbox: [x, y, x + side - 1, y + side - 1],
             mask_data,
             area,
+            sum_x,
+            sum_y,
+            sum_x2,
+            sum_y2,
+            sum_xy,
             plane: ImagePlane::default(),
             ..Default::default()
         });
@@ -838,12 +859,20 @@ mod tests {
         );
 
         let ellipse_object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        // A filled square's corners are now outside the fitted ellipse, so the area shrinks.
-        assert!(ellipse_object.area > 0);
-        assert!(
-            ellipse_object.area < 64,
-            "expected the ellipse to cut the square's corners"
+        // The ellipse with the square's moments: a circle (no orientation),
+        // variance (8² - 1) / 12 = 5.25 per axis, so the semi-axes are
+        // sqrt(8 · 10.5) / 2 = 4.58 px. Centred on the square's centre
+        // (24, 24): pixel centres up to 4.5 px away along the axes are in
+        // (pixels 19..=28), the corners (3.5, 3.5 → 4.95 px) are cut.
+        // Counted by hand: 68 pixels.
+        assert_eq!(ellipse_object.area, 68);
+        assert_eq!(
+            ellipse_object.bbox,
+            [19, 19, 28, 28],
+            "centred on the square"
         );
+        assert!(!ellipse_object.is_part_of(20, 20), "corner cut");
+        assert!(ellipse_object.is_part_of(19, 24), "side bulges out");
     }
 
     #[test]
@@ -1187,6 +1216,128 @@ mod tests {
         assert!(b.is_part_of(11, 2) && !a.is_part_of(11, 2));
         assert!(a.is_part_of(3, 2) && !a.is_part_of(2, 2));
         assert_eq!(a.bbox[0], 3);
+    }
+
+    /// Expand Without Overlap in nanometres: the margin is divided by the
+    /// pixel size - 4 nm at 2 nm per pixel is 2 px, so a single pixel grows
+    /// into the pixels at most 2 px away: dx² + dy² <= 4 holds for
+    /// 1 + 4 (distance 1) + 4 (√2) + 4 (distance 2) = 13 pixels, a 5 x 5 box.
+    #[test]
+    fn expand_without_overlap_converts_nanometres_with_the_pixel_size() {
+        let size = ImageSize {
+            width: 20,
+            height: 20,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let object = make_square_object(ID_A, 10, 10, 1, CLASS_IN);
+        cache.object_cache.insert(object.id.clone(), object);
+        let step = TransformObjects {
+            function: TransformFunction::ExpandWithoutOverlap {
+                margin: 4.0,
+                unit: SizeUnits::NanoMeter,
+            },
+            input_class: CLASS_IN,
+            output_class: ObjectClass::Unset,
+        };
+        step.execute(&mut make_ctx_with_pixel_size(size, 2.0), &mut cache)
+            .unwrap();
+        let grown = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert_eq!(grown.area, 13);
+        assert_eq!(grown.bbox, [8, 8, 12, 12]);
+        assert!(grown.is_part_of(12, 10) && !grown.is_part_of(12, 11));
+    }
+
+    /// A margin of 0 grows nothing: the objects keep their pixels.
+    #[test]
+    fn expand_without_overlap_by_zero_keeps_the_objects() {
+        let size = ImageSize {
+            width: 20,
+            height: 20,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let object = make_square_object(ID_A, 5, 6, 3, CLASS_IN);
+        cache.object_cache.insert(object.id.clone(), object);
+        let step = TransformObjects {
+            function: TransformFunction::ExpandWithoutOverlap {
+                margin: 0.0,
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: CLASS_OUT,
+        };
+        run(&step, &mut cache, size);
+        let copy = cache
+            .object_cache
+            .values()
+            .find(|o| o.is_of(&CLASS_OUT, Scope::Global))
+            .expect("a new object of the output class");
+        assert_eq!(copy.area, 9);
+        assert_eq!(copy.bbox, [5, 6, 7, 8]);
+    }
+
+    /// Expand Without Overlap cites the nearest-object expansion
+    /// (CellProfiler) and the feature transform (Maurer 2003) besides the
+    /// tool; the other transforms only the tool.
+    #[test]
+    fn expand_without_overlap_cites_its_methods() {
+        let keys = |function| {
+            TransformObjects {
+                function,
+                input_class: CLASS_IN,
+                output_class: ObjectClass::Unset,
+            }
+            .cite()
+            .iter()
+            .map(|c| c.cite_key)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            keys(TransformFunction::ExpandWithoutOverlap {
+                margin: 1.0,
+                unit: SizeUnits::Pixels,
+            }),
+            [
+                CitationMetadata::DANMAYR.cite_key,
+                CitationMetadata::CELLPROFILER.cite_key,
+                CitationMetadata::MAURER_2003.cite_key,
+            ]
+        );
+        assert_eq!(
+            keys(TransformFunction::Scale { factor: 2.0 }),
+            [CitationMetadata::DANMAYR.cite_key]
+        );
+    }
+
+    /// Draw Circle with a diameter draws a circle of that diameter, not of
+    /// the object's box: 10 px around a single pixel is a disk of radius 5 -
+    /// 10 or 11 px across (depending on where the centre falls in the
+    /// pixel grid) and about π · 5² ≈ 78.5 pixels.
+    #[test]
+    fn draw_circle_with_a_diameter_uses_it() {
+        let cmd = TransformObjects {
+            function: TransformFunction::DrawCircle {
+                diameter: 10.0,
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: ObjectClass::Unset,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let object = make_square_object(ID_A, 20, 20, 1, CLASS_IN);
+        cache.object_cache.insert(object.id.clone(), object);
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
+        let circle = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        let [x_min, y_min, x_max, y_max] = circle.bbox;
+        let (w, h) = (x_max - x_min + 1, y_max - y_min + 1);
+        assert!((10..=11).contains(&w) && w == h, "{w} x {h}");
+        assert!((76..=81).contains(&circle.area), "area {}", circle.area);
     }
 
     /// Speed and peak RAM of Expand Without Overlap: a 9 x 9 object every

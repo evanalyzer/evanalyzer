@@ -4089,4 +4089,389 @@ mod tests {
             }])
             .unwrap();
     }
+
+    /// A clone of an in-memory connection is a connection to the same
+    /// database: a table made through one is seen through the other.
+    #[test]
+    fn a_clone_of_an_in_memory_connection_sees_the_same_database() {
+        let first = ResultsConnection::open_in_memory().unwrap();
+        first
+            .execute_batch("CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (7);")
+            .unwrap();
+        let second = first.try_clone().unwrap();
+        let v: i32 = second
+            .query_row("SELECT v FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 7);
+        assert!(!is_open(Path::new("")), "an in-memory one is not cached");
+    }
+
+    /// A connection can be used mutably (a transaction needs `&mut`): a
+    /// rolled back insert leaves nothing, a committed one stays.
+    #[test]
+    fn a_results_connection_runs_transactions() {
+        let mut conn = ResultsConnection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (v INTEGER);").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch("INSERT INTO t VALUES (1);").unwrap();
+        tx.rollback().unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch("INSERT INTO t VALUES (2);").unwrap();
+        tx.commit().unwrap();
+        let values: Vec<i32> = conn
+            .prepare("SELECT v FROM t")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(values, [2]);
+    }
+
+    /// Adding to an earlier analysis needs its results file: a missing one
+    /// is an error naming the path, and no file is created.
+    #[test]
+    fn opening_a_missing_results_file_to_add_to_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.evadb");
+        let err = DuckDbExporter::open_existing(&path)
+            .err()
+            .expect("an error");
+        assert!(
+            matches!(&err, InternalErrors::Io(msg) if msg.starts_with("No results database at") && msg.contains("missing.evadb")),
+            "{err:?}"
+        );
+        assert!(!path.exists());
+    }
+
+    /// An image whose bit depth isn't 1-32 can't be exported: its
+    /// intensities couldn't be scaled to gray values.
+    #[test]
+    fn export_refuses_an_implausible_bit_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        for bits in [0, 33] {
+            let mut cache = cache_with_objects("a.tif", 1);
+            cache.image_meta.nr_of_bits = bits;
+            let err = exporter.export(&cache).unwrap_err();
+            assert!(
+                matches!(&err, InternalErrors::Generic(msg) if msg.contains("cannot export a.tif") && msg.contains(&format!("implausible bit depth {bits}"))),
+                "{err:?}"
+            );
+        }
+        assert_eq!(object_count(&path), 0);
+    }
+
+    /// Classes without a global number: a module-local class is written
+    /// by its label `local_<n>` without an id, `Unset` is left out of the
+    /// names and ids, and a parent of class `Unset` is keyed -1.
+    #[test]
+    fn classes_without_a_global_number_are_written_by_label_and_key_minus_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        let mut cache = cache_with_objects("a.tif", 0);
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(1),
+            object_class: [
+                ObjectClass::Global(4),
+                ObjectClass::Local(3),
+                ObjectClass::Unset,
+            ]
+            .into(),
+            bbox: [0, 0, 1, 1],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
+            area: 4,
+            ..Default::default()
+        });
+        object.set_parent(ObjectClass::Unset, Some(ObjectId(2)));
+        cache.object_cache.insert(ObjectId(1), object);
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let (names, ids, parent): (String, String, String) = conn
+            .query_row(
+                "SELECT object_class_name, CAST(list_sort(object_class_id) AS VARCHAR), \
+                 CAST(parent_ids[-1] AS VARCHAR) FROM objects",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let mut names: Vec<String> = serde_json::from_str(&names).unwrap();
+        names.sort();
+        assert_eq!(names, ["class_4", "local_3"]);
+        assert_eq!(ids, "[4]");
+        assert_eq!(parent, ObjectId(2).to_string());
+    }
+
+    /// A measurement value of an object in no global class has an empty
+    /// class list (names and ids) - `Unset` is no class to group by.
+    #[test]
+    fn a_measurement_of_an_unclassified_object_has_no_classes() {
+        use crate::pipeline::pipeline_measure::PipelineMeasurements;
+        use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path);
+        let mut cache = cache_with_objects("a.tif", 0);
+        cache.object_cache.insert(
+            ObjectId(1),
+            Object::new(ObjectInit {
+                id: ObjectId(1),
+                object_class: [ObjectClass::Unset].into(),
+                bbox: [0, 0, 1, 1],
+                mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
+                area: 4,
+                ..Default::default()
+            }),
+        );
+        let info = MeasurementInfo {
+            key: "area_01/area".into(),
+            name: "Area".into(),
+            step: "area_01".into(),
+            unit: MeasurementUnit::None,
+            target: MeasurementTarget::Object,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+            profile: false,
+        };
+        cache.measurements = PipelineMeasurements {
+            measurements: vec![
+                Measurement {
+                    info: info.clone(),
+                    values: MeasurementValues::Objects(vec![ObjectValue {
+                        object: ObjectId(1),
+                        value: 4.0,
+                        related: None,
+                        position: None,
+                    }]),
+                },
+                // No values at all: described, no rows.
+                Measurement {
+                    info: MeasurementInfo {
+                        key: "area_01/empty".into(),
+                        ..info
+                    },
+                    values: MeasurementValues::Objects(vec![]),
+                },
+            ],
+            z_stack: 0,
+            t_stack: 0,
+            excluded: None,
+        };
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let rows: Vec<(String, String, String, f64)> = conn
+            .prepare(
+                "SELECT key, object_class_name, CAST(object_class_id AS VARCHAR), value \
+                 FROM measurements",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [("area_01/area".into(), "[]".into(), "[]".into(), 4.0)]
+        );
+        let described: i64 = conn
+            .query_row("SELECT count(*) FROM measurement_info", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(described, 2);
+    }
+
+    /// The highest track id outside a class: objects of that class are left
+    /// out, a class never stored (`Unset`) leaves none out.
+    #[test]
+    fn the_highest_track_id_leaves_out_only_the_given_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = test_exporter(&dir.path().join("results.evadb"));
+        let mut cache = cache_with_objects("a.tif", 0);
+        for (n, class) in [(1, 1), (2, 2)] {
+            let object = frame_object(n, class, 0);
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        exporter.export(&cache).unwrap();
+        let store = exporter.dataset_store().unwrap();
+        let id = |n: u128| ObjectId(u128::MAX - n);
+        store
+            .set_track_ids(&[
+                TrackAssignment {
+                    object_id: id(1),
+                    track_id: 4,
+                    parent_track_ids: vec![],
+                },
+                TrackAssignment {
+                    object_id: id(2),
+                    track_id: 9,
+                    parent_track_ids: vec![],
+                },
+            ])
+            .unwrap();
+
+        assert_eq!(
+            store.max_track_id_except(ObjectClass::Global(2)).unwrap(),
+            4
+        );
+        assert_eq!(
+            store.max_track_id_except(ObjectClass::Global(1)).unwrap(),
+            9
+        );
+        assert_eq!(store.max_track_id_except(ObjectClass::Unset).unwrap(), 9);
+        assert_eq!(store.max_track_id_except(ObjectClass::Local(1)).unwrap(), 9);
+    }
+
+    /// Tracking again replaces the lineage of the objects it tracks: one
+    /// now without parents loses the old ones, one not tracked again keeps
+    /// its own.
+    #[test]
+    fn tracking_again_clears_the_old_parents_of_the_retracked_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = test_exporter(&dir.path().join("results.evadb"));
+        let mut cache = cache_with_objects("a.tif", 0);
+        for (n, class) in [(1, 1), (2, 2)] {
+            let object = frame_object(n, class, 0);
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        exporter.export(&cache).unwrap();
+        let store = exporter.dataset_store().unwrap();
+        let id = |n: u128| ObjectId(u128::MAX - n);
+        let assign = |n, track_id, parent_track_ids: Vec<u64>| TrackAssignment {
+            object_id: id(n),
+            track_id,
+            parent_track_ids,
+        };
+        store
+            .set_track_ids(&[assign(1, 5, vec![2, 3]), assign(2, 6, vec![1])])
+            .unwrap();
+        store.set_track_ids(&[assign(1, 7, vec![])]).unwrap();
+
+        let parents = |n: u128| -> (Option<u64>, Option<String>) {
+            exporter
+                .lock_conn()
+                .query_row(
+                    "SELECT track_id, parent_track_ids::VARCHAR FROM objects
+                     WHERE object_id = CAST(? AS UUID)",
+                    params![id(n).to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(parents(1), (Some(7), None), "re-tracked without parents");
+        assert_eq!(parents(2), (Some(6), Some("[1]".into())), "not re-tracked");
+    }
+
+    /// A dataset value naming a measurement description that doesn't exist
+    /// is refused, and nothing of the step is written.
+    #[test]
+    fn a_dataset_value_of_an_unknown_measurement_is_refused() {
+        use crate::storage::{DatasetValue, DatasetValueAbout};
+        use evanalyzer_cfg::core_types::{MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = test_exporter(&dir.path().join("results.evadb"));
+        let infos = [MeasurementInfo {
+            key: "motion_01/vcl".into(),
+            name: "VCL".into(),
+            step: "motion_01".into(),
+            unit: MeasurementUnit::PixelsPerFrame,
+            target: MeasurementTarget::Image,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+            profile: false,
+        }];
+        let value = DatasetValue {
+            image_rel_path: "a.tif".into(),
+            z_stack: 0,
+            t_stack: 0,
+            about: DatasetValueAbout::Image,
+            info: 5,
+            value: 1.0,
+        };
+        let store = exporter.dataset_store().unwrap();
+        let err = store
+            .write_measurements("motion_01", &infos, &[value])
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::InvalidArgument(msg) if msg == "motion_01: no measurement 5"),
+            "{err:?}"
+        );
+        let rows: i64 = exporter
+            .lock_conn()
+            .query_row("SELECT count(*) FROM measurement_info", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "rolled back");
+    }
+
+    /// Dataset values of a track whose class has no global number name it
+    /// by its label without an id; more values than one batch are all
+    /// written.
+    #[test]
+    fn dataset_values_beyond_one_batch_are_all_written() {
+        use crate::storage::{DatasetValue, DatasetValueAbout};
+        use evanalyzer_cfg::core_types::{MeasurementTarget, MeasurementUnit};
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = test_exporter(&dir.path().join("results.evadb"));
+        let infos = [MeasurementInfo {
+            key: "motion_01/vcl".into(),
+            name: "VCL".into(),
+            step: "motion_01".into(),
+            unit: MeasurementUnit::PixelsPerFrame,
+            target: MeasurementTarget::Track,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+            profile: false,
+        }];
+        let count = ARROW_BATCH_ROWS as u64 + 1;
+        let values: Vec<DatasetValue> = (1..=count)
+            .map(|track_id| DatasetValue {
+                image_rel_path: "a.tif".into(),
+                z_stack: 0,
+                t_stack: 0,
+                about: DatasetValueAbout::Track {
+                    track_id,
+                    class: ObjectClass::Unset,
+                },
+                info: 0,
+                value: track_id as f64,
+            })
+            .collect();
+        let store = exporter.dataset_store().unwrap();
+        store
+            .write_measurements("motion_01", &infos, &values)
+            .unwrap();
+        let (rows, distinct, sum, names, ids): (i64, i64, f64, String, String) = exporter
+            .lock_conn()
+            .query_row(
+                "SELECT count(*), count(DISTINCT track_id), sum(value), \
+                 any_value(object_class_name), CAST(any_value(object_class_id) AS VARCHAR) \
+                 FROM measurements",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(rows, count as i64);
+        assert_eq!(distinct, count as i64);
+        // 1 + 2 + ... + n = n (n + 1) / 2
+        assert_eq!(sum, (count * (count + 1) / 2) as f64);
+        assert_eq!(names, "[\"unset\"]");
+        assert_eq!(ids, "[]");
+    }
+
+    /// A NULL list has no items.
+    #[test]
+    fn a_null_list_has_no_items() {
+        assert_eq!(list_values(Value::Null).count(), 0);
+        assert_eq!(
+            list_values(Value::List(vec![Value::Int(1), Value::Int(2)])).count(),
+            2
+        );
+    }
 }

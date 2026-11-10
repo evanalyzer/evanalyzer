@@ -869,6 +869,63 @@ mod tests {
         }
     }
 
+    /// The mean filter averages the 3 x 3 window of radius 1, the image's
+    /// edge extended by its border values: on 1..9 (row by row) the centre
+    /// is 45 / 9 = 5; the top-left corner sees rows 1 1 2 / 1 1 2 / 4 4 5,
+    /// 21 / 9; the bottom-right 5 6 6 / 8 9 9 / 8 9 9, 69 / 9.
+    #[test]
+    fn mean_averages_the_window_with_the_edges_extended() {
+        let img = Image::<f32, 1>::new(
+            ImageSize {
+                width: 3,
+                height: 3,
+            },
+            (1..=9).map(|v| v as f32).collect(),
+        )
+        .unwrap();
+        let out = RankFilter {
+            radius: 1.0,
+            filter_type: RankFilterType::Mean,
+        }
+        .process_image(&img)
+        .unwrap();
+        let out = out.as_slice();
+        assert!((out[4] - 5.0).abs() < 1e-6, "{}", out[4]);
+        assert!((out[0] - 21.0 / 9.0).abs() < 1e-6, "{}", out[0]);
+        assert!((out[8] - 69.0 / 9.0).abs() < 1e-6, "{}", out[8]);
+    }
+
+    /// Two values closer than one gray level (0.1 and the next float above
+    /// it, both level 6554 of 0..1 scaled to 0..65535) keep their exact
+    /// values: the median of a 3 x 1 row 0.1, 0.1+, 0.9 (radius 1, every
+    /// row the same) is per pixel the 5th of its 9 values - 0.1 (six 0.1),
+    /// 0.1+ (three of each), 0.9 (six 0.9).
+    #[test]
+    fn median_keeps_values_closer_than_a_gray_level_apart() {
+        let close = f32::from_bits(0.1f32.to_bits() + 1);
+        assert_eq!(
+            (0.1f32 * 65535.0 + 0.5) as u32,
+            (close * 65535.0 + 0.5) as u32,
+            "the same gray level"
+        );
+        let img = Image::<f32, 1>::new(
+            ImageSize {
+                width: 3,
+                height: 1,
+            },
+            vec![0.1, close, 0.9],
+        )
+        .unwrap();
+        let out = RankFilter {
+            radius: 1.0,
+            filter_type: RankFilterType::Median,
+        }
+        .process_image(&img)
+        .unwrap();
+        let bits = |v: &[f32]| v.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(out.as_slice()), bits(&[0.1, close, 0.9]));
+    }
+
     /// Speed: median radius 3 on a 4096² 16-bit-like image, sliding
     /// histogram vs gathering every window.
     ///

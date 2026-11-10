@@ -1480,4 +1480,219 @@ pub(crate) mod tests {
             assert!(reads > 0, "{name}: read again");
         }
     }
+
+    /// A gray image is not RGB, an RGB one is (its samples 3 per pixel),
+    /// and a label image gives no channel region.
+    #[test]
+    fn regions_from_containers_tell_rgb_and_refuse_label_images() {
+        use crate::image::{ManagedImage, Point2d};
+        use crate::{ImageDimensionality, ImageTile};
+        use kornia_image::{Image, ImageSize};
+        let size = ImageSize {
+            width: 2,
+            height: 1,
+        };
+        let at = ImageTile {
+            offset_x: 4,
+            offset_y: 5,
+            width: 2,
+            height: 1,
+        };
+        let managed = |data| ManagedImage {
+            data,
+            tile_offset: Point2d { x: 4, y: 5 },
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        };
+        let gray = ImageContainer::F32Gray(managed(
+            Image::<f32, 1>::from_size_slice(size, &[0.25, 0.5]).unwrap(),
+        ));
+        let rgb = ImageContainer::F32Rgb(ManagedImage {
+            data: Image::<f32, 3>::from_size_slice(size, &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]).unwrap(),
+            tile_offset: Point2d { x: 4, y: 5 },
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        });
+        let labels = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::from_size_slice(size, &[1, 2]).unwrap(),
+            tile_offset: Point2d { x: 4, y: 5 },
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        });
+
+        let g = ChannelTile::from_container(3, at, &gray).unwrap();
+        assert_eq!((g.channel, g.tile, g.is_rgb), (3, at, false));
+        assert_eq!(g.samples, &[0.25, 0.5]);
+        let c = ChannelTile::from_container(1, at, &rgb).unwrap();
+        assert!(c.is_rgb);
+        assert_eq!(c.samples.len(), 6, "3 samples per pixel");
+        assert!(ChannelTile::from_container(0, at, &labels).is_none());
+    }
+
+    /// A region covers the pixels inside it only: from its offset up to
+    /// (not including) offset + size.
+    #[test]
+    fn a_region_covers_only_its_own_pixels() {
+        let samples = [0.0; 6];
+        let t = tile(0, 10, 20, 3, 2, &samples);
+        assert!(t.covers(10, 20));
+        assert!(t.covers(12, 21));
+        assert!(!t.covers(13, 20), "right of it");
+        assert!(!t.covers(12, 22), "below it");
+        assert!(!t.covers(9, 20), "left of it");
+        assert!(!t.covers(10, 19), "above it");
+    }
+
+    /// Where two regions of a channel overlap, the pixel is taken from the
+    /// first one only - counted once, its value from that region.
+    #[test]
+    fn a_pixel_two_regions_cover_is_taken_from_the_first() {
+        // A 3 × 1 strip; the first region holds x 0..=1 (1, 2), the second
+        // x 1..=2 (100 at x 1 - ignored - and 3).
+        let annotation = ObjectMetricSettings {
+            bbox: [0, 0, 2, 0],
+            mask_data: bitvec![u64, Lsb0; 1, 1, 1],
+            ..Default::default()
+        };
+        let (first, second) = ([1.0, 2.0], [100.0, 3.0]);
+        let mut acc = IntensityAccumulator::default();
+        annotation.add_intensities(
+            &[tile(0, 0, 0, 2, 1, &first), tile(0, 1, 0, 2, 1, &second)],
+            &mut acc,
+        );
+        let i = &acc.finish()[&0];
+        // 1 + 2 + 3 over 3 pixels.
+        assert_eq!(i.sum_intensity, 6.0);
+        assert_eq!((i.min_intensity, i.max_intensity), (1.0, 3.0));
+        assert_eq!(i.avg_intensity, 2.0);
+        // Sorted 1, 2, 3: the median at n/2 = 1.5 → 2 · 0.5 + 3 · 0.5.
+        assert_eq!(i.median_intensity, 2.5);
+    }
+
+    /// The MAD from the histogram when the median is the highest value:
+    /// walking out from it, the higher side runs out first and the
+    /// distances continue on the lower side only.
+    #[test]
+    fn the_histogram_mad_continues_below_when_nothing_is_above() {
+        // 20 × 0 and 21 × 10 (n = 41 > SORT_UP_TO, raw gray values: the
+        // histogram).
+        let mut values: Vec<f32> = [0.0; 20].into_iter().chain([10.0; 21]).collect();
+        let n = values.len() as f64;
+        let mean = 210.0 / n;
+        assert!(Spread::from_histogram(&values, mean).is_some());
+        let d = Spread::of(&mut values, mean).unwrap();
+        // Median at n/2 = 20.5: between the values at 20 and 21, both 10.
+        assert_eq!(d.median, 10.0);
+        // Quartiles at 10.25 (0 and 0) and 30.75 (10 and 10).
+        assert_eq!((d.lower_quartile, d.upper_quartile), (0.0, 10.0));
+        // Distances from 10: 21 × 0, 20 × 10; at 20.5: 0 · 0.5 + 10 · 0.5.
+        assert_eq!(d.mad, 5.0);
+        // Population std: sqrt((20 · mean² + 21 · (10 - mean)²) / 41).
+        let std = ((20.0 * mean * mean + 21.0 * (10.0 - mean).powi(2)) / n).sqrt();
+        assert!((d.std - std).abs() < 1e-12, "{} vs {std}", d.std);
+    }
+
+    /// Fewer values than [`LIST_UP_TO`] are held, then passed on in the
+    /// order they came when the order is finished.
+    #[test]
+    fn a_short_list_order_passes_its_values_on_as_they_came() {
+        let mut out = Vec::new();
+        let mut emit = |v: f32| out.push(v);
+        let mut order = ListOrder::new(&mut emit);
+        for v in [3.0, 1.5, 2.0] {
+            order.push(v);
+        }
+        order.finish();
+        assert_eq!(out, vec![3.0, 1.5, 2.0]);
+    }
+
+    /// The f64 keys sort as [`f64::total_cmp`] does - negative values,
+    /// -0 before 0, infinities - and give the value back bit for bit.
+    #[test]
+    fn f64_keys_sort_like_total_cmp_and_round_trip() {
+        let values = [
+            3.25,
+            -0.0,
+            f64::NEG_INFINITY,
+            1.0,
+            -2.5,
+            0.0,
+            f64::INFINITY,
+            -1e-300,
+        ];
+        for v in values {
+            assert_eq!(f64_of_key(f64_key(v)).to_bits(), v.to_bits(), "{v}");
+        }
+        let mut by_key = values.to_vec();
+        by_key.sort_by_key(|v| f64_key(*v));
+        let mut by_cmp = values.to_vec();
+        by_cmp.sort_by(f64::total_cmp);
+        assert_eq!(
+            by_key.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            by_cmp.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
+    }
+
+    /// Streamed values: none give no spread.
+    #[test]
+    fn no_streamed_values_give_no_spread() {
+        let mut values = |_: &mut dyn FnMut(f32)| panic!("nothing to read");
+        assert_eq!(spread_of_stream(0, 0.0, 0.0, 0.0, &mut values), None);
+    }
+
+    /// Streamed values spanning far more levels than there are values
+    /// (no histogram): the order statistics picked from the stream.
+    #[test]
+    fn streamed_values_over_a_wide_range_are_picked_not_counted() {
+        // 20 × 0 and 20 × 1000: 1001 levels > 4 · 40 values.
+        let list: Vec<f32> = [0.0; 20].into_iter().chain([1000.0; 20]).collect();
+        let mut values = |f: &mut dyn FnMut(f32)| list.iter().for_each(|v| f(*v));
+        let d = spread_of_stream(40, 500.0, 0.0, 1000.0, &mut values).unwrap();
+        // Every value 500 from the mean.
+        assert_eq!(d.std, 500.0);
+        // At n/2 = 20 (exact): the 21st value in order, 1000.
+        assert_eq!(d.median, 1000.0);
+        // At 10 and 30.
+        assert_eq!((d.lower_quartile, d.upper_quartile), (0.0, 1000.0));
+        // Distances from 1000: 20 × 0, 20 × 1000 - the one at 20: 1000.
+        assert_eq!(d.mad, 1000.0);
+    }
+
+    /// A streamed value outside the range given for the histogram doesn't
+    /// fit it: the spread is picked from the values instead - the numbers
+    /// of all the values, the outlier included.
+    #[test]
+    fn a_streamed_value_outside_the_range_falls_back_to_picking() {
+        // 20 × 0, 19 × 10, 1 × 1000 - but the range given is 0..=10.
+        let list: Vec<f32> = [0.0; 20]
+            .into_iter()
+            .chain([10.0; 19])
+            .chain([1000.0])
+            .collect();
+        let mean = (190.0 + 1000.0) / 40.0;
+        let mut values = |f: &mut dyn FnMut(f32)| list.iter().for_each(|v| f(*v));
+        let d = spread_of_stream(40, mean, 0.0, 10.0, &mut values).unwrap();
+        // In order: 0 at 0..=19, 10 at 20..=38, 1000 at 39.
+        assert_eq!(d.median, 10.0);
+        assert_eq!((d.lower_quartile, d.upper_quartile), (0.0, 10.0));
+        // Distances from 10: 19 × 0, 20 × 10, 990 - the one at 20: 10.
+        assert_eq!(d.mad, 10.0);
+        let std = ((20.0 * mean * mean + 19.0 * (10.0 - mean).powi(2) + (1000.0 - mean).powi(2))
+            / 40.0f64)
+            .sqrt();
+        assert!((d.std - std).abs() < 1e-9 * std, "{} vs {std}", d.std);
+    }
+
+    /// An object without a mask adds nothing - not even its channels.
+    #[test]
+    fn an_object_without_a_mask_adds_nothing() {
+        let object = Object::new(crate::object::ObjectInit {
+            bbox: [0, 0, 1, 0],
+            ..Default::default()
+        });
+        assert!(object.mask_data.is_empty());
+        let mut acc = IntensityAccumulator::default();
+        object.add_intensities(&[tile(0, 0, 0, 2, 1, &[1.0, 2.0])], &mut acc);
+        assert!(acc.finish().is_empty());
+    }
 }

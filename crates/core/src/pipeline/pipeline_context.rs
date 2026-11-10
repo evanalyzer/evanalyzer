@@ -1426,4 +1426,66 @@ mod tests {
         ctx.prepare_scratch_matching_image().unwrap();
         assert_eq!(ctx.scratch_pad.size(), ctx.image.size());
     }
+
+    /// A gray image without plane information can't get a matching
+    /// scratch pad (it would carry no plane): an error saying so.
+    #[test]
+    fn preparing_a_scratch_pad_for_an_image_without_a_plane_is_refused() {
+        let mut ctx = gray_ctx();
+        let ImageContainer::F32Gray(image) = Arc::make_mut(&mut ctx.image) else {
+            unreachable!()
+        };
+        image.plane = None;
+        let result = ctx.get_f32_gray_image_and_prep_scratch::<F32Gray>();
+        assert!(
+            matches!(&result, Err(InternalErrors::Generic(msg)) if msg == "Image has no plane information!"),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    /// The label scratch pad for the segmentation is made the image's size
+    /// when it has another one, and kept when it fits already.
+    #[test]
+    fn the_label_scratch_pad_follows_the_image_size() {
+        let mut ctx = gray_ctx();
+        // A label scratch pad of another size (3 x 3, the image is 2 x 1).
+        ctx.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(size(3, 3), vec![7; 9]).unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        }));
+        let (segmentation, scratch) = ctx.get_segmentation_map_u32_buf().unwrap();
+        assert_eq!(segmentation.size(), size(2, 1));
+        assert_eq!(scratch.size(), size(2, 1));
+        assert_eq!(scratch.as_slice(), [0, 0], "a new, zeroed buffer");
+        scratch.as_slice_mut()[0] = 5;
+
+        let (_, scratch) = ctx.get_segmentation_map_u32_buf().unwrap();
+        assert_eq!(scratch.as_slice(), [5, 0], "the same buffer kept");
+    }
+
+    /// A label image needs no float scratch pad: the scratch pad is left as
+    /// it was.
+    #[test]
+    fn a_label_image_leaves_the_scratch_pad_as_it_was() {
+        let mut ctx = label_ctx();
+        let before = Arc::clone(&ctx.scratch_pad);
+        ctx.prepare_scratch_matching_image().unwrap();
+        assert!(Arc::ptr_eq(&before, &ctx.scratch_pad));
+    }
+
+    /// A gray image without a segmentation map gets a zeroed one of its
+    /// size.
+    #[test]
+    fn the_gray_image_and_its_segmentation_create_a_missing_map() {
+        let mut ctx = gray_ctx();
+        ctx.segmentation_map = None;
+        let (image, segmentation) = ctx.get_f32_gray_and_segmentation_mask_mut().unwrap();
+        assert_eq!(image.as_slice(), [0.5, 0.5]);
+        assert_eq!(segmentation.size(), size(2, 1));
+        assert_eq!(segmentation.as_slice(), [0, 0]);
+        assert!(ctx.does_segmentation_map_exist());
+    }
 }

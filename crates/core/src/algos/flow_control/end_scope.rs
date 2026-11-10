@@ -499,6 +499,75 @@ mod tests {
         assert!(cache.object_cache.get(&ObjectId(2)).is_some());
     }
 
+    /// Ending the project's (unscoped) scope removes its objects but leaves
+    /// every memory slot alone - module memory belongs to a scoped use only.
+    /// Both a whole use's end and a nested one's.
+    #[test]
+    fn ending_the_global_scope_keeps_every_memory_slot() {
+        use crate::image::ImageContainer;
+        let image = || {
+            std::sync::Arc::new(ImageContainer::new_f32_gray_from_image_test(
+                kornia_image::Image::new(
+                    kornia_image::ImageSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    vec![0.0],
+                )
+                .unwrap(),
+            ))
+        };
+        let mut ctx = crate::pipeline::pipeline_context::PipelineContext::new_from_image_test(
+            kornia_image::Image::new(
+                kornia_image::ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                vec![0.0],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let slot = CacheAddress::ModuleMemory(ScopeId(1), 5);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_cache.insert(slot, image());
+        cache.object_cache = self::cache(vec![
+            object(1, ObjectClass::Global(1), Scope::Global),
+            object(2, ObjectClass::Global(2), Scope::Global),
+            object(3, ObjectClass::Local(1), MODULE),
+        ]);
+
+        // A nested use in the project's scope: only its class's objects go.
+        EndScope {
+            end: UseEnd::Nested {
+                scope: Scope::Global,
+                classes: vec![ObjectClass::Global(2)],
+                slots: vec![5],
+            },
+            phase: ExecutionScope::Tile,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+        assert!(cache.object_cache.get(&ObjectId(1)).is_some());
+        assert!(cache.object_cache.get(&ObjectId(2)).is_none());
+        assert!(
+            cache.image_cache.contains_key(&slot),
+            "slot 5 of module 1 is not the project's"
+        );
+
+        // The whole project's scope: every global object goes, the module's
+        // object and the module's slot stay.
+        EndScope {
+            end: UseEnd::Scope(Scope::Global),
+            phase: ExecutionScope::WholeImage,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+        assert!(cache.object_cache.get(&ObjectId(1)).is_none());
+        assert!(cache.object_cache.get(&ObjectId(3)).is_some());
+        assert!(cache.image_cache.contains_key(&slot));
+    }
+
     /// Few removed objects take the `retain` path instead of the rebuild;
     /// references to them are dropped all the same.
     #[test]

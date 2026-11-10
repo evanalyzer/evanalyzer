@@ -988,4 +988,125 @@ mod tests {
             "spot_output_class_2"
         );
     }
+
+    /// Object Math and Transform Objects writing into their input class
+    /// change objects in place - creating none; into another class they
+    /// create it.
+    #[test]
+    fn writing_into_the_input_class_creates_no_class() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ObjectMathSettings, TransformObjectsSettings,
+        };
+        let math = |input: u32, output: u32| {
+            PipelineCommand::ObjectMath(ObjectMathSettings {
+                input_class: ObjectClass::Global(input),
+                output_class: ObjectClass::Global(output),
+                ..Default::default()
+            })
+        };
+        let transform = |input: u32, output: u32| {
+            PipelineCommand::TransformObjects(TransformObjectsSettings {
+                input_class: ObjectClass::Global(input),
+                output_class: ObjectClass::Global(output),
+                ..Default::default()
+            })
+        };
+        let output = |class| vec![("output_class".to_string(), class)];
+
+        assert_eq!(created_classes(&math(1, 1)), output(ObjectClass::Unset));
+        assert_eq!(created_classes(&math(1, 2)), output(ObjectClass::Global(2)));
+        assert_eq!(
+            created_classes(&transform(3, 3)),
+            output(ObjectClass::Unset)
+        );
+        assert_eq!(
+            created_classes(&transform(3, 4)),
+            output(ObjectClass::Global(4))
+        );
+    }
+
+    /// Object Math works on its input and its other class - an unset one
+    /// isn't worked on.
+    #[test]
+    fn object_math_reads_its_input_and_other_class() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::ObjectMathSettings;
+        let math = |other| {
+            PipelineCommand::ObjectMath(ObjectMathSettings {
+                input_class: ObjectClass::Global(1),
+                other_class: other,
+                ..Default::default()
+            })
+        };
+
+        assert_eq!(
+            read_classes(&math(ObjectClass::Global(2))),
+            [
+                ("input_class".to_string(), ObjectClass::Global(1)),
+                ("other_class".to_string(), ObjectClass::Global(2)),
+            ]
+        );
+        assert_eq!(
+            read_classes(&math(ObjectClass::Unset)),
+            [("input_class".to_string(), ObjectClass::Global(1))]
+        );
+    }
+
+    /// Yes/no and decimal values name no class.
+    #[test]
+    fn toggles_and_decimals_name_no_class() {
+        assert_eq!(classes_in(&ParamValue::Bool(true)), []);
+        assert_eq!(classes_in(&ParamValue::Float(3.0)), []);
+    }
+
+    /// An unknown module has no wiring and no keys to change; a binding to
+    /// a step the module doesn't have adds nothing to the wiring.
+    #[test]
+    fn an_unknown_module_or_step_adds_no_wiring() {
+        let mut project = project();
+        assert_eq!(parameter_wiring(&project.modules, "MISSING"), []);
+        assert_eq!(rekey_parameters(&mut project, "MISSING"), 0);
+        let before = parameter_wiring(&project.modules, "DETECT");
+
+        project.modules[0].parameters[0]
+            .bindings
+            .push(ParamBinding {
+                step: StepId(99),
+                param: "channel".into(),
+            });
+
+        assert_eq!(parameter_wiring(&project.modules, "DETECT"), before);
+    }
+
+    /// A parameter setting three settings: each says it sets 2 others.
+    #[test]
+    fn a_setting_names_how_many_others_its_parameter_sets() {
+        let mut project = project();
+        let size = &mut project.modules[1].parameters[3];
+        size.bindings.push(ParamBinding {
+            step: StepId(1),
+            param: "channel".into(),
+        });
+        size.bindings.push(ParamBinding {
+            step: StepId(2),
+            param: "channel".into(),
+        });
+
+        assert_eq!(
+            setting_wiring(&project.modules[1], StepId(3), "kernel_size").as_deref(),
+            Some("Set by “Size” - which sets 2 other settings too")
+        );
+    }
+
+    /// Channels without names: the description lists none.
+    #[test]
+    fn unnamed_channels_are_described_without_names() {
+        let channels = ImageChannels {
+            fewest: 2,
+            images_with_fewest: 1,
+            images: 1,
+            names: vec![String::new(), String::new()],
+        };
+
+        assert_eq!(channels.describe(), "the images have only channels 0–1");
+    }
 }

@@ -4879,6 +4879,266 @@ mod full_run_integration_tests {
             );
         }
     }
+
+    // ---- conversions, run outcome and whole-image phase ----
+
+    /// The project's tile-merge connectivity is the same connectivity for
+    /// the merge algorithm.
+    #[test]
+    fn the_projects_tile_merge_connectivity_is_the_merges_connectivity() {
+        use evanalyzer_cfg::settings::project_settings::TileMergeConnectivity;
+        assert!(matches!(
+            Connectivity::from(TileMergeConnectivity::FourConnected),
+            Connectivity::FourConnected
+        ));
+        assert!(matches!(
+            Connectivity::from(TileMergeConnectivity::EightConnected),
+            Connectivity::EightConnected
+        ));
+    }
+
+    /// Dataset steps need results they can read back: a storage without a
+    /// dataset store fails the run with a clear message, and the step
+    /// doesn't run.
+    #[test]
+    fn dataset_steps_on_results_that_cant_be_read_back_fail_the_run() {
+        let (mut job, _out_objects, seen) = single_image_job_with_dataset_step(false);
+        job.result_storage = Arc::new(PlanesRecorder::default());
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("These results can't be read back, so the dataset steps can't run"),
+            "{err}"
+        );
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    /// A storage that can't record how the run ended.
+    struct FinishFails;
+
+    impl PipelineResultExporter for FinishFails {
+        fn export(&self, _cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            Ok(())
+        }
+
+        fn finish_run(&self, _outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
+            Err(InternalErrors::Io("disk full".into()))
+        }
+    }
+
+    /// Not recording the run's outcome is only a warning: the run's own
+    /// result stands and `Finished` is still sent.
+    #[test]
+    fn a_failure_to_record_the_runs_outcome_does_not_fail_the_run() {
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        job.result_storage = Arc::new(FinishFails);
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        assert!(rx.into_iter().any(|e| matches!(e, ProgressEvent::Finished)));
+    }
+
+    /// Z-stacks as volumes aren't analysed yet: the run fails with that
+    /// message instead of analysing something else, and nothing is written.
+    #[test]
+    fn analysing_z_stacks_as_volumes_is_refused() {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        job.global_image_settings.z_stack = Some(ZStackSettings {
+            z_projection: ZStackHandling::Volume3d,
+            z_range: None,
+        });
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Z-stacks as volumes (3D) can't be analysed yet"),
+            "{err}"
+        );
+        assert!(out_objects.lock().unwrap().is_empty());
+    }
+
+    /// The pixel sizes each exported plane carries.
+    struct PixelSizeRecorder(Mutex<Vec<PixelSizes>>);
+
+    impl PipelineResultExporter for PixelSizeRecorder {
+        fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(cache.image_meta.pixel_sizes.clone());
+            Ok(())
+        }
+    }
+
+    /// Pixel sizes the user entered replace the image's own for every
+    /// exported plane.
+    #[test]
+    fn pixel_sizes_from_the_user_replace_the_images_own() {
+        let recorder = Arc::new(PixelSizeRecorder(Mutex::new(Vec::new())));
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        job.result_storage = recorder.clone();
+        job.override_pixel_sizes = Some(PixelSizes {
+            px_size_x: 250.0,
+            px_size_y: 260.0,
+            px_size_z: 1000.0,
+        });
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let planes = recorder.0.lock().unwrap();
+        assert!(!planes.is_empty());
+        for sizes in planes.iter() {
+            assert_eq!(
+                (sizes.px_size_x, sizes.px_size_y, sizes.px_size_z),
+                (250.0, 260.0, 1000.0)
+            );
+        }
+    }
+
+    /// A whole-image command that counts its runs and, when asked for an
+    /// object prediction, answers with one object.
+    struct CountsWholeImageRuns(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::algos::ImageAlgorithm for CountsWholeImageRuns {
+        fn execute(
+            &self,
+            ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
+            _cache: &mut GlobalPipelineCache,
+        ) -> Result<(), InternalErrors> {
+            use crate::pipeline::pipeline::{ObjectPredictionCapture, PredictionRequest};
+            self.0.fetch_add(1, Ordering::Relaxed);
+            if ctx.prediction == PredictionRequest::Asked {
+                ctx.prediction = PredictionRequest::CapturedObjects(ObjectPredictionCapture {
+                    classes: Vec::new(),
+                    objects: vec![(ObjectId(42), 0, 200)],
+                });
+            }
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "Counts whole-image runs"
+        }
+
+        fn cite(&self) -> Vec<&'static evanalyzer_cfg::core_types::CitationMetadata> {
+            Vec::new()
+        }
+
+        fn execution_scope(&self) -> crate::algos::ExecutionScope {
+            crate::algos::ExecutionScope::WholeImage
+        }
+    }
+
+    type ExportedObjects = Arc<Mutex<Vec<ObjectMetricSettings>>>;
+    type RunCounter = Arc<std::sync::atomic::AtomicUsize>;
+
+    /// The fixture job plus whole-image pipelines 2 and 3, each one
+    /// counting command (step 20 and 30); returns their counters.
+    fn job_with_two_whole_image_pipelines() -> (JobExecutor, ExportedObjects, [RunCounter; 2]) {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        let counters: [RunCounter; 2] = Default::default();
+        for (id, counter) in [(2, &counters[0]), (3, &counters[1])] {
+            let mut pipeline = Pipeline::new(
+                PipelineId(id),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Scratchpad,
+                },
+            );
+            pipeline.add_step(
+                evanalyzer_cfg::core_types::StepId(id * 10),
+                Scope::Global,
+                Box::new(CountsWholeImageRuns(Arc::clone(counter))),
+            );
+            job.add_post_process_pipeline(pipeline);
+        }
+        (job, out_objects, counters)
+    }
+
+    /// A stop breakpoint in a whole-image pipeline ends the whole-image
+    /// phase there: the pipelines after it don't run, the objects found so
+    /// far are still written.
+    #[test]
+    fn a_whole_image_breakpoint_stops_the_pipelines_after_it() {
+        let (mut job, out_objects, [second, third]) = job_with_two_whole_image_pipelines();
+        job.breakpoint = Some(BreakpointSettings {
+            pipeline_id: PipelineId(2),
+            step_id: evanalyzer_cfg::core_types::StepId(20),
+            mode: BreakpointMode::Stop,
+        });
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        // The default stack settings analyse one plane.
+        assert_eq!(second.load(Ordering::Relaxed), 1);
+        assert_eq!(third.load(Ordering::Relaxed), 0, "after the breakpoint");
+        assert!(!out_objects.lock().unwrap().is_empty());
+
+        let (job, _out_objects, [second, third]) = job_with_two_whole_image_pipelines();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        assert_eq!(
+            (
+                second.load(Ordering::Relaxed),
+                third.load(Ordering::Relaxed)
+            ),
+            (1, 1),
+            "without a breakpoint both run"
+        );
+    }
+
+    /// A prediction target on a whole-image step sends that step's object
+    /// prediction.
+    #[test]
+    fn a_whole_image_prediction_target_sends_the_object_prediction() {
+        let (mut job, _out_objects, _counters) = job_with_two_whole_image_pipelines();
+        job.prediction = Some(PredictionTarget {
+            pipeline_id: PipelineId(3),
+            step_id: evanalyzer_cfg::core_types::StepId(30),
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let captures: Vec<_> = rx
+            .into_iter()
+            .filter_map(|e| match e {
+                ProgressEvent::ObjectPredictionReached { capture } => Some(capture.objects),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(captures, [vec![(ObjectId(42), 0, 200)]]);
+    }
+
+    /// A channel variant of a channel the image doesn't have (or a negative
+    /// one) is skipped: nothing is read or stored for it.
+    #[test]
+    fn a_channel_variant_of_a_missing_channel_is_skipped() {
+        let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        let (reader, channels) = fixture_reader();
+        let entry = job.images.values().next().unwrap().clone();
+        let variant = |channel| ChannelVariant {
+            channel,
+            projection: ZProjection::MaxIntensity,
+            z: 0,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        job.add_channel_variants(
+            &mut cache,
+            &reader,
+            &entry,
+            &whole_image(),
+            0,
+            ZProjection::None,
+            0,
+            &[variant(channels), variant(-1)],
+            channels as u32,
+            None,
+        )
+        .unwrap();
+        assert!(variant_images(&cache).is_empty());
+    }
 }
 
 /// The plan's strongest correctness check for `docs/tile_merge_plan.md`:

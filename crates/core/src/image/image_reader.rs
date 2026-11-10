@@ -2080,4 +2080,141 @@ mod tests {
             "an RGB series is never Z-projected"
         );
     }
+
+    /// `read_image_tile_volume` checks series, channel, resolution and bit
+    /// depth itself, each with its own error naming what is missing.
+    #[test]
+    fn read_image_tile_volume_errors_for_a_nonexistent_series_channel_resolution_or_bad_bit_depth()
+    {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let tile = ImageTile::default();
+        let plane = |c| ImagePlane { z: 0, c, t: 0 };
+        let message = |r: Result<ImageContainer, InternalErrors>| match r {
+            Err(InternalErrors::ImageReadError(msg)) => msg,
+            other => panic!("expected an image read error, got {other:?}"),
+        };
+
+        let msg = message(reader.read_image_tile_volume(99, 0, &plane(0), 0..=0, &tile));
+        assert!(msg.contains("Series 99 does not exist"), "{msg}");
+        let msg = message(reader.read_image_tile_volume(0, 0, &plane(99), 0..=0, &tile));
+        assert!(
+            msg.contains("Channel 99 does not exist in series 0"),
+            "{msg}"
+        );
+        let msg = message(reader.read_image_tile_volume(0, 99, &plane(0), 0..=0, &tile));
+        assert!(
+            msg.contains("Pyramid 99 does not exist in series 0"),
+            "{msg}"
+        );
+
+        let mut corrupt = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let meta = Arc::make_mut(&mut corrupt.image_meta);
+        for info in meta.series.values_mut() {
+            for resolution in info.resolutions.values_mut() {
+                resolution.nr_bits = 0;
+            }
+        }
+        let msg = message(corrupt.read_image_tile_volume(0, 0, &plane(0), 0..=0, &tile));
+        assert!(msg.contains("implausible bit depth of 0"), "{msg}");
+    }
+
+    /// A volume of a tile with a real size is that rectangle of every plane:
+    /// each plane of the tile volume equals the same rectangle cut out of
+    /// the whole-image volume.
+    #[test]
+    fn a_volume_of_a_tile_is_the_same_rectangle_of_every_plane() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let channel = ImagePlane { z: 0, c: 0, t: 0 };
+        let tile = ImageTile {
+            offset_x: 2,
+            offset_y: 1,
+            width: 4,
+            height: 3,
+        };
+        let ImageContainer::F32Gray(part) = reader
+            .read_image_tile_volume(0, 0, &channel, 0..=1, &tile)
+            .unwrap()
+        else {
+            panic!("a gray volume");
+        };
+        let ImageContainer::F32Gray(whole) = reader
+            .read_image_tile_volume(0, 0, &channel, 0..=1, &ImageTile::default())
+            .unwrap()
+        else {
+            panic!("a gray volume");
+        };
+        assert_eq!(
+            part.plane_size(),
+            ImageSize {
+                width: 4,
+                height: 3
+            }
+        );
+        assert_eq!(part.size().height, 3 * 2, "two planes one below the other");
+        assert_eq!(part.tile_offset, Point2d { x: 2, y: 1 });
+        let whole_width = whole.plane_size().width;
+        for z in 0..2 {
+            let full = whole.plane_slice(z);
+            let expected: Vec<f32> = (1..4)
+                .flat_map(|y| full[y * whole_width + 2..y * whole_width + 6].to_vec())
+                .collect();
+            assert_eq!(part.plane_slice(z), expected, "plane {z}");
+        }
+    }
+
+    /// A packed RGB image read as a volume is an RGB volume whose single
+    /// plane equals the packed RGB read of that plane.
+    #[test]
+    fn an_rgb_image_reads_as_an_rgb_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rgb.png");
+        image::RgbImage::from_fn(5, 4, |x, y| {
+            image::Rgb([(x * 50) as u8, (y * 60) as u8, (x + y) as u8])
+        })
+        .save(&path)
+        .unwrap();
+        let reader = ImageReader::new(&path, ReadMode::Default).unwrap();
+        let volume = reader
+            .read_image_tile_volume(0, 0, &ImagePlane::default(), 0..=0, &ImageTile::default())
+            .unwrap();
+        let ImageContainer::F32Rgb(rgb) = &volume else {
+            panic!("an RGB volume, got {volume:?}");
+        };
+        assert_eq!(rgb.dimensionality, ImageDimensionality::Volume { depth: 1 });
+        assert_eq!(
+            rgb.size(),
+            ImageSize {
+                width: 5,
+                height: 4
+            }
+        );
+        let packed = reader
+            .read_image_tile_combined(0, 0, ZProjection::None, &None, 0, None, &full_tile())
+            .unwrap();
+        assert_eq!(
+            volume.as_f32_slice().unwrap(),
+            packed[0].image.as_f32_slice().unwrap()
+        );
+        // Pixel (1, 0) is (50, 0, 1) of 255.
+        for (got, want) in rgb.as_slice()[3..6]
+            .iter()
+            .zip([50.0 / 255.0, 0.0, 1.0 / 255.0])
+        {
+            assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+        }
+    }
+
+    /// `image_channel` refuses a channel the series has no metadata for.
+    #[test]
+    fn image_channel_errors_for_a_channel_without_metadata() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let image = reader
+            .read_image_tile(0, 0, &ImagePlane::default(), &full_tile())
+            .unwrap();
+        let err = reader.image_channel(0, 99, false, image).unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Channel 99 does not exist in series 0")),
+            "{err:?}"
+        );
+    }
 }

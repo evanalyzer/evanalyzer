@@ -305,7 +305,8 @@ fn create_in_pipeline(
         .iter_mut()
         .find(|p| p.id == pipeline_id)
         .expect("checked by selected_steps");
-    let steps: Vec<PipelineStepSettings> = pipeline.steps.drain(range.clone()).collect();
+    // Built from copies: a refused module leaves the pipeline as it was.
+    let steps: Vec<PipelineStepSettings> = pipeline.steps[range.clone()].to_vec();
     let mut definition = module_of_steps(
         &key,
         name,
@@ -324,6 +325,7 @@ fn create_in_pipeline(
     }
 
     let start = *range.start();
+    pipeline.steps.drain(range);
     pipeline.steps.insert(start, module_step(&key));
     assign_step_ids(&mut pipeline.steps);
     project.modules.push(definition);
@@ -3995,5 +3997,550 @@ mod tests {
             "output_class"
         ));
         assert_eq!(definition.parameters.len(), before);
+    }
+
+    // ---- Less common shapes ----
+
+    fn load_channel(channel: u32) -> PipelineCommand {
+        PipelineCommand::LoadChannel(LoadChannelSettings {
+            channel: ImageChannelIdx(channel),
+            projection: evanalyzer_cfg::settings::pipeline_command_settings::MathLoadChannelChannelZProjectionSettings::Auto,
+            z_index: 0,
+        })
+    }
+
+    fn uses_module(id: u32, key: &str, values: &[(&str, ParamValue)]) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: StepContent::Module(ModuleInstance {
+                key: key.into(),
+                values: values
+                    .iter()
+                    .map(|(k, v)| (ModuleParamKey::from(*k), v.clone()))
+                    .collect(),
+            }),
+        }
+    }
+
+    fn empty_module(key: &str) -> ModuleDefinition {
+        ModuleDefinition {
+            key: key.into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![],
+            parameters: vec![],
+            origin: None,
+        }
+    }
+
+    /// Steps loading channels 1, 2 and 1 again: one parameter per channel,
+    /// numbered because there are several - channel 1's sets both steps
+    /// loading it.
+    #[test]
+    fn several_loaded_channels_get_a_numbered_parameter_each() {
+        let mut project = ProjectSettings::default();
+        project.pipelines = vec![pipeline(
+            1,
+            vec![
+                step(1, load_channel(1)),
+                step(2, load_channel(2)),
+                step(3, load_channel(1)),
+            ],
+        )];
+
+        create_module(&mut project, PipelineId(1), 0..=2, "Load", &[]).unwrap();
+
+        let parameters: Vec<(&str, &ParamValue, Vec<(StepId, &str)>)> = project.modules[0]
+            .parameters
+            .iter()
+            .map(|p| {
+                (
+                    p.label.as_str(),
+                    &p.default,
+                    p.bindings
+                        .iter()
+                        .map(|b| (b.step, b.param.as_str()))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parameters,
+            [
+                (
+                    "Channel 1",
+                    &ParamValue::Int(1),
+                    vec![(StepId(1), "channel"), (StepId(3), "channel")]
+                ),
+                (
+                    "Channel 2",
+                    &ParamValue::Int(2),
+                    vec![(StepId(2), "channel")]
+                ),
+            ]
+        );
+    }
+
+    /// Seeds is only used by steps 3-5 of the pipelines - but hand-drawn
+    /// objects have that class too, so it's used elsewhere: a parameter.
+    #[test]
+    fn a_class_hand_annotations_use_is_suggested_as_a_parameter() {
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+        let mut project = project();
+        let mut object = ObjectMetricSettings::default();
+        object.object_class.insert(SEEDS);
+        let mut series = SeriesSettings::default();
+        series.objects.push(object);
+        let mut image = ImageEntry::default();
+        image.series.insert(0, series);
+        project.images.list.insert("a.tif".into(), image);
+
+        let plan = plan_module(&project, PipelineId(1), 2..=4).unwrap();
+
+        assert_eq!(
+            roles(&plan),
+            [
+                (NUCLEI, ClassRole::Parameter),
+                (SEEDS, ClassRole::Parameter),
+                (CELLS, ClassRole::Parameter),
+            ]
+        );
+        assert!(plan.classes[1].used_elsewhere);
+    }
+
+    /// A class the project has no name for - not listed, or listed with an
+    /// empty name - is offered as "Class n".
+    #[test]
+    fn a_class_without_a_name_is_offered_by_its_number() {
+        let mut project = project();
+        project
+            .classification
+            .classes_mut()
+            .iter_mut()
+            .find(|c| c.id == 1)
+            .unwrap()
+            .name = String::new();
+        project.pipelines.push(pipeline(
+            3,
+            vec![step(1, threshold(1)), step(2, threshold(8))],
+        ));
+
+        let plan = plan_module(&project, PipelineId(3), 0..=1).unwrap();
+
+        let names: Vec<(ObjectClass, &str)> = plan
+            .classes
+            .iter()
+            .map(|c| (c.class, c.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                (ObjectClass::Global(1), "Class 1"),
+                (ObjectClass::Global(8), "Class 8")
+            ]
+        );
+    }
+
+    /// A module class can't stay as it is in a module made of a pipeline's
+    /// steps - the new module wouldn't have it. Nothing is created.
+    #[test]
+    fn a_module_class_kept_fixed_in_a_new_module_is_refused() {
+        let mut project = project();
+
+        let error = create_module(
+            &mut project,
+            PipelineId(1),
+            0..=0,
+            "Broken",
+            &[(ObjectClass::Local(1), ClassRole::Fixed)],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("the module class L1 can't stay as it is"),
+            "{error}"
+        );
+        assert!(project.modules.is_empty());
+    }
+
+    /// A refused module leaves the pipeline as it was: its steps stay,
+    /// nothing is removed (the GUI edits the open project directly).
+    #[test]
+    fn a_refused_module_keeps_the_pipelines_steps() {
+        let mut project = project();
+        let before = serde_json::to_value(&project.pipelines).unwrap();
+
+        create_module(
+            &mut project,
+            PipelineId(1),
+            0..=0,
+            "Broken",
+            &[(ObjectClass::Local(1), ClassRole::Fixed)],
+        )
+        .unwrap_err();
+
+        assert_eq!(serde_json::to_value(&project.pipelines).unwrap(), before);
+    }
+
+    /// Extract Objects already maps the segmentation class (5) to the
+    /// class made local: that mapping - a list entry's setting - now names
+    /// the module's class, and no second mapping for 5 is added.
+    #[test]
+    fn an_existing_class_mapping_is_rewritten_not_doubled() {
+        let mut project = project();
+        let five = ObjectClass::Global(5);
+        project.pipelines.push(pipeline(
+            3,
+            vec![
+                step(1, threshold(5)),
+                step(2, PipelineCommand::ConnectedComponents(Default::default())),
+                step(
+                    3,
+                    PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                        max_objects_before_fail: 100_000,
+                        class_mapping: vec![ExtractClassMappingSettings {
+                            segmentation_class: SegmentationClass(5),
+                            object_class: five,
+                        }],
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        ));
+        let plan = plan_module(&project, PipelineId(3), 0..=2).unwrap();
+        assert_eq!(roles(&plan), [(five, ClassRole::Local)]);
+
+        create_module(&mut project, PipelineId(3), 0..=2, "Spots", &roles(&plan)).unwrap();
+
+        let Some(PipelineCommand::ExtractObjects(extract)) = project.modules[0].steps[2].command()
+        else {
+            panic!("extract")
+        };
+        let mappings: Vec<(SegmentationClass, ObjectClass)> = extract
+            .class_mapping
+            .iter()
+            .map(|m| (m.segmentation_class, m.object_class))
+            .collect();
+        assert_eq!(mappings, [(SegmentationClass(5), ObjectClass::Local(1))]);
+    }
+
+    /// Class 6 is made local; a class list holding it with class 1 keeps
+    /// class 1 and gets the module's class in its place.
+    #[test]
+    fn a_class_in_a_list_with_others_is_replaced_in_the_list() {
+        let six = ObjectClass::Global(6);
+        let mut project = project();
+        project.pipelines.push(pipeline(
+            3,
+            vec![
+                step(1, classify(NUCLEI, six)),
+                step(
+                    2,
+                    PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                        input_classes: vec![six, NUCLEI],
+                        output_class: ObjectClass::Global(7),
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        ));
+
+        create_module(
+            &mut project,
+            PipelineId(3),
+            0..=1,
+            "Six",
+            &[(six, ClassRole::Local)],
+        )
+        .unwrap();
+
+        let steps = &project.modules[0].steps;
+        let Some(PipelineCommand::ClassifyObjects(first)) = steps[0].command() else {
+            panic!("classify")
+        };
+        let Some(PipelineCommand::ClassifyObjects(second)) = steps[1].command() else {
+            panic!("classify")
+        };
+        assert_eq!(first.output_class, ObjectClass::Local(1));
+        assert_eq!(second.input_classes, [ObjectClass::Local(1), NUCLEI]);
+        assert_eq!(second.output_class, ObjectClass::Global(7), "left fixed");
+    }
+
+    /// A pipeline slot only the steps use, read by a threshold entry (a
+    /// setting inside a list): it becomes the module's slot there too.
+    #[test]
+    fn a_slot_read_inside_a_list_entry_becomes_the_modules_slot() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ImageCacheSettings, MathImageCacheImageCacheModeSettings,
+            SegmentationThresholdThresholdValueSourceSettings as Source,
+        };
+        let mut project = project();
+        project.pipelines[0].steps = vec![
+            step(
+                1,
+                PipelineCommand::ImageCache(ImageCacheSettings {
+                    mode: MathImageCacheImageCacheModeSettings::Store,
+                    address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
+                }),
+            ),
+            step(
+                2,
+                PipelineCommand::Threshold(ThresholdSettings {
+                    thresholds: vec![ThresholdEntrySettings {
+                        value_source: Source::Memory(MemoryId::PipelineContext(1)),
+                        ..Default::default()
+                    }],
+                }),
+            ),
+        ];
+
+        create_module(&mut project, PipelineId(1), 0..=1, "Cached", &[]).unwrap();
+
+        let Some(PipelineCommand::Threshold(threshold)) = project.modules[0].steps[1].command()
+        else {
+            panic!("threshold")
+        };
+        assert_eq!(
+            threshold.thresholds[0].value_source,
+            Source::Memory(MemoryId::ModuleContext(1))
+        );
+    }
+
+    /// `create_module` refuses what `plan_module` refuses - here a shared
+    /// slot a step uses other than as an address - and changes nothing.
+    #[test]
+    fn creating_a_module_of_steps_that_cant_be_one_is_refused() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::SegmentationThresholdThresholdValueSourceSettings as Source;
+        let threshold = PipelineCommand::Threshold(ThresholdSettings {
+            thresholds: vec![ThresholdEntrySettings {
+                value_source: Source::Memory(MemoryId::ModuleContext(1)),
+                ..Default::default()
+            }],
+        });
+        let mut project = with_slots_module(threshold);
+
+        let error = create_module(
+            &mut project,
+            StepList::Module("SLOTS".into()),
+            2..=2,
+            "Inner",
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("step 3 uses it in a way that can't be handed"),
+            "{error}"
+        );
+        assert_eq!(project.modules.len(), 1);
+        assert_eq!(project.modules[0].steps.len(), 3);
+    }
+
+    /// Expanding a module into the pipeline: what its step hands a module
+    /// inside it reads as outside a module too - its class the new project
+    /// class (4, after 1-3), its module slot a pipeline slot, also inside a
+    /// list; a number stays.
+    #[test]
+    fn expanding_rewrites_what_a_step_hands_a_nested_module() {
+        let mut project = project();
+        let slot = |memory| ImageAddress::Memory(memory).to_param_value();
+        let mut outer = empty_module("OUTER");
+        outer.classes.push(Class {
+            id: 1,
+            color: 0x00FF00,
+            name: "Inner seeds".into(),
+            notes: String::new(),
+        });
+        outer.steps.push(uses_module(
+            1,
+            "INNER",
+            &[
+                ("class", ParamValue::Text("L1".into())),
+                ("slot", ParamValue::Text(slot(MemoryId::ModuleContext(2)))),
+                (
+                    "list",
+                    ParamValue::List(vec![ParamValue::Text("L1".into())]),
+                ),
+                ("count", ParamValue::Int(3)),
+            ],
+        ));
+        project.modules.extend([empty_module("INNER"), outer]);
+        project.pipelines[1]
+            .steps
+            .push(uses_module(9, "OUTER", &[]));
+
+        expand_module(&mut project, PipelineId(2), 1).unwrap();
+
+        let new_class = project
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.name == "Inner seeds")
+            .unwrap();
+        assert_eq!((new_class.id, new_class.color), (4, 0x00FF00));
+        let StepContent::Module(inner) = &project.pipelines[1].steps[1].content else {
+            panic!("the nested module's step")
+        };
+        let value = |key: &str| inner.values[&ModuleParamKey::from(key)].clone();
+        assert_eq!(value("class"), ParamValue::Text("4".into()));
+        assert_eq!(
+            value("slot"),
+            ParamValue::Text(slot(MemoryId::PipelineContext(2)))
+        );
+        assert_eq!(
+            value("list"),
+            ParamValue::List(vec![ParamValue::Text("4".into())])
+        );
+        assert_eq!(value("count"), ParamValue::Int(3));
+    }
+
+    /// Seeds (L2) of "Outer" alone moves into a module of its steps 4-5 -
+    /// but once another step of "Outer" hands it to a nested module, it is
+    /// used by others: handed in, a parameter.
+    #[test]
+    fn a_class_another_step_hands_to_a_nested_module_is_handed_in() {
+        let mut project = with_outer_module();
+        let list = StepList::Module("OUTER".into());
+        let seeds = |plan: &ModulePlan| {
+            plan.classes
+                .iter()
+                .find(|c| c.class == ObjectClass::Local(2))
+                .map(|c| (c.used_elsewhere, c.suggested))
+        };
+        let plan = plan_module(&project, list.clone(), 3..=4).unwrap();
+        assert_eq!(seeds(&plan), Some((false, ClassRole::Local)));
+
+        project.modules.push(empty_module("INNER"));
+        project
+            .modules
+            .iter_mut()
+            .find(|d| d.key == "OUTER")
+            .unwrap()
+            .steps
+            .push(uses_module(
+                50,
+                "INNER",
+                &[
+                    ("count", ParamValue::Int(2)), // a number, not class L2
+                    ("class", ParamValue::Text("L2".into())),
+                ],
+            ));
+        let plan = plan_module(&project, list, 3..=4).unwrap();
+
+        assert_eq!(seeds(&plan), Some((true, ClassRole::Parameter)));
+    }
+
+    /// Two steps of A and one of TOP use the same module: it's looked into
+    /// once, and a module none of them is isn't found.
+    #[test]
+    fn a_module_used_several_times_inside_another_is_checked_once() {
+        let mut project = with_module();
+        let mut a = empty_module("A");
+        a.steps = vec![
+            uses_module(1, "CELL_RECONSTRUCTION", &[]),
+            uses_module(2, "CELL_RECONSTRUCTION", &[]),
+        ];
+        let mut top = empty_module("TOP");
+        top.steps = vec![
+            uses_module(1, "A", &[]),
+            uses_module(2, "CELL_RECONSTRUCTION", &[]),
+        ];
+        project.modules.extend([a, top, empty_module("OTHER")]);
+
+        assert!(!would_contain_itself(&project, "OTHER", "TOP"));
+        assert!(would_contain_itself(&project, "A", "TOP"));
+    }
+
+    /// "Edit in place" only applies to a module step.
+    #[test]
+    fn edit_in_place_on_a_command_step_is_refused() {
+        let mut project = with_module();
+
+        let error =
+            module_in_place_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 0, None)
+                .unwrap_err()
+                .to_string();
+
+        assert!(error.contains("step 1 isn't a module"), "{error}");
+    }
+
+    /// An unknown module, an unknown parameter, or a module whose card
+    /// can't be shown (a parameter bound to nothing) offer nothing to bind.
+    #[test]
+    fn unknown_or_broken_modules_offer_nothing_to_bind() {
+        let mut project = with_module();
+        let (setting, _) = setting_at(&classify(NUCLEI, SEEDS), "output_class").unwrap();
+        let cells = ModuleParamKey::from("cells");
+        let key = "CELL_RECONSTRUCTION";
+        assert!(
+            !compatible_parameters(&project.modules, key, &setting).is_empty(),
+            "a class setting fits the class parameters"
+        );
+
+        assert!(bindable_settings(&project.modules, "MISSING", &cells).is_empty());
+        assert!(compatible_parameters(&project.modules, "MISSING", &setting).is_empty());
+        assert!(
+            bindable_settings(&project.modules, key, &ModuleParamKey::from("missing")).is_empty()
+        );
+
+        project.modules[0].parameters[0].bindings.clear();
+        assert!(compatible_parameters(&project.modules, key, &setting).is_empty());
+        assert!(bindable_settings(&project.modules, key, &cells).is_empty());
+    }
+
+    /// A parameter still bound to a step the module no longer has: an edit
+    /// of "that" setting finds no value - the default stays.
+    #[test]
+    fn editing_a_setting_of_a_missing_step_keeps_the_default() {
+        let mut project = with_module();
+        let definitions = project.modules.clone();
+        let definition = &mut project.modules[0];
+        definition.parameters[0].bindings.push(ParamBinding {
+            step: StepId(99),
+            param: "output_class".into(),
+        });
+        let before = definition.parameters[0].default.clone();
+
+        assert!(!bound_setting_edited(
+            definition,
+            &definitions,
+            StepId(99),
+            "output_class"
+        ));
+        assert_eq!(definition.parameters[0].default, before);
+    }
+
+    /// Removing a step past the end of a module changes nothing.
+    #[test]
+    fn removing_a_step_past_the_end_changes_nothing() {
+        let mut project = with_module();
+        let definition = &mut project.modules[0];
+        let (steps, parameters) = (definition.steps.len(), definition.parameters.len());
+
+        remove_module_step(definition, steps);
+
+        assert_eq!(definition.steps.len(), steps);
+        assert_eq!(definition.parameters.len(), parameters);
+    }
+
+    /// A module parameter without a label is shown under its key - on its
+    /// own and in the list of a step's settings.
+    #[test]
+    fn a_module_parameter_without_a_label_is_labelled_by_its_key() {
+        let mut project = with_module();
+        project.modules[0].parameters[0].label = String::new();
+        let key = project.modules[0].parameters[0].key.to_string();
+        let step = &project.pipelines[0].steps[2];
+
+        let (_, label) = step_setting(&project.modules, step, &key).unwrap();
+        let settings = step_settings(&project.modules, step);
+
+        assert_eq!(label, key);
+        let listed = settings.iter().find(|(path, _, _)| *path == key).unwrap();
+        assert_eq!(listed.2, key);
     }
 }

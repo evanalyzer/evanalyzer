@@ -870,6 +870,154 @@ mod tests {
         assert_eq!(get("first_closest_distance").related, None);
     }
 
+    /// A filled box `[x0, y0, x1, y1]` (inclusive) of class `CELL`.
+    fn filled(id: u128, bbox: [u32; 4]) -> Object {
+        let n = ((bbox[2] - bbox[0] + 1) * (bbox[3] - bbox[1] + 1)) as usize;
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(id),
+            bbox,
+            area: n,
+            mask_data: BitVec::repeat(true, n),
+            ..Default::default()
+        });
+        object.add_object_class(CELL, Scope::Global).unwrap();
+        object
+    }
+
+    /// Runs `step` on `objects` in a 10 × 10 image; the values per output id.
+    fn measure(
+        step: &MeasureObjectNeighbors,
+        objects: Vec<Object>,
+    ) -> HashMap<String, Vec<ObjectValue>> {
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta.full_image_width = ImageSize {
+            width: 10,
+            height: 10,
+        };
+        for object in objects {
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        let mut ctx =
+            PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
+                .unwrap();
+        step.execute(&mut ctx, &mut cache).unwrap();
+        cache
+            .measurements
+            .measurements
+            .iter()
+            .map(|m| {
+                let MeasurementValues::Objects(values) = &m.values else {
+                    panic!("{}: per object", m.info.key)
+                };
+                let id = m.info.key.trim_start_matches(&format!("{}/", step.id));
+                (id.to_string(), values.clone())
+            })
+            .collect()
+    }
+
+    fn adjacent_step() -> MeasureObjectNeighbors {
+        MeasureObjectNeighbors {
+            id: "n".into(),
+            objects: CELL,
+            neighbors: ObjectClass::Unset,
+            method: NeighborMethod::Adjacent,
+            distance: 5,
+        }
+    }
+
+    /// Without the objects chosen the step says so instead of measuring.
+    #[test]
+    fn unset_objects_are_an_error() {
+        let step = MeasureObjectNeighbors {
+            objects: ObjectClass::Unset,
+            ..adjacent_step()
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let mut ctx =
+            PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
+                .unwrap();
+        match step.execute(&mut ctx, &mut cache) {
+            Err(InternalErrors::InvalidArgument(message)) => {
+                assert_eq!(message, "Measure object neighbors: choose the objects")
+            }
+            other => panic!("expected an invalid argument, got {other:?}"),
+        }
+        assert!(cache.measurements.measurements.is_empty());
+    }
+
+    /// The step measures, and only after the tiles are merged (neighbours
+    /// across tile borders).
+    #[test]
+    fn it_measures_on_the_whole_image() {
+        let step = adjacent_step();
+        assert!(step.measures());
+        assert!(matches!(step.execution_scope(), ExecutionScope::WholeImage));
+    }
+
+    /// No object of the class: every output is there, without values.
+    #[test]
+    fn no_objects_give_empty_outputs() {
+        let values = measure(&adjacent_step(), vec![]);
+        assert_eq!(values.len(), VALUES.len());
+        for (id, ..) in VALUES {
+            assert!(values[id].is_empty(), "{id}");
+        }
+    }
+
+    /// Two objects: each has a first closest one (the other, 5 px away:
+    /// a 3-4-5 triangle) but no second closest, so no second distance and
+    /// no angle (no value rather than 0).
+    #[test]
+    fn two_objects_have_a_first_but_no_second_closest_one() {
+        let values = measure(
+            &adjacent_step(),
+            vec![filled(1, [1, 1, 1, 1]), filled(2, [4, 5, 4, 5])],
+        );
+        for (object, other) in [(1, 2), (2, 1)] {
+            let of = |id: &str| {
+                values[id]
+                    .iter()
+                    .find(|v| v.object == ObjectId(object))
+                    .unwrap()
+                    .clone()
+            };
+            // sqrt(3² + 4²) = 5.
+            close(of("first_closest_distance").value, 5.0, "first distance");
+            assert_eq!(of("first_closest_distance").related, Some(ObjectId(other)));
+            assert!(of("second_closest_distance").value.is_nan());
+            assert_eq!(of("second_closest_distance").related, None);
+            assert!(of("angle_between_neighbors").value.is_nan());
+            // 2 px apart diagonally at the closest: not adjacent.
+            assert_eq!(of("number_of_neighbors").value, 0.0);
+        }
+    }
+
+    /// An object painted over completely by a later one (as a label image
+    /// would hold them) has no pixel of its own left: no neighbours, 0 %
+    /// touching - and the one covering it doesn't see it as a neighbour.
+    #[test]
+    fn an_object_painted_over_has_no_neighbors() {
+        // Object 1: the pixel (5, 5); object 2 (later): the 3 × 3 box around it.
+        let values = measure(
+            &adjacent_step(),
+            vec![filled(1, [5, 5, 5, 5]), filled(2, [4, 4, 6, 6])],
+        );
+        let of = |id: &str, object: u128| {
+            values[id]
+                .iter()
+                .find(|v| v.object == ObjectId(object))
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(of("number_of_neighbors", 1).value, 0.0);
+        assert_eq!(of("percent_touching", 1).value, 0.0);
+        assert_eq!(of("number_of_neighbors", 2).value, 0.0);
+        assert_eq!(of("percent_touching", 2).value, 0.0);
+        // Centre to centre both are at (5, 5).
+        assert_eq!(of("first_closest_distance", 1).value, 0.0);
+        assert_eq!(of("first_closest_distance", 1).related, Some(ObjectId(2)));
+    }
+
     /// Speed and peak RAM: a 9 × 9 object every 40 px on `BENCH_SIZE`²
     /// (default 8192: 42,025 objects), `BENCH_METHOD` (expand | adjacent |
     /// within) - release, one per process:

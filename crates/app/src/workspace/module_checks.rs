@@ -2169,4 +2169,336 @@ mod tests {
             problems(ObjectClass::Global(2))
         );
     }
+
+    // ---- Less common shapes ----
+
+    fn classify(input: Vec<ObjectClass>, overlapping_with: ObjectClass) -> PipelineCommand {
+        PipelineCommand::ClassifyObjects(
+            evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings {
+                input_classes: input,
+                overlapping_with,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn voronoi(output: u32) -> PipelineCommand {
+        PipelineCommand::Voronoi(VoronoiSettings {
+            output_class: ObjectClass::Global(output),
+            ..Default::default()
+        })
+    }
+
+    fn module(key: &str, steps: Vec<PipelineStepSettings>) -> ModuleDefinition {
+        ModuleDefinition {
+            key: key.into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps,
+            parameters: vec![],
+            origin: None,
+        }
+    }
+
+    /// Only the problems at the given pipeline step are picked.
+    #[test]
+    fn the_problems_at_a_step_are_picked_by_pipeline_and_step() {
+        let at = |pipeline: u32, step: u32, message: &str| {
+            ModuleProblem::error(
+                None,
+                Some((PipelineId(pipeline), StepId(step))),
+                message.into(),
+            )
+        };
+        let problems = [
+            at(1, 2, "a"),
+            at(2, 2, "other pipeline"),
+            at(1, 3, "other step"),
+            ModuleProblem::error(None, None, "no step".into()),
+            at(1, 2, "b"),
+        ];
+
+        let picked: Vec<&str> = problems_at(&problems, PipelineId(1), StepId(2))
+            .iter()
+            .map(|p| p.message.as_str())
+            .collect();
+
+        assert_eq!(picked, ["a", "b"]);
+    }
+
+    /// A pipeline's command step using a module class: a run refuses it -
+    /// an error at the step, and its step problem.
+    #[test]
+    fn a_command_step_using_a_module_class_is_an_error_at_the_step() {
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(nuclei(vec![step(
+            1,
+            PipelineCommand::Voronoi(VoronoiSettings {
+                centers: ObjectClass::Local(1),
+                ..Default::default()
+            }),
+        )]));
+        // The error as a run reports it (`InternalErrors::InvalidArgument`).
+        let expected =
+            "Invalid argument: uses the module class L1, which only exists inside a module";
+
+        let problems = check_modules(&project);
+
+        assert_eq!(messages_at(&problems, 1), [expected]);
+        assert_eq!(problems[0].severity, Severity::Error);
+        assert_eq!(
+            step_problem(&project, &project.pipelines[0].steps[0]).as_deref(),
+            Some(expected)
+        );
+    }
+
+    /// A step using a broken module: its problem is the module's error.
+    #[test]
+    fn a_step_using_a_broken_module_has_the_modules_error_as_its_problem() {
+        let mut project = project();
+        project.modules[0].parameters[0].bindings[0].param = "no_such".into();
+
+        let problem = step_problem(&project, &project.pipelines[0].steps[0]).unwrap();
+
+        assert!(problem.contains("no_such"), "{problem}");
+    }
+
+    /// A parameter bound to a step the module doesn't have: the expansion
+    /// reports it - it isn't taken for a setting of another kind.
+    #[test]
+    fn a_parameter_bound_to_a_missing_step_is_reported_once() {
+        let mut project = project();
+        project.modules[0].parameters[0]
+            .bindings
+            .push(ParamBinding {
+                step: StepId(99),
+                param: "output_class".into(),
+            });
+
+        let problems = check_module(&project, "SMOOTH");
+
+        let text = messages(&problems);
+        assert_eq!(problems.len(), 1, "{text:?}");
+        assert_eq!(problems[0].severity, Severity::Error);
+        assert!(
+            text[0].contains("bound to step 99, which the module doesn't have"),
+            "{text:?}"
+        );
+    }
+
+    /// Volumes (3D) and a pipeline's own command working on planes only:
+    /// the error names the command.
+    #[test]
+    fn volumes_and_a_command_step_working_on_planes_name_the_command() {
+        use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(nuclei(vec![step(1, blur())]));
+        project.images.settings.z_stack = Some(ZStackSettings {
+            z_projection: ZStackHandling::Volume3d,
+            z_range: None,
+        });
+
+        let problems = check_project(&project);
+
+        assert_eq!(
+            messages_at(&problems, 1),
+            [format!(
+                "{} works on planes (2D) only, but the project analyzes the z-stacks as \
+                 volumes (3D) - choose another z-stack setting",
+                blur().name()
+            )]
+        );
+    }
+
+    /// A command step looking for class 1 objects overlapping class 1: a
+    /// warning naming the command and the class.
+    #[test]
+    fn a_command_step_overlapping_a_class_with_itself_warns() {
+        let mut project = spots_project();
+        project.pipelines[0].steps.push(step(
+            2,
+            classify(vec![ObjectClass::Global(1)], ObjectClass::Global(1)),
+        ));
+
+        let problems = check_project(&project);
+
+        let expected = format!(
+            "{} looks for class 1 “Spot” objects overlapping other class 1 “Spot” objects - \
+             “Overlapping with” is usually another class",
+            classify(vec![], ObjectClass::Unset).name()
+        );
+        assert!(
+            messages_at(&problems, 2).contains(&expected.as_str()),
+            "{:?}",
+            messages_at(&problems, 2)
+        );
+    }
+
+    /// Inside a module, without a parameter setting it: the module "looks
+    /// inside", and its own class is named as the module has it (L1).
+    #[test]
+    fn a_module_overlapping_its_own_class_with_itself_warns() {
+        let mut project = ProjectSettings::default();
+        let mut definition = module(
+            "OVERLAP",
+            vec![step(
+                1,
+                classify(vec![ObjectClass::Local(1)], ObjectClass::Local(1)),
+            )],
+        );
+        definition.meta.name = "Overlap".into();
+        definition.classes.push(Class {
+            id: 1,
+            name: "Seeds".into(),
+            ..Default::default()
+        });
+        project.modules.push(definition);
+        project
+            .pipelines
+            .push(nuclei(vec![uses(1, "OVERLAP", &[])]));
+
+        let problems = check_project(&project);
+
+        let warning = problems
+            .iter()
+            .find(|p| p.message.contains("Overlapping with"))
+            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
+        assert_eq!(
+            warning.message,
+            "“Overlap” looks inside for class L1 objects overlapping other class L1 objects - \
+             “Overlapping with” is usually another class"
+        );
+        assert_eq!(warning.step, Some((PipelineId(1), StepId(1))));
+    }
+
+    /// Three steps working on class 9 that nothing gives objects: one
+    /// warning at the first, counting the 2 others.
+    #[test]
+    fn a_class_three_steps_work_on_without_objects_counts_the_others() {
+        let mut project = spots_project();
+        for id in 2..=4 {
+            project.pipelines[0].steps.push(step(
+                id,
+                classify(vec![ObjectClass::Global(9)], ObjectClass::Unset),
+            ));
+        }
+
+        let unmade: Vec<ModuleProblem> = check_project(&project)
+            .into_iter()
+            .filter(|p| p.message.contains("nothing to work on"))
+            .collect();
+
+        assert_eq!(unmade.len(), 1, "{:?}", messages(&unmade));
+        assert_eq!(unmade[0].step, Some((PipelineId(1), StepId(2))));
+        assert!(
+            unmade[0]
+                .message
+                .ends_with("- 2 more steps of this pipeline work on it too"),
+            "{}",
+            unmade[0].message
+        );
+    }
+
+    /// Colocalization's overlap regions and a Voronoi both create class 3:
+    /// the Voronoi's warning says the colocalization creates it for its
+    /// overlap areas.
+    #[test]
+    fn a_class_also_created_for_overlap_areas_says_so() {
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: 3,
+            name: "Overlap".into(),
+            ..Default::default()
+        });
+        let coloc = PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings {
+            classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
+            class_for_overlapping_areas: ObjectClass::Global(3),
+            ..Default::default()
+        });
+        let name = coloc.name().to_string();
+        project
+            .pipelines
+            .push(nuclei(vec![step(1, coloc), step(2, voronoi(3))]));
+
+        let problems = check_project(&project);
+
+        let expected = format!(
+            "Class 3 “Overlap” is also given to new objects by the pipeline “Nuclei” at #1 \
+             ({name}, for its overlap areas) - objects of both end up in one class and can't \
+             be told apart"
+        );
+        assert!(
+            messages_at(&problems, 2).contains(&expected.as_str()),
+            "{:?}",
+            messages_at(&problems, 2)
+        );
+    }
+
+    /// A command step creating class 9, which the project doesn't have: a
+    /// warning naming the command, fixed by adding the class.
+    #[test]
+    fn a_command_step_creating_a_missing_class_can_add_it() {
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(nuclei(vec![step(1, voronoi(9))]));
+
+        let problems = check_modules(&project);
+
+        let missing = problems
+            .iter()
+            .find(|p| p.fix == Some(ProblemFix::AddClass(9)))
+            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
+        assert_eq!(
+            missing.message,
+            format!(
+                "{} creates objects of class 9, which the project doesn't have",
+                voronoi(9).name()
+            )
+        );
+        assert_eq!(missing.severity, Severity::Warning);
+        assert_eq!(missing.step, Some((PipelineId(1), StepId(1))));
+    }
+
+    /// A module creating classes 8 and 9, which the project doesn't have: a
+    /// warning each for the module, and each once at the step using it.
+    #[test]
+    fn a_module_creating_missing_classes_is_warned_in_it_and_at_its_step() {
+        let mut project = ProjectSettings::default();
+        project.modules.push(module(
+            "SHAPES",
+            vec![step(1, voronoi(8)), step(2, voronoi(9))],
+        ));
+        project.pipelines.push(nuclei(vec![uses(1, "SHAPES", &[])]));
+
+        let in_module: Vec<ModuleProblem> = check_module(&project, "SHAPES")
+            .into_iter()
+            .filter(|p| p.fix.is_some())
+            .collect();
+        let name = voronoi(8).name().to_string();
+        assert_eq!(
+            messages(&in_module),
+            [
+                format!(
+                    "Module SHAPES: {name} creates objects of class 8, which the project doesn't have"
+                ),
+                format!(
+                    "Module SHAPES: {name} creates objects of class 9, which the project doesn't have"
+                ),
+            ]
+        );
+        assert_eq!(
+            in_module.iter().map(|p| p.fix.clone()).collect::<Vec<_>>(),
+            [Some(ProblemFix::AddClass(8)), Some(ProblemFix::AddClass(9))]
+        );
+        assert!(in_module.iter().all(|p| p.parameters.is_empty()));
+
+        let at_step: Vec<Option<ProblemFix>> = check_project(&project)
+            .into_iter()
+            .filter(|p| p.step == Some((PipelineId(1), StepId(1))) && p.fix.is_some())
+            .map(|p| p.fix)
+            .collect();
+        assert_eq!(
+            at_step,
+            [Some(ProblemFix::AddClass(8)), Some(ProblemFix::AddClass(9))]
+        );
+    }
 }

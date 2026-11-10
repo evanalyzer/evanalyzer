@@ -855,6 +855,14 @@ impl Object {
         (x_center, y_center)
     }
 
+    /// The centre of the bounding box in the continuous coordinates the
+    /// shape transforms rasterize in, where pixel `i` spans `[i, i + 1)`
+    /// and its centre is `i + 0.5` (see `rasterize_geometry`).
+    fn bbox_center_continuous(&self) -> (f32, f32) {
+        let (x, y) = self.get_bbox_center();
+        (x + 0.5, y + 0.5)
+    }
+
     /// Returns Feret diameter (longest distance between boundary points):
     /// the largest distance between two pixel centres (see
     /// [`Object::feret_diameters`]). Was the bounding
@@ -1399,14 +1407,15 @@ impl Object {
         scale_y: f32,
         image_size: ImageSize,
     ) -> TransformedGeometry {
-        let (cx, cy) = self.get_bbox_center();
+        let (cx, cy) = self.bbox_center_continuous();
         let [x_min, y_min, x_max, y_max] = self.bbox;
         let project = |v: f32, c: f32, s: f32| c + (v - c) * s;
+        // The box's edges: its last pixel ends at `max + 1`.
         let bbox_f = [
             project(x_min as f32, cx, scale_x),
             project(y_min as f32, cy, scale_y),
-            project(x_max as f32, cx, scale_x),
-            project(y_max as f32, cy, scale_y),
+            project((x_max + 1) as f32, cx, scale_x),
+            project((y_max + 1) as f32, cy, scale_y),
         ];
 
         rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
@@ -1425,7 +1434,7 @@ impl Object {
     /// Builds the rasterized geometry of a filled circle with the given `diameter`, centered
     /// on `self`'s bounding-box center.
     pub fn circle_geometry(&self, diameter: f32, image_size: ImageSize) -> TransformedGeometry {
-        let (cx, cy) = self.get_bbox_center();
+        let (cx, cy) = self.bbox_center_continuous();
         // A radius of 0 would rasterize to an empty mask; floor it to a single pixel.
         let radius = (diameter / 2.0).max(0.5);
         let bbox_f = [cx - radius, cy - radius, cx + radius, cy + radius];
@@ -1445,7 +1454,7 @@ impl Object {
         scale: f32,
         image_size: ImageSize,
     ) -> TransformedGeometry {
-        let (cx, cy) = self.get_bbox_center();
+        let (cx, cy) = self.bbox_center_continuous();
         let ellipse = self.get_ellipse();
         // Degenerate ROIs (e.g. a single pixel) have zero moments; floor the semi-axes to a
         // single pixel so they still rasterize to something instead of vanishing.
@@ -2753,5 +2762,240 @@ mod tests {
         assert!(!local.is_visible_in(Scope::Global));
         let global = Object::new(ObjectInit::default());
         assert!(global.is_visible_in(scoped(2)));
+    }
+
+    // ---- Classes, coloc partners and shape guards ----
+
+    /// `Unset` is no class: adding it changes neither the classes nor the
+    /// scope, and is no error.
+    #[test]
+    fn adding_the_unset_class_changes_nothing() {
+        let mut object = Object::new(ObjectInit::default());
+        object
+            .add_object_class(ObjectClass::Local(1), scoped(3))
+            .unwrap();
+        object
+            .add_object_class(ObjectClass::Unset, Scope::Global)
+            .unwrap();
+        assert_eq!(object.scope(), scoped(3));
+        assert_eq!(
+            object.object_classes().iter().copied().collect::<Vec<_>>(),
+            [ObjectClass::Local(1)]
+        );
+    }
+
+    /// Coloc partners are kept per class, each id once, sorted.
+    #[test]
+    fn colocalizing_objects_are_kept_per_class_sorted_and_once() {
+        let mut object = Object::new(ObjectInit::default());
+        for id in [3, 1, 3] {
+            object.add_colocalizing_object(ObjectClass::Global(2), ObjectId(id));
+        }
+        object.add_colocalizing_object(ObjectClass::Global(5), ObjectId(9));
+        assert_eq!(
+            object.colocalized_with[&ObjectClass::Global(2)],
+            [ObjectId(1), ObjectId(3)]
+        );
+        assert_eq!(
+            object.colocalized_with[&ObjectClass::Global(5)],
+            [ObjectId(9)]
+        );
+    }
+
+    /// The Feret diameters of a filled 3 x 4 rectangle: over the pixel
+    /// centres (0..2 x 0..3) the longest distance is the diagonal
+    /// sqrt(2² + 3²), the narrowest caliper width the short side, 2.
+    #[test]
+    fn the_feret_diameters_of_a_rectangle_are_its_centres_diagonal_and_short_side() {
+        let row: &[bool] = &[true; 3];
+        let object = object_from_pattern(&[row; 4]);
+        assert!((object.get_feret_diameter() - 13f32.sqrt()).abs() < 1e-5);
+        assert!((object.get_min_feret_diameter() - 2.0).abs() < 1e-5);
+    }
+
+    /// An object without pixels has solidity and compactness 0, not NaN.
+    #[test]
+    fn solidity_and_compactness_of_an_empty_object_are_zero() {
+        let object = Object::new(ObjectInit {
+            bbox: [0, 0, 2, 2],
+            mask_data: BitVec::<u64, Lsb0>::repeat(false, 9),
+            area: 0,
+            ..Default::default()
+        });
+        assert_eq!(object.get_solidity(), 0.0);
+        assert_eq!(object.get_compactness(4.0), 0.0);
+        // 3 x 3 square, perimeter 8: 64 / 9.
+        let square = square_object_at(0, 0, 3);
+        assert!((square.get_compactness(8.0) - 64.0 / 9.0).abs() < 1e-5);
+    }
+
+    /// Collinear points have no hull area; a unit square's corners have 1.
+    #[test]
+    fn the_hull_of_collinear_points_has_no_area() {
+        let mut hull = Vec::new();
+        let mut line = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)];
+        assert_eq!(convex_hull_area(&mut line, &mut hull), 0.0);
+        let mut square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.5, 0.5)];
+        assert_eq!(convex_hull_area(&mut square, &mut hull), 1.0);
+    }
+
+    /// Scaled by 0 an object has no pixels left (its box collapses on its
+    /// centre).
+    #[test]
+    fn scaled_by_zero_an_object_has_no_pixels() {
+        let object = square_object_at(10, 10, 5);
+        let geometry = object.scaled_geometry(0.0, 0.0, LARGE);
+        assert_eq!(geometry.area, 0);
+        assert!(geometry.mask_data.not_any());
+    }
+
+    /// Into an image without pixels nothing can be drawn: the geometry is
+    /// empty and touches the edge.
+    #[test]
+    fn a_geometry_in_an_empty_image_is_empty_and_touches_the_edge() {
+        let object = square_object_at(0, 0, 3);
+        let empty = ImageSize {
+            width: 0,
+            height: 0,
+        };
+        for geometry in [
+            object.dilated_geometry(1.0, empty),
+            object.circle_geometry(3.0, empty),
+        ] {
+            assert_eq!(geometry.area, 0);
+            assert!(geometry.mask_data.is_empty());
+            assert!(geometry.touches_edge);
+        }
+    }
+
+    /// Mirrored (a negative scale) the box is inverted: nothing is drawn,
+    /// the box collapses on its first corner.
+    #[test]
+    fn an_inverted_box_draws_nothing() {
+        let object = square_object_at(10, 10, 5);
+        let geometry = object.scaled_geometry(-1.0, -1.0, LARGE);
+        assert_eq!(geometry.area, 0);
+        assert_eq!(geometry.bbox[0], geometry.bbox[2]);
+        assert_eq!(geometry.bbox[1], geometry.bbox[3]);
+    }
+
+    /// A circle is centred on the object: diameter 5 around the single
+    /// pixel (20, 20) are the pixels whose centres lie within 2.5 px of
+    /// that pixel's centre - the 5 x 5 block without its 4 corners
+    /// (2² + 2² = 8 > 6.25, while 2² + 1² = 5 is in): 25 - 4 = 21 pixels.
+    #[test]
+    fn a_circle_is_centred_on_the_object() {
+        let object = square_object_at(20, 20, 1);
+        let geometry = object.circle_geometry(5.0, LARGE);
+        assert_eq!(geometry.bbox, [18, 18, 22, 22]);
+        assert_eq!(geometry.area, 21);
+    }
+
+    /// Scaled, an object grows evenly on all sides around its centre: the
+    /// 2 x 2 square at (10, 10) (pixels 10..=11, centre 11.0) by 2 becomes
+    /// the 4 x 4 block 9..=12, the single pixel (10, 10) (centre 10.5) by 3
+    /// the 3 x 3 block 9..=11.
+    #[test]
+    fn scaling_grows_an_object_evenly_around_its_centre() {
+        let geometry = square_object_at(10, 10, 2).scaled_geometry(2.0, 2.0, LARGE);
+        assert_eq!(geometry.bbox, [9, 9, 12, 12]);
+        assert_eq!(geometry.area, 16);
+
+        let geometry = square_object_at(10, 10, 1).scaled_geometry(3.0, 3.0, LARGE);
+        assert_eq!(geometry.bbox, [9, 9, 11, 11]);
+        assert_eq!(geometry.area, 9);
+    }
+
+    /// Objects with more fractional values than an accumulator lists (in a
+    /// single tile, and over several tiles) get their spread from their
+    /// pixels read again: the same median, quartiles and MAD as from all
+    /// their values at once.
+    #[test]
+    fn measure_intensities_of_large_fractional_objects_reads_their_pixels_again() {
+        use crate::ImageContainer;
+        use crate::image::ManagedImage;
+        use crate::image::Point2d;
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use kornia_image::Image;
+        use std::sync::Arc;
+
+        const SIZE: usize = 600;
+        const TILE: usize = 300;
+        // Fractional: never whole gray values, so they are listed, not counted.
+        let value = |x: usize, y: usize| ((x * 31 + y * 17) % 4000) as f32 / 7.0 + 0.1;
+        let mut cache = GlobalPipelineCache::default();
+        for (x0, y0) in (0..2).flat_map(|ty| (0..2).map(move |tx| (tx * TILE, ty * TILE))) {
+            let samples: Vec<f32> = (0..TILE * TILE)
+                .map(|i| value(x0 + i % TILE, y0 + i / TILE))
+                .collect();
+            let size = ImageSize {
+                width: TILE,
+                height: TILE,
+            };
+            let image = ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::from_size_slice(size, &samples).unwrap(),
+                tile_offset: Point2d { x: x0, y: y0 },
+                plane: None,
+                dimensionality: ImageDimensionality::Planar,
+            });
+            let tile = ImageTile {
+                offset_x: x0,
+                offset_y: y0,
+                width: TILE,
+                height: TILE,
+            };
+            cache.add_to_channel_cache(Arc::new(image), 0, tile);
+        }
+        // 290² = 84,100 px in the first tile; 400² = 160,000 px over all four:
+        // both more than an accumulator lists.
+        let boxes: [[u32; 4]; 2] = [[5, 5, 294, 294], [100, 100, 499, 499]];
+        assert!(boxes.iter().all(|b| {
+            ((b[2] - b[0] + 1) * (b[3] - b[1] + 1)) as usize > intensities::CAPPED_LIST
+        }));
+        let mut objects: Vec<Object> = boxes
+            .iter()
+            .enumerate()
+            .map(|(i, &bbox)| {
+                let area = ((bbox[2] - bbox[0] + 1) * (bbox[3] - bbox[1] + 1)) as usize;
+                Object::new(ObjectInit {
+                    id: ObjectId(i as u128 + 1),
+                    bbox,
+                    area,
+                    mask_data: BitVec::<u64, Lsb0>::repeat(true, area),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        Object::measure_intensities_of(&mut objects, &cache);
+
+        for object in &objects {
+            let [x0, y0, x1, y1] = object.bbox.map(|v| v as usize);
+            let mut values: Vec<f32> = (y0..=y1)
+                .flat_map(|y| (x0..=x1).map(move |x| value(x, y)))
+                .collect();
+            let sum: f64 = values.iter().map(|v| *v as f64).sum();
+            let mut expected = Intensity {
+                avg_intensity: sum / values.len() as f64,
+                ..Default::default()
+            };
+            expected.set_spread(&mut values);
+            let got = &object.intensities[&0];
+            let what = format!("object {:?}", object.id);
+            assert!((got.sum_intensity - sum).abs() <= 1e-9 * sum, "{what}");
+            assert_eq!(got.median_intensity, expected.median_intensity, "{what}");
+            assert_eq!(
+                got.lower_quartile_intensity, expected.lower_quartile_intensity,
+                "{what}"
+            );
+            assert_eq!(
+                got.upper_quartile_intensity, expected.upper_quartile_intensity,
+                "{what}"
+            );
+            assert_eq!(got.mad_intensity, expected.mad_intensity, "{what}");
+            assert!(
+                (got.std_intensity - expected.std_intensity).abs() <= 1e-9 * expected.std_intensity,
+                "{what}"
+            );
+        }
     }
 }

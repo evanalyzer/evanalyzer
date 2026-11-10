@@ -1130,3 +1130,173 @@ fn every_command_key_round_trips_and_matches_its_serialized_tag() {
     }
     assert!(PipelineCommand::default_for_key("no_such_command").is_none());
 }
+
+/// A valid value for `p` that differs from its current one, or `None` when
+/// the type has nothing else to pick (a read-only label, a lone option).
+fn changed_value(p: &evanalyzer_cfg::settings::parameter_def::ParameterDef) -> Option<String> {
+    use evanalyzer_cfg::settings::parameter_def::ParamType as T;
+    let number = |integer: bool| {
+        let current: f64 = p.value.trim().parse().unwrap_or(0.0);
+        let (min, max) = (f64::from(p.min), f64::from(p.max));
+        let step = if integer {
+            1.0
+        } else {
+            f64::from(p.step).max(0.01)
+        };
+        // A huge "no limit" default (f32 can't hold +1 there): a plain value.
+        let mut next = if current.abs() > 1e6 {
+            100.0
+        } else {
+            current + step
+        };
+        if max > min && next > max {
+            next = current - step;
+        }
+        if max > min && next < min {
+            return None;
+        }
+        Some(if integer || p.value.parse::<i64>().is_ok() {
+            format!("{}", next.round() as i64)
+        } else {
+            format!("{next}")
+        })
+    };
+    match p.param_type {
+        T::Label | T::Group | T::Script | T::Measurement | T::ImageAddress => None,
+        T::Toggle => Some(if p.value == "true" { "false" } else { "true" }.into()),
+        T::Dropdown | T::PixelUnits | T::SizeUnits => {
+            p.options.iter().find(|o| **o != p.value).cloned()
+        }
+        T::Text | T::FilePath => Some(format!("{}_changed", p.value)),
+        T::ObjClass | T::SegClass => Some(if p.value == "3" { "4" } else { "3" }.into()),
+        T::MultiObjClass | T::MultiSegClass => {
+            Some(if p.value == "3,5" { "2" } else { "3,5" }.into())
+        }
+        T::Spinner | T::ImageChannel => number(true),
+        T::Number | T::Slider => number(false),
+    }
+}
+
+/// Every setting a user changes in a step's panel is kept: for every
+/// command, every parameter (and every field of a list entry) set to a
+/// different valid value reads back as that value. A setting the editor
+/// shows but `apply_param_change` drops would silently run the pipeline
+/// with the old value.
+#[test]
+fn every_parameter_keeps_a_changed_value() {
+    let mut checked = 0usize;
+    let mut skipped = Vec::new();
+    for meta in all_command_meta() {
+        let mut cmd = default_command(meta.id).expect("valid id");
+        // One entry in every list, so its fields can be set too.
+        for p in cmd.to_parameters() {
+            if p.groups.is_empty() {
+                cmd.add_group_item(&p.name);
+            }
+        }
+        for p in cmd.to_parameters() {
+            if !p.groups.is_empty() {
+                for (row, fields) in p.groups.iter().enumerate() {
+                    for f in fields {
+                        let Some(v) = changed_value(f) else { continue };
+                        let key = format!("{}.{row}.{}", p.name, f.name);
+                        cmd.apply_param_change(&key, &v);
+                        let now = param_value_nested(&cmd, &p.name, row, &f.name);
+                        if now == f.value {
+                            skipped.push(format!("{}: {key} = {v:?}", meta.name));
+                        } else {
+                            assert!(
+                                values_match(&now, &v),
+                                "{}: {key} set to {v:?} reads {now:?}",
+                                meta.name
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+            // An earlier change (a variant picked) may have replaced it.
+            let Some(p) = cmd.to_parameters().into_iter().find(|q| q.name == p.name) else {
+                continue;
+            };
+            let Some(v) = changed_value(&p) else { continue };
+            cmd.apply_param_change(&p.name, &v);
+            let Some(now) = cmd
+                .to_parameters()
+                .into_iter()
+                .find(|q| q.name == p.name)
+                .map(|q| q.value)
+            else {
+                // Picking a variant can rename its own fields.
+                continue;
+            };
+            if now == p.value {
+                skipped.push(format!("{}: {} = {v:?}", meta.name, p.name));
+            } else {
+                assert!(
+                    values_match(&now, &v),
+                    "{}: {} set to {v:?} reads {now:?}",
+                    meta.name,
+                    p.name
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100, "only {checked} parameters checked");
+    assert!(
+        skipped.is_empty(),
+        "changes that were dropped:\n{}",
+        skipped.join("\n")
+    );
+}
+
+/// The same value, allowing a number's formatting ("2" vs "2.0").
+fn values_match(a: &str, b: &str) -> bool {
+    a == b || matches!((a.parse::<f64>(), b.parse::<f64>()), (Ok(x), Ok(y)) if (x - y).abs() < 1e-4)
+}
+
+/// Ticking a class in a multi-class picker adds it, ticking it again
+/// removes it - for every command's class list.
+#[test]
+fn ticking_a_class_twice_adds_then_removes_it() {
+    use evanalyzer_cfg::settings::parameter_def::ParamType as T;
+    let mut checked = 0usize;
+    for meta in all_command_meta() {
+        let mut cmd = default_command(meta.id).expect("valid id");
+        for p in cmd.to_parameters() {
+            if !matches!(p.param_type, T::MultiObjClass | T::MultiSegClass) {
+                continue;
+            }
+            let has = |cmd: &PipelineCommand| {
+                param_value(cmd, &p.name)
+                    .split(',')
+                    .any(|c| c.trim() == "7")
+            };
+            assert!(!has(&cmd), "{}: {} starts with class 7", meta.name, p.name);
+            cmd.apply_param_change(&p.name, "toggle:7");
+            if p.param_type == T::MultiSegClass && !has(&cmd) {
+                // Segmentation-class lists take the plain list only.
+                continue;
+            }
+            assert!(
+                has(&cmd),
+                "{}: {} ticked 7: {:?}",
+                meta.name,
+                p.name,
+                param_value(&cmd, &p.name)
+            );
+            cmd.apply_param_change(&p.name, "toggle:7");
+            assert!(
+                !has(&cmd),
+                "{}: {} unticked 7: {:?}",
+                meta.name,
+                p.name,
+                param_value(&cmd, &p.name)
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 5, "only {checked} class lists checked");
+}

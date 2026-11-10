@@ -991,6 +991,131 @@ mod tests {
         );
     }
 
+    /// Adds a tile of channel 0 at (`x`, `y`) to `cache` holding the gray
+    /// levels `levels` (256 levels: level L is the value L / 255).
+    fn add_level_tile(
+        cache: &mut GlobalPipelineCache,
+        (x, y, width, height): (usize, usize, usize, usize),
+        levels: &[u8],
+    ) {
+        let samples: Vec<f32> = levels.iter().map(|l| *l as f32 / 255.0).collect();
+        let image = ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1>::from_size_slice(ImageSize { width, height }, &samples).unwrap(),
+            tile_offset: Point2d { x, y },
+            plane: None,
+            dimensionality: ImageDimensionality::Planar,
+        });
+        let tile = ImageTile {
+            offset_x: x,
+            offset_y: y,
+            width,
+            height,
+        };
+        cache.add_to_channel_cache(Arc::new(image), 0, tile);
+    }
+
+    fn texture_of_channel(channel: u32) -> Texture {
+        Texture {
+            channel: ImageChannelIdx(channel),
+            scale: 1,
+            gray_levels: 256,
+            directions: TextureDirections::Each,
+        }
+    }
+
+    /// An image without the channel measured: an error naming the channel.
+    #[test]
+    fn a_missing_channel_is_an_error() {
+        let mut cache = GlobalPipelineCache::default();
+        add_level_tile(&mut cache, (0, 0, 2, 2), &[1, 2, 3, 4]);
+        let texture = texture_of_channel(3);
+        let levels = texture.levels().unwrap();
+        match texture.image_features(&cache, &levels) {
+            Err(InternalErrors::InvalidArgument(message)) => {
+                assert_eq!(message, "Measure texture: the image has no channel 3")
+            }
+            other => panic!("expected an invalid argument, got {other:?}"),
+        }
+    }
+
+    /// Overlapping tiles (the same image underneath): a pair whose second
+    /// pixel lies inside the other tile, away from its border strips, reads
+    /// that pixel from the tile - every pair counted holds the image's
+    /// levels, the same pairs and highest level as one tile.
+    #[test]
+    fn overlapping_tiles_read_the_neighbour_inside_the_other_tile() {
+        // 5 × 3, each pixel its own level: y · 5 + x + 1.
+        let level = |x: usize, y: usize| (y * 5 + x + 1) as u8;
+        let region = |x0: usize, x1: usize| -> Vec<u8> {
+            (0..3)
+                .flat_map(|y| (x0..x1).map(move |x| level(x, y)))
+                .collect()
+        };
+        let mut whole = GlobalPipelineCache::default();
+        add_level_tile(&mut whole, (0, 0, 5, 3), &region(0, 5));
+        // x 0..3 and x 1..5: (3, 1) - right of the first tile - lies inside
+        // the second one, past its 1 px left / right / top strips.
+        let mut overlapping = GlobalPipelineCache::default();
+        add_level_tile(&mut overlapping, (0, 0, 3, 3), &region(0, 3));
+        add_level_tile(&mut overlapping, (1, 0, 4, 3), &region(1, 5));
+        let texture = texture_of_channel(0);
+        let levels = texture.levels().unwrap();
+        let (one, max_one) = texture.image_counts(&whole, &levels).unwrap();
+        let (two, max_two) = texture.image_counts(&overlapping, &levels).unwrap();
+        assert_eq!(max_two, max_one);
+        assert_eq!(max_one, 15);
+        let pairs = |c: &Cooccurrences, d: usize| -> Vec<usize> {
+            let mut found: Vec<usize> = (0..LEVELS * LEVELS)
+                .filter(|&i| c.counts[d][i] > 0)
+                .collect();
+            found.sort_unstable();
+            found
+        };
+        for d in 0..DIRECTIONS.len() {
+            assert_eq!(pairs(&two, d), pairs(&one, d), "direction {d}");
+        }
+        // The pair across the first tile's right border in row 1: (8, 9).
+        assert!(two.counts[0][8 * LEVELS + 9] > 0);
+    }
+
+    /// An object over two overlapping tiles takes each pixel from the first
+    /// tile (in reading order) that holds it - the second tile's different
+    /// values there are ignored. Contrast per direction by hand.
+    #[test]
+    fn an_object_over_overlapping_tiles_reads_each_pixel_from_the_first() {
+        let mut cache = GlobalPipelineCache::default();
+        // First tile x 0..=1: column 1 holds 10 (row 0) and 20 (row 1).
+        add_level_tile(&mut cache, (0, 0, 2, 2), &[5, 10, 5, 20]);
+        // Second tile x 1..=3: column 1 (99) is the first tile's; column 2
+        // holds 30 and 50.
+        add_level_tile(&mut cache, (1, 0, 3, 2), &[99, 30, 7, 99, 50, 7]);
+        // The object: the 2 × 2 box x 1..=2, y 0..=1 - levels 10 30 / 20 50.
+        let object = Object::new(ObjectInit {
+            bbox: [1, 0, 2, 1],
+            area: 4,
+            mask_data: BitVec::repeat(true, 4),
+            ..Default::default()
+        });
+        let texture = texture_of_channel(0);
+        let levels = texture.levels().unwrap();
+        let features = texture
+            .object_features(&object, &cache, &levels)
+            .expect("pairs in every direction");
+        // Contrast: Σ P(i, j) (i - j)², each pair counted both ways.
+        // 0° (right): (10, 30), (20, 50) → (400 + 900) / 2.
+        assert_eq!(features[0][1], 650.0);
+        // 135° (down-right): (10, 50) → 40².
+        assert_eq!(features[1][1], 1600.0);
+        // 90° (down): (10, 20), (30, 50) → (100 + 400) / 2.
+        assert_eq!(features[2][1], 250.0);
+        // 45° (down-left): (30, 20) → 10².
+        assert_eq!(features[3][1], 100.0);
+        // Angular second moment: Σ P². Two pairs: 4 entries of 1/4; one
+        // pair: 2 entries of 1/2.
+        assert_eq!(features[0][0], 0.25);
+        assert_eq!(features[1][0], 0.5);
+    }
+
     /// Speed and RAM: a textured 16-bit image in 4 tiles (`BENCH_SIZE`²,
     /// default 2048), a 21 × 21 object every 30 px, all 4 directions.
     ///

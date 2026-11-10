@@ -1724,6 +1724,75 @@ mod tests {
         assert!(err.contains("no channel 4"), "{err}");
     }
 
+    /// Without an object of the seeds' class nothing grows: the step
+    /// succeeds and adds no region.
+    #[test]
+    fn no_seeds_grow_no_cells() {
+        let mut cache = cache_with_two_nuclei();
+        let before = cache.object_cache.len();
+        run(
+            &Propagation {
+                seeds: ObjectClass::Global(7),
+                ..step()
+            },
+            &mut cache,
+        )
+        .unwrap();
+        assert!(cells(&cache).is_empty());
+        assert_eq!(cache.object_cache.len(), before);
+    }
+
+    /// Where seeds overlap the first (in image order) keeps the pixels: a
+    /// seed lying exactly on another one gets no pixel and so no region -
+    /// the other two still split the whole image.
+    #[test]
+    fn a_seed_covered_by_another_grows_no_cell() {
+        let mut cache = cache_with_two_nuclei();
+        let twin = filled(3, [3, 4, 4, 5], NUCLEUS);
+        cache.object_cache.insert(twin.id.clone(), twin);
+        run(&step(), &mut cache).unwrap();
+        let cells = cells(&cache);
+        assert_eq!(cells.len(), 2, "one region per seed that has a pixel");
+        assert_eq!(cells.iter().map(|c| c.area).sum::<usize>(), 200);
+        assert!(cells.iter().any(|c| c.is_part_of(3, 4)));
+        assert!(cells.iter().any(|c| c.is_part_of(17, 5)));
+    }
+
+    /// A region grows across the grid's cells (256 px) and the image's
+    /// blocks: one seed at the left of a flat 300 x 16 image takes all of
+    /// it - the windows to the right hold no seed and are told by the
+    /// growth from their neighbours.
+    #[test]
+    fn one_seed_grows_over_several_grid_cells() {
+        let (width, height) = (300, 16);
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(
+            Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(ImageSize { width, height }, vec![0.5; width * height]).unwrap(),
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+                dimensionality: ImageDimensionality::Planar,
+            })),
+            1,
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width,
+                height,
+            },
+        );
+        let nucleus = filled(1, [1, 1, 2, 2], NUCLEUS);
+        cache.object_cache.insert(nucleus.id.clone(), nucleus);
+        let mut meta = PipelineImageMeta::default();
+        meta.full_image_width = ImageSize { width, height };
+        let mut ctx = PipelineContext::without_image(std::path::PathBuf::new(), meta).unwrap();
+        step().execute(&mut ctx, &mut cache).unwrap();
+        let cells = cells(&cache);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].area, width * height);
+        assert_eq!(cells[0].bbox, [0, 0, width as u32 - 1, height as u32 - 1]);
+    }
+
     /// Peak RSS of this process in MB (Linux).
     fn peak_rss_mb() -> f64 {
         std::fs::read_to_string("/proc/self/status")

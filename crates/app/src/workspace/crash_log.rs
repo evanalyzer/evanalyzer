@@ -200,4 +200,37 @@ mod tests {
         assert!(contents.contains("first"), "contents were: {contents}");
         assert!(contents.contains("second"), "contents were: {contents}");
     }
+
+    /// A panic whose payload isn't text (`panic_any(42)`) still gets an
+    /// entry, saying so.
+    #[test]
+    fn format_crash_log_entry_handles_a_payload_that_is_not_text() {
+        let entry = capture_crash_log_entry(|| std::panic::panic_any(42_i32));
+
+        assert!(
+            entry.contains("<non-string panic payload>"),
+            "entry was: {entry}"
+        );
+    }
+
+    /// A log that can't be opened (its folder is missing) is skipped
+    /// without a second panic, and nothing is created.
+    #[test]
+    fn write_crash_log_entry_to_an_unopenable_path_writes_nothing() {
+        let _guard = hook_test_lock().lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing").join("crash.log");
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new({
+            let path = path.clone();
+            move |info| write_crash_log_entry_to(&path, info)
+        }));
+        let result = std::panic::catch_unwind(|| panic!("unlogged"));
+        std::panic::set_hook(previous);
+
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert!(!dir.path().join("missing").exists());
+    }
 }

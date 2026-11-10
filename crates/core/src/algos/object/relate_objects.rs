@@ -602,4 +602,40 @@ mod tests {
         };
         assert!(run(&step, &mut cache).is_err());
     }
+
+    /// Without child classes chosen it is the same error as without parent
+    /// classes - it names both.
+    #[test]
+    fn without_child_classes_it_says_what_is_missing() {
+        let mut cache = cache(vec![filled(1, [0, 0, 9, 9], CELL)]);
+        let step = RelateObjects {
+            child_classes: vec![],
+            ..step(RelateRule::CentreInside)
+        };
+        match run(&step, &mut cache) {
+            Err(InternalErrors::InvalidArgument(message)) => assert_eq!(
+                message,
+                "Relate Objects: choose the children's and the parents' classes"
+            ),
+            other => panic!("expected an invalid argument, got {other:?}"),
+        }
+    }
+
+    /// No object of the child classes: nothing to link, nothing removed -
+    /// even with "remove children without a parent" - and the parents keep
+    /// their own links.
+    #[test]
+    fn without_children_nothing_changes() {
+        let mut cell = filled(1, [0, 0, 9, 9], CELL);
+        cell.set_parent(REGION, Some(ObjectId(7)));
+        let mut cache = cache(vec![cell, filled(2, [20, 0, 29, 9], CELL)]);
+        let step = RelateObjects {
+            remove_without_parent: true,
+            ..step(RelateRule::CentreInside)
+        };
+        run(&step, &mut cache).unwrap();
+        assert_eq!(cache.object_cache.len(), 2);
+        assert_eq!(parent(&cache, 1, REGION), Some(7));
+        assert_eq!(parent(&cache, 2, CELL), None);
+    }
 }
