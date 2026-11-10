@@ -83,9 +83,11 @@ pub(super) fn has_trees(db: &ResultsGenerator) -> Result<bool, InternalErrors> {
         .any(|(parent, child)| parent == child))
 }
 
-/// The key of Measure Filament Tree's value `id` (the first such step):
-/// `None` when no step measured it.
-fn tree_key(db: &ResultsGenerator, id: &str) -> Result<Option<String>, InternalErrors> {
+/// The step of Measure Filament Tree (the first one): the step with a
+/// `strahler_order` value, which only that command measures - a value id
+/// alone is no proof (Measure Object Skeleton has `branch_points` too).
+/// `None` when no step measured trees.
+fn tree_step(db: &ResultsGenerator) -> Result<Option<String>, InternalErrors> {
     let exists: bool = db
         .connection()
         .query_row(
@@ -99,8 +101,9 @@ fn tree_key(db: &ResultsGenerator, id: &str) -> Result<Option<String>, InternalE
     }
     db.connection()
         .query_row(
-            "SELECT key FROM measurement_info WHERE key LIKE ? ORDER BY key LIMIT 1",
-            [format!("%/{id}")],
+            "SELECT step FROM measurement_info WHERE key = step || '/strahler_order' \
+             ORDER BY step LIMIT 1",
+            [],
             |row| row.get(0),
         )
         .map(Some)
@@ -108,6 +111,28 @@ fn tree_key(db: &ResultsGenerator, id: &str) -> Result<Option<String>, InternalE
             duckdb::Error::QueryReturnedNoRows => Ok(None),
             e => Err(err(e)),
         })
+}
+
+/// The keys of the tree step's values `ids` (see [`tree_step`]), `None`
+/// for one it didn't measure.
+fn tree_keys(db: &ResultsGenerator, ids: &[&str]) -> Result<Vec<Option<String>>, InternalErrors> {
+    let Some(step) = tree_step(db)? else {
+        return Ok(vec![None; ids.len()]);
+    };
+    let mut stmt = db
+        .connection()
+        .prepare("SELECT key FROM measurement_info WHERE key = ?")
+        .map_err(err)?;
+    ids.iter()
+        .map(|id| {
+            stmt.query_row([format!("{step}/{id}")], |row| row.get(0))
+                .map(Some)
+                .or_else(|e| match e {
+                    duckdb::Error::QueryReturnedNoRows => Ok(None),
+                    e => Err(err(e)),
+                })
+        })
+        .collect()
 }
 
 /// The values of `keys` of the objects in `ids` (`object_id -> key -> value`).
@@ -186,10 +211,8 @@ pub(super) fn tree_neurons(
         .map_err(err)?
         .collect::<Result<_, _>>()
         .map_err(err)?;
-    let keys: Vec<Option<String>> = TREE_NEURON_VALUES
-        .iter()
-        .map(|(id, _)| tree_key(db, id))
-        .collect::<Result<_, _>>()?;
+    let ids: Vec<&str> = TREE_NEURON_VALUES.iter().map(|(id, _)| *id).collect();
+    let keys = tree_keys(db, &ids)?;
     let measured = keys.iter().any(Option::is_some);
     let present: Vec<String> = keys.iter().flatten().cloned().collect();
     let ids: Vec<String> = neurons.iter().map(|n| n.soma_id.clone()).collect();
@@ -237,10 +260,7 @@ pub(super) fn tree_segments(
         .map_err(err)?
         .collect::<Result<_, _>>()
         .map_err(err)?;
-    let keys: Vec<Option<String>> = SEGMENT_KEYS
-        .iter()
-        .map(|id| tree_key(db, id))
-        .collect::<Result<_, _>>()?;
+    let keys = tree_keys(db, &SEGMENT_KEYS)?;
     let present: Vec<String> = keys.iter().flatten().cloned().collect();
     let ids: Vec<String> = segments.iter().map(|s| s.object_id.clone()).collect();
     let values = object_values(db, &present, &ids)?;
@@ -314,10 +334,15 @@ mod tests {
                  step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
                  INSERT INTO measurement_info VALUES
                      ('tree_01/total_length', 'Neuron total length', 'tree_01', 'Pixels', 'Object', NULL, NULL, true, 1),
-                     ('tree_01/branch_level', 'Branch level', 'tree_01', 'Count', 'Object', NULL, NULL, true, 2);
+                     ('tree_01/branch_level', 'Branch level', 'tree_01', 'Count', 'Object', NULL, NULL, true, 2),
+                     ('tree_01/strahler_order', 'Strahler order', 'tree_01', 'Count', 'Object', NULL, NULL, true, 3),
+                     ('tree_01/branch_points', 'Neuron branch points', 'tree_01', 'Count', 'Object', NULL, NULL, true, 4),
+                     ('skeleton_01/branch_points', 'Branch points', 'skeleton_01', 'Count', 'Object', NULL, NULL, true, 5);
                  INSERT INTO measurements VALUES
-                     ('A01_1.tif', 'A01_1.tif', 0, 0, 'object', '{}', NULL, NULL, [1], 'tree_01', 'x', 'Pixels', 'tree_01/total_length', 60),
-                     ('A01_1.tif', 'A01_1.tif', 0, 0, 'object', '{}', NULL, NULL, [3], 'tree_01', 'x', 'Count', 'tree_01/branch_level', 2);",
+                     ('A01_1.tif', 'A01_1.tif', 0, 0, 'object', '{0}', NULL, NULL, [1], 'tree_01', 'x', 'Pixels', 'tree_01/total_length', 60),
+                     ('A01_1.tif', 'A01_1.tif', 0, 0, 'object', '{0}', NULL, NULL, [1], 'tree_01', 'x', 'Count', 'tree_01/branch_points', 1),
+                     ('A01_1.tif', 'A01_1.tif', 0, 0, 'object', '{0}', NULL, NULL, [1], 'skeleton_01', 'x', 'Count', 'skeleton_01/branch_points', 9),
+                     ('A01_1.tif', 'A01_1.tif', 0, 0, 'object', '{1}', NULL, NULL, [3], 'tree_01', 'x', 'Count', 'tree_01/branch_level', 2);",
                 id(0),
                 id(3)
             ));
@@ -352,6 +377,9 @@ mod tests {
                 ("B01_1.tif".to_string(), 1, None)
             ]
         );
+        // Branch points: Measure Filament Tree's, not Measure Object
+        // Skeleton's (its key sorts first).
+        assert_eq!(neurons.neurons[0].values[2], Some(1.0));
         let only_b = tree_neurons(&database(true), Some(&["B01_1.tif".to_string()])).unwrap();
         assert_eq!(only_b.neurons.len(), 1);
     }
