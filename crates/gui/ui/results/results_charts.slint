@@ -260,38 +260,51 @@ component BoxplotChart inherits Rectangle {
     }
 }
 
-// A chart kind to pick: its picture above its name.
+// A chart kind to pick: its drawn picture above its name. Every tile gets
+// its width from the grid (all equal); selected shows by border and tint
+// only, so the name keeps its weight and nothing moves.
 component ChartTile inherits Rectangle {
-    in property <string> glyph;
+    // The picture as path commands on a 28 × 18 grid.
+    in property <string> icon;
+    // Filled (the scatter's dots) instead of stroked lines.
+    in property <bool> icon-filled;
     in property <string> text;
     in property <bool> selected;
     callback clicked;
 
-    height: 54px;
-    horizontal-stretch: 1;
+    height: 58px;
     border-radius: Ink.radius-md;
     border-width: 1px;
     border-color: root.selected ? Ink.focus : Ink.border;
-    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : Ink.panel;
+    background: root.selected ? Ink.info-tint : ta.has-hover ? Ink.hover : Ink.panel;
     accessible-role: button;
     accessible-label: root.text;
     accessible-checked: root.selected;
 
     VerticalLayout {
         alignment: center;
-        spacing: 2px;
-        Text {
-            text: root.glyph;
-            font-size: Ink.fs-title;
-            color: root.selected ? Ink.focus : Ink.text-dim;
-            horizontal-alignment: center;
+        spacing: 4px;
+        HorizontalLayout {
+            alignment: center;
+            Path {
+                width: 28px;
+                height: 18px;
+                viewbox-width: 28;
+                viewbox-height: 18;
+                commands: root.icon;
+                fill: root.icon-filled ? (root.selected ? Ink.focus : Ink.text-dim) : transparent;
+                stroke: root.icon-filled ? transparent : (root.selected ? Ink.focus : Ink.text-dim);
+                stroke-width: root.icon-filled ? 0px : 1.6px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+            }
         }
         Text {
             text: root.text;
             font-size: Ink.fs-secondary;
-            font-weight: root.selected ? 600 : 400;
             color: Ink.text;
             horizontal-alignment: center;
+            overflow: elide;
         }
     }
 
@@ -510,6 +523,9 @@ component OverTimeChart inherits Rectangle {
 export component ResultsChartsView inherits Rectangle {
     property <length> side-w: 280px;
     property <length> field-w: root.side-w - 2 * Ink.pad-panel;
+    property <length> kind-gap: 6px;
+    property <int> kind-columns: ResultsState.has-profiles ? 3 : 2;
+    property <length> kind-tile-w: (root.field-w - (root.kind-columns - 1) * root.kind-gap) / root.kind-columns;
 
     background: Ink.ground;
 
@@ -536,66 +552,81 @@ export component ResultsChartsView inherits Rectangle {
 
                 SettingsGroup {
                     title: "CHART";
-                    // The kinds as tiles, each with a picture of it (board M).
+                    // The kinds as one grid of equal tiles, each with a drawn
+                    // picture: 3 columns with Profile (a value per radius, with
+                    // profile measurements in the results), 2 without.
                     VerticalLayout {
-                    spacing: 6px;
-                    HorizontalLayout {
-                        spacing: 6px;
-                        ChartTile {
-                            glyph: "▁▃▇▃▁";
-                            text: "Histogram";
-                            selected: ResultsState.chart-kind == ResultsChartKind2.histogram;
-                            clicked => {
-                                ResultsState.chart-kind = ResultsChartKind2.histogram;
-                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                        spacing: root.kind-gap;
+                        HorizontalLayout {
+                            spacing: root.kind-gap;
+                            alignment: start;
+                            ChartTile {
+                                width: root.kind-tile-w;
+                                icon: "M 2 17 H 26 M 5 17 V 13 H 9 V 17 M 10 17 V 7 H 14 V 17 M 15 17 V 3 H 19 V 17 M 20 17 V 11 H 24 V 17";
+                                text: "Histogram";
+                                selected: ResultsState.chart-kind == ResultsChartKind2.histogram;
+                                clicked => {
+                                    ResultsState.chart-kind = ResultsChartKind2.histogram;
+                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                                }
+                            }
+                            ChartTile {
+                                width: root.kind-tile-w;
+                                icon: "M 2 9 H 8 M 20 9 H 26 M 2 5 V 13 M 26 5 V 13 M 8 4 H 20 V 14 H 8 Z M 14 4 V 14";
+                                text: "Boxplot";
+                                selected: ResultsState.chart-kind == ResultsChartKind2.boxplot;
+                                clicked => {
+                                    ResultsState.chart-kind = ResultsChartKind2.boxplot;
+                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                                }
+                            }
+                            if ResultsState.has-profiles: ChartTile {
+                                width: root.kind-tile-w;
+                                icon: "M 3.2 13 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 8.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 11.2 14 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 15.2 6 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 19.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 22.2 3 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0";
+                                icon-filled: true;
+                                text: "Scatter";
+                                selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
+                                clicked => {
+                                    ResultsState.chart-kind = ResultsChartKind2.scatter;
+                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                                }
                             }
                         }
-                        ChartTile {
-                            glyph: "┤▭├";
-                            text: "Boxplot";
-                            selected: ResultsState.chart-kind == ResultsChartKind2.boxplot;
-                            clicked => {
-                                ResultsState.chart-kind = ResultsChartKind2.boxplot;
-                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                        HorizontalLayout {
+                            spacing: root.kind-gap;
+                            alignment: start;
+                            if !ResultsState.has-profiles: ChartTile {
+                                width: root.kind-tile-w;
+                                icon: "M 3.2 13 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 8.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 11.2 14 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 15.2 6 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 19.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 22.2 3 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0";
+                                icon-filled: true;
+                                text: "Scatter";
+                                selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
+                                clicked => {
+                                    ResultsState.chart-kind = ResultsChartKind2.scatter;
+                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                                }
+                            }
+                            ChartTile {
+                                width: root.kind-tile-w;
+                                icon: "M 2 14 L 8 7 L 13 12 L 19 3 L 26 9";
+                                text: "Over time";
+                                selected: ResultsState.chart-kind == ResultsChartKind2.over-time;
+                                clicked => {
+                                    ResultsState.chart-kind = ResultsChartKind2.over-time;
+                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                                }
+                            }
+                            if ResultsState.has-profiles: ChartTile {
+                                width: root.kind-tile-w;
+                                icon: "M 2 17 C 4 4 7 3 9 6 C 11 9 13 16 17 16 C 21 16 23 15 26 15";
+                                text: "Profile";
+                                selected: ResultsState.chart-kind == ResultsChartKind2.profile;
+                                clicked => {
+                                    ResultsState.chart-kind = ResultsChartKind2.profile;
+                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                                }
                             }
                         }
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        ChartTile {
-                            glyph: "∴ ∵";
-                            text: "Scatter";
-                            selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
-                            clicked => {
-                                ResultsState.chart-kind = ResultsChartKind2.scatter;
-                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                            }
-                        }
-                        ChartTile {
-                            glyph: "╱╲╱";
-                            text: "Over time";
-                            selected: ResultsState.chart-kind == ResultsChartKind2.over-time;
-                            clicked => {
-                                ResultsState.chart-kind = ResultsChartKind2.over-time;
-                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                            }
-                        }
-                    }
-                    // A value per radius (e.g. the Sholl profile) - with
-                    // profile measurements in the results.
-                    if ResultsState.has-profiles: HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        ChartTile {
-                            glyph: "╭─╮_";
-                            text: "Profile";
-                            selected: ResultsState.chart-kind == ResultsChartKind2.profile;
-                            clicked => {
-                                ResultsState.chart-kind = ResultsChartKind2.profile;
-                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                            }
-                        }
-                    }
                     }
                 }
 
