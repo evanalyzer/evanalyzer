@@ -1159,9 +1159,14 @@ impl<'a> JobExecutor {
                     };
                     merged_cache.measurements.z_stack = z;
                     merged_cache.measurements.t_stack = t;
-                    if merged_cache.object_cache.is_empty()
-                        && merged_cache.annotated_objects.is_empty()
-                        && !measures
+                    // No tile analysed (a preview of a viewport beside the
+                    // image): no pixels, nothing for the whole-image steps -
+                    // a step reading a channel would only fail.
+                    let no_tile = visible_tiles.is_empty() && hidden_tiles.is_empty();
+                    if no_tile
+                        || (merged_cache.object_cache.is_empty()
+                            && merged_cache.annotated_objects.is_empty()
+                            && !measures)
                     {
                         // Object buffer is empty - no whole-image-scoped
                         // commands or export to run, but this stack's
@@ -3230,6 +3235,45 @@ mod full_run_integration_tests {
             };
             assert!((-1.0..=1.0).contains(&r), "plane {plane:?}: {r}");
         }
+    }
+
+    /// A preview of a viewport beside the image analyses no tile: the
+    /// whole-image steps don't run on an empty cache (a step reading a
+    /// channel failed with "the image has no channel 0").
+    #[test]
+    fn a_preview_beside_the_image_runs_no_whole_image_step() {
+        let recorder = Arc::new(MeasurementRecorder(Mutex::new(Vec::new())));
+        let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+        job.result_storage = recorder.clone();
+        job.pipelines_pre_process.clear();
+        let mut measure = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        measure.add_command(Box::new(crate::algos::MeasureImageColocalization {
+            id: "pearson_01".into(),
+            channel_a: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+            channel_b: evanalyzer_cfg::core_types::ImageChannelIdx(1),
+            threshold_percent: 15.0,
+            costes: crate::algos::CostesMethod::Off,
+        }));
+        job.add_post_process_pipeline(measure);
+        // screen = image * zoom + offset: the image lies far left of the view.
+        job.preview_tile_settings = Some(PreviewTileSettings {
+            offset_x: 100_000.0,
+            offset_y: 0.0,
+            viewport_width: 800.0,
+            viewport_height: 600.0,
+            zoom: 1.0,
+            process_all_tiles: false,
+        });
+        assert_eq!(job.count_preview_visible_tiles().unwrap(), 0);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        assert!(recorder.0.lock().unwrap().is_empty(), "nothing measured");
     }
 
     /// Per plane: the measurements' values, the area of its objects and of
