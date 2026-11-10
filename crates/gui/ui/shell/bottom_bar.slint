@@ -112,8 +112,8 @@ export component BottomBar inherits Rectangle {
                     text: (ResultsState.loading ? "Loading" : "Ready") + (ResultsState.database-name == "" ? "" : " · " + ResultsState.database-name)
                         + (ResultsState.analysis-summary == "" ? "" : " · " + ResultsState.analysis-summary);
                 }
-                if !StartState.active && LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.rail-mode != ResultsRailMode.charts: InkStatusItem {
-                    text: "Split view · " + (ResultsState.rail-mode == ResultsRailMode.matrix ? "plate" : "list") + " and image";
+                if !StartState.active && LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.split-offered: InkStatusItem {
+                    text: "Split view · " + (ResultsState.rail-mode == ResultsRailMode.matrix ? "plate" : ResultsState.rail-mode == ResultsRailMode.charts ? "chart" : "list") + " and image";
                 }
                 // Under the pointer.
                 if !StartState.active && LayoutState.mode != WorkspaceMode.results: HorizontalLayout {

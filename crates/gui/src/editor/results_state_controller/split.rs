@@ -178,6 +178,12 @@ impl ResultsStateController {
             };
             if shown {
                 manager.split_push_overlay();
+                // Charts › Profile with no image yet: the first object.
+                if manager.in_profile_chart()
+                    && manager.split.lock().expect("Poisoned").image.is_none()
+                {
+                    manager.profile_step(1);
+                }
             } else {
                 manager.viewport().set_results_overlay(None);
                 *manager
@@ -338,6 +344,10 @@ impl ResultsStateController {
     fn split_step(self: &Arc<Self>, delta: i32) {
         if self.in_tracks() {
             self.tracks_step(delta);
+            return;
+        }
+        if self.in_profile_chart() {
+            self.profile_step(delta);
             return;
         }
         if self.in_plate() {
@@ -761,25 +771,17 @@ impl ResultsStateController {
             (Some(family), Some(selected)) => family.links(selected, &objects),
             _ => Vec::new(),
         };
-        // Charts › Profile: the selected object's circles, around its
-        // parent on this image (the soma Relate linked it to), else itself.
-        let profile_shown = *self.rail_mode.lock().expect("Poisoned") == ResultsRailMode::Charts
-            && self.chart_filter.lock().expect("Poisoned").kind == ChartKind::Profile;
+        // Charts › Profile: the selected object's circles, around what it
+        // was measured around (Measure Object Sholl's Centre From parent),
+        // else itself.
         let rings = match (
             self.profile_rings.lock().expect("Poisoned").as_ref(),
             selected.and_then(|i| objects.get(i)),
         ) {
-            (Some((id, radii, peak)), Some(object)) if profile_shown && *id == object.object_id => {
-                let centre = object
-                    .parent_ids
-                    .iter()
-                    .find_map(|parent| objects.iter().find(|o| o.object_id == *parent))
-                    .unwrap_or(object)
-                    .centroid_px;
-                radii
-                    .iter()
-                    .map(|r| ((centre[0], centre[1]), *r as f32, Some(*r) == *peak))
-                    .collect()
+            (Some(rings), Some(object))
+                if self.in_profile_chart() && rings.id == object.object_id =>
+            {
+                ring_circles(rings, object, &objects)
             }
             _ => Vec::new(),
         };
@@ -989,8 +991,15 @@ impl ResultsStateController {
             .collect();
         let rows = self.list_row_locations.lock().expect("Poisoned").len();
         let plate = self.in_plate();
-        // Tracks: the selected track of the image's tracks.
-        let track_pos = self.in_tracks().then(|| self.tracks_position());
+        // Tracks: the selected track of the image's tracks; Charts ›
+        // Profile: the object among those with the profile.
+        let track_pos = match self.in_profile_chart() {
+            true => {
+                let (pos, total) = *self.profile_pos.lock().expect("Poisoned");
+                Some((pos as i32, total as i32))
+            }
+            false => self.in_tracks().then(|| self.tracks_position()),
+        };
         let image_name = title_image
             .as_deref()
             .map(|rel| {
@@ -1095,6 +1104,86 @@ impl ResultsStateController {
         .ok();
     }
 
+    /// Charts › Profile is shown (its split: the selected object's circles).
+    pub(super) fn in_profile_chart(&self) -> bool {
+        *self.rail_mode.lock().expect("Poisoned") == ResultsRailMode::Charts
+            && self.chart_filter.lock().expect("Poisoned").kind == ChartKind::Profile
+    }
+
+    /// ‹ › in Charts › Profile: `delta` objects on among those with the
+    /// profile (of the chart's class), its image shown with it selected.
+    pub(super) fn profile_step(self: &Arc<Self>, delta: i32) {
+        let chart_filter = self.chart_filter.lock().expect("Poisoned").clone();
+        let key = {
+            let profiles = self.profile_columns.lock().expect("Poisoned");
+            profiles
+                .iter()
+                .find(|c| c.key == chart_filter.profile_key)
+                .or(profiles.first())
+                .map(|c| c.key.clone())
+        };
+        let Some(key) = key else {
+            return;
+        };
+        let from = {
+            let split = self.split.lock().expect("Poisoned");
+            split
+                .selected
+                .and_then(|i| split.objects.get(i))
+                .map(|o| o.object_id.clone())
+        };
+        let filter = ProfileStepFilter {
+            key,
+            object_classes: match chart_filter.profile_lines {
+                ProfileLines::Class => None,
+                _ => chart_filter.object_class.map(|class| vec![class]),
+            },
+            from,
+            delta,
+        };
+        self.run_db_job(move |manager| {
+            let step = {
+                let guard = manager.result_generator.lock().expect("Poisoned");
+                match guard.as_ref() {
+                    None => return,
+                    Some(db) => db.profile_step(&filter),
+                }
+            };
+            let step = match step {
+                Ok(step) => step,
+                Err(err) => {
+                    error!("Could not step through the profile's objects: {err}");
+                    return;
+                }
+            };
+            manager.profile_set_pos((step.position, step.total));
+            if let Some(object) = step.object {
+                manager.split_show_image(object.image_rel_path, object.bbox_px, None);
+            }
+        });
+    }
+
+    /// The selected object's place among the profile's objects: kept, and
+    /// on the image's head when Charts › Profile is split.
+    pub(super) fn profile_set_pos(&self, place: (usize, usize)) {
+        let changed = {
+            let mut pos = self.profile_pos.lock().expect("Poisoned");
+            std::mem::replace(&mut *pos, place) != place
+        };
+        if !changed || !self.in_profile_chart() {
+            return;
+        }
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ResultsState>();
+                state.set_split_pos(place.0 as i32);
+                state.set_split_total(place.1 as i32);
+            }
+        })
+        .ok();
+    }
+
     fn split_push_channels(&self, channels: Vec<String>) {
         let channel = self.split.lock().expect("Poisoned").channel;
         let ui_weak = self.ui.clone();
@@ -1187,6 +1276,26 @@ impl ResultsStateController {
 }
 
 /// `stops` (the heatmap's gradient) at `t` (0…1), as 0xRRGGBB.
+/// The circles of `rings` on the image: around its centre object on the
+/// image (`rings.centre`), else around `object` itself; the peak stronger.
+fn ring_circles(
+    rings: &ProfileRings,
+    object: &ResultObject,
+    objects: &[ResultObject],
+) -> Vec<((f32, f32), f32, bool)> {
+    let centre = rings
+        .centre
+        .as_ref()
+        .and_then(|id| objects.iter().find(|o| o.object_id == *id))
+        .unwrap_or(object)
+        .centroid_px;
+    rings
+        .radii
+        .iter()
+        .map(|r| ((centre[0], centre[1]), *r as f32, Some(*r) == rings.peak))
+        .collect()
+}
+
 fn gradient_at(stops: &[u32], t: f64) -> u32 {
     let t = t.clamp(0.0, 1.0) * (stops.len() - 1) as f64;
     let i = (t.floor() as usize).min(stops.len() - 1);
@@ -1513,6 +1622,32 @@ mod family_tests {
             mask: Vec::new(),
             parent_ids: parents.iter().map(|p| p.to_string()).collect(),
         }
+    }
+
+    /// The profile's circles go around the object it was measured around
+    /// (on this image), else around the object itself; the peak stronger.
+    #[test]
+    fn the_circles_are_around_the_centre_object_else_the_object() {
+        let mut skeleton = object("skeleton", &["soma"]);
+        skeleton.centroid_px = [30.0, 40.0];
+        let mut soma = object("soma", &[]);
+        soma.centroid_px = [10.0, 20.0];
+        let objects = vec![skeleton.clone(), soma];
+        let mut rings = ProfileRings {
+            id: "skeleton".into(),
+            radii: vec![5.0, 10.0],
+            peak: Some(10.0),
+            centre: Some("soma".into()),
+        };
+        assert_eq!(
+            ring_circles(&rings, &skeleton, &objects),
+            [((10.0, 20.0), 5.0, false), ((10.0, 20.0), 10.0, true)]
+        );
+        // Not on the image, or none: around the skeleton.
+        rings.centre = Some("elsewhere".into());
+        assert_eq!(ring_circles(&rings, &skeleton, &objects)[0].0, (30.0, 40.0));
+        rings.centre = None;
+        assert_eq!(ring_circles(&rings, &skeleton, &objects)[0].0, (30.0, 40.0));
     }
 
     #[test]

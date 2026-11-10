@@ -33,6 +33,7 @@ use evanalyzer_app::results::GroupedByImageFilter;
 use evanalyzer_app::results::HistogramFilter;
 use evanalyzer_app::results::ImageEntry;
 use evanalyzer_app::results::ImageHeatmapFilter;
+use evanalyzer_app::results::ProfileStepFilter;
 use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::ResultsSource;
 use evanalyzer_app::results::ScatterFilter;
@@ -512,6 +513,18 @@ struct MatrixFilter {
     pub square_size: Option<usize>,
 }
 
+/// Charts › Profile's selected object as circles on the split view: its id,
+/// its curve's positions (the radii, in image pixels), the one with the
+/// highest value (drawn stronger) and the object they are around (`None`:
+/// the object itself).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ProfileRings {
+    pub id: String,
+    pub radii: Vec<f64>,
+    pub peak: Option<f64>,
+    pub centre: Option<String>,
+}
+
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) _app_state: Arc<UiState>,
@@ -528,10 +541,13 @@ pub struct ResultsStateController {
     available_columns: Mutex<Vec<ColumnEntry>>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
-    /// Charts › Profile's selected object: its id, its curve's positions
-    /// and the one with the highest value - the split view draws them as
-    /// circles. `None`: none drawn.
-    profile_rings: Mutex<Option<(String, Vec<f64>, Option<f64>)>>,
+    /// Charts › Profile's selected object's circles on the split view.
+    /// `None`: none drawn.
+    profile_rings: Mutex<Option<ProfileRings>>,
+    /// Charts › Profile split with the image: the selected object's place
+    /// among the objects with the profile (1-based, 0: none) and their
+    /// count - the image's ‹ n / total ›.
+    profile_pos: Mutex<(usize, usize)>,
     // Last-rendered plate cells, by well key (e.g. "C12") — so
     // `on_plate_cell_clicked` can look up what to show in the sidebar
     // without re-querying the database.
@@ -647,6 +663,7 @@ impl ResultsStateController {
             available_columns: Mutex::new(Vec::new()),
             profile_columns: Mutex::new(Vec::new()),
             profile_rings: Mutex::new(None),
+            profile_pos: Mutex::new((0, 0)),
             matrix_cells: Mutex::new(HashMap::new()),
             well_cells: Mutex::new(HashMap::new()),
             image_heatmap_cells: Mutex::new(HashMap::new()),
@@ -889,14 +906,23 @@ impl ResultsStateController {
                         return;
                     };
                     let mut list_filter = manager.list_filter.lock().expect("Poisened".into());
+                    // `[Unset]` is "none" (`select_none_classes`): a real
+                    // class ticked replaces it, the last one unticked
+                    // brings it back - an empty list would be "all".
+                    let classes = &mut list_filter.object_classes;
                     if selected {
-                        if !list_filter.object_classes.contains(&object_class) {
-                            list_filter.object_classes.push(object_class);
+                        classes.retain(|c| *c != ObjectClass::Unset);
+                        if !classes.contains(&object_class) {
+                            classes.push(object_class);
                         }
                     } else {
-                        list_filter.object_classes.retain(|c| c != &object_class);
+                        classes.retain(|c| c != &object_class);
+                        if classes.is_empty() {
+                            classes.push(ObjectClass::Unset);
+                        }
                     }
-                    let selected_count = list_filter.object_classes.len();
+                    let selected_count =
+                        classes.iter().filter(|c| **c != ObjectClass::Unset).count();
                     drop(list_filter);
                     manager.push_class_summary(selected_count);
                     manager.refresh_list();
@@ -3439,17 +3465,30 @@ impl ResultsStateController {
                     },
                     max_lines: CHART_TIME_MAX_LINES,
                 };
-                // The selected object's curve (the split view's object).
-                let selected = chart_filter
-                    .profile_curve
-                    .then(|| {
-                        let split = self.split.lock().expect("Poisoned");
-                        split
-                            .selected
-                            .and_then(|i| split.objects.get(i))
-                            .map(|o| o.object_id.clone())
+                // The split view's object: its place among the objects with
+                // the profile (‹ n / total ›) and what it was measured around.
+                let split_selected = {
+                    let split = self.split.lock().expect("Poisoned");
+                    split
+                        .selected
+                        .and_then(|i| split.objects.get(i))
+                        .map(|o| o.object_id.clone())
+                };
+                let place = db
+                    .profile_step(&ProfileStepFilter {
+                        key: profile.key.clone(),
+                        object_classes: filter.object_classes.clone(),
+                        from: split_selected.clone(),
+                        delta: 0,
                     })
-                    .flatten();
+                    .unwrap_or_default();
+                self.profile_set_pos((place.position, place.total));
+                let centre = place
+                    .object
+                    .filter(|o| Some(&o.object_id) == split_selected.as_ref())
+                    .and_then(|o| o.centre_id);
+                // Its curve (switched on).
+                let selected = split_selected.filter(|_| chart_filter.profile_curve);
                 let curve = selected
                     .clone()
                     .and_then(|id| db.object_profile(&profile.key, &id).ok())
@@ -3465,7 +3504,12 @@ impl ResultsStateController {
                         })
                         .filter(|(_, v)| *v > 0.0)
                         .map(|(p, _)| p);
-                    (id, curve.iter().map(|c| c.0).collect(), peak)
+                    ProfileRings {
+                        id,
+                        radii: curve.iter().map(|c| c.0).collect(),
+                        peak,
+                        centre,
+                    }
                 });
                 let changed = {
                     let mut kept = self.profile_rings.lock().expect("Poisened");
@@ -9214,6 +9258,28 @@ pub(crate) mod tests {
         assert!(o.controller.list_filter.lock().unwrap().transpond);
     }
 
+    /// A view with no class ticked ("None") still shows none when it is
+    /// shown again - not every class.
+    #[test]
+    fn a_view_with_no_class_ticked_comes_back_with_none() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_list_class_select_none();
+        drain_ui_queue();
+        assert_eq!(s.get_list_rows().row_count(), 0);
+
+        s.invoke_view_new("list".into());
+        drain_ui_queue();
+        s.invoke_view_selected(view_id(&o, "List"));
+        drain_ui_queue();
+        assert_eq!(
+            o.controller.list_filter.lock().unwrap().object_classes,
+            vec![ObjectClass::Unset]
+        );
+        assert!(s.get_list_class_items().iter().all(|item| !item.selected));
+        assert_eq!(s.get_list_rows().row_count(), 0, "none, not all");
+    }
+
     /// A view of another kind shows that kind; "Show as" changes it.
     #[test]
     fn a_view_shows_its_kind_and_show_as_changes_it() {
@@ -10002,6 +10068,10 @@ pub(crate) mod tests {
         s.set_rail_mode(ResultsRailMode::Trees);
         s.invoke_rail_mode_selected(ResultsRailMode::Trees);
         drain_ui_queue();
+        // Sorted as the header shows from the start (Length), not only
+        // after a click on it.
+        assert_eq!(s.get_trees_sort(), 1);
+        assert_eq!(o.controller.trees.lock().unwrap().sort, 1);
         // The image's group row, then its neuron by its number.
         assert_eq!(s.get_trees_rows().row_count(), 2);
         let image = s.get_trees_rows().row_data(0).unwrap();
@@ -10224,19 +10294,82 @@ pub(crate) mod tests {
         // stronger - around the object itself (no parent on the image).
         assert_eq!(
             *o.controller.profile_rings.lock().unwrap(),
-            Some((
-                o.controller.split.lock().unwrap().objects[0]
+            Some(ProfileRings {
+                id: o.controller.split.lock().unwrap().objects[0]
                     .object_id
                     .clone(),
-                vec![10.0, 20.0, 30.0],
-                Some(20.0)
-            ))
+                radii: vec![10.0, 20.0, 30.0],
+                peak: Some(20.0),
+                centre: None,
+            })
         );
+        // Its place among the three objects with the profile.
+        let (pos, total) = *o.controller.profile_pos.lock().unwrap();
+        assert!((1..=3).contains(&pos), "{pos}");
+        assert_eq!(total, 3);
         // Switched off: no curve.
         s.set_chart_profile_curve(false);
         s.invoke_chart_time_changed();
         drain_ui_queue();
         assert_eq!(s.get_chart_time_highlight(), "");
+    }
+
+    /// Split is offered for the Profile chart (its circles on the image),
+    /// not for the other charts; the List always.
+    #[test]
+    fn split_is_offered_for_the_profile_chart_only_of_the_charts() {
+        let (o, _) = opened_with_profiles();
+        let s = o.state();
+        s.set_rail_mode(ResultsRailMode::List);
+        assert!(s.get_split_offered());
+        s.set_rail_mode(ResultsRailMode::Charts);
+        s.set_chart_kind(ResultsChartKind2::Histogram);
+        assert!(!s.get_split_offered());
+        s.set_chart_kind(ResultsChartKind2::Profile);
+        assert!(s.get_split_offered());
+    }
+
+    /// ‹ › in the Profile chart: through the objects with the profile, on
+    /// any image - the image shown with the object selected, "n / total"
+    /// on its head; split shown with no image yet: the first object.
+    #[test]
+    fn profile_arrows_step_through_the_objects_with_the_profile() {
+        let (o, _) = opened_with_profiles();
+        let s = o.state();
+        s.set_rail_mode(ResultsRailMode::Charts);
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.set_chart_kind(ResultsChartKind2::Profile);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
+        drain_ui_queue();
+        let selected_id = || {
+            let split = o.controller.split.lock().unwrap();
+            split
+                .selected
+                .and_then(|i| split.objects.get(i))
+                .map(|o| o.object_id.clone())
+        };
+
+        s.invoke_split_shown(true);
+        drain_ui_queue();
+        assert!(o.controller.split.lock().unwrap().image.is_some());
+        let first = selected_id().expect("the first object selected");
+        assert_eq!((s.get_split_pos(), s.get_split_total()), (1, 3));
+
+        s.invoke_split_step(1);
+        drain_ui_queue();
+        let second = selected_id().expect("the second object selected");
+        assert_ne!(second, first);
+        assert_eq!((s.get_split_pos(), s.get_split_total()), (2, 3));
+
+        // At the end it stays there.
+        s.invoke_split_step(1);
+        s.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!((s.get_split_pos(), s.get_split_total()), (3, 3));
+        s.invoke_split_step(-2);
+        drain_ui_queue();
+        assert_eq!(selected_id(), Some(first));
+        assert_eq!(s.get_split_pos(), 1);
     }
 
     /// The profile chart's settings are the view's: kept when switching.
@@ -10593,6 +10726,52 @@ pub(crate) mod tests {
 
     // -- unknown, deselected and out-of-range input -------------------------
 
+    /// "None" unticks every class (Background too) and lists nothing;
+    /// ticking a class then counts and lists only it; unticking it again
+    /// is none again, not all.
+    #[test]
+    fn classes_ticked_after_none_are_counted_without_the_none_marker() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        let total = o.controller.classes.lock().unwrap().len();
+        s.invoke_list_class_select_none();
+        drain_ui_queue();
+        assert!(
+            s.get_list_class_items().iter().all(|item| !item.selected),
+            "{:?}",
+            s.get_list_class_items()
+                .iter()
+                .map(|i| (i.value.clone(), i.selected))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            s.get_list_class_summary(),
+            list_summary(0, total, "Classes")
+        );
+        assert_eq!(s.get_list_rows().row_count(), 0);
+
+        s.invoke_list_class_selected("ClassA".into(), true);
+        drain_ui_queue();
+        assert_eq!(
+            s.get_list_class_summary(),
+            list_summary(1, total, "Classes")
+        );
+        assert_eq!(
+            o.controller.list_filter.lock().unwrap().object_classes,
+            vec![ObjectClass::Global(1)]
+        );
+        assert!(s.get_list_rows().row_count() > 0, "ClassA's objects");
+
+        s.invoke_list_class_selected("ClassA".into(), false);
+        drain_ui_queue();
+        assert_eq!(
+            s.get_list_class_summary(),
+            list_summary(0, total, "Classes")
+        );
+        assert_eq!(s.get_list_rows().row_count(), 0, "none, not all");
+    }
+
     #[test]
     fn list_filters_ignore_unknown_entries_and_toggle_known_ones() {
         let o = opened();
@@ -10618,7 +10797,8 @@ pub(crate) mod tests {
         state.invoke_list_class_selected("ClassA".into(), true);
         assert_eq!(classes(&o), vec![ObjectClass::Global(1)]);
         state.invoke_list_class_selected("ClassA".into(), false);
-        assert!(classes(&o).is_empty());
+        // The last class unticked: none (`[Unset]`), not all (empty).
+        assert_eq!(classes(&o), vec![ObjectClass::Unset]);
 
         let columns = |o: &Opened| o.controller.list_filter.lock().unwrap().columns.clone();
         let before = columns(&o);

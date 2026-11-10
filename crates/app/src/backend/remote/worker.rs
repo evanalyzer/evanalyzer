@@ -822,6 +822,9 @@ fn answer_query(
         ResultsQuery::ObjectProfile { key, object_id } => {
             ResultsAnswer::ObjectProfile(source.object_profile(&key, &object_id)?)
         }
+        ResultsQuery::ProfileStep(filter) => {
+            ResultsAnswer::ProfileStep(source.profile_step(&filter)?)
+        }
         ResultsQuery::HasTrees => ResultsAnswer::Flag(source.has_trees()?),
         ResultsQuery::TreeNeurons(images) => {
             ResultsAnswer::TreeNeurons(source.tree_neurons(images)?)
@@ -1478,6 +1481,16 @@ mod session_tests {
             .with_idle_timeout(Duration::from_secs(60));
 
         assert_eq!(worker.idle_timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn the_job_duration_limit_is_kept_until_the_worker_runs() {
+        let worker = Worker::bind("127.0.0.1:0", "t".into())
+            .unwrap()
+            .with_max_job_duration(Duration::from_secs(90 * 60));
+
+        assert_eq!(worker.max_job_duration, Some(Duration::from_secs(90 * 60)));
+        assert_eq!(worker.idle_timeout, None, "only the limit asked for");
     }
 
     #[test]

@@ -277,6 +277,16 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn profile_step(
+        &self,
+        filter: &crate::api::ProfileStepFilter,
+    ) -> Result<crate::api::ProfileStep, InternalErrors> {
+        match self.query(ResultsQuery::ProfileStep(filter.clone()))? {
+            ResultsAnswer::ProfileStep(step) => Ok(step),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn has_trees(&self) -> Result<bool, InternalErrors> {
         match self.query(ResultsQuery::HasTrees)? {
             ResultsAnswer::Flag(yes) => Ok(yes),
@@ -586,6 +596,76 @@ mod tests {
         );
     }
 
+    fn profile_filter() -> ProfileFilter {
+        ProfileFilter {
+            key: "sholl_01/intersections".into(),
+            lines: ProfileLines::Class,
+            grouping: Grouping::Auto,
+            images: None,
+            object_classes: None,
+            max_lines: 10,
+        }
+    }
+
+    /// The profile, tree and track path queries give the same answers over
+    /// the connection as read locally - for results without profiles,
+    /// traced neurons or tracks: none of them.
+    #[test]
+    fn the_profiles_trees_and_track_paths_of_a_remote_database_match_a_local_read() {
+        let (_dir, db) = analyzed_database();
+        let remote = connect(LocalBackend::default());
+        let remote_db = remote.open_results(&db).unwrap();
+        let local_db = LocalBackend::default().open_results(&db).unwrap();
+
+        assert_eq!(
+            json(remote_db.profile_columns().unwrap()),
+            json(local_db.profile_columns().unwrap())
+        );
+        assert_eq!(
+            json(remote_db.profile(&profile_filter()).unwrap()),
+            json(local_db.profile(&profile_filter()).unwrap())
+        );
+        let object = "00000000-0000-0000-0000-000000000000";
+        assert_eq!(
+            remote_db
+                .object_profile("sholl_01/intersections", object)
+                .unwrap(),
+            local_db
+                .object_profile("sholl_01/intersections", object)
+                .unwrap()
+        );
+        let step = crate::api::ProfileStepFilter {
+            key: "sholl_01/intersections".into(),
+            delta: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            remote_db.profile_step(&step).unwrap(),
+            local_db.profile_step(&step).unwrap()
+        );
+        assert!(!remote_db.has_trees().unwrap());
+        assert_eq!(
+            remote_db.has_trees().unwrap(),
+            local_db.has_trees().unwrap()
+        );
+        assert_eq!(
+            remote_db.tree_neurons(None).unwrap(),
+            local_db.tree_neurons(None).unwrap()
+        );
+        assert_eq!(
+            remote_db.tree_segments(object).unwrap(),
+            local_db.tree_segments(object).unwrap()
+        );
+        let paths = TrackPathsFilter {
+            summary: TrackSummaryFilter::default(),
+            max_tracks: 10,
+        };
+        assert_eq!(
+            remote_db.track_paths(&paths).unwrap(),
+            local_db.track_paths(&paths).unwrap()
+        );
+    }
+
     #[test]
     fn opening_a_file_that_is_no_database_reports_the_worker_s_error() {
         let remote = connect(LocalBackend::default());
@@ -746,6 +826,12 @@ mod tests {
         }
         fn object_profile(&self, _: &str, _: &str) -> Result<Vec<(f64, f64)>, InternalErrors> {
             Err(broken("object profile"))
+        }
+        fn profile_step(
+            &self,
+            _: &crate::api::ProfileStepFilter,
+        ) -> Result<crate::api::ProfileStep, InternalErrors> {
+            Err(broken("profile step"))
         }
         fn has_trees(&self) -> Result<bool, InternalErrors> {
             Err(broken("has trees"))
@@ -979,6 +1065,26 @@ mod tests {
             }),
             "scatter",
         );
+        failed_with(db.profile_columns(), "profile columns");
+        failed_with(db.profile(&profile_filter()), "profile");
+        failed_with(
+            db.object_profile("sholl_01/intersections", "x"),
+            "object profile",
+        );
+        failed_with(
+            db.profile_step(&crate::api::ProfileStepFilter::default()),
+            "profile step",
+        );
+        failed_with(db.has_trees(), "has trees");
+        failed_with(db.tree_neurons(None), "tree neurons");
+        failed_with(db.tree_segments("x"), "tree segments");
+        failed_with(
+            db.track_paths(&TrackPathsFilter {
+                summary: TrackSummaryFilter::default(),
+                max_tracks: 10,
+            }),
+            "track paths",
+        );
         // Counts can't fail: the worker's own numbers.
         assert_eq!(db.get_nr_of_z_stacks(), 4);
         assert_eq!(db.get_nr_of_t_stacks(), 5);
@@ -1071,5 +1177,203 @@ mod tests {
             panic!("expected a lost connection, got {result:?}");
         };
         assert!(text.contains("Lost connection"), "{text}");
+    }
+
+    /// How an [`odd_worker`] answers.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Odd {
+        /// Opening results is answered with something else.
+        Open,
+        /// Every query: a results answer of the wrong kind; an export: a
+        /// reply that isn't an export's.
+        WrongAnswer,
+        /// Every query: a reply that isn't a results answer; an export: the
+        /// worker's failure.
+        WrongReply,
+    }
+
+    /// A worker of this protocol answering as `odd` says - as a client of
+    /// another build could meet it.
+    fn odd_worker(odd: Odd) -> RemoteBackend {
+        use crate::backend::remote::wire::frame;
+        use crate::backend::remote::wire::protocol::{
+            APP_VERSION, ClientMsg, Reply, Request, ResultsAnswer, ServerMsg, WireError,
+            to_postcard,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            while let Ok(message) = ws.read() {
+                let tungstenite::Message::Binary(bytes) = message else {
+                    continue;
+                };
+                let (msg, blobs) = match frame::decode::<ClientMsg>(&bytes).unwrap().msg {
+                    ClientMsg::Hello { .. } => (
+                        ServerMsg::Welcome {
+                            app_version: APP_VERSION.into(),
+                            image_formats: Vec::new(),
+                        },
+                        Vec::new(),
+                    ),
+                    ClientMsg::Request { id, request } => {
+                        let (reply, blobs) = match (request, odd) {
+                            (Request::OpenResults { .. }, Odd::Open) => (Reply::Done, Vec::new()),
+                            (Request::OpenResults { .. }, _) => {
+                                (Reply::ResultsOpened { handle: 1 }, Vec::new())
+                            }
+                            (Request::QueryResults { .. }, Odd::WrongAnswer) => (
+                                Reply::ResultsAnswer,
+                                vec![to_postcard(&ResultsAnswer::Done).unwrap()],
+                            ),
+                            (Request::ExportResults { .. }, Odd::WrongReply) => (
+                                Reply::Failed(WireError::message("no space left")),
+                                Vec::new(),
+                            ),
+                            _ => (Reply::Done, Vec::new()),
+                        };
+                        (ServerMsg::Reply { id, reply }, blobs)
+                    }
+                    _ => continue,
+                };
+                let bytes = frame::encode(&msg, &blobs).unwrap();
+                if ws.send(tungstenite::Message::Binary(bytes.into())).is_err() {
+                    break;
+                }
+            }
+        });
+        RemoteBackend::connect(&url, TOKEN).unwrap()
+    }
+
+    /// `result` failed as an unexpected reply.
+    fn unexpected<T>(result: Result<T, InternalErrors>, what: &str) {
+        match result {
+            Err(InternalErrors::Internal(text)) => {
+                assert_eq!(text, "unexpected reply from server", "{what}")
+            }
+            Err(other) => panic!("{what}: expected an unexpected reply, got {other:?}"),
+            Ok(_) => panic!("{what}: expected an unexpected reply"),
+        }
+    }
+
+    /// Opening answered with something else: an unexpected reply, no
+    /// results.
+    #[test]
+    fn results_opened_with_an_odd_reply_are_not_opened() {
+        let remote = odd_worker(Odd::Open);
+        unexpected(remote.open_results(Path::new("/data/a.evadb")), "open");
+    }
+
+    /// Every query answered with the wrong kind of answer is an unexpected
+    /// reply - never read as some other value; the stack counts fall back
+    /// to one; an export answered with something else is unexpected too.
+    #[test]
+    fn every_query_answered_with_the_wrong_kind_of_answer_is_an_unexpected_reply() {
+        let remote = odd_worker(Odd::WrongAnswer);
+        let db = remote.open_results(Path::new("/data/a.evadb")).unwrap();
+        let image = "a.tif";
+        let list = ListFilter {
+            plane: plane(),
+            images: None,
+            object_classes: None,
+            columns: vec![Column::AreaSizePx],
+            with_coloc_details: false,
+            related_to: None,
+            page: Pagination {
+                limit: 10,
+                after: None,
+            },
+            transpond_table: false,
+        };
+        unexpected(db.get_object_list(&list), "object list");
+        unexpected(db.get_images(), "images");
+        unexpected(db.get_object_classes(), "classes");
+        unexpected(db.get_available_columns(), "columns");
+        unexpected(db.get_planes(), "planes");
+        unexpected(db.run_status(), "run status");
+        unexpected(db.grouping_regex(&Grouping::Auto), "grouping regex");
+        unexpected(db.histogram(&histogram()), "histogram");
+        unexpected(db.time_course(&time_course()), "time course");
+        unexpected(db.profile_columns(), "profile columns");
+        unexpected(db.profile(&profile_filter()), "profile");
+        unexpected(db.object_profile("k", "x"), "object profile");
+        unexpected(
+            db.profile_step(&crate::api::ProfileStepFilter::default()),
+            "profile step",
+        );
+        unexpected(db.has_trees(), "has trees");
+        unexpected(db.tree_neurons(None), "tree neurons");
+        unexpected(db.tree_segments("x"), "tree segments");
+        unexpected(db.image_objects(&image_objects(image)), "image objects");
+        unexpected(
+            db.track_summary(&TrackSummaryFilter::default()),
+            "track summary",
+        );
+        unexpected(
+            db.track_paths(&TrackPathsFilter {
+                summary: TrackSummaryFilter::default(),
+                max_tracks: 10,
+            }),
+            "track paths",
+        );
+        unexpected(db.has_tracks(), "has tracks");
+        unexpected(db.has_lineage(), "has lineage");
+        unexpected(db.image_tracks(&image_tracks(image)), "image tracks");
+        unexpected(
+            db.boxplot(&BoxplotFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                column: Column::AreaSizePx,
+                group_by: Default::default(),
+                grouping: Default::default(),
+            }),
+            "boxplot",
+        );
+        unexpected(
+            db.scatter(&ScatterFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                x_column: Column::AreaSizePx,
+                y_column: Column::PerimeterPx,
+                max_points: Some(10),
+            }),
+            "scatter",
+        );
+        // `Done` is enabling's answer: that one works.
+        db.enable_image(image, true).unwrap();
+        assert_eq!(db.get_nr_of_z_stacks(), 1);
+        assert_eq!(db.get_nr_of_t_stacks(), 1);
+        unexpected(
+            db.export(
+                &ResultExport::default(),
+                &AtomicBool::new(false),
+                &mut |_, _, _| {},
+            ),
+            "export",
+        );
+    }
+
+    /// A query answered with a reply that isn't a results answer is
+    /// unexpected; an export the worker reports failed is its error.
+    #[test]
+    fn a_query_answered_with_another_reply_is_unexpected_and_a_failed_export_is_the_workers_error()
+    {
+        let remote = odd_worker(Odd::WrongReply);
+        let db = remote.open_results(Path::new("/data/a.evadb")).unwrap();
+        unexpected(db.get_images(), "images");
+        unexpected(db.enable_image("a.tif", true), "enable image");
+        assert_eq!(db.get_nr_of_z_stacks(), 1, "a failed count falls back");
+        let result = db.export(
+            &ResultExport::default(),
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        );
+        let Err(InternalErrors::Internal(text)) = result else {
+            panic!("expected the worker's error, got {result:?}");
+        };
+        assert_eq!(text, "Server: no space left");
     }
 }

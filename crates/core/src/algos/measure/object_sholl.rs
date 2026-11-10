@@ -138,31 +138,38 @@ impl ImageAlgorithm for MeasureObjectSholl {
             .collect();
         let centre_from = self.centre_from;
         // Each skeleton on its own: in parallel.
-        let results: Vec<Sholl> = objects
+        // Each skeleton on its own: in parallel - with the parent its
+        // circles are around (`None`: its own centroid).
+        let results: Vec<(Sholl, Option<_>)> = objects
             .par_iter()
             .map(|(_, object)| {
-                let centre = (centre_from != ObjectClass::Unset)
+                let parent = (centre_from != ObjectClass::Unset)
                     .then(|| object.parent(&centre_from))
                     .flatten()
-                    .and_then(|id| cache.object_cache.get(id))
-                    .unwrap_or(object)
-                    .get_centroid();
-                sholl(object, (centre.0 as f64, centre.1 as f64), rings)
+                    .and_then(|id| cache.object_cache.get(id).map(|parent| (id, parent)));
+                let centre = parent.map_or(*object, |(_, p)| p).get_centroid();
+                (
+                    sholl(object, (centre.0 as f64, centre.1 as f64), rings),
+                    parent.map(|(id, _)| id.clone()),
+                )
             })
             .collect();
         let ids: Vec<_> = objects.into_iter().map(|(id, _)| id.clone()).collect();
 
+        // The profile's values name the centre (the results draw the
+        // circles around it).
         let mut profile = Vec::new();
-        for (id, result) in ids.iter().zip(&results) {
+        for (id, (result, centre)) in ids.iter().zip(&results) {
             for &(radius, crossings) in &result.profile {
                 profile.push(ObjectValue {
                     object: id.clone(),
                     value: crossings as f64,
-                    related: None,
+                    related: centre.clone(),
                     position: Some(radius),
                 });
             }
         }
+        let results: Vec<Sholl> = results.into_iter().map(|(result, _)| result).collect();
         cache.add_object_measurement(self.measurement_output(PROFILE), profile);
         for (i, (id, ..)) in SUMMARY.iter().enumerate() {
             let values: Vec<ObjectValue> = ids
@@ -203,6 +210,11 @@ impl ImageAlgorithm for MeasureObjectSholl {
                 .object(PROFILE, "Intersections", MeasurementUnit::Count)
                 .profile(),
         )
+        .map(|info| match self.centre_from {
+            // Its values name the centre object.
+            ObjectClass::Unset => info,
+            _ => info.naming_objects(),
+        })
         .chain(
             SUMMARY
                 .iter()
@@ -561,11 +573,52 @@ mod tests {
         };
         let rows: Vec<(Option<f64>, f64)> = values.iter().map(|v| (v.position, v.value)).collect();
         assert_eq!(rows, [(Some(10.0), 4.0), (Some(20.0), 4.0)]);
+        // Each value names the soma the circles are around.
+        assert!(profile.info.related_objects);
+        assert!(values.iter().all(|v| v.related == Some(ObjectId(2))));
         let max = measurements
             .iter()
             .find(|m| m.info.key == "sh/max_intersections")
             .unwrap();
         assert!(!max.info.profile);
+    }
+
+    #[test]
+    fn without_a_centre_object_the_values_name_none() {
+        let mut skeleton = object(1, &star(4, 20));
+        skeleton
+            .add_object_class(ObjectClass::Global(1), Scope::Global)
+            .unwrap();
+        // Centre From set, but this skeleton has no such parent.
+        let mut cache = GlobalPipelineCache::default();
+        cache.object_cache.insert(ObjectId(1), skeleton);
+        let mut step = MeasureObjectSholl {
+            id: "sh".into(),
+            objects: ObjectClass::Global(1),
+            centre_from: ObjectClass::Global(2),
+            ring_step: 10.0,
+            first_radius: 0.0,
+            last_radius: 0.0,
+            unit: SizeUnits::Pixels,
+        };
+        let mut ctx =
+            PipelineContext::without_image(std::path::PathBuf::new(), PipelineImageMeta::default())
+                .unwrap();
+        step.execute(&mut ctx, &mut cache).unwrap();
+        let profile = cache
+            .measurements
+            .measurements
+            .iter()
+            .find(|m| m.info.key == "sh/intersections")
+            .unwrap();
+        let MeasurementValues::Objects(values) = &profile.values else {
+            panic!()
+        };
+        assert!(!values.is_empty());
+        assert!(values.iter().all(|v| v.related.is_none()));
+        // No Centre From: the values name no object at all.
+        step.centre_from = ObjectClass::Unset;
+        assert!(!step.measurement_outputs()[0].related_objects);
     }
 
     #[test]

@@ -1071,6 +1071,47 @@ pub struct ProfileResult {
     pub lines_total: usize,
 }
 
+/// Steps through the objects with a profile (Charts › Profile split with
+/// the image: ‹ ›), in a fixed order: by image, then top to bottom, left to
+/// right.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileStepFilter {
+    /// The profile measurement's key ("sholl_01/intersections").
+    pub key: String,
+    /// `None` means every object class.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// The object stepped from (its id); `None` or not one of them: the
+    /// first (`delta` > 0) or the last (`delta` < 0).
+    pub from: Option<String>,
+    /// How many objects on (negative: back), clamped to the first and last;
+    /// 0: `from` itself (none without it).
+    pub delta: i32,
+}
+
+/// An object with a profile, where it is and what its profile was measured
+/// around.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileObject {
+    pub object_id: String,
+    pub image_rel_path: String,
+    /// `[xmin, ymin, xmax, ymax]` (inclusive); `None` if the object is not
+    /// in the objects table.
+    pub bbox_px: Option<[u32; 4]>,
+    /// The object the positions are measured from (e.g. Measure Object
+    /// Sholl's soma, its Centre From parent); `None`: the object itself.
+    pub centre_id: Option<String>,
+}
+
+/// Where a step landed: the object, its place (1-based) and how many there
+/// are.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileStep {
+    /// 1-based; 0 with no object.
+    pub position: usize,
+    pub total: usize,
+    pub object: Option<ProfileObject>,
+}
+
 /// The neuron values of Measure Filament Tree, in `TreeNeuron::values`
 /// order: (id at the end of its key, name).
 pub const TREE_NEURON_VALUES: [(&str, &str); 6] = [

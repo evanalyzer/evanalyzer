@@ -512,3 +512,398 @@ fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, InternalErrors> {
         None => format!("{host} did not resolve to any address"),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::remote::wire::protocol::WireError;
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    type ServerSocket = WebSocket<TcpStream>;
+
+    /// A server at the returned `ws://` URL that accepts one connection and
+    /// runs `script` on it - then closes it.
+    fn serve(script: impl FnOnce(&mut ServerSocket) + Send + 'static) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            script(&mut ws);
+        });
+        url
+    }
+
+    /// The client's next binary message; `None` once it is gone.
+    fn next_msg(ws: &mut ServerSocket) -> Option<Frame<ClientMsg>> {
+        loop {
+            match ws.read() {
+                Ok(Message::Binary(bytes)) => return Some(frame::decode(&bytes).unwrap()),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+    }
+
+    fn send(ws: &mut ServerSocket, msg: &ServerMsg) {
+        let bytes = frame::encode(msg, &[]).unwrap();
+        ws.send(Message::Binary(bytes.into())).unwrap();
+    }
+
+    /// Answers the client's `Hello` with a welcome from `app_version`.
+    fn welcome(ws: &mut ServerSocket, app_version: &str) {
+        let hello = next_msg(ws).expect("a hello");
+        assert!(matches!(hello.msg, ClientMsg::Hello { .. }));
+        send(
+            ws,
+            &ServerMsg::Welcome {
+                app_version: app_version.into(),
+                image_formats: vec!["tif".into()],
+            },
+        );
+    }
+
+    /// The id of the client's next request.
+    fn next_request_id(ws: &mut ServerSocket) -> u64 {
+        match next_msg(ws).expect("a request").msg {
+            ClientMsg::Request { id, .. } => id,
+            _ => panic!("expected a request"),
+        }
+    }
+
+    /// Reads until the client is gone - keeps the connection open meanwhile.
+    fn until_gone(ws: &mut ServerSocket) {
+        while next_msg(ws).is_some() {}
+    }
+
+    fn reply(ws: &mut ServerSocket, id: u64, reply: Reply) {
+        send(ws, &ServerMsg::Reply { id, reply });
+    }
+
+    /// A session with the server running `script` after its welcome.
+    fn session(script: impl FnOnce(&mut ServerSocket) + Send + 'static) -> Arc<Session> {
+        let url = serve(move |ws| {
+            welcome(ws, APP_VERSION);
+            script(ws);
+        });
+        let ws = open_websocket(&url, &TlsTrust::default()).unwrap();
+        Session::open(ws, &url, "token").unwrap()
+    }
+
+    fn wait_until_disconnected(session: &Session) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.is_connected() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!session.is_connected());
+    }
+
+    #[test]
+    fn a_url_that_is_neither_ws_nor_wss_is_refused() {
+        for result in [
+            open_websocket("http://localhost", &TlsTrust::default()).map(drop),
+            server_certificate("http://localhost").map(drop),
+        ] {
+            let Err(InternalErrors::InvalidArgument(message)) = result else {
+                panic!("expected an invalid argument");
+            };
+            assert!(
+                message.contains("must start with wss:// or ws://"),
+                "{message}"
+            );
+        }
+    }
+
+    /// `ws://` has no certificate to look at.
+    #[test]
+    fn an_unencrypted_server_has_no_certificate() {
+        assert!(server_certificate("ws://localhost:1").unwrap().is_none());
+    }
+
+    /// A fingerprint or no verification without TLS would protect nothing:
+    /// refused.
+    #[test]
+    fn certificate_options_need_an_encrypted_url() {
+        for trust in [
+            TlsTrust::Fingerprint("ab:cd".into()),
+            TlsTrust::NoVerification,
+        ] {
+            let Err(InternalErrors::InvalidArgument(message)) =
+                open_websocket("ws://localhost:1", &trust)
+            else {
+                panic!("expected an invalid argument");
+            };
+            assert!(message.contains("need a wss:// URL"), "{message}");
+        }
+    }
+
+    /// Something listening that doesn't speak WebSocket: the handshake
+    /// fails, with a hint that the server may use TLS.
+    #[test]
+    fn a_failed_handshake_hints_at_tls() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+        });
+        let Err(InternalErrors::Io(message)) = open_websocket(&url, &TlsTrust::default()) else {
+            panic!("expected an io error");
+        };
+        assert!(message.contains("WebSocket handshake with"), "{message}");
+        assert!(message.contains("connect with wss://"), "{message}");
+    }
+
+    #[test]
+    fn a_reply_before_the_welcome_is_refused() {
+        let url = serve(|ws| {
+            next_msg(ws).expect("a hello");
+            reply(ws, 1, Reply::Done);
+        });
+        let ws = open_websocket(&url, &TlsTrust::default()).unwrap();
+        let Err(InternalErrors::Internal(message)) = Session::open(ws, &url, "token") else {
+            panic!("expected an internal error");
+        };
+        assert_eq!(message, "unexpected reply before handshake");
+    }
+
+    /// Another app version with the same protocol: connected, with the
+    /// server's image formats.
+    #[test]
+    fn a_server_of_another_version_with_the_same_protocol_is_used() {
+        let url = serve(|ws| {
+            welcome(ws, "0.0.1-older");
+            until_gone(ws);
+        });
+        let ws = open_websocket(&url, &TlsTrust::default()).unwrap();
+        let session = Session::open(ws, &url, "token").unwrap();
+        assert!(session.is_connected());
+        assert_eq!(session.image_formats(), ["tif"]);
+        assert_eq!(session.security(), ConnectionSecurity::Unencrypted);
+    }
+
+    /// A reply to a request nobody waits for is dropped; the connection
+    /// stays and the next reply reaches its request.
+    #[test]
+    fn a_reply_nobody_waits_for_is_dropped() {
+        let session = session(|ws| {
+            reply(ws, 999, Reply::Done);
+            let id = next_request_id(ws);
+            reply(ws, id, Reply::Jobs(Vec::new()));
+            until_gone(ws);
+        });
+        let (id, rx) = session.request(Request::ListJobs).unwrap();
+        let answer = session.recv(&rx).unwrap();
+        session.finish(id);
+        assert!(matches!(answer.msg, Reply::Jobs(jobs) if jobs.is_empty()));
+        assert!(session.is_connected());
+    }
+
+    /// A message that can't be read drops the connection: a request
+    /// waiting then learns the connection is lost.
+    #[test]
+    fn a_malformed_server_message_drops_the_connection() {
+        let session = session(|ws| {
+            next_request_id(ws);
+            ws.send(Message::Binary(vec![1u8, 2, 3].into())).unwrap();
+            until_gone(ws);
+        });
+        let (_, rx) = session.request(Request::ListJobs).unwrap();
+        let Err(InternalErrors::Io(message)) = session.recv(&rx) else {
+            panic!("expected a lost connection");
+        };
+        assert!(message.contains("Lost connection"), "{message}");
+        wait_until_disconnected(&session);
+    }
+
+    /// Anything but `JobStarted` (or a failure) to a started job is an
+    /// unexpected reply.
+    #[test]
+    fn a_job_start_answered_with_something_else_is_unexpected() {
+        let session = session(|ws| {
+            let id = next_request_id(ws);
+            reply(ws, id, Reply::Done);
+            until_gone(ws);
+        });
+        let (id, rx) = session.request(Request::ListJobs).unwrap();
+        let Err(InternalErrors::Internal(message)) = session.job_started(id, rx) else {
+            panic!("expected an unexpected reply");
+        };
+        assert_eq!(message, "unexpected reply from server");
+    }
+
+    /// A started job the worker then reports failed: its result is the
+    /// worker's error; the job carries the worker's id and output folder.
+    #[test]
+    fn a_started_job_that_fails_on_the_worker_reports_its_error() {
+        let session = session(|ws| {
+            let id = next_request_id(ws);
+            reply(
+                ws,
+                id,
+                Reply::JobStarted {
+                    output_path: PathBuf::from("/out/run"),
+                    parallelism: 2,
+                    job_id: Some("job-1".into()),
+                },
+            );
+            reply(ws, id, Reply::Failed(WireError::message("disk full")));
+            until_gone(ws);
+        });
+        let (id, rx) = session.request(Request::ListJobs).unwrap();
+        let job = session.job_started(id, rx).unwrap();
+        assert_eq!(job.id(), Some("job-1"));
+        assert_eq!(job.output_path(), &PathBuf::from("/out/run"));
+        let Err(InternalErrors::Internal(message)) = job.wait() else {
+            panic!("expected the worker's error");
+        };
+        assert_eq!(message, "Server: disk full");
+    }
+
+    /// A started job answered with something that isn't a job's: the job
+    /// ends with an unexpected reply.
+    #[test]
+    fn a_started_job_answered_with_something_else_ends_unexpectedly() {
+        let session = session(|ws| {
+            let id = next_request_id(ws);
+            reply(
+                ws,
+                id,
+                Reply::JobStarted {
+                    output_path: PathBuf::from("/out/preview"),
+                    parallelism: 1,
+                    job_id: None,
+                },
+            );
+            reply(ws, id, Reply::Done);
+            until_gone(ws);
+        });
+        let (id, rx) = session.request(Request::ListJobs).unwrap();
+        let job = session.job_started(id, rx).unwrap();
+        assert_eq!(job.id(), None);
+        let Err(InternalErrors::Internal(message)) = job.wait() else {
+            panic!("expected an unexpected reply");
+        };
+        assert_eq!(message, "unexpected reply from server");
+    }
+
+    /// A server answering text commands with `answers` in turn, after
+    /// reading the client's command (which it hands to `command`).
+    fn text_server(
+        answers: Vec<Message>,
+        command: impl FnOnce(serde_json::Value) + Send + 'static,
+    ) -> String {
+        serve(move |ws| {
+            let text = loop {
+                match ws.read().unwrap() {
+                    Message::Text(text) => break text,
+                    _ => continue,
+                }
+            };
+            command(serde_json::from_str(&text).unwrap());
+            for answer in answers {
+                ws.send(answer).unwrap();
+            }
+            while ws.read().is_ok() {}
+        })
+    }
+
+    fn connected(url: &str) -> WebSocket<NetStream> {
+        open_websocket(url, &TlsTrust::default()).unwrap()
+    }
+
+    /// A greeting and a ping before the answer are skipped; the accepted
+    /// login's session token is returned. The command names the user.
+    #[test]
+    fn a_login_skips_what_isnt_its_answer_and_returns_the_session_token() {
+        let (tx, rx) = mpsc::channel();
+        let url = text_server(
+            vec![
+                Message::text(r#"{"greeting": "EVAnalyzer server"}"#),
+                Message::Ping(Vec::new().into()),
+                Message::text(r#"{"response": "accepted", "session_token": "abc"}"#),
+            ],
+            move |command| tx.send(command).unwrap(),
+        );
+        let token = login(&mut connected(&url), &url, "me", "secret").unwrap();
+        assert_eq!(token, "abc");
+        let command = rx.recv().unwrap();
+        assert_eq!(command["cmd"], "login");
+        assert_eq!(command["username"], "me");
+    }
+
+    #[test]
+    fn a_refused_login_says_why() {
+        let url = text_server(
+            vec![Message::text(
+                r#"{"response": "error", "msg": "wrong password"}"#,
+            )],
+            drop,
+        );
+        let Err(InternalErrors::InvalidArgument(message)) =
+            login(&mut connected(&url), &url, "me", "nope")
+        else {
+            panic!("expected an invalid argument");
+        };
+        assert_eq!(message, format!("Login at {url} failed: wrong password"));
+    }
+
+    #[test]
+    fn an_accepted_login_without_a_session_is_an_error() {
+        let url = text_server(vec![Message::text(r#"{"response": "accepted"}"#)], drop);
+        let Err(InternalErrors::Internal(message)) =
+            login(&mut connected(&url), &url, "me", "secret")
+        else {
+            panic!("expected an internal error");
+        };
+        assert!(message.contains("sent no session"), "{message}");
+    }
+
+    /// A binary answer: a worker, not a server - it wants a token.
+    #[test]
+    fn a_login_at_a_worker_says_to_use_a_token() {
+        let url = text_server(vec![Message::Binary(vec![0u8; 4].into())], drop);
+        let Err(InternalErrors::InvalidArgument(message)) =
+            login(&mut connected(&url), &url, "me", "secret")
+        else {
+            panic!("expected an invalid argument");
+        };
+        assert!(message.contains("is not an EVAnalyzer server"), "{message}");
+    }
+
+    #[test]
+    fn a_login_the_server_closes_or_leaves_unanswered_is_an_io_error() {
+        let url = text_server(vec![Message::Close(None)], drop);
+        let Err(InternalErrors::Io(message)) = login(&mut connected(&url), &url, "me", "x") else {
+            panic!("expected an io error");
+        };
+        assert!(message.contains("closed the connection"), "{message}");
+
+        // Gone without a word.
+        let url = serve(|ws| {
+            let _ = ws.read();
+        });
+        let Err(InternalErrors::Io(message)) = login(&mut connected(&url), &url, "me", "x") else {
+            panic!("expected an io error");
+        };
+        assert!(message.contains("No answer from"), "{message}");
+    }
+
+    /// Reconnecting sends the session token, no password.
+    #[test]
+    fn resuming_sends_the_session_token() {
+        let (tx, rx) = mpsc::channel();
+        let url = text_server(
+            vec![Message::text(
+                r#"{"response": "accepted", "session_token": "abc"}"#,
+            )],
+            move |command| tx.send(command).unwrap(),
+        );
+        resume(&mut connected(&url), &url, "abc").unwrap();
+        let command = rx.recv().unwrap();
+        assert_eq!(command["cmd"], "resume");
+        assert_eq!(command["session_token"], "abc");
+        assert!(command.get("password").is_none());
+    }
+}

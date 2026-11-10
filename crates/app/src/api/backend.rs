@@ -223,6 +223,11 @@ pub trait ResultsSource: Send + Sync {
     /// One object's profile: (position, value), by position.
     fn object_profile(&self, key: &str, object_id: &str)
     -> Result<Vec<(f64, f64)>, InternalErrors>;
+    /// Steps through the objects with a profile (`ProfileStepFilter`).
+    fn profile_step(
+        &self,
+        filter: &crate::api::ProfileStepFilter,
+    ) -> Result<crate::api::ProfileStep, InternalErrors>;
     /// The results hold traced neurons (Trace Filaments - Results › Trees
     /// is offered).
     fn has_trees(&self) -> Result<bool, InternalErrors>;

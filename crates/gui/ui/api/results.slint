@@ -282,8 +282,12 @@ export struct ChartBoxplotBox {
 
 export global ResultsState {
     // -- Split with image (board Z) --
-    // Results left, the image right (List and Plate; not Charts).
+    // Results left, the image right (asked for - see `split-offered`).
     in-out property <bool> split: false;
+    // The view shown can be split: all but the charts, of them Profile (the
+    // selected object's circles on the image). Another chart shows full
+    // width, `split` kept for when Profile comes back.
+    out property <bool> split-offered: self.rail-mode != ResultsRailMode.charts || self.chart-kind == ResultsChartKind2.profile;
     // The results pane's width.
     in-out property <length> split-w: 640px;
     // Selecting an object flies the image to it (off: only highlighted).

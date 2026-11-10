@@ -176,6 +176,13 @@ impl ResultsSource for LocalResults {
         self.with(|db| results_profile::object_profile(db, key, object_id))
     }
 
+    fn profile_step(
+        &self,
+        filter: &crate::api::ProfileStepFilter,
+    ) -> Result<crate::api::ProfileStep, InternalErrors> {
+        self.with(|db| results_profile::profile_step(db, filter))
+    }
+
     fn has_trees(&self) -> Result<bool, InternalErrors> {
         self.with(results_trees::has_trees)
     }

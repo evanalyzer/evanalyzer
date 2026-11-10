@@ -19,7 +19,10 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::results_generator::{ResultsGenerator, class_filter_sql, sql_string_in_list};
-use crate::api::{MeasurementColumn, ProfileFilter, ProfileLines, ProfilePoint, ProfileResult};
+use crate::api::{
+    MeasurementColumn, ProfileFilter, ProfileLines, ProfileObject, ProfilePoint, ProfileResult,
+    ProfileStep, ProfileStepFilter,
+};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use std::collections::HashMap;
 
@@ -80,6 +83,111 @@ pub(super) fn object_profile(
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)?;
     Ok(rows)
+}
+
+/// The objects with the profile `filter.key` (of its classes, on the
+/// enabled images), numbered in the order ‹ › steps through them: by
+/// image, then top to bottom, left to right. Columns `n, id, image, centre,
+/// x0, y0, x1, y1`.
+fn profile_objects_sql(filter: &ProfileStepFilter) -> String {
+    let mut conditions = vec![
+        format!("m.key = '{}'", filter.key.replace('\'', "''")),
+        "m.region = 'object'".to_string(),
+        "m.position IS NOT NULL".to_string(),
+        "NOT i.disabled".to_string(),
+        "i.successful".to_string(),
+    ];
+    if let Some(classes) = &filter.object_classes {
+        let ids: Vec<u32> = classes
+            .iter()
+            .filter_map(|class| match class {
+                ObjectClass::Global(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        conditions.push(match ids.is_empty() {
+            true => "false".to_string(),
+            false => class_filter_sql("m.object_class_id", &ids),
+        });
+    }
+    format!(
+        "WITH p AS (
+            SELECT m.object_id, any_value(m.image_rel_path) AS image,
+                any_value(m.related_object_id) AS centre
+            FROM measurements m JOIN images i ON i.image_rel_path = m.image_rel_path
+            WHERE {conditions}
+            GROUP BY m.object_id
+         ),
+         b AS (
+            SELECT object_id, min(bbox_xmin_px) AS x0, min(bbox_ymin_px) AS y0,
+                max(bbox_xmax_px) AS x1, max(bbox_ymax_px) AS y1
+            FROM objects WHERE object_id IN (SELECT object_id FROM p)
+            GROUP BY object_id
+         )
+         SELECT row_number() OVER (ORDER BY p.image, b.y0, b.x0, p.object_id) AS n,
+             p.object_id::VARCHAR AS id, p.image, p.centre::VARCHAR AS centre,
+             b.x0, b.y0, b.x1, b.y1
+         FROM p LEFT JOIN b ON b.object_id = p.object_id",
+        conditions = conditions.join(" AND "),
+    )
+}
+
+/// A step through the objects with a profile (`ProfileStepFilter`): none
+/// in results of format 1.
+pub(super) fn profile_step(
+    db: &ResultsGenerator,
+    filter: &ProfileStepFilter,
+) -> Result<ProfileStep, InternalErrors> {
+    if !db.has_profiles()? || filter.key.is_empty() {
+        return Ok(ProfileStep::default());
+    }
+    let objects = profile_objects_sql(filter);
+    let (total, current): (i64, Option<i64>) = db
+        .connection()
+        .query_row(
+            &format!("SELECT count(*), max(CASE WHEN id = ? THEN n END) FROM ({objects})"),
+            [filter.from.as_deref().unwrap_or("")],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(err)?;
+    let target = match (current, filter.delta) {
+        _ if total == 0 => None,
+        (Some(n), delta) => Some((n + delta as i64).clamp(1, total)),
+        (None, 0) => None,
+        (None, delta) if delta < 0 => Some(total),
+        (None, _) => Some(1),
+    };
+    let Some(target) = target else {
+        return Ok(ProfileStep {
+            position: 0,
+            total: total as usize,
+            object: None,
+        });
+    };
+    let object = db
+        .connection()
+        .query_row(
+            &format!("SELECT id, image, centre, x0, y0, x1, y1 FROM ({objects}) WHERE n = ?"),
+            [target],
+            |row| {
+                let bbox: [Option<u32>; 4] = [row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?];
+                Ok(ProfileObject {
+                    object_id: row.get(0)?,
+                    image_rel_path: row.get(1)?,
+                    centre_id: row.get(2)?,
+                    bbox_px: match bbox {
+                        [Some(x0), Some(y0), Some(x1), Some(y1)] => Some([x0, y0, x1, y1]),
+                        _ => None,
+                    },
+                })
+            },
+        )
+        .map_err(err)?;
+    Ok(ProfileStep {
+        position: target as usize,
+        total: total as usize,
+        object: Some(object),
+    })
 }
 
 /// The SQL of a profile chart's lines (see the module's doc): its columns
@@ -333,6 +441,97 @@ mod tests {
         assert_eq!(curve, [(10.0, 4.0), (20.0, 6.0), (30.0, 2.0)]);
     }
 
+    fn step(from: Option<usize>, delta: i32) -> ProfileStepFilter {
+        ProfileStepFilter {
+            key: "sholl_01/intersections".into(),
+            object_classes: None,
+            from: from.map(|i| format!("00000000-0000-0000-0000-{i:012}")),
+            delta,
+        }
+    }
+
+    fn landed(step: &ProfileStep) -> (usize, usize, Option<String>) {
+        (
+            step.position,
+            step.total,
+            step.object.as_ref().map(|o| o.object_id[24..].to_string()),
+        )
+    }
+
+    #[test]
+    fn stepping_goes_through_the_objects_by_image_and_stops_at_the_ends() {
+        let db = database();
+        // The two neurons of A01_1 (same box: by id), then B01_1's.
+        assert_eq!(
+            landed(&profile_step(&db, &step(None, 1)).unwrap()),
+            (1, 3, Some("000000000000".into()))
+        );
+        assert_eq!(
+            landed(&profile_step(&db, &step(None, -1)).unwrap()),
+            (3, 3, Some("000000000002".into()))
+        );
+        assert_eq!(
+            landed(&profile_step(&db, &step(Some(0), 1)).unwrap()),
+            (2, 3, Some("000000000001".into()))
+        );
+        assert_eq!(
+            landed(&profile_step(&db, &step(Some(2), 1)).unwrap()),
+            (3, 3, Some("000000000002".into()))
+        );
+        assert_eq!(
+            landed(&profile_step(&db, &step(Some(0), -1)).unwrap()),
+            (1, 3, Some("000000000000".into()))
+        );
+        // Where an object is, and the count without one.
+        assert_eq!(
+            landed(&profile_step(&db, &step(Some(1), 0)).unwrap()),
+            (2, 3, Some("000000000001".into()))
+        );
+        assert_eq!(
+            landed(&profile_step(&db, &step(None, 0)).unwrap()),
+            (0, 3, None)
+        );
+        // An object without the profile: like none.
+        assert_eq!(
+            landed(&profile_step(&db, &step(Some(9), 1)).unwrap()),
+            (1, 3, Some("000000000000".into()))
+        );
+    }
+
+    #[test]
+    fn a_step_names_the_objects_image_box_and_centre() {
+        let db = database();
+        db.connection()
+            .execute_batch(
+                "UPDATE measurements SET related_object_id = '00000000-0000-0000-0000-000000000007' \
+                 WHERE object_id = '00000000-0000-0000-0000-000000000002'",
+            )
+            .unwrap();
+        let last = profile_step(&db, &step(None, -1)).unwrap().object.unwrap();
+        assert_eq!(last.image_rel_path, "B01_1.tif");
+        assert_eq!(last.bbox_px, Some([0, 0, 10, 10]));
+        assert_eq!(
+            last.centre_id.as_deref(),
+            Some("00000000-0000-0000-0000-000000000007")
+        );
+        let first = profile_step(&db, &step(None, 1)).unwrap().object.unwrap();
+        assert_eq!(first.centre_id, None);
+    }
+
+    #[test]
+    fn stepping_keeps_to_the_classes_asked_for() {
+        let db = database();
+        let mut only_b = step(None, 1);
+        only_b.object_classes = Some(vec![ObjectClass::Global(2)]);
+        assert_eq!(
+            landed(&profile_step(&db, &only_b).unwrap()),
+            (1, 1, Some("000000000002".into()))
+        );
+        let mut none = step(None, 1);
+        none.object_classes = Some(vec![ObjectClass::Unset]);
+        assert_eq!(landed(&profile_step(&db, &none).unwrap()), (0, 0, None));
+    }
+
     #[test]
     fn results_of_format_1_have_no_profiles() {
         let dir = tempfile::tempdir().unwrap();
@@ -343,6 +542,10 @@ mod tests {
         assert_eq!(
             profile(&db, &filter(ProfileLines::Class)).unwrap(),
             ProfileResult::default()
+        );
+        assert_eq!(
+            profile_step(&db, &step(None, 1)).unwrap(),
+            ProfileStep::default()
         );
     }
 }

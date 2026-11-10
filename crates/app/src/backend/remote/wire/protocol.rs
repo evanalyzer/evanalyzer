@@ -69,7 +69,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 38;
+pub const PROTOCOL_VERSION: u32 = 39;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -197,6 +197,7 @@ pub(crate) enum ResultsQuery {
         key: String,
         object_id: String,
     },
+    ProfileStep(crate::api::ProfileStepFilter),
     HasTrees,
     TreeNeurons(Option<Vec<String>>),
     TreeSegments(String),
@@ -230,6 +231,7 @@ pub(crate) enum ResultsAnswer {
     ProfileColumns(Vec<crate::api::MeasurementColumn>),
     Profile(crate::api::ProfileResult),
     ObjectProfile(Vec<(f64, f64)>),
+    ProfileStep(crate::api::ProfileStep),
     Flag(bool),
     TreeNeurons(crate::api::TreeNeurons),
     TreeSegments(Vec<crate::api::TreeSegment>),
@@ -1056,5 +1058,31 @@ mod tests {
         let other = WireError::from(&InternalErrors::Io("disk full".into())).into_internal();
         assert!(other.to_string().contains("Server"), "{other}");
         assert!(other.to_string().contains("disk full"), "{other}");
+    }
+
+    /// A failed image arrives as failed, naming the same image, without
+    /// any blob.
+    #[test]
+    fn a_failed_image_survives_the_wire() {
+        let (wire, blobs) = event_to_wire(ProgressEvent::ImageFailed {
+            path: "plate/a.tif".into(),
+        });
+        assert!(blobs.is_empty());
+        let ProgressEvent::ImageFailed { path } = event_from_wire(wire, blobs).unwrap() else {
+            panic!("expected a failed image");
+        };
+        assert_eq!(path, std::path::PathBuf::from("plate/a.tif"));
+    }
+
+    /// A tile whose pixel blobs don't match its channels is refused, not
+    /// read with the wrong pixels.
+    #[test]
+    fn a_tile_with_more_blobs_than_channels_is_refused() {
+        let error =
+            channels_from_wire(Vec::new(), vec![vec![0u8; 4]]).expect_err("a blob too many");
+        assert!(
+            matches!(&error, InternalErrors::Internal(m) if m == "tile has 0 channels but 1 pixel blobs"),
+            "{error}"
+        );
     }
 }

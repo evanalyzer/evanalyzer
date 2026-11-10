@@ -146,8 +146,8 @@ pub mod results {
         TrackPoint, drift_at,
     };
     pub use crate::api::{
-        ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint,
-        ProfileResult,
+        ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfileObject,
+        ProfilePoint, ProfileResult, ProfileStep, ProfileStepFilter,
     };
     pub use crate::api::{TREE_NEURON_VALUES, TreeNeuron, TreeNeurons, TreeSegment};
     pub use crate::api::{

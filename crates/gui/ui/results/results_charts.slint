@@ -803,7 +803,9 @@ export component ResultsChartsView inherits Rectangle {
                         }
                     }
                     if ResultsState.chart-kind == ResultsChartKind2.profile: InkHint {
-                        text: "Select an object in the split view or the List to see its curve. A position an object doesn't reach counts as 0.";
+                        text: ResultsState.split
+                            ? "Click an object on the image - or use ‹ › - to see its curve and its circles. A position an object doesn't reach counts as 0."
+                            : "Split with image to pick an object and see its curve and its circles. A position an object doesn't reach counts as 0.";
                     }
                     if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
                         text: "Relative to the first time point";

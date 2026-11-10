@@ -145,7 +145,7 @@ export component GlobalShortcuts inherits FocusScope {
 
         // -- Results, split with the image: ↑ ↓ step through the objects,
         // Esc lets go of the selected one --
-        if (LayoutState.mode == WorkspaceMode.results && ResultsState.split && !e.modifiers.control && !e.modifiers.alt) {
+        if (LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.split-offered && !e.modifiers.control && !e.modifiers.alt) {
             if (e.text == Key.UpArrow || e.text == Key.DownArrow) {
                 ResultsState.split-step(e.text == Key.UpArrow ? -1 : 1);
                 return accept;

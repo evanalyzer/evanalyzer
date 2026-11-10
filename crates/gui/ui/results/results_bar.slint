@@ -569,10 +569,13 @@ export component ResultsBarActions inherits HorizontalLayout {
             width: 200px;
             label: "Layout";
             model: ["Full", "Split with image"];
-            selected: ResultsState.split ? 1 : 0;
-            // A chart has no image to show beside it.
-            disabled-index: ResultsState.rail-mode == ResultsRailMode.charts ? 1 : -1;
-            disabled-why: "Split view works with List, Plate and Tracks";
+            // Another chart than Profile: full width (the split comes back
+            // with Profile).
+            selected: ResultsState.split && ResultsState.split-offered ? 1 : 0;
+            // A chart has no image to show beside it - Profile has the
+            // selected object's circles.
+            disabled-index: ResultsState.split-offered ? -1 : 1;
+            disabled-why: "Split view works with List, Plate, Tracks and the Profile chart";
             picked(i) => {
                 ResultsState.split = i == 1;
                 ResultsState.split-changed(i == 1);

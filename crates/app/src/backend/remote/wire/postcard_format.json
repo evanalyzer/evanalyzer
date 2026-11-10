@@ -1,5 +1,5 @@
 {
-  "protocol_version": 38,
+  "protocol_version": 39,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1103,6 +1103,31 @@
         }
       }
     },
+    "ProfileObject": {
+      "STRUCT": [
+        {
+          "object_id": "STR"
+        },
+        {
+          "image_rel_path": "STR"
+        },
+        {
+          "bbox_px": {
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "U32",
+                "SIZE": 4
+              }
+            }
+          }
+        },
+        {
+          "centre_id": {
+            "OPTION": "STR"
+          }
+        }
+      ]
+    },
     "ProfilePoint": {
       "STRUCT": [
         {
@@ -1158,6 +1183,47 @@
         },
         {
           "lines_total": "U64"
+        }
+      ]
+    },
+    "ProfileStep": {
+      "STRUCT": [
+        {
+          "position": "U64"
+        },
+        {
+          "total": "U64"
+        },
+        {
+          "object": {
+            "OPTION": {
+              "TYPENAME": "ProfileObject"
+            }
+          }
+        }
+      ]
+    },
+    "ProfileStepFilter": {
+      "STRUCT": [
+        {
+          "key": "STR"
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "from": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "delta": "I32"
         }
       ]
     },
@@ -1554,18 +1620,25 @@
           }
         },
         "17": {
+          "ProfileStep": {
+            "NEWTYPE": {
+              "TYPENAME": "ProfileStep"
+            }
+          }
+        },
+        "18": {
           "Flag": {
             "NEWTYPE": "BOOL"
           }
         },
-        "18": {
+        "19": {
           "TreeNeurons": {
             "NEWTYPE": {
               "TYPENAME": "TreeNeurons"
             }
           }
         },
-        "19": {
+        "20": {
           "TreeSegments": {
             "NEWTYPE": {
               "SEQ": {
@@ -1574,14 +1647,14 @@
             }
           }
         },
-        "20": {
+        "21": {
           "Tracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracks"
             }
           }
         },
-        "21": {
+        "22": {
           "TrackSummary": {
             "NEWTYPE": {
               "SEQ": {
@@ -1590,7 +1663,7 @@
             }
           }
         },
-        "22": {
+        "23": {
           "TrackPaths": {
             "NEWTYPE": {
               "TYPENAME": "TrackPaths"
@@ -1735,9 +1808,16 @@
           }
         },
         "20": {
-          "HasTrees": "UNIT"
+          "ProfileStep": {
+            "NEWTYPE": {
+              "TYPENAME": "ProfileStepFilter"
+            }
+          }
         },
         "21": {
+          "HasTrees": "UNIT"
+        },
+        "22": {
           "TreeNeurons": {
             "NEWTYPE": {
               "OPTION": {
@@ -1746,46 +1826,46 @@
             }
           }
         },
-        "22": {
+        "23": {
           "TreeSegments": {
             "NEWTYPE": "STR"
           }
         },
-        "23": {
+        "24": {
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
             }
           }
         },
-        "24": {
+        "25": {
           "ImageObjects": {
             "NEWTYPE": {
               "TYPENAME": "ImageObjectsFilter"
             }
           }
         },
-        "25": {
+        "26": {
           "ImageTracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracksFilter"
             }
           }
         },
-        "26": {
+        "27": {
           "HasTracks": "UNIT"
         },
-        "27": {
+        "28": {
           "TrackSummary": {
             "NEWTYPE": {
               "TYPENAME": "TrackSummaryFilter"
             }
           }
         },
-        "28": {
+        "29": {
           "HasLineage": "UNIT"
         },
-        "29": {
+        "30": {
           "TrackPaths": {
             "NEWTYPE": {
               "TYPENAME": "TrackPathsFilter"

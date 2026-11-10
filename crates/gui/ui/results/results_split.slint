@@ -93,7 +93,7 @@ export component SplitImageHead inherits Hud {
         }
         Rectangle { width: 2px; }
         Text {
-            text: ResultsState.split-title != "" ? ResultsState.split-title : (root.plate ? "Click a well to see its images" : "Click a row to see its object");
+            text: ResultsState.split-title != "" ? ResultsState.split-title : (root.plate ? "Click a well to see its images" : ResultsState.rail-mode == ResultsRailMode.charts ? "Use ‹ › or click an object" : "Click a row to see its object");
             font-size: Ink.fs-body;
             font-weight: 600;
             color: #F4F4F5;
@@ -415,7 +415,7 @@ export component SplitHint inherits Hud {
         spacing: 8px;
         // The zoom is in the status bar.
         Text {
-            text: ResultsState.rail-mode == ResultsRailMode.tracks ? "Click an object to select its track" : "Click an object to find it in the " + (root.plate ? "well" : "list");
+            text: ResultsState.rail-mode == ResultsRailMode.tracks ? "Click an object to select its track" : ResultsState.rail-mode == ResultsRailMode.charts ? "Click an object to see its curve and its circles" : "Click an object to find it in the " + (root.plate ? "well" : "list");
             font-size: Ink.fs-caption;
             color: #A1A1AA;
             vertical-alignment: center;
