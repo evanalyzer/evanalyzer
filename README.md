@@ -12,7 +12,7 @@
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm_Noncommercial-blue)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](https://github.com/evanalyzer/evanalyzer/releases/latest)
 
-<a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-light.svg#gh-light-mode-only" height="40" alt="Made with Slint"></a><a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-dark.svg#gh-dark-mode-only" height="40" alt="Made with Slint"></a>
+<a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-light.svg" height="40" alt="Made with Slint"></a>
 
 **Find, classify and measure objects in microscopy images - reproducibly, on ordinary computers.**
 
@@ -31,10 +31,12 @@ whole slides. Results go into one database you can explore, chart and export.
   segmentation (Cellpose, StarDist, U-Net, YOLOv5), trained pixel and object
   classifiers; every change is previewed right away.
 - **Measurements that match the reference tools** - intensity, shape, texture,
-  colocalization, neighbours and parent/child relations, checked against
+  colocalization, neighbors and parent/child relations, checked against
   CellProfiler and ImageJ.
-- **Results in one place** - tables, plate heat maps and charts; export to CSV
-  and Excel.
+- **Tracking and filaments** - follow objects over time (LAP, Kalman and
+  overlap trackers) and trace filaments and neurite trees.
+- **Results in one place** - tables, plate heat maps and charts; export to CSV,
+  Excel and Parquet.
 - **Runs where your data is** - on your computer, from the command line, or on
   a shared workstation or server that others log in to.
 
@@ -127,7 +129,7 @@ methods of the steps you used:
 
 ### Prerequisites
 
-- **Rust** 1.85 or later (2024 edition): `rustup update`
+- **Rust** 1.95 or later (2024 edition): `rustup update`
 - **Native libraries** (libtorch for the AI plugin, DuckDB on Windows/macOS),
   downloaded once into `libs/`:
 
@@ -315,12 +317,19 @@ Pipeline commands (`Blur`, `Threshold`, `Cellpose`, ...) are declared once, in
    }
 
    impl ImageAlgorithm for MyCommand {
-       fn execute(&self, ctx: &mut PipelineContext, cache: &mut PipelineCache) -> Result<(), InternalErrors> {
+       fn execute(&self, ctx: &mut PipelineContext, cache: &mut GlobalPipelineCache) -> Result<(), InternalErrors> {
            /* ... */
        }
-       fn name(&self) -> &'static str { "MyCommand" }
+       fn name(&self) -> &'static str { "My Command" }
+       fn cite(&self) -> Vec<&'static CitationMetadata> { vec![/* the method's publication */] }
+       fn execution_scope(&self) -> ExecutionScope { ExecutionScope::Tile }
    }
    ```
+
+   `ExecutionScope::Tile` runs the command per tile; `WholeImage` gets the
+   whole image at once. The optional trait methods (RAM per tile pixel,
+   measurement outputs, ...) are documented on `ImageAlgorithm` in
+   `crates/core/src/algos.rs`.
 
 2. Build. `crates/cfg/build/pipeline_commands_generator.rs` finds every
    `#[derive(CommandsMeta)]` struct and regenerates
@@ -330,7 +339,7 @@ Pipeline commands (`Blur`, `Threshold`, `Cellpose`, ...) are declared once, in
    settings type, the `PipelineCommand` variant, the editor parameters and the
    conversion to `MyCommand`. Nothing to wire up by hand.
 
-Field types bring their own UI and behaviour:
+Field types bring their own UI and behavior:
 
 - `PathBuf` - a file picker, stored relative to the project so projects can be
   moved. `file_extensions` only narrows the picker's filter.

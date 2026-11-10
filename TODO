@@ -857,7 +857,7 @@ Imaris is closed source: user documentation and papers only. 3D rendering is out
 
 ### Spots
 - [x] Command "Find Maxima" (`segmentation/find_maxima.rs`, 2026-11-08): each pixel without a brighter one within the radius = one 1-pixel object, quality cut-off manual or Otsu, plateaus = one pixel, flat regions never maxima. Self-contained (no code shared with Watershed's seed search).
-- [ ] Module "Spot detection" in the templates repo: Gaussian Blur (or DoG) → Find Maxima → Extract Objects → Transform Objects › Draw Circle.
+- [x] Module "Spot detection" in the templates repo: Gaussian Blur (or DoG) → Find Maxima → Extract Objects → Transform Objects › Draw Circle.
 - [ ] Transform Objects › Draw Circle: "equivalent diameter from the area" (region growing: Threshold + Propagation from the maxima, then a circle of the grown area).
 - [ ] Find Maxima in the real app: parameter panel, an EV and an smFISH image, a whole slide (duplicates at tile seams - no halo, like Watershed).
 - [ ] Maybe: sub-pixel position (quadratic fit around the maximum), only if distances/tracking need it.
