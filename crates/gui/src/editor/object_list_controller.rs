@@ -194,6 +194,18 @@ impl ObjectListController {
                                 .unwrap_or(-1)
                         });
                     let (parents, children) = relations_text(&object, &preview_objects, &project);
+                    let coloc_with = coloc_text(&object, &project);
+                    class_state.set_selected_card(crate::editor::object_card::object_card(
+                        &object,
+                        &project,
+                        &crate::editor::object_card::CardContext {
+                            label_count,
+                            parents: &parents,
+                            children: &children,
+                            coloc_with: &coloc_with,
+                            nr_of_bits,
+                        },
+                    ));
                     class_state.set_selected_object(ObjectItemDataSlint {
                         editable: project.is_manual_object(object.id.clone()),
                         parents: parents.into(),
@@ -212,6 +224,7 @@ impl ObjectListController {
                     }
                 } else {
                     class_state.set_selected_object(ObjectItemDataSlint::default());
+                    class_state.set_selected_card(Default::default());
                 }
             }
         }) {

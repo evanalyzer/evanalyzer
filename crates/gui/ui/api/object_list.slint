@@ -43,6 +43,42 @@ export struct ObjectItemDataSlint {
     bbox-h: float,
 }
 
+// One line of the object card: name, value, and a second value (µm).
+export struct CardFact {
+    label: string,
+    value: string,
+    extra: string,
+}
+
+// The intensity of one channel (a colour image: one row, its brightness).
+// `values`: mean, sum, min, max, std, median, lower quartile, upper
+// quartile, MAD - "" where not measured.
+export struct CardIntensityRow {
+    name: string,
+    color: color,
+    rgb: bool,
+    values: [string],
+}
+
+// The values one Measure step gave the object.
+export struct CardStepGroup {
+    step: string,
+    facts: [CardFact],
+}
+
+// The selected object's card, by section - filled for the selected object
+// only.
+export struct ObjectCardSlint {
+    shape: [CardFact],
+    intensity-rows: [CardIntensityRow],
+    step-groups: [CardStepGroup],
+    // How many values the steps gave (shown on the folded section).
+    step-count: int,
+    relations: [CardFact],
+    // The folded relations section's few words ("Bee · 417 same label").
+    relations-summary: string,
+}
+
 export global ObjectListState {
     in-out property <bool> is_scanning: false;
     in-out property <int> scroll_to_object_index: -1;
@@ -50,6 +86,14 @@ export global ObjectListState {
     in property <[ObjectItemDataSlint]> object_list: [];
 
     in-out property <ObjectItemDataSlint> selected_object;
+    // Its card's values, by section, and which sections are open (kept
+    // for the session).
+    in-out property <ObjectCardSlint> selected-card;
+    in-out property <bool> card-shape-open: true;
+    in-out property <bool> card-intensity-open: true;
+    in-out property <bool> card-intensity-more: false;
+    in-out property <bool> card-steps-open: false;
+    in-out property <bool> card-relations-open: false;
 
     // The objects shown: of this class (-1 all) and matching the search
     // ("12" an id, "area > 50", "circ < 0.6", a class name; terms split by

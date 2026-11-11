@@ -799,6 +799,12 @@ An analysis reads a colour image as one channel (0, packed RGB); the viewer list
 - [ ] Later: Color Filter output "Mask" - kept pixels white (1) instead of their brightness, a region to use directly (e.g. tissue area) without a Threshold.
 - [ ] Later, if needed (board B2): colour components (Red / Green / Blue) as channels of a step - e.g. colocalization of an RGB fluorescence export; needs the analysis to read single colours.
 - [ ] Not wanted (2026-11-11): white balance by clicking the background; a Threshold hint "Add Color to Grayscale".
+- [x] Object card: a colour image's intensity as one row "Image (RGB)" (was "Red" with the value, Green and Blue "–").
+
+### Object card - every value (2026-11-11, design canvas https://claude.ai/artifact/KVv8jbjKeSJgQyYdvkXxgD, variant A)
+- [x] The card over the image in folding sections (open ones kept for the session; scrolls inside above ~70 % of the image height): Size & shape (area, perimeter, circularity, fitted ellipse, centre, box, plane, touches edge - µm beside px once the pixel size is known, none while unknown - was "0.0 nm²"), Intensity (mean, sum, min, max per channel; "More": median, quartiles, sd, MAD), Measured by steps (the preview's per-object values by step, profiles left out), Relations. Default open: Size & shape, Intensity. Built for the selected object only (`editor/object_card.rs`).
+- [ ] Later, maybe: the same sections on the results' split view card (asked 2026-11-11, not decided).
+- [ ] Later, maybe: a value about another object (nearest neighbour, parent) links to that object on the card.
 
 ### Annotation tools (QuPath level)
 EVA has rectangle, ellipse, polygon, brush, eraser, marker - and now the wand. Covered by the pipeline (decided 2026-10-26): analysing inside an annotation (load annotated objects as the region), boolean operations (object commands), hierarchy (Relate: parent/child, counts per parent).

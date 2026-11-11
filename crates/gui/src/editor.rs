@@ -36,6 +36,7 @@ pub mod histogram_controller;
 pub mod image_meta_controller;
 pub mod images_list_controller;
 pub(crate) mod measurements_panel;
+pub(crate) mod object_card;
 pub mod object_list_controller;
 pub(crate) mod object_render;
 pub mod pipeline_task;

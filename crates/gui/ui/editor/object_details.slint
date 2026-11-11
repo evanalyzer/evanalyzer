@@ -6,14 +6,115 @@
 // line): its classes (removable on a manual one), area, circularity, and
 // the mean and sum of each channel. Its actions are in the list's line.
 
-import { ChannelState } from "../api/state.slint";
 import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
 import { Ink, InkCaption, InkChip, InkIconButton, InkIcons, InkFact } from "../ink/ink.slint";
 
+// A section's title: folds the section on a click; folded, a few words
+// of what it holds; open, an optional action on the right ("More").
+component CardSection inherits Rectangle {
+    in property <string> title;
+    in property <bool> open;
+    in property <string> summary;
+    in property <string> action;
+    callback toggled();
+    callback action-clicked();
+
+    height: 24px;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+    HorizontalLayout {
+        padding-top: 4px;
+        spacing: 4px;
+        Image {
+            source: root.open ? InkIcons.caret-down : InkIcons.caret-right;
+            width: 10px;
+            colorize: Ink.text-mute;
+        }
+        InkCaption {
+            text: root.title;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: !root.open && root.summary != "" ? "· " + root.summary : "";
+            font-size: Ink.fs-caption;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.action != "": Text {
+            text: root.action;
+            font-size: Ink.fs-caption;
+            color: Ink.focus;
+            vertical-alignment: center;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.action-clicked();
+                }
+            }
+        }
+    }
+}
+
+// A line of the intensity table: the channel (swatch and name) and four
+// values - the column heads with `header`.
+component IntensityLine inherits HorizontalLayout {
+    in property <string> name;
+    in property <color> color;
+    in property <bool> rgb;
+    in property <bool> header;
+    in property <[string]> names;
+
+    spacing: 6px;
+    height: 18px;
+    HorizontalLayout {
+        width: 86px;
+        spacing: 5px;
+        if !root.header: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 2px;
+                background: root.rgb ? @linear-gradient(90deg, #E8231E 0%, #22C02A 50%, #1E3BE8 100%) : root.color;
+            }
+        }
+        Text {
+            text: root.name;
+            font-size: Ink.fs-secondary;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+    for value in root.names: Text {
+        horizontal-stretch: 1;
+        text: value;
+        font-size: root.header ? Ink.fs-caption : Ink.fs-secondary;
+        font-family: root.header ? Ink.font-sans : Ink.font-mono;
+        color: root.header ? Ink.text-mute : Ink.text;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
 export component ObjectDetails inherits Rectangle {
     property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
+    // Taller than this: the card scrolls inside.
+    in property <length> max-card-height: 600px;
 
-    height: body.preferred-height;
+    height: min(body.preferred-height, root.max-card-height);
     background: Ink.glass;
     border-radius: Ink.radius-lg;
     border-width: 1px;
@@ -27,7 +128,11 @@ export component ObjectDetails inherits Rectangle {
     // Clicks stay on the card, not the image under it.
     TouchArea { }
 
+    Flickable {
+        content-height: body.preferred-height;
+        interactive: body.preferred-height > root.height;
     body := VerticalLayout {
+        width: parent.width;
         padding: Ink.pad-panel;
         padding-top: 8px;
         spacing: 6px;
@@ -72,37 +177,104 @@ export component ObjectDetails inherits Rectangle {
             }
         }
 
-        InkFact {
-            label: "Area";
-            value: root.sel.area > 0 ? root.sel.area + " px²" : "–";
-            extra: root.sel.area_nm2 != "" ? root.sel.area_nm2 + " nm²" : "";
+        // -- Size & shape --
+        CardSection {
+            title: "SIZE & SHAPE";
+            open: ObjectListState.card-shape-open;
+            toggled => {
+                ObjectListState.card-shape-open = !ObjectListState.card-shape-open;
+            }
         }
-        InkFact {
-            label: "Circularity";
-            value: root.sel.circularity != "" ? root.sel.circularity : "–";
+        if ObjectListState.card-shape-open: VerticalLayout {
+            spacing: 0px;
+            for f in ObjectListState.selected-card.shape: InkFact {
+                label: f.label;
+                value: f.value;
+                extra: f.extra;
+            }
         }
-        InkFact {
-            label: "Shared by";
-            value: root.sel.label_count + " objects";
+
+        // -- Intensity: a row per channel (a colour image: one) --
+        if ObjectListState.selected-card.intensity-rows.length > 0: CardSection {
+            title: "INTENSITY";
+            open: ObjectListState.card-intensity-open;
+            action: ObjectListState.card-intensity-open ? (ObjectListState.card-intensity-more ? "Fewer" : "More") : "";
+            toggled => {
+                ObjectListState.card-intensity-open = !ObjectListState.card-intensity-open;
+            }
+            action-clicked => {
+                ObjectListState.card-intensity-more = !ObjectListState.card-intensity-more;
+            }
         }
-        if root.sel.parents != "": InkFact {
-            label: "Parent";
-            value: root.sel.parents;
+        if ObjectListState.card-intensity-open && ObjectListState.selected-card.intensity-rows.length > 0: VerticalLayout {
+            spacing: 2px;
+            IntensityLine {
+                header: true;
+                names: ["mean", "sum", "min", "max"];
+            }
+            for row in ObjectListState.selected-card.intensity-rows: VerticalLayout {
+                spacing: 2px;
+                IntensityLine {
+                    name: row.name;
+                    color: row.color;
+                    rgb: row.rgb;
+                    names: [row.values[0], row.values[1], row.values[2], row.values[3]];
+                }
+                if ObjectListState.card-intensity-more: HorizontalLayout {
+                    padding-left: 91px;
+                    Text {
+                    text: "median " + row.values[5] + " · Q1–Q3 " + row.values[6] + "–" + row.values[7] + " · sd " + row.values[4] + " · MAD " + row.values[8];
+                    font-size: Ink.fs-caption;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    wrap: word-wrap;
+                    }
+                }
+            }
         }
-        if root.sel.children != "": InkFact {
-            label: "Children";
-            value: root.sel.children;
+
+        // -- What the preview's Measure steps gave it --
+        if ObjectListState.selected-card.step-count > 0: CardSection {
+            title: "MEASURED BY STEPS";
+            open: ObjectListState.card-steps-open;
+            summary: ObjectListState.selected-card.step-count == 1 ? "1 value" : ObjectListState.selected-card.step-count + " values";
+            toggled => {
+                ObjectListState.card-steps-open = !ObjectListState.card-steps-open;
+            }
         }
-        if root.sel.coloc-with != "": InkFact {
-            label: "Touches";
-            value: root.sel.coloc-with;
+        if ObjectListState.card-steps-open && ObjectListState.selected-card.step-count > 0: VerticalLayout {
+            spacing: 4px;
+            for group in ObjectListState.selected-card.step-groups: VerticalLayout {
+                spacing: 0px;
+                Text {
+                    text: group.step;
+                    font-size: Ink.fs-caption;
+                    color: Ink.cat-measure;
+                    overflow: elide;
+                }
+                for f in group.facts: InkFact {
+                    label: f.label;
+                    value: f.value;
+                    label-width: 120px;
+                }
+            }
         }
-        // One line per channel of the image (not per measured value): the
-        // card keeps its height while the full values arrive.
-        for ch in ChannelState.channels: InkFact {
-            label: ch.name;
-            value: "μ " + (root.sel.intensity_avgs.length > ch.idx && root.sel.intensity_avgs[ch.idx] != "" ? root.sel.intensity_avgs[ch.idx] : "–");
-            extra: "Σ " + (root.sel.intensities.length > ch.idx && root.sel.intensities[ch.idx] != "" ? root.sel.intensities[ch.idx] : "–");
+
+        // -- Relations --
+        CardSection {
+            title: "RELATIONS";
+            open: ObjectListState.card-relations-open;
+            summary: ObjectListState.selected-card.relations-summary;
+            toggled => {
+                ObjectListState.card-relations-open = !ObjectListState.card-relations-open;
+            }
+        }
+        if ObjectListState.card-relations-open: VerticalLayout {
+            spacing: 0px;
+            for f in ObjectListState.selected-card.relations: InkFact {
+                label: f.label;
+                value: f.value;
+            }
         }
 
         if !root.sel.editable: Text {
@@ -110,5 +282,6 @@ export component ObjectDetails inherits Rectangle {
             font-size: Ink.fs-caption;
             color: Ink.text-mute;
         }
+    }
     }
 }

@@ -378,7 +378,8 @@ export component Workspace inherits Rectangle {
         x: parent.width - Float.right-w - 2 * Float.gap - self.width;
         // Above the bar at the bottom of the image (40 px).
         y: clamp(ObjectDetailsPlace.row-y - root.absolute-position.y - 8px, Float.gap, max(Float.gap, parent.height - 2 * Float.gap - 40px - root.bottom-room - self.height));
-        width: 260px;
+        width: 300px;
+        max-card-height: max(160px, (parent.height - 2 * Float.gap - 40px - root.bottom-room) * 0.7);
     }
 
     // -- The objects as a table: at the bottom, between the left and the
