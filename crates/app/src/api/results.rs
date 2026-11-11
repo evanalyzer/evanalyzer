@@ -1399,6 +1399,70 @@ pub struct DrawnImages {
     pub max_side: u32,
     /// Each channel's color (channel -> RGB 0..1); white when missing.
     pub colors: std::collections::BTreeMap<i32, [f32; 3]>,
+    /// How the objects are drawn.
+    #[serde(default)]
+    pub style: DrawStyle,
+    /// Where each channel's display range comes from.
+    #[serde(default)]
+    pub brightness: DrawBrightness,
+    /// How the images are shown - the project's settings.
+    #[serde(default)]
+    pub display: ImageDisplay,
+    /// The images with settings of their own (relative path -> them), in
+    /// place of `display`.
+    #[serde(default)]
+    pub image_display: std::collections::BTreeMap<String, ImageDisplay>,
+}
+
+/// How "Images with objects drawn" draws an object.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawStyle {
+    /// Its contour, 1 px, in its class's color.
+    #[default]
+    Outline,
+    /// Filled half transparent, its contour opaque.
+    Filled,
+    /// Its bounding box, 2 px.
+    Box,
+}
+
+/// Where "Images with objects drawn" takes a channel's display range from.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawBrightness {
+    /// The viewer's range of the channel (`ChannelDisplay::range`); auto
+    /// where it has none.
+    #[default]
+    Viewer,
+    /// Each image's own 0.5 % / 99.5 % values.
+    Auto,
+}
+
+/// How an image is shown, as the viewer shows it.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageDisplay {
+    /// The z-projection its analysis read (`None`: plane by plane) - the
+    /// objects of a projection are on its plane 0.
+    pub z_projection: evanalyzer_cfg::core_types::ZProjection,
+    /// Per channel; a channel missing here is shown, auto-scaled.
+    pub channels: std::collections::BTreeMap<i32, ChannelDisplay>,
+}
+
+/// How a channel is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChannelDisplay {
+    pub visible: bool,
+    /// The display range `(min, max)` in the read image's values - `None`:
+    /// auto-scaled.
+    pub range: Option<(f32, f32)>,
+}
+
+impl Default for ChannelDisplay {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            range: None,
+        }
+    }
 }
 
 /// serde for an optional `std::range::Range` (no upstream support yet):

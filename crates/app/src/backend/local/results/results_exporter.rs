@@ -871,14 +871,21 @@ impl ResultExport {
         }
         if let Some(drawn) = &self.drawn_images {
             let images = resolve_images(database, self)?;
-            // The first exported plane's objects.
-            let first = ExportPlanes::of(database, self)?.planes[0];
+            // Each image's planes within the exported ones, named by their
+            // Z / T when the results have several.
+            let planes = ExportPlanes::of(database, self)?;
             super::drawn_images::export_drawn_images(
                 database,
                 drawn,
+                &self.object_classes,
                 &images,
                 &self.output_dir,
-                (first.z_stack, first.t_stack),
+                super::drawn_images::DrawnPlanes {
+                    z_stacks: self.z_stacks,
+                    t_stacks: self.t_stacks,
+                    by_z: planes.by_z,
+                    by_t: planes.by_t,
+                },
                 cancel,
                 &mut *on_progress,
             )?;
@@ -4088,6 +4095,7 @@ mod tests {
                 series: 0,
                 max_side: 4096,
                 colors: [(0, [1.0, 0.0, 0.0])].into(),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -4099,6 +4107,49 @@ mod tests {
             .join("multi-channel-4D-series.ome.png");
         let picture = image::open(&png).expect("a png").to_rgb8();
         assert!(picture.width() > 0 && picture.height() > 0);
+    }
+
+    /// Results with several time points: a PNG per plane, named by it; the
+    /// chosen time range limits them.
+    #[test]
+    fn images_with_objects_drawn_get_a_png_per_time_point() {
+        let name = "multi-channel-4D-series.ome.tif";
+        let (database, out_dir) = open(&[
+            ObjectSpec::new(name, "ClassA", 1, 100).at_plane(0, 0),
+            ObjectSpec::new(name, "ClassB", 2, 100).at_plane(0, 1),
+            ObjectSpec::new(name, "ClassB", 2, 100).at_plane(0, 2),
+        ]);
+        let (z_stacks, _) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks: Some(std::range::Range { start: 0, end: 2 }),
+            object_classes: vec![ObjectClass::Global(2)],
+            drawn_images: Some(crate::api::DrawnImages {
+                image_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests"),
+                series: 0,
+                max_side: 4096,
+                colors: [(0, [1.0, 0.0, 0.0])].into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let mut written: Vec<String> = std::fs::read_dir(out_dir.join("images"))
+            .expect("images")
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        written.sort();
+        assert_eq!(
+            written,
+            [
+                "multi-channel-4D-series.ome_t0000.png",
+                "multi-channel-4D-series.ome_t0001.png"
+            ]
+        );
     }
 
     /// The image paths come from the results file - anyone's: one that
@@ -4127,6 +4178,7 @@ mod tests {
                     series: 0,
                     max_side: 4096,
                     colors: [(0, [1.0, 0.0, 0.0])].into(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             };

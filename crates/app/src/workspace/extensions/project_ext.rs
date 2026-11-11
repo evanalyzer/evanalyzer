@@ -24,9 +24,10 @@ use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId, ZProjection};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
+use evanalyzer_cfg::settings::images_settings::SeriesSettings;
 use evanalyzer_cfg::settings::images_settings::{
-    ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackHandling,
-    ZStackSettings,
+    ChannelSettings, GlobalImageSettings, HistogramSettings, PixelSizeSettings, TStackSettings,
+    ZStackHandling, ZStackSettings,
 };
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::modules::ModuleDefinition;
@@ -39,8 +40,7 @@ use evanalyzer_cfg::{
 use evanalyzer_cfg::{
     core_types::ObjectClass,
     settings::{
-        classification_settings::Class,
-        images_settings::{ImageEntry, SeriesSettings},
+        classification_settings::Class, images_settings::ImageEntry,
         project_settings::ProjectSettings,
     },
 };
@@ -146,6 +146,15 @@ pub trait ProjectExt {
     fn reset_global_emission_wavel_length(&mut self, channel_id: i32);
     fn get_emission_wave_length(&self, channel_id: i32) -> f32;
     fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]>;
+    /// How the images are shown, for "Images with objects drawn": the
+    /// project's z-projection, channel visibility and display ranges, and
+    /// (relative path -> theirs) the images whose own settings differ.
+    fn drawn_image_display(
+        &self,
+    ) -> (
+        crate::api::ImageDisplay,
+        BTreeMap<String, crate::api::ImageDisplay>,
+    );
     fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]>;
     fn set_grayscale(&mut self, grayscale: bool);
     /// Links (one range for all three) or unlinks a colour image's red,
@@ -709,6 +718,28 @@ impl ProjectExt for ProjectWithRuntime {
 
     /// The colour each channel of the current image is shown in - see
     /// `utils::channel_colors` - or white for all of them in grayscale mode.
+    fn drawn_image_display(
+        &self,
+    ) -> (
+        crate::api::ImageDisplay,
+        BTreeMap<String, crate::api::ImageDisplay>,
+    ) {
+        let global = &self.images.settings;
+        let project = image_display(global, None);
+        let own = self
+            .images
+            .list
+            .0
+            .iter()
+            .filter_map(|(rel_path, entry)| {
+                let series = entry.series.get(&entry.active_series(global))?;
+                let display = image_display(global, Some(series));
+                (display != project).then(|| (rel_path.to_string_lossy().into_owned(), display))
+            })
+            .collect();
+        (project, own)
+    }
+
     fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]> {
         let channels: Vec<(i32, f32)> = self
             .get_current_image_channel_settings()
@@ -1980,6 +2011,49 @@ fn read_text(files: &dyn FileSystem, path: &Path) -> Result<String, InternalErro
     })
 }
 
+/// How an image with `series` settings (`None`: the project's) is shown -
+/// each value its own, else the project's: the z-projection its analysis
+/// reads, each channel's visibility and display range (only the channels
+/// not shown auto-scaled).
+fn image_display(
+    global: &GlobalImageSettings,
+    series: Option<&SeriesSettings>,
+) -> crate::api::ImageDisplay {
+    let z_projection = series
+        .and_then(|s| s.z_stack.as_ref())
+        .or(global.z_stack.as_ref())
+        .map_or(ZProjection::None, |z| z.z_projection.z_projection());
+    let mut ids: Vec<i32> = global.channels.keys().copied().collect();
+    if let Some(series) = series {
+        ids.extend(series.channels.keys().copied());
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    let channels = ids
+        .into_iter()
+        .map(|id| {
+            let own = series.and_then(|s| s.channels.get(&id));
+            let project = global.channels.get(&id);
+            let visible = own
+                .and_then(|c| c.visible)
+                .or(project.and_then(|c| c.visible))
+                .unwrap_or(true);
+            let range = own
+                .and_then(|c| c.histogram.as_ref())
+                .or(project.and_then(|c| c.histogram.as_ref()))
+                .map(|h| (h.min, h.max));
+            (id, crate::api::ChannelDisplay { visible, range })
+        })
+        // Shown and auto-scaled is what a channel missing here gets: left
+        // out, so an image without settings of its own equals the project.
+        .filter(|(_, shown)| *shown != crate::api::ChannelDisplay::default())
+        .collect();
+    crate::api::ImageDisplay {
+        z_projection,
+        channels,
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -2104,6 +2178,30 @@ mod tests {
             488.0,
             "back to the image's value"
         );
+    }
+
+    /// The project's visibility and z-projection for every image; an image
+    /// with its own display range is listed with it.
+    #[test]
+    fn drawn_images_show_the_images_as_the_viewer_does() {
+        let mut project = project_with_one_image();
+        project.set_global_preferences(&BTreeMap::from([(1, false)]));
+        let (shown, own) = project.drawn_image_display();
+        assert!(!shown.channels[&1].visible);
+        assert!(own.is_empty(), "nothing of its own yet");
+
+        project.set_image_histogram_settings_for_all_channels(0.1, 0.6, 0.0, 1.0);
+        project.set_image_z_stack(&ZStackSettings {
+            z_projection: ZStackHandling::MaxIntensity,
+            z_range: None,
+        });
+        let (shown, own) = project.drawn_image_display();
+        assert!(!shown.channels.contains_key(&0), "shown, auto-scaled");
+        assert_eq!(shown.z_projection, ZProjection::None);
+        let image = &own["img.tif"];
+        assert_eq!(image.channels[&0].range, Some((0.1, 0.6)));
+        assert!(!image.channels[&1].visible, "the project's visibility");
+        assert_eq!(image.z_projection, ZProjection::MaxIntensity);
     }
 
     #[test]

@@ -294,6 +294,20 @@ export component ExportDialog inherits InkDialog {
                     text: "Images with objects drawn (PNG)";
                     checked <=> ExportDialogState.with-drawn-images;
                 }
+                // How the objects of the chosen classes are drawn.
+                if ExportDialogState.with-drawn-images: HorizontalLayout {
+                    padding-left: 24px;
+                    alignment: start;
+                    InkSegmented {
+                        label: "Draw the objects";
+                        model: ["Outline", "Filled 50 %", "Box"];
+                        tips: ["The object's contour", "Half transparent, contour opaque", "Its bounding box"];
+                        selected: ExportDialogState.drawn-style;
+                        picked(i) => {
+                            ExportDialogState.drawn-style = i;
+                        }
+                    }
+                }
             }
 
             Group {
@@ -494,6 +508,44 @@ export component ExportDialog inherits InkDialog {
                             if selected {
                                 ExportDialogState.color-schema-summary = value;
                             }
+                        }
+                    }
+                }
+            }
+
+            if root.more: Group {
+                title: "IMAGES";
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Brightness";
+                    }
+                    InkSegmented {
+                        label: "Brightness";
+                        model: ["As in the viewer", "Auto per image"];
+                        tips: ["Each channel's display range from the viewer", "Each image scaled to its own 0.5 % - 99.5 % values"];
+                        selected: ExportDialogState.drawn-brightness;
+                        enabled: ExportDialogState.with-drawn-images;
+                        picked(i) => {
+                            ExportDialogState.drawn-brightness = i;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Size";
+                    }
+                    InkSegmented {
+                        label: "Size";
+                        model: ["2048", "4096", "8192 px"];
+                        tips: ["Longer side at most 2048 px - smaller images keep their size", "Longer side at most 4096 px - smaller images keep their size", "Longer side at most 8192 px - smaller images keep their size"];
+                        selected: ExportDialogState.drawn-size;
+                        enabled: ExportDialogState.with-drawn-images;
+                        picked(i) => {
+                            ExportDialogState.drawn-size = i;
                         }
                     }
                 }

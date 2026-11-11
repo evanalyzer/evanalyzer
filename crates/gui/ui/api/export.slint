@@ -86,8 +86,14 @@ export global ExportDialogState {
     in-out property <string> track-min-points: "1";
     in-out property <bool> track-from-start: false;
     in-out property <bool> track-no-edge: false;
-    // A PNG per image with its objects drawn (boxes in their class colors).
+    // A PNG per image and plane with the export's classes drawn.
     in-out property <bool> with-drawn-images: false;
+    // How: 0 outline, 1 filled, 2 box.
+    in-out property <int> drawn-style: 0;
+    // Display ranges: 0 as in the viewer, 1 auto per image.
+    in-out property <int> drawn-brightness: 0;
+    // Longer side at most: 0 2048, 1 4096, 2 8192 px.
+    in-out property <int> drawn-size: 1;
 
     in-out property <bool> with-plate-heatmap-view: false;
     in-out property <bool> with-well-heatmap-view: false;

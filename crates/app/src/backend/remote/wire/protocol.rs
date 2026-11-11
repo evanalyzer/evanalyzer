@@ -69,7 +69,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 39;
+pub const PROTOCOL_VERSION: u32 = 40;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -810,6 +810,13 @@ mod tests {
             .unwrap();
         tracer
             .trace_simple_type::<crate::api::ProfileExportContent>()
+            .unwrap();
+        tracer.trace_simple_type::<crate::api::DrawStyle>().unwrap();
+        tracer
+            .trace_simple_type::<crate::api::DrawBrightness>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<evanalyzer_cfg::core_types::ZProjection>()
             .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();

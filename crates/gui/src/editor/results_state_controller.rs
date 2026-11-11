@@ -5662,16 +5662,33 @@ impl ResultsStateController {
     // field) — shown in the dialog's error area rather than silently
     // falling back to a default the user didn't ask for.
     /// "Images with objects drawn": where the project's images are, the
-    /// series and the channels' colors (the database knows only the
-    /// objects).
-    fn drawn_images(&self) -> evanalyzer_app::results::DrawnImages {
+    /// series, the channels' colors and how the viewer shows the images
+    /// (the database knows only the objects), and the dialog's choices.
+    fn drawn_images(&self, state: &ExportDialogState) -> evanalyzer_app::results::DrawnImages {
         use evanalyzer_app::project::ProjectExt;
+        use evanalyzer_app::results::{DrawBrightness, DrawStyle};
         let project = self._app_state.get_project();
+        let (display, image_display) = project.drawn_image_display();
         evanalyzer_app::results::DrawnImages {
             image_root: project.images.root.clone().unwrap_or_default(),
             series: project.images.settings.selected_series.unwrap_or(0),
-            max_side: 4096,
+            max_side: match state.get_drawn_size() {
+                0 => 2048,
+                2 => 8192,
+                _ => 4096,
+            },
             colors: project.get_channel_display_colors().into_iter().collect(),
+            style: match state.get_drawn_style() {
+                1 => DrawStyle::Filled,
+                2 => DrawStyle::Box,
+                _ => DrawStyle::Outline,
+            },
+            brightness: match state.get_drawn_brightness() {
+                1 => DrawBrightness::Auto,
+                _ => DrawBrightness::Viewer,
+            },
+            display,
+            image_display,
         }
     }
 
@@ -5907,7 +5924,9 @@ impl ResultsStateController {
             with_well_view_list: state.get_with_well_list(),
             with_heatmap: state.get_with_heatmap(),
             transpond_table,
-            drawn_images: state.get_with_drawn_images().then(|| self.drawn_images()),
+            drawn_images: state
+                .get_with_drawn_images()
+                .then(|| self.drawn_images(&state)),
         })
     }
 

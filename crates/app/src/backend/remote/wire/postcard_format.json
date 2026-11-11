@@ -1,5 +1,5 @@
 {
-  "protocol_version": 39,
+  "protocol_version": 40,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -197,6 +197,23 @@
           }
         }
       }
+    },
+    "ChannelDisplay": {
+      "STRUCT": [
+        {
+          "visible": "BOOL"
+        },
+        {
+          "range": {
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "F32",
+                "SIZE": 2
+              }
+            }
+          }
+        }
+      ]
     },
     "ChildColumn": {
       "STRUCT": [
@@ -515,6 +532,29 @@
         }
       ]
     },
+    "DrawBrightness": {
+      "ENUM": {
+        "0": {
+          "Viewer": "UNIT"
+        },
+        "1": {
+          "Auto": "UNIT"
+        }
+      }
+    },
+    "DrawStyle": {
+      "ENUM": {
+        "0": {
+          "Outline": "UNIT"
+        },
+        "1": {
+          "Filled": "UNIT"
+        },
+        "2": {
+          "Box": "UNIT"
+        }
+      }
+    },
     "DrawnImages": {
       "STRUCT": [
         {
@@ -535,6 +575,31 @@
                   "CONTENT": "F32",
                   "SIZE": 3
                 }
+              }
+            }
+          }
+        },
+        {
+          "style": {
+            "TYPENAME": "DrawStyle"
+          }
+        },
+        {
+          "brightness": {
+            "TYPENAME": "DrawBrightness"
+          }
+        },
+        {
+          "display": {
+            "TYPENAME": "ImageDisplay"
+          }
+        },
+        {
+          "image_display": {
+            "MAP": {
+              "KEY": "STR",
+              "VALUE": {
+                "TYPENAME": "ImageDisplay"
               }
             }
           }
@@ -666,6 +731,25 @@
         },
         {
           "max": "F64"
+        }
+      ]
+    },
+    "ImageDisplay": {
+      "STRUCT": [
+        {
+          "z_projection": {
+            "TYPENAME": "ZProjection"
+          }
+        },
+        {
+          "channels": {
+            "MAP": {
+              "KEY": "I32",
+              "VALUE": {
+                "TYPENAME": "ChannelDisplay"
+              }
+            }
+          }
         }
       ]
     },
@@ -2764,6 +2848,28 @@
           "cols": "U64"
         }
       ]
+    },
+    "ZProjection": {
+      "ENUM": {
+        "0": {
+          "None": "UNIT"
+        },
+        "1": {
+          "MaxIntensity": "UNIT"
+        },
+        "2": {
+          "MinIntensity": "UNIT"
+        },
+        "3": {
+          "AvgIntensity": "UNIT"
+        },
+        "4": {
+          "SumIntensity": "UNIT"
+        },
+        "5": {
+          "TakeTheMiddle": "UNIT"
+        }
+      }
     }
   }
 }

@@ -118,7 +118,6 @@ pub mod results {
     pub use crate::api::Column;
     pub use crate::api::ColumnEntry;
     pub use crate::api::DatabaseResult;
-    pub use crate::api::DrawnImages;
     pub use crate::api::ExportFormat;
     pub use crate::api::GroupedByImageFilter;
     pub use crate::api::Grouping;
@@ -146,6 +145,7 @@ pub mod results {
     pub use crate::api::WellsBatchFilterMulti;
     pub use crate::api::color_scale_gradient;
     pub use crate::api::view_settings;
+    pub use crate::api::{ChannelDisplay, DrawBrightness, DrawStyle, DrawnImages, ImageDisplay};
     pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
     pub use crate::api::{
         ImageObjectsFilter, ImageTracks, ImageTracksFilter, LineageEvent, ResultObject,
