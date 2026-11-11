@@ -1186,7 +1186,7 @@ pub enum AiSegmentationUnetUNetOutputModeSettings {
 /// method used for general image smoothing, blending variations, and rapid noise
 /// suppression where edge precision is less critical.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlurSettings {
     /// The size of the blur matrix.
@@ -1211,7 +1211,7 @@ impl Default for BlurSettings {
 /// For IHC: Stain 2 of H-DAB is the DAB (brown) signal - threshold it, or
 /// measure the DAB per nucleus found on Stain 1.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorDeconvolutionSettings {
     /// The stains on the slide.
@@ -1251,7 +1251,7 @@ pub struct ColorFilterCommandSettings {
 /// For stains (Hematoxylin, DAB, Eosin) use Color Deconvolution instead; for
 /// one colour range, Color Filter.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorToGrayscaleSettings {
     /// How the red, green and blue of a pixel become one gray value.
@@ -1351,7 +1351,7 @@ pub struct EnhanceContrastSettings {
 /// or dust) while preserving structural features. It is commonly used as a
 /// preprocessing step to optimize thresholding and edge detection tasks.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct GaussianBlurSettings {
     /// The size of the blur matrix.
@@ -1396,7 +1396,7 @@ pub struct HessianSettings {
 ///
 /// This is commonly used for color-based filtering or "chroma keying."
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct HsvRangeSettings {
     /// Minimum Hue angle in degrees [0.0, 360.0].
@@ -1461,7 +1461,7 @@ impl Default for HsvRangeSettings {
 /// baseline via a rolling structural element, this estimates one *global*,
 /// low-frequency field for the whole image/channel.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct IlluminationCorrectionSettings {
     /// How the illumination field is estimated from the image.
@@ -1553,7 +1553,7 @@ pub struct IntensityTransformationSettings {
 /// rapid intensity change. It is particularly effective for detecting edges
 /// and fine details, though it is highly sensitive to noise.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct LaplacianSettings {
     /// The size of the discrete Laplacian aperture.
@@ -1589,7 +1589,7 @@ fn _serde_default_loadchannel_z_index() -> u32 {
 /// Use it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.
 /// Objects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadChannelSettings {
     /// The image channel to load.
@@ -1635,7 +1635,7 @@ pub struct MedianSubtractSettings {
 /// Morphological operations use a structuring element (kernel) to probe
 /// and modify the shapes within an image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MorphologicalCommandSettings {
     /// The transformation type (e.g., Dilate, Erode).
@@ -1696,7 +1696,7 @@ pub struct RankFilterSettings {
 /// curves of background variations. The path traced by the ball establishes a local
 /// baseline map that is subtracted from the original image to isolate foreground features.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct RollingBallSettings {
     /// The radius of the ball or paraboloid in pixels.
@@ -1726,7 +1726,7 @@ impl Default for RollingBallSettings {
 /// pipeline context, nor does it perform a buffer swap. It acts as a tap
 /// to view the state of the image at a specific point in the pipeline.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveImageSettings {
     /// Name the image should be stord under
@@ -1773,7 +1773,7 @@ fn _serde_default_script_values() -> BTreeMap<String, ParamValue> {
 /// run("gaussian_blur", #{ kernel_size: 5 });
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptSettings {
     /// Object classes the script creates or uses. Commands the script runs
@@ -1834,7 +1834,7 @@ pub struct StructureTensorSettings {
 /// The result is 0..1: high in the middle of a line, low for the
 /// background, blobs and flat areas.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct VesselnessSettings {
     /// The width of the thinnest lines to find.
@@ -1936,7 +1936,7 @@ fn _serde_default_cellpose_replicate_gray_channel() -> bool {
 /// [1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org
 ///
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellposeSettings {
     /// Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
@@ -2026,7 +2026,7 @@ impl Default for CellposeSettings {
 /// found first (row order) is kept. Flat regions (a background of 0) are
 /// never maxima.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct FindMaximaSettings {
     /// A pixel is a maximum only if no pixel within this radius is brighter.
@@ -2093,7 +2093,7 @@ fn _serde_default_pixelclassifier_min_certainty() -> f32 {
 /// Use a pixel classifier in place of a threshold step.
 /// Like a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelClassifierSettings {
     /// Path to a trained pixel classifier model, saved from the AI training dialog.
@@ -2157,7 +2157,7 @@ fn _serde_default_stardist_piece_size() -> AiSegmentationPieceSizePieceSizeSetti
 /// segmentation and instance maps. Runs on GPU automatically if CUDA is
 /// available in the linked libtorch build, otherwise falls back to CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct StardistSettings {
     /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
@@ -2209,7 +2209,7 @@ fn _serde_default_thresholdentry_value_source() -> SegmentationThresholdThreshol
 }
 /// Configuration for a single thresholding operation within a multi-threshold stack.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdEntrySettings {
     /// The algorithm to use (Manual or Automatic).
@@ -2270,7 +2270,7 @@ fn _serde_default_unet_piece_size() -> AiSegmentationPieceSizePieceSizeSettings 
 /// for the pixels at the tile edge, the "halo" bioimage.io models declare),
 /// and the prediction is cropped back to the tile.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct UNetSettings {
     /// Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
@@ -2337,7 +2337,7 @@ impl Default for UNetSettings {
 
 /// Which project segmentation class the objects of one model class get.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct YoloClassMappingSettings {
     /// Index of the class in the model (`0` = its first class).
@@ -2373,7 +2373,7 @@ fn _serde_default_yolov5_image_scale() -> f32 {
 /// detectable; objects seen by several windows are merged. Gray images are
 /// given to the model as RGB with equal channels.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct Yolov5Settings {
     /// Path to a YOLOv5 model exported as TorchScript.
@@ -2435,7 +2435,7 @@ fn _serde_default_connectedcomponents_min_size() -> i32 {
 ///
 /// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectedComponentsSettings {
     /// Minimum object size, in pixels, an object must have to be kept.
@@ -2498,7 +2498,7 @@ fn _serde_default_watershed_seed_source() -> SegmentationWatershedSeedSourceSett
 /// are merged, and a constrained flood draws 1-pixel watershed lines between the
 /// surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct WatershedSettings {
     /// Prominence tolerance for the maximum finder, in pixels of distance -
@@ -2577,7 +2577,7 @@ fn _serde_default_extractobjects_class_mapping() -> Vec<ExtractClassMappingSetti
 /// Represents a bounded object extracted from a labeled image.
 /// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractObjectsSettings {
     /// Maximum allowed ROIs to extract.
@@ -2642,7 +2642,7 @@ fn _serde_default_aiobjectclassifier_min_certainty() -> f32 {
 /// unmapped classes of the pixel classifier stay background): map only the
 /// classes you care about.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct AiObjectClassifierSettings {
     /// Path to a trained object classifier model, saved from the AI training dialog.
@@ -2715,7 +2715,7 @@ fn _serde_default_classifyobjects_intensity_filters() -> Vec<IntensityFilterSett
 /// to extracted ROIs. Classification is performed using configurable criteria
 /// including area, shape descriptors, and intensity statistics.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassifyObjectsSettings {
     /// Apply only to objects with this given segmentation class
@@ -2930,7 +2930,7 @@ fn _serde_default_colocalizeobjects_mark_as() -> ObjectClass {
 /// between intersecting entities and can optionally generate new child ROIs representing
 /// the precise intersection regions.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColocalizeObjectsSettings {
     /// The classes whose objects must overlap (e.g. the ch1 and the ch2
@@ -3026,7 +3026,7 @@ pub struct ExtractClassMappingSettings {
 /// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity
 /// in channel 1 brighter than 1200".
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct IntensityFilterSettings {
     /// Image channel whose intensity is compared (0-based)
@@ -3074,7 +3074,7 @@ fn _serde_default_loadannotatedobjects_use_on() -> ObjectLoadAnnotaedObjectsAnno
 /// and has its intensities measured on every channel - from there on it is
 /// handled like any segmented object.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadAnnotatedObjectsSettings {
     /// Only load annotations carrying at least one of these classes.
@@ -3112,7 +3112,7 @@ impl Default for LoadAnnotatedObjectsSettings {
 /// are unioned into a single "B" before the operation is applied, so the result
 /// doesn't depend on the order they'd otherwise be combined in.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectMathSettings {
     /// Boolean set operation to apply
@@ -3174,7 +3174,7 @@ impl Default for ObjectMathSettings {
 /// where the stain is dim, not halfway between their nuclei. Each region
 /// keeps its seed's pixels (Relate Objects links it to its seed).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct PropagationSettings {
     /// Objects carrying this class are the seeds (e.g. nuclei): each grows
@@ -3217,7 +3217,7 @@ impl Default for PropagationSettings {
 /// each child. A child already linked to a parent of one of these classes
 /// is linked anew - or unlinked when no parent matches.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct RelateObjectsSettings {
     /// The objects to link to a parent (e.g. spots).
@@ -3253,7 +3253,7 @@ impl Default for RelateObjectsSettings {
 /// shorter than the minimum branch length are pruned. The input objects
 /// stay as they are; link skeletons and points to them with Relate Objects.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct SkeletonizeObjectsSettings {
     /// Objects carrying this class are skeletonized (e.g. the thresholded
@@ -3299,7 +3299,7 @@ impl Default for SkeletonizeObjectsSettings {
 /// Each segment is a 1-pixel-wide object of the output class, linked to the
 /// next segment towards the soma (a root segment: none) and to its soma.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceFilamentsSettings {
     /// The somata: each the root of one tree.
@@ -3359,7 +3359,7 @@ impl Default for TraceFilamentsSettings {
 /// A transformed shape with no pixels left (e.g. `Shrink` by more than the object's own
 /// size) is not an object: no new object is created, and in place the input object is removed.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformObjectsSettings {
     /// Geometric transform applied to each input object
@@ -3487,7 +3487,7 @@ pub struct MeasureImageAreaOccupiedSettings {
 /// and RWC (Manders weighted by how similar the two pixels' ranks are) use
 /// the same pixels.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureImageColocalizationSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3560,7 +3560,7 @@ pub struct MeasureImageQualitySettings {
 /// angular second moment where few pairs repeat over and over (smooth or
 /// regular), entropy where the pairs are all different.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureImageTextureSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3601,7 +3601,7 @@ impl Default for MeasureImageTextureSettings {
 /// RWC ranks the values of all the objects, and Costes uses the whole
 /// image's Costes thresholds.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureObjectColocalizationSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3657,7 +3657,7 @@ pub struct MeasureObjectDistanceToParentSettings {
 /// distance names the object it is to. "Percent touching" is the part of
 /// the object's outline pixels within the distance (+ ½ px) of a neighbour.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureObjectNeighborsSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3710,7 +3710,7 @@ pub struct MeasureObjectShapeSettings {
 ///
 /// [Skeletonize Objects] -> [Relate Objects (skeletons to somata)] -> [Measure Object Sholl]
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureObjectShollSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3759,7 +3759,7 @@ impl Default for MeasureObjectShollSettings {
 ///
 /// [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureObjectSkeletonSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3789,7 +3789,7 @@ impl Default for MeasureObjectSkeletonSettings {
 ///
 /// The same values as Measure Image Texture, of the object's pixels only.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureObjectTextureSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3837,7 +3837,7 @@ impl Default for MeasureObjectTextureSettings {
 /// beads, tracked too) the drift of the image is taken away first: the
 /// median step of the reference tracks from one time point to the next.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureTrackMotionSettings {
     /// The step's ID, unique in the project - its values' keys start with
@@ -3885,7 +3885,7 @@ impl Default for MeasureTrackMotionSettings {
 /// to `max_gap_frames` later, and - if switched on - track ends into other
 /// tracks (merge) and starts out of them (split), as in Track LAP.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackKalmanSettings {
     /// Object class to track.
@@ -3958,7 +3958,7 @@ impl Default for TrackKalmanSettings {
 /// (merge) and starts out of them (split). A merge or split starts new
 /// tracks, with the old ones as parents.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackLapSettings {
     /// Object class to track.
@@ -4010,7 +4010,7 @@ impl Default for TrackLapSettings {
 /// most `max_distance` apart. Every object gets a track id; one that can't
 /// be linked starts a new track.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackNearestNeighborSettings {
     /// Object class to track.
@@ -4045,7 +4045,7 @@ impl Default for TrackNearestNeighborSettings {
 /// tracks (merge) and starts out of them (split). A merge or split starts
 /// new tracks, with the old ones as parents.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
+#[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackOverlapSettings {
     /// Object class to track.

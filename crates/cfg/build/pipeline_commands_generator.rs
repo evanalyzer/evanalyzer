@@ -476,8 +476,14 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                     out.push_str(&format!("/// {}\n", doc));
                 }
                 if has_explicit_defaults {
+                    // `serde(default)`, not `schemars(default)`: a field with a
+                    // default may be missing from the file and is then filled
+                    // from the struct's `Default` impl (new parameters load from
+                    // old projects; saving writes them). schemars reads the same
+                    // attribute, so the schema marks these fields not required
+                    // and loader and schema always agree.
                     out.push_str("#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]\n");
-                    out.push_str("#[schemars(default)]\n");
+                    out.push_str("#[serde(default)]\n");
                 } else {
                     out.push_str(
                         "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]\n",
