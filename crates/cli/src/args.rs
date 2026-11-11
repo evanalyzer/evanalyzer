@@ -16,7 +16,7 @@ pub enum CliCommand {
     Analyze(AnalyzeArgs),
     /// Print a project's images, classes and pipelines without running anything
     ProjectInfo(ProjectInfoArgs),
-    /// Check that every image referenced by a project can be found on disk
+    /// Check a project as a run would: its images on disk, its pipelines and modules
     Validate(ValidateArgs),
     /// Write a project's methods paragraph and the citations of its steps (Markdown)
     Cite(CiteArgs),

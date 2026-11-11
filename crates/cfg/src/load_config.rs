@@ -23,6 +23,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::core_types::InternalErrors;
+use crate::load_problems::project_problems;
 use crate::migration::migration_v1_to_v2::migrate_from_v1_to_v2;
 use crate::migration::migration_v2_to_v3::migrate_from_v2_to_v3;
 use crate::migration::migration_v3_to_v4::migrate_from_v3_to_v4;
@@ -46,10 +47,60 @@ const PROJECT_MIGRATIONS: &[MigrationStep] = &[
 
 /// Loads a [`ProjectSettings`] from its raw on-disk JSON, migrating it
 /// forward from whatever `schemaVersion` it was written with.
+///
+/// Its error is serde's first, without its place - a caller with the
+/// file's text uses [`load_project_settings_from_str`], which lists every
+/// problem at its place.
 pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErrors> {
     let version = schema_version_of(&raw, "schemaVersion");
     reject_if_too_new(version, CURRENT_PROJECT_SCHEMA_VERSION, "project")?;
     migrate_and_deserialize(raw, version, PROJECT_MIGRATIONS)
+}
+
+/// Loads a [`ProjectSettings`] from the text of a project file, like
+/// [`load_project_settings`]. If it doesn't load, the error lists every
+/// problem with its place ("pipeline “Nuclei”, step 2 (WATERSHED):
+/// smoothingSigma: ...") - found by parsing the text again, so a file
+/// that loads costs nothing more.
+pub fn load_project_settings_from_str(data: &str) -> Result<ProjectSettings, InternalErrors> {
+    match load_project_settings(parse_json(data)?) {
+        Err(InternalErrors::ParseError(first)) => Err(InternalErrors::ParseError(
+            describe_project_error(data, first),
+        )),
+        other => other,
+    }
+}
+
+/// The message for a project file that didn't load with error `first`:
+/// every problem [`project_problems`] finds, or `first` if it finds none.
+fn describe_project_error(data: &str, first: String) -> String {
+    let Ok(mut raw) = parse_json(data) else {
+        return first;
+    };
+    let version = schema_version_of(&raw, "schemaVersion");
+    if reject_if_too_new(version, CURRENT_PROJECT_SCHEMA_VERSION, "project").is_err() {
+        return first;
+    }
+    migrate(&mut raw, version, PROJECT_MIGRATIONS);
+    let problems = project_problems(&raw);
+    match problems.len() {
+        0 => first,
+        1 => format!("the project file could not be loaded: {}", problems[0]),
+        n => {
+            let mut listed = problems[..n.min(LISTED_PROBLEMS)].join("\n  - ");
+            if n > LISTED_PROBLEMS {
+                listed.push_str(&format!("\n  - and {} more", n - LISTED_PROBLEMS));
+            }
+            format!("the project file could not be loaded, {n} problems:\n  - {listed}")
+        }
+    }
+}
+
+/// Up to this many problems a load error lists (it ends up in a dialog).
+const LISTED_PROBLEMS: usize = 20;
+
+fn parse_json(data: &str) -> Result<Value, InternalErrors> {
+    serde_json::from_str(data).map_err(|e| InternalErrors::ParseError(e.to_string()))
 }
 
 /// Migration steps for [`AiLearningSettings`] - see [`PROJECT_MIGRATIONS`].
@@ -98,10 +149,16 @@ pub fn migrate_and_deserialize<T: DeserializeOwned>(
     from_version: u32,
     steps: &[MigrationStep],
 ) -> Result<T, InternalErrors> {
-    for step in &steps[from_version as usize..] {
-        step(&mut raw);
-    }
+    migrate(&mut raw, from_version, steps);
     serde_json::from_value(raw).map_err(|e| InternalErrors::ParseError(e.to_string()))
+}
+
+/// Runs every migration step from `from_version` onward over `raw` - see
+/// [`migrate_and_deserialize`] for what callers must check first.
+fn migrate(raw: &mut Value, from_version: u32, steps: &[MigrationStep]) {
+    for step in &steps[from_version as usize..] {
+        step(raw);
+    }
 }
 
 /// Rejects a document whose `schema_version` is newer than this build

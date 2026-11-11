@@ -54,6 +54,7 @@ rustfft = "6.4.1"
 schemars = "1.2.3"
 serde = "1.0.229"
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
+serde_path_to_error = "0.1.20"
 tempfile = "3.27.0"
 # Held at 0.21: burn 0.22 needs its `std` feature for the optimizers, and
 # `std` drags its (deprecated) `burn-tch` into the lockfile - it links

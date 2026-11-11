@@ -9,6 +9,7 @@ publish = { workspace = true }
 [dependencies]
 quick-xml = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 ndarray = { workspace = true }
 serde = { workspace = true, features = ["derive","rc"] }
 thiserror = { workspace = true }
@@ -25,6 +26,7 @@ syn = { workspace = true }
 quote = { workspace = true }
 schemars = { workspace = true, features = ["indexmap2", "chrono04"] }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive","rc"] }
 bitvec = { workspace = true, features = ["serde", "alloc","atomic","std"] }

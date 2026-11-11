@@ -8,12 +8,15 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod load_config;
+mod load_problems;
 mod migration;
 pub mod settings;
 mod types;
 mod utils;
 
-pub use load_config::{load_ai_learning_settings, load_project_settings};
+pub use load_config::{
+    load_ai_learning_settings, load_project_settings, load_project_settings_from_str,
+};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";

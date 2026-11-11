@@ -277,6 +277,7 @@ pub mod analysis {
     pub use crate::api::JobState;
     pub use crate::api::ProgressEvent;
     pub use crate::api::RunningJob;
+    pub use evanalyzer_core::check_pipeline_channels;
     pub use evanalyzer_core::random_job_name;
     pub use evanalyzer_core::{
         ObjectPredictionCapture, PredictedClass, PredictedObjectClass, PredictionCapture,

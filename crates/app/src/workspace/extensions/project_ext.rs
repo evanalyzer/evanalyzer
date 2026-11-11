@@ -1925,9 +1925,7 @@ pub fn load_project(
     path: &PathBuf,
 ) -> Result<ProjectWithRuntime, InternalErrors> {
     let data = read_text(files, path)?;
-    let raw: serde_json::Value =
-        serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-    let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
+    let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings_from_str(&data)?;
 
     // A module definition's steps are a list of their own (see
     // `assign_module_step_ids`).

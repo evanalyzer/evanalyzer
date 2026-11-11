@@ -8,11 +8,14 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::args::{CiteArgs, ProjectInfoArgs, ValidateArgs};
+use evanalyzer_app::analysis::check_pipeline_channels;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::exporter::cite_project;
+use evanalyzer_app::modules::{ModuleProblem, Severity, check_project};
 use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{ProjectExt, load_project};
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{InternalErrors, StepId};
+use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use serde_json::json;
 
 pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
@@ -89,13 +92,17 @@ pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalE
     Ok(())
 }
 
-/// Checks every image referenced by the project against disk, rather than just the
-/// single sample `does_project_images_exist` uses to detect a relinked/moved root.
+/// Checks the project as a run would: every image it references against
+/// disk (not just the single sample `does_project_images_exist` uses to
+/// detect a relinked/moved root), the pipelines and modules as the GUI
+/// editor checks them, and the channels the pipelines read against the
+/// images'. Warnings are printed; errors (and missing images) fail.
 pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
     let project = load_project(backend.files(), &args.project)?;
-    let root = project.images.root.clone();
+    let settings = &project.settings;
+    let root = settings.images.root.clone();
 
-    let missing: Vec<_> = project
+    let missing: Vec<_> = settings
         .images
         .list
         .keys()
@@ -106,7 +113,7 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
         .filter(|abs| !abs.exists())
         .collect();
 
-    let total = project.images.list.len();
+    let total = settings.images.list.len();
     println!("Project:    {}", args.project.display());
     println!(
         "Image root: {}",
@@ -114,20 +121,87 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
             .unwrap_or_else(|| "(none)".into())
     );
     println!("Checked {total} image(s)");
-
     if missing.is_empty() {
         println!("All images found on disk.");
-        return Ok(());
+    } else {
+        println!("{} image(s) missing:", missing.len());
+        for path in &missing {
+            println!("  - {}", path.display());
+        }
     }
 
-    println!("{} image(s) missing:", missing.len());
-    for path in &missing {
-        println!("  - {}", path.display());
+    let problems = check_project(settings);
+    let channels = check_pipeline_channels(settings).err();
+    let errors = problems
+        .iter()
+        .filter(|p| p.severity == Severity::Error)
+        .count()
+        + usize::from(channels.is_some());
+    let warnings = problems.len() + usize::from(channels.is_some()) - errors;
+    println!(
+        "Checked {} pipeline(s) and {} module(s)",
+        settings.pipelines.len(),
+        settings.modules.len()
+    );
+    if errors + warnings == 0 {
+        println!("No problems found in the pipelines.");
     }
-    Err(InternalErrors::InvalidArgument(format!(
-        "{} of {total} image(s) could not be found on disk",
-        missing.len()
-    )))
+    for problem in &problems {
+        let severity = match problem.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        let detail = if problem.detail.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", problem.detail)
+        };
+        println!(
+            "  {severity}: {}: {}{detail}",
+            problem_place(settings, problem),
+            problem.message
+        );
+    }
+    if let Some(channels) = &channels {
+        println!("  error: {channels}");
+    }
+
+    let mut failures = Vec::new();
+    if !missing.is_empty() {
+        failures.push(format!(
+            "{} of {total} image(s) could not be found on disk",
+            missing.len()
+        ));
+    }
+    if errors > 0 {
+        failures.push(format!("{errors} error(s) in the pipelines"));
+    }
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(InternalErrors::InvalidArgument(failures.join(", ")))
+}
+
+/// Where a problem is, as the GUI names it: "pipeline “Nuclei”, step 2",
+/// "pipeline “Nuclei”" (its image source), "module “SEGMENT”" or
+/// "project".
+fn problem_place(settings: &ProjectSettings, problem: &ModuleProblem) -> String {
+    if let Some((pipeline_id, step_id)) = problem.step {
+        let Some(pipeline) = settings.pipelines.iter().find(|p| p.id == pipeline_id) else {
+            return format!("pipeline {pipeline_id}");
+        };
+        let position = pipeline.steps.iter().position(|s| s.id == step_id);
+        return match position {
+            Some(i) if step_id != StepId::UNASSIGNED => {
+                format!("pipeline “{}”, step {}", pipeline.name, i + 1)
+            }
+            _ => format!("pipeline “{}”", pipeline.name),
+        };
+    }
+    match &problem.module {
+        Some(key) => format!("module “{key}”"),
+        None => "project".into(),
+    }
 }
 
 /// Writes the same file as the GUI's "Cite project": a methods paragraph,
@@ -243,5 +317,42 @@ mod tests {
             panic!("expected InvalidArgument, got {err:?}");
         };
         assert!(msg.contains("1 of 1"));
+    }
+
+    /// `validate` checks the pipelines too, not only the images: a
+    /// measurement ID with a space is an error the GUI editor shows.
+    #[test]
+    fn run_validate_fails_on_a_pipeline_problem() {
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, StepId};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+
+        let mut command = PipelineCommand::default_for_key("measure_image_colocalization").unwrap();
+        *command.measurement_id_mut().unwrap() = "bad name".into();
+        let mut settings = ProjectSettings::default();
+        settings.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Nuclei".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: StepId(1),
+                enabled: true,
+                content: StepContent::Command(command),
+            }],
+        });
+        let file = TempProjectFile::new(&settings);
+
+        let result = run_validate(ValidateArgs {
+            project: file.path.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "validate passed a project whose measurement ID is invalid"
+        );
     }
 }
