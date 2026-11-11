@@ -65,6 +65,7 @@ use evanalyzer_cfg::settings::pipeline_settings::{
     PipelineSettings, PipelineStepSettings, StepContent,
 };
 use evanalyzer_cfg::settings::project_settings::{PinnedSetting, ProjectSettings};
+use evanalyzer_cfg::settings::step_roles::{step_roles, tracker_after};
 use evanalyzer_cfg::settings::templates::ModuleTemplate;
 use evanalyzer_gui_slint::CommandAuthor;
 use log::debug;
@@ -1062,7 +1063,8 @@ impl PipelinesController {
                             .find(|p| p.id.0 == pipeline_id as u32)
                         {
                             let name = p.name.clone();
-                            let (ctx_cat, suggested) = picker_suggestion(&p.steps, step_after_idx);
+                            let (ctx_cat, suggested) =
+                                picker_suggestion(&p.steps, &project.modules, step_after_idx);
                             (name, p.steps.len() as i32, ctx_cat, suggested)
                         } else {
                             (String::new(), 0, -1i32, [false; 7])
@@ -4734,10 +4736,7 @@ impl PipelinesController {
             picker_state.get_fcat_dat(),
         );
         let any_active = fc_pre || fc_seg || fc_obj || fc_ext || fc_cls || fc_mea || fc_dat;
-        let cat_enabled = move |target: CommandCategory| -> bool {
-            if !any_active {
-                return true;
-            }
+        let chip_on = move |target: CommandCategory| -> bool {
             match target {
                 CommandCategory::Preprocess => fc_pre,
                 CommandCategory::Segment => fc_seg,
@@ -4746,74 +4745,12 @@ impl PipelinesController {
                 CommandCategory::Object => fc_cls,
                 CommandCategory::Measure => fc_mea,
                 CommandCategory::Dataset => fc_dat,
+                // No chip: a utility is always listed.
+                CommandCategory::Utility => false,
             }
         };
-        let make = |m: &evanalyzer_cfg::settings::pipeline_command::CommandMeta,
-                    _cat: StepCategory|
-         -> CommandDef { to_command_def(m) };
-        let pre: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::Preprocess)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::Preprocess))
-            .collect();
-        let seg: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::Segment)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::Segment))
-            .collect();
-        let obj: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::InstanceSegmentation)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::InstanceSegmentation))
-            .collect();
-        let ext: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::Extract)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::Extract))
-            .collect();
-        let cls: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::Object)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::Object))
-            .collect();
-        let mea: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::Measure)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::Measure))
-            .collect();
-        let dat: Vec<CommandDef> = metas
-            .iter()
-            .filter(|m| {
-                matches!(m.category, CommandCategory::Dataset)
-                    && cat_enabled(m.category)
-                    && text_matches(m)
-            })
-            .map(|m| make(m, StepCategory::Dataset))
-            .collect();
+        let [pre, seg, obj, ext, cls, mea, dat, util] =
+            picker_sections(metas.iter().filter(text_matches), any_active, chip_on);
         // Modules: all of the project's with the Modules chip, else only when
         // searching (they don't crowd the category lists).
         let filter_modules = picker_state.get_filter_modules();
@@ -4882,6 +4819,7 @@ impl PipelinesController {
                 + cls.len()
                 + mea.len()
                 + dat.len()
+                + util.len()
                 + modules.len()
                 + library_modules.len()) as i32
         };
@@ -4902,6 +4840,7 @@ impl PipelinesController {
         picker.set_shown_classify(ModelRc::new(VecModel::from(cls)));
         picker.set_shown_measure(ModelRc::new(VecModel::from(mea)));
         picker.set_shown_dataset(ModelRc::new(VecModel::from(dat)));
+        picker.set_shown_utility(ModelRc::new(VecModel::from(util)));
         picker.set_shown_modules(ModelRc::new(VecModel::from(modules)));
         picker.set_unused_module_count(
             evanalyzer_app::modules::unused_modules(&self.app_state.get_project()).len() as i32,
@@ -5097,7 +5036,7 @@ impl PipelinesController {
                 let project = manager.app_state.get_project();
                 manager
                     .shown_steps(&project, pipeline_id)
-                    .map(|steps| picker_suggestion(steps, last as i32))
+                    .map(|steps| picker_suggestion(steps, &project.modules, last as i32))
                     .unwrap_or((-1, [false; 7]))
             };
             picker.set_query("".into());
@@ -5152,41 +5091,17 @@ impl PipelinesController {
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let all: Vec<CommandDef> = raw.iter().map(to_command_def).collect();
-                let shown_pre: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Preprocess))
-                    .map(to_command_def)
-                    .collect();
-                let shown_seg: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Segment))
-                    .map(to_command_def)
-                    .collect();
-                let shown_obj: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::InstanceSegmentation))
-                    .map(to_command_def)
-                    .collect();
-                let shown_ext: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Extract))
-                    .map(to_command_def)
-                    .collect();
-                let shown_cls: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Object))
-                    .map(to_command_def)
-                    .collect();
-                let shown_mea: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Measure))
-                    .map(to_command_def)
-                    .collect();
-                let shown_dat: Vec<CommandDef> = raw
-                    .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Dataset))
-                    .map(to_command_def)
-                    .collect();
+                // No chip on: every command under its home.
+                let [
+                    shown_pre,
+                    shown_seg,
+                    shown_obj,
+                    shown_ext,
+                    shown_cls,
+                    shown_mea,
+                    shown_dat,
+                    shown_util,
+                ] = picker_sections(&raw, false, |_| false);
                 let total = all.len() as i32;
                 let (cp, cs, co, ce, cc, cm, cd) = (
                     shown_pre.len() as i32,
@@ -5206,6 +5121,7 @@ impl PipelinesController {
                 picker.set_shown_classify(ModelRc::new(VecModel::from(shown_cls)));
                 picker.set_shown_measure(ModelRc::new(VecModel::from(shown_mea)));
                 picker.set_shown_dataset(ModelRc::new(VecModel::from(shown_dat)));
+                picker.set_shown_utility(ModelRc::new(VecModel::from(shown_util)));
                 picker.set_total_shown(total);
                 picker.set_cat_count_pre(cp);
                 picker.set_cat_count_seg(cs);
@@ -5433,6 +5349,8 @@ impl PipelinesController {
                         .shown_steps(&project, pipeline_id.0)
                         .unwrap_or(&pipeline.steps),
                 };
+                // The role each step runs in: its stripe's colour.
+                let roles = step_roles(shown, &project.modules);
                 let steps: Vec<StepData> = shown
                     .iter()
                     .enumerate()
@@ -5463,7 +5381,7 @@ impl PipelinesController {
                                         .map(|problem| format!("⚠ {problem}"))
                                         .unwrap_or_else(|| command.to_summary()),
                                 },
-                                category: step_category(*command.category()),
+                                category: step_category(roles[idx].unwrap_or(*command.category())),
                                 enabled: step.enabled,
                                 parameters: {
                                     let mut parameters =
@@ -5474,6 +5392,13 @@ impl PipelinesController {
                                         &mut parameters,
                                         &measurements,
                                     );
+                                    // Several categories: the place decides
+                                    // what it works on - shown, not set.
+                                    if command.categories().len() > 1
+                                        && let Some(role) = roles[idx]
+                                    {
+                                        parameters.push(works_on_parameter(role));
+                                    }
                                     parameters
                                 },
                                 exposed: open_definition
@@ -6579,7 +6504,77 @@ fn step_category(category: CommandCategory) -> StepCategory {
         CommandCategory::Object => StepCategory::Object,
         CommandCategory::Measure => StepCategory::Measure,
         CommandCategory::Dataset => StepCategory::Dataset,
+        CommandCategory::Utility => StepCategory::Utility,
     }
+}
+
+/// What a command of several categories (Morphological) works on at its
+/// place: a read-only line where its "Use Grayscale" switch was - the role
+/// the place gives it decides (see `step_roles`).
+fn works_on_parameter(role: CommandCategory) -> ParameterDef {
+    let mask = role == CommandCategory::InstanceSegmentation;
+    ParameterDef {
+        name: "works_on".into(),
+        display_name: "Works on".into(),
+        description: "Set by the step's place: after a segmentation (e.g. a \
+                      Threshold) the segmentation mask, else the image. Move \
+                      the step to change it."
+            .into(),
+        value: if mask { "Segmentation mask" } else { "Image" }.into(),
+        param_type: CfgParamType::Label,
+        options: Vec::new(),
+        min: 0.0,
+        max: 0.0,
+        step: 1.0,
+        groups: Vec::new(),
+        default_value: String::new(),
+        advanced: false,
+        option_advanced: Vec::new(),
+        section: String::new(),
+    }
+}
+
+/// The picker section `m` is listed in - `None`: not listed. A utility is
+/// always listed, under Utility. With no chip on (`any_active` false) a
+/// command is listed under its home; else under its home if that chip is
+/// on, or else under the first of its further categories whose chip is on -
+/// once, whatever the number of chips on.
+fn picker_section(
+    m: &CommandMeta,
+    any_active: bool,
+    chip_on: impl Fn(CommandCategory) -> bool,
+) -> Option<CommandCategory> {
+    if m.category == CommandCategory::Utility || !any_active || chip_on(m.category) {
+        return Some(m.category);
+    }
+    m.categories.iter().copied().find(|c| chip_on(*c))
+}
+
+/// The picker sections (by `display_order`) of the commands of `metas`,
+/// see [`picker_section`].
+fn picker_sections<'a>(
+    metas: impl IntoIterator<Item = &'a CommandMeta>,
+    any_active: bool,
+    chip_on: impl Fn(CommandCategory) -> bool,
+) -> [Vec<CommandDef>; 8] {
+    let mut sections: [Vec<CommandDef>; 8] = Default::default();
+    for m in metas {
+        if let Some(section) = picker_section(m, any_active, &chip_on) {
+            sections[section.display_order() as usize].push(to_command_def_in(m, section));
+        }
+    }
+    sections
+}
+
+/// The picker entry of `m` listed under `section`: in that section's colour,
+/// naming its home when that is another one ("also Preprocess").
+fn to_command_def_in(m: &CommandMeta, section: CommandCategory) -> CommandDef {
+    let mut def = to_command_def(m);
+    if section != m.category {
+        def.category = step_category(section);
+        def.also = category_name(m.category).into();
+    }
+    def
 }
 
 fn to_command_def(m: &CommandMeta) -> CommandDef {
@@ -6601,6 +6596,7 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         creation_time: "".into(),
         citations: ModelRc::default(),
         ram: "".into(),
+        also: "".into(),
     };
     detail
 }
@@ -6724,6 +6720,7 @@ fn library_module_to_command_def(idx: usize, path: &Path, template: &ModuleTempl
     CommandDef {
         citations: ModelRc::default(),
         ram: "".into(),
+        also: "".into(),
         id: LIBRARY_MODULE_PICKER_ID_BASE + idx as i32,
         name: definition.meta.name.clone().into(),
         summary: if definition.meta.short_description.is_empty() {
@@ -6807,6 +6804,7 @@ fn module_to_command_def(
     CommandDef {
         citations: ModelRc::default(),
         ram: "".into(),
+        also: "".into(),
         id: MODULE_PICKER_ID_BASE + idx as i32,
         name: definition.meta.name.clone().into(),
         summary: summary.into(),
@@ -6862,6 +6860,7 @@ fn category_name(category: CommandCategory) -> &'static str {
         CommandCategory::Object => "Object",
         CommandCategory::Measure => "Measure",
         CommandCategory::Dataset => "Dataset",
+        CommandCategory::Utility => "Utility",
     }
 }
 
@@ -7232,27 +7231,35 @@ fn move_step<T>(steps: &mut [T], idx: i32, delta: i32) -> bool {
 
 /// The step picker's suggestion for a step inserted after step
 /// `after_idx` of `steps` (-1: at the start; past the end: the last one):
-/// that step's category (-1 none) and the categories that may follow it -
-/// the chips pre-selected. *All* the categories its `allowed_next` names,
-/// which is decoupled from the display `category` (ConnectedComponents
-/// suggests Object + Extract, so Watershed and ExtractObjects are both in
-/// view). Only suggestions: any chip can be toggled, none shows all. A
-/// module suggests nothing (yet).
-fn picker_suggestion(steps: &[PipelineStepSettings], after_idx: i32) -> (i32, [bool; 7]) {
-    let prev = usize::try_from(after_idx)
+/// the role of that step (`display_order`, -1 none or a module) and the
+/// categories that may follow the commands run up to it - the chips
+/// pre-selected. They follow the roles (`step_roles`): after a
+/// Morphological on the mask what may follow a mask step, after a utility
+/// step what may follow the step before it; a disabled step doesn't count.
+/// Only suggestions: any chip can be toggled, none shows all.
+fn picker_suggestion(
+    steps: &[PipelineStepSettings],
+    modules: &[ModuleDefinition],
+    after_idx: i32,
+) -> (i32, [bool; 7]) {
+    let Some(last) = usize::try_from(after_idx)
         .ok()
-        .and_then(|idx| steps.get(idx.min(steps.len().saturating_sub(1))))
-        .and_then(|s| s.command());
-    match prev {
-        Some(prev) => {
-            let mut flags = [false; 7];
-            for c in prev.allowed_next() {
-                flags[c.display_order() as usize] = true;
-            }
-            (prev.category().display_order() as i32, flags)
+        .filter(|_| !steps.is_empty())
+        .map(|idx| idx.min(steps.len() - 1))
+    else {
+        return (-1, [false; 7]);
+    };
+    let mut flags = [false; 7];
+    for c in tracker_after(steps, modules, last + 1)
+        .suggested_next()
+        .unwrap_or_default()
+    {
+        if let Some(flag) = flags.get_mut(c.display_order() as usize) {
+            *flag = true;
         }
-        None => (-1, [false; 7]),
     }
+    let role = step_roles(&steps[..=last], modules)[last];
+    (role.map_or(-1, |r| r.display_order() as i32), flags)
 }
 
 /// Shows a suggestion (see [`picker_suggestion`]) in the step picker.
@@ -7604,6 +7611,7 @@ mod tests {
                 CommandCategory::Object => StepCategory::Object,
                 CommandCategory::Measure => StepCategory::Measure,
                 CommandCategory::Dataset => StepCategory::Dataset,
+                CommandCategory::Utility => StepCategory::Utility,
             };
             assert_eq!(
                 def.category, expected_category,
@@ -7935,7 +7943,8 @@ mod tests {
                 + picker.get_cat_count_ext()
                 + picker.get_cat_count_cls()
                 + picker.get_cat_count_mea()
-                + picker.get_cat_count_dat(),
+                + picker.get_cat_count_dat()
+                + picker.get_shown_utility().row_count() as i32,
         );
     }
 
@@ -7988,9 +7997,76 @@ mod tests {
         );
         assert_eq!(
             picker.get_total_shown(),
-            picker.get_cat_count_seg(),
-            "only the active category contributes to the total while a chip is set"
+            picker.get_cat_count_seg() + picker.get_shown_utility().row_count() as i32,
+            "only the active category (and the utilities, always listed) contributes \
+             to the total while a chip is set"
         );
+    }
+
+    /// The names listed in `section`.
+    fn names(section: ModelRc<CommandDef>) -> Vec<String> {
+        section.iter().map(|c| c.name.to_string()).collect()
+    }
+
+    const MORPH: &str = "MorphologicalCommand";
+
+    #[test]
+    fn morphological_is_listed_under_instance_segmentation_when_only_that_chip_is_on() {
+        let ui = test_ui_window();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_fcat_obj(true);
+        controller.apply_picker_filter(&ui, "");
+        let morph = picker
+            .get_shown_object()
+            .iter()
+            .find(|c| c.name == MORPH)
+            .expect("listed under Instance Seg.");
+        assert_eq!(morph.category, StepCategory::InstanceSegmentation);
+        assert_eq!(morph.also, "Preprocess");
+        assert!(!names(picker.get_shown_preprocess()).contains(&MORPH.to_string()));
+    }
+
+    #[test]
+    fn morphological_is_listed_once_under_its_home_otherwise() {
+        let ui = test_ui_window();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        let picker = ui.global::<CommandPickerState>();
+        // No chip ("All"), then both of its chips.
+        for both in [false, true] {
+            picker.set_fcat_pre(both);
+            picker.set_fcat_obj(both);
+            controller.apply_picker_filter(&ui, "");
+            let morph = picker
+                .get_shown_preprocess()
+                .iter()
+                .find(|c| c.name == MORPH)
+                .expect("listed under Preprocess");
+            assert_eq!(morph.category, StepCategory::Preprocess);
+            assert_eq!(morph.also, "");
+            assert!(!names(picker.get_shown_object()).contains(&MORPH.to_string()));
+        }
+    }
+
+    #[test]
+    fn utilities_are_listed_whatever_chips_are_on() {
+        let ui = test_ui_window();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_fcat_mea(true);
+        controller.apply_picker_filter(&ui, "");
+        let mut utilities = names(picker.get_shown_utility());
+        utilities.sort();
+        assert_eq!(utilities, ["ImageCache", "SaveImage", "Script"]);
+        assert!(
+            picker
+                .get_shown_utility()
+                .iter()
+                .all(|c| c.category == StepCategory::Utility)
+        );
+        // A search still narrows them.
+        controller.apply_picker_filter(&ui, "save");
+        assert_eq!(names(picker.get_shown_utility()), ["SaveImage"]);
     }
 
     fn module_definition(key: &str, name: &str) -> ModuleDefinition {
@@ -11558,6 +11634,67 @@ mod tests {
         );
     }
 
+    /// A step's stripe shows its role: Morphological before a threshold as
+    /// preprocessing, after it on the mask; a utility in its own colour.
+    #[test]
+    fn a_steps_colour_follows_its_role() {
+        let (ui, _ui_state, _controller) = selected(vec![
+            step("MorphologicalCommand"),
+            step("Threshold"),
+            step("SaveImage"),
+            step("MorphologicalCommand"),
+        ]);
+        let categories: Vec<StepCategory> = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .iter()
+            .map(|c| c.category)
+            .collect();
+        assert_eq!(
+            categories,
+            [
+                StepCategory::Preprocess,
+                StepCategory::Segment,
+                StepCategory::Utility,
+                StepCategory::InstanceSegmentation,
+            ]
+        );
+        // Morphological says what it works on there.
+        let works_on = |idx: usize| {
+            ui.global::<PipelinesPanelState>()
+                .get_active_commands()
+                .row_data(idx)
+                .unwrap()
+                .parameters
+                .iter()
+                .find(|p| p.name == "works_on")
+                .map(|p| (p.value.to_string(), p.param_type))
+        };
+        assert_eq!(works_on(0), Some(("Image".into(), ParamType::Label)));
+        assert_eq!(
+            works_on(3),
+            Some(("Segmentation mask".into(), ParamType::Label))
+        );
+        assert_eq!(works_on(1), None, "Threshold has one category");
+    }
+
+    /// After a Morphological on the mask the picker suggests what follows a
+    /// mask step, after one on the image what follows preprocessing.
+    #[test]
+    fn the_suggestion_after_morphological_follows_its_role() {
+        for (first, mask) in [("Threshold", true), ("GaussianBlur", false)] {
+            let (ui, _ui_state, _controller) =
+                selected(vec![step(first), step("MorphologicalCommand")]);
+            ui.global::<PipelinesPanelState>().invoke_insert_step(1, 1);
+            drain_ui_queue();
+            let picker = ui.global::<CommandPickerState>();
+            assert_eq!(picker.get_fcat_obj(), mask, "after {first}");
+            assert_eq!(picker.get_fcat_ext(), mask, "after {first}");
+            assert_eq!(picker.get_fcat_pre(), !mask, "after {first}");
+            assert_eq!(picker.get_fcat_seg(), !mask, "after {first}");
+        }
+    }
+
     #[test]
     fn picker_select_shows_a_command_and_confirm_inserts_it_after_the_given_step() {
         let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Threshold")]);
@@ -11682,7 +11819,8 @@ mod tests {
             + picker.get_cat_count_ext()
             + picker.get_cat_count_cls()
             + picker.get_cat_count_mea()
-            + picker.get_cat_count_dat();
+            + picker.get_cat_count_dat()
+            + picker.get_shown_utility().row_count() as i32;
         assert_eq!(per_category as usize, all);
     }
 

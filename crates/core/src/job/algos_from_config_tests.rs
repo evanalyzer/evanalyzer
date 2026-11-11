@@ -738,13 +738,11 @@ fn morphological_command_settings_convert_all_fields() {
         op: MorphologyMorphologicalTransformationMorphOpsSettings::Close,
         kernel_size: 5,
         kernel_shape: MorphologyMorphologicalTransformationKernelShapesSettings::Cross,
-        use_grayscale: true,
     };
     let result = MorphologicalCommand::from(settings);
     assert!(matches!(result.op, MorphOps::Close));
     assert_eq!(result.kernel_size, 5);
     assert!(matches!(result.kernel_shape, KernelShapes::Cross));
-    assert!(result.use_grayscale);
 }
 
 #[test]

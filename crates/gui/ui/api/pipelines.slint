@@ -7,7 +7,7 @@
 import { Ink } from "../ink/palette.slint";
 import { ClassItemData } from "classification.slint";
 
-export enum StepCategory { preprocess, segment, instance-segmentation, extract, object, measure, dataset, module }
+export enum StepCategory { preprocess, segment, instance-segmentation, extract, object, measure, dataset, utility, module }
 
 export enum PipelineStatus { idle, queued, running, done, error }
 
@@ -235,6 +235,9 @@ export global Cat {
             if c == StepCategory.module {
                 return Ink.cat-module;
             }
+            if c == StepCategory.utility {
+                return Ink.cat-utility;
+            }
             return Ink.cat-classify;
         }
         public pure function tint(c: StepCategory) -> color {
@@ -261,6 +264,9 @@ export global Cat {
             }
             if c == StepCategory.module {
                 return "Module";
+            }
+            if c == StepCategory.utility {
+                return "Utility";
             }
             return "Object";
         }

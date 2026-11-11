@@ -35,7 +35,7 @@ pub enum ImageCacheMode {
 /// `ImageCache` allows the pipeline to branch or "undo" operations by saving
 /// states to a named address and reloading them as needed.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "Preprocessing")]
+#[cmdsmeta(category = "utility")]
 pub struct ImageCache {
     /// Whether to save the current state to the cache or load a state from it.
     pub mode: ImageCacheMode,

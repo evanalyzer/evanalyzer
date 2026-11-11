@@ -36,6 +36,9 @@ export struct CommandDef {
     // What the command takes in RAM on the shown image's tiles ("" none
     // worth naming) - filled for the selected command (`detail`).
     ram: string,
+    // Listed outside its home category (Morphological under Instance
+    // Seg.): the home's name ("Preprocess"), else "".
+    also: string,
 }
 
 export global CommandPickerState {
@@ -53,6 +56,9 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-extract;
+    // Utility commands (Script, Save Image, Image Cache): listed whatever
+    // chips are on.
+    in property <[CommandDef]> shown-utility;
     in property <[CommandDef]> shown-modules;
     in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;
@@ -131,6 +137,9 @@ export global PickerStyle {
         if c == StepCategory.module {
             return Ink.cat-module;
         }
+        if c == StepCategory.utility {
+            return Ink.cat-utility;
+        }
         return Ink.cat-classify;
     }
     public pure function cmd-color(cmd: CommandDef) -> color {
@@ -157,6 +166,9 @@ export global PickerStyle {
         }
         if c == StepCategory.module {
             return "Module";
+        }
+        if c == StepCategory.utility {
+            return "Utility";
         }
         return "Object";
     }

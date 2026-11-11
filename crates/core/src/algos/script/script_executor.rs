@@ -46,12 +46,8 @@ const CANCEL_CHECK_OPERATIONS: u64 = 256;
 /// print(`Hello world from a ${image_width}x${image_height} tile`);
 /// run("gaussian_blur", #{ kernel_size: 5 });
 /// ```
-// TODO: pick the real category/successors once scripts can sit at any stage.
 #[derive(CommandsMeta)]
-#[cmdsmeta(
-    category = "Preprocessing",
-    next = "preprocessing,segment,instance_segmentation,extract,object"
-)]
+#[cmdsmeta(category = "utility")]
 pub struct Script {
     /// Object classes the script creates or uses. Commands the script runs
     /// may only use these classes, so the pipeline knows them without

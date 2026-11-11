@@ -16,6 +16,7 @@ use crate::{
     pipeline::pipeline::{PipelineImageMeta, PredictionRequest},
 };
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::pipeline_command::CommandCategory;
 use kornia_image::{Image, ImageSize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,6 +40,11 @@ pub struct PipelineContext {
     /// The scope the running command is in - set by the pipeline before
     /// each command. A local class names objects of this scope only.
     pub scope: Scope,
+    /// The role the running command works in at its place (see
+    /// `evanalyzer_cfg::settings::step_roles`) - set by the pipeline before
+    /// each command; `None` outside a pipeline step. Morphological works on
+    /// the segmentation mask in the Instance Segmentation role.
+    pub role: Option<CommandCategory>,
     /// Set to `Asked` by the pipeline before the step a run wants the
     /// prediction of; a pixel classifier answers with `Captured`.
     pub prediction: PredictionRequest,
@@ -64,6 +70,7 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             scope: Scope::Global,
+            role: None,
             prediction: PredictionRequest::None,
             image_meta,
             image: Arc::new(T::create_container(size, tile_offset, plane)?),
@@ -95,6 +102,7 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             scope: Scope::Global,
+            role: None,
             prediction: PredictionRequest::None,
             image_meta,
             image,
@@ -146,6 +154,7 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             scope: Scope::Global,
+            role: None,
             prediction: PredictionRequest::None,
             image: placeholder()?,
             scratch_pad: placeholder()?,
@@ -185,6 +194,7 @@ impl PipelineContext {
         let empty = PipelineContext {
             output_path: None,
             scope: Scope::Global,
+            role: None,
             prediction: PredictionRequest::None,
             image_meta: self.image_meta.clone(),
             image: placeholder(),
@@ -706,6 +716,7 @@ mod tests {
             Ok(Self {
                 output_path: None,
                 scope: Scope::Global,
+                role: None,
                 prediction: PredictionRequest::None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
@@ -753,6 +764,7 @@ mod tests {
             Ok(Self {
                 output_path: None,
                 scope: Scope::Global,
+                role: None,
                 prediction: PredictionRequest::None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
@@ -800,6 +812,7 @@ mod tests {
             Ok(Self {
                 output_path: None,
                 scope: Scope::Global,
+                role: None,
                 prediction: PredictionRequest::None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
@@ -840,6 +853,7 @@ mod tests {
             Ok(Self {
                 output_path: Some(PathBuf::default()),
                 scope: Scope::Global,
+                role: None,
                 prediction: PredictionRequest::None,
                 image: Arc::new(T::create_container(
                     size,
@@ -890,6 +904,7 @@ mod tests {
             Ok(Self {
                 output_path: Some(PathBuf::default()),
                 scope: Scope::Global,
+                role: None,
                 prediction: PredictionRequest::None,
                 image: Arc::new(T::create_container(
                     size,

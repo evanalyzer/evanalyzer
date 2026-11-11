@@ -297,6 +297,14 @@ component CommandRow inherits Rectangle {
             }
         }
 
+        // Listed outside its home category: "also Preprocess".
+        if cmd.also != "": Text {
+            text: "also \{cmd.also}";
+            color: Ink.text-mute;
+            font-size: Ink.fs-caption;
+            vertical-alignment: center;
+        }
+
         // recent badge
         if cmd.recent && !cmd.favorite: Rectangle {
             y: (parent.height - 18px) / 2;
@@ -573,6 +581,7 @@ export component CommandSelectionDialog inherits InkDialog {
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-extract;
+    in property <[CommandDef]> shown-utility;
     in property <[CommandDef]> shown-modules;
     in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;            // command for selected-id (or default)
@@ -1074,6 +1083,30 @@ export component CommandSelectionDialog inherits InkDialog {
                                     }
                                 }
 
+                                // Utility: listed whatever chips are on
+                            if shown-utility.length > 0 && !filter-modules: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.utility;
+                                        count: shown-utility.length;
+                                    }
+
+                                    for c in shown-utility: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
                                 // Modules: on their own tab.
                             if filter-modules: VerticalLayout {
                                     spacing: 0;
@@ -1353,6 +1386,7 @@ export component CommandPickerModal inherits Rectangle {
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-extract;
+    in property <[CommandDef]> shown-utility;
     in property <[CommandDef]> shown-modules;
     in property <[CommandDef]> shown-library-modules;
     in property <CommandDef> detail;
@@ -1409,6 +1443,7 @@ export component CommandPickerModal inherits Rectangle {
         shown-measure: root.shown-measure;
         shown-dataset: root.shown-dataset;
         shown-extract: root.shown-extract;
+        shown-utility: root.shown-utility;
         shown-modules: root.shown-modules;
         shown-library-modules: root.shown-library-modules;
         detail: root.detail;

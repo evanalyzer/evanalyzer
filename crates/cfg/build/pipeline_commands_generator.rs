@@ -436,6 +436,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         "Object",
         "Measure",
         "Dataset",
+        "Utility",
         "Other",
     ] {
         if let Some(cmds) = by_category.get(*category) {
@@ -889,7 +890,10 @@ impl Default for FieldMetadata {
 
 #[derive(Debug, Clone, Default)]
 struct StructMetadata {
-    /// Explicit category override from #[cmdsmeta(category = "...")]
+    /// Explicit category override from #[cmdsmeta(category = "...")]: a
+    /// comma list, the first entry the command's home (its colour, its
+    /// section when several chips are on), the others the stages it also
+    /// works in (e.g. Morphological: `"preprocessing, instance_segmentation"`).
     category: Option<String>,
     /// Explicit display name override from #[cmdsmeta(display_name = "...")],
     /// shown in the command picker/header instead of the bare struct name.
@@ -942,7 +946,10 @@ impl StepKind {
 struct CommandInfo {
     struct_name: String,
     fields: Vec<FieldInfo>,
+    /// The home category (the first of `#[cmdsmeta(category = "...")]`).
     category: String,
+    /// The further categories of `#[cmdsmeta(category = "a, b")]`, normalised.
+    extra_categories: Vec<String>,
     _source_file: String,
     doc_comments: Vec<String>,
     /// `Some` for a pipeline command - a struct that implements one of the
@@ -1100,15 +1107,27 @@ fn extract_command_structs(
                 let doc_comments = extract_doc_comments(&item_struct.attrs);
                 let struct_meta = parse_struct_meta(&item_struct.attrs);
                 // Explicit category annotation overrides directory heuristic
-                let effective_category = struct_meta
+                let declared: Vec<String> = struct_meta
                     .category
                     .as_deref()
-                    .map(normalize_category)
+                    .map(|raw| {
+                        raw.split(',')
+                            .map(str::trim)
+                            .filter(|c| !c.is_empty())
+                            .map(normalize_category)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let effective_category = declared
+                    .first()
+                    .cloned()
                     .unwrap_or_else(|| category.clone());
+                let extra_categories: Vec<String> = declared.iter().skip(1).cloned().collect();
                 commands.push(CommandInfo {
                     struct_name,
                     fields,
                     category: effective_category,
+                    extra_categories,
                     _source_file: source_file.clone(),
                     doc_comments,
                     kind,
@@ -1194,6 +1213,7 @@ fn normalize_category(raw: &str) -> String {
         "measure" => "Measure".to_string(),
         "object" | "classify" | "classification" => "Object".to_string(),
         "dataset" => "Dataset".to_string(),
+        "utility" => "Utility".to_string(),
         _ => "Other".to_string(),
     }
 }
@@ -3253,6 +3273,18 @@ fn command_display_name(cmd: &CommandInfo) -> &str {
         .unwrap_or(&cmd.struct_name)
 }
 
+/// The enum variants of `cmd`'s categories, the home first, no repeats.
+fn command_categories(cmd: &CommandInfo) -> Vec<String> {
+    let mut variants: Vec<String> = Vec::new();
+    for category in std::iter::once(&cmd.category).chain(&cmd.extra_categories) {
+        let variant = category_to_enum_variant(category).to_string();
+        if !variants.contains(&variant) {
+            variants.push(variant);
+        }
+    }
+    variants
+}
+
 fn category_to_enum_variant(category: &str) -> &str {
     match category {
         "Preprocessing" => "Preprocess",
@@ -3262,6 +3294,7 @@ fn category_to_enum_variant(category: &str) -> &str {
         "Measure" => "Measure",
         "Object" => "Object",
         "Dataset" => "Dataset",
+        "Utility" => "Utility",
         _ => "Preprocess",
     }
 }
@@ -3286,8 +3319,41 @@ fn default_next_for_category(variant: &str) -> &'static [&'static str] {
         "Object" => &["Object"],
         "Measure" => &["Measure", "Dataset"],
         "Dataset" => &["Dataset"],
+        // A utility step fits anywhere: what follows it is what may follow
+        // the step before it (see `step_roles`).
+        "Utility" => &[
+            "Preprocess",
+            "Segment",
+            "InstanceSegmentation",
+            "Extract",
+            "Object",
+        ],
         _ => &["Segment"],
     }
+}
+
+/// `next` (enum variant names) with the categories that may always follow
+/// an object step: a measurement and a dataset step need extracted objects
+/// (a measurement the final ones), and a dataset step runs after every
+/// image anyway, wherever it sits.
+fn with_later_steps(mut next: Vec<String>) -> Vec<String> {
+    if next.iter().any(|v| v == "Object") {
+        for later in ["Measure", "Dataset"] {
+            if !next.iter().any(|v| v == later) {
+                next.push(later.to_string());
+            }
+        }
+    }
+    next
+}
+
+/// `variants` as a `&[CommandCategory::A, ...]` literal.
+fn category_slice(variants: &[String]) -> String {
+    let items: Vec<String> = variants
+        .iter()
+        .map(|v| format!("CommandCategory::{v}"))
+        .collect();
+    format!("&[{}]", items.join(", "))
 }
 
 fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
@@ -3323,6 +3389,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("    Measure,\n");
     out.push_str("    /// Runs once after every image, on the objects of all of them.\n");
     out.push_str("    Dataset,\n");
+    out.push_str("    /// Fits anywhere (Script, Save Image, Image Cache): listed whatever\n");
+    out.push_str("    /// the picker's chips, it has no role of its own.\n");
+    out.push_str("    Utility,\n");
     out.push_str("}\n\n");
 
     // --- CommandCategory methods (ordering rules) ---
@@ -3338,6 +3407,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::Object               => 4,\n");
     out.push_str("            Self::Measure              => 5,\n");
     out.push_str("            Self::Dataset              => 6,\n");
+    out.push_str("            Self::Utility              => 7,\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// Which categories are valid immediately before this one in a pipeline.\n");
     out.push_str("    /// An empty slice means this category can start a pipeline.\n");
@@ -3357,6 +3427,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         "            Self::Measure              => &[Self::Extract, Self::Object, Self::Measure],\n",
     );
     out.push_str("            Self::Dataset              => &[Self::Extract, Self::Object, Self::Measure, Self::Dataset],\n");
+    out.push_str("            Self::Utility              => &[Self::Preprocess, Self::Segment, Self::InstanceSegmentation, Self::Extract, Self::Object, Self::Measure],\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// The natural next category after this one, used to pre-filter the command picker.\n");
     out.push_str("#[allow(dead_code)]\n");
@@ -3369,6 +3440,37 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::Object               => Self::Object,\n");
     out.push_str("            Self::Measure              => Self::Measure,\n");
     out.push_str("            Self::Dataset              => Self::Dataset,\n");
+    out.push_str("            Self::Utility              => Self::Preprocess,\n");
+    out.push_str("        }\n    }\n\n");
+    // default_next(): what may follow a step running in this category - for
+    // a command with several categories, what follows depends on the one it
+    // runs in (see `step_roles`).
+    out.push_str("    /// The categories that may follow a step of this category (the first\n");
+    out.push_str("    /// suggested), unless a command names its own (`allowed_next`).\n");
+    out.push_str("#[allow(dead_code)]\n");
+    out.push_str("    pub fn default_next(self) -> &'static [CommandCategory] {\n");
+    out.push_str("        match self {\n");
+    for variant in [
+        "Preprocess",
+        "Segment",
+        "InstanceSegmentation",
+        "Extract",
+        "Object",
+        "Measure",
+        "Dataset",
+        "Utility",
+    ] {
+        let next = with_later_steps(
+            default_next_for_category(variant)
+                .iter()
+                .map(|c| c.to_string())
+                .collect(),
+        );
+        out.push_str(&format!(
+            "            Self::{variant} => {},\n",
+            category_slice(&next)
+        ));
+    }
     out.push_str("        }\n    }\n");
     out.push_str("}\n\n");
 
@@ -3397,6 +3499,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("    pub id: i32,\n");
     out.push_str("    pub name: &'static str,\n");
     out.push_str("    pub category: CommandCategory,\n");
+    out.push_str("    /// `category` first, then the further stages it works in.\n");
+    out.push_str("    pub categories: &'static [CommandCategory],\n");
     out.push_str("    pub summary: &'static str,\n");
     out.push_str("    pub description: &'static str,\n");
     out.push_str("}\n\n");
@@ -3434,9 +3538,10 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
             .join("\\n");
         let summary = escape(summary);
         let cat = category_to_enum_variant(&cmd.category);
+        let categories = category_slice(&command_categories(cmd));
         let display_name = command_display_name(cmd);
         out.push_str(&format!(
-            "        CommandMeta {{ id: {i}, name: \"{display_name}\", category: CommandCategory::{cat}, summary: \"{summary}\", description: \"{description}\" }},\n",
+            "        CommandMeta {{ id: {i}, name: \"{display_name}\", category: CommandCategory::{cat}, categories: {categories}, summary: \"{summary}\", description: \"{description}\" }},\n",
         ));
     }
     out.push_str("    ]\n}\n\n");
@@ -3530,6 +3635,21 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     }
     out.push_str("        }\n    }\n\n");
 
+    // categories(): the home first, then the further stages.
+    out.push_str("    /// Every category this command works in, its home (`category`) first:\n");
+    out.push_str("    /// the picker lists it under each, the step's role picks one\n");
+    out.push_str("    /// (see `step_roles`).\n");
+    out.push_str("    pub fn categories(&self) -> &'static [CommandCategory] {\n");
+    out.push_str("        match self {\n");
+    for cmd in &algo_commands {
+        out.push_str(&format!(
+            "            Self::{}(_) => {},\n",
+            cmd.struct_name,
+            category_slice(&command_categories(cmd))
+        ));
+    }
+    out.push_str("        }\n    }\n\n");
+
     // allowed_next(): which categories may follow this specific command in a
     // pipeline. Defaults to the category's natural successors, but a command can
     // override this via #[cmdsmeta(next = "...")] to decouple display grouping
@@ -3540,35 +3660,20 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        match self {\n");
     for cmd in &algo_commands {
         let variant = category_to_enum_variant(&cmd.category);
-        let mut next_variants: Vec<String> = match &cmd.struct_meta.next {
+        let next_variants: Vec<String> = with_later_steps(match &cmd.struct_meta.next {
             Some(list) => list
                 .iter()
-                .map(|c| {
-                    format!(
-                        "CommandCategory::{}",
-                        category_to_enum_variant(&normalize_category(c))
-                    )
-                })
+                .map(|c| category_to_enum_variant(&normalize_category(c)).to_string())
                 .collect(),
             None => default_next_for_category(variant)
                 .iter()
-                .map(|c| format!("CommandCategory::{c}"))
+                .map(|c| c.to_string())
                 .collect(),
-        };
-        // A measurement and a dataset step may follow wherever an object
-        // step may - they need extracted objects (a measurement the final
-        // ones). A dataset step runs after every image anyway, wherever it sits.
-        if next_variants.contains(&"CommandCategory::Object".to_string()) {
-            for later in ["CommandCategory::Measure", "CommandCategory::Dataset"] {
-                if !next_variants.iter().any(|v| v == later) {
-                    next_variants.push(later.to_string());
-                }
-            }
-        }
+        });
         out.push_str(&format!(
-            "            Self::{}(_) => &[{}],\n",
+            "            Self::{}(_) => {},\n",
             cmd.struct_name,
-            next_variants.join(", ")
+            category_slice(&next_variants)
         ));
     }
     out.push_str("        }\n    }\n\n");

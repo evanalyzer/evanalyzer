@@ -18,8 +18,7 @@ use crate::{
         modules::{ExpandedCommand, ScopeCounter, UseId, expand_step},
         pipeline_step::PipelineStep,
     },
-    pipeline::pipeline::{CorePipelineSettings, Pipeline},
-    pipeline::scope::Scope,
+    pipeline::pipeline::{CorePipelineSettings, Pipeline, StepPlace},
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
@@ -37,6 +36,7 @@ use evanalyzer_cfg::{
         pipeline_command_settings::MathImageCacheImageCacheModeSettings,
         pipeline_settings::{PipelineSettings, PipelineStepSettings},
         project_settings::ProjectSettings,
+        step_roles::RoleTracker,
     },
 };
 use log::{error, info, warn};
@@ -629,6 +629,9 @@ fn generate_job_from_project_settings_intenal(
         // Each module use's last command, per phase (index in that list).
         let mut last_tile: BTreeMap<UseId, usize> = BTreeMap::new();
         let mut last_whole_image: BTreeMap<UseId, usize> = BTreeMap::new();
+        // The role each command runs in - the rule the editor colours the
+        // steps by (`step_roles`), over the commands in the order they run.
+        let mut roles = RoleTracker::new();
         for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
             // A module runs as its commands.
             for ExpandedCommand {
@@ -642,6 +645,10 @@ fn generate_job_from_project_settings_intenal(
                     measurement_ids.push((name.to_string(), pipeline_setting.name.as_str()));
                 }
                 let loads = loads_image(&command);
+                let place = StepPlace {
+                    scope,
+                    role: Some(roles.run(&command)),
+                };
                 match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
                     PipelineStep::Image(algo) => match algo.execution_scope() {
@@ -655,12 +662,12 @@ fn generate_job_from_project_settings_intenal(
                                 )));
                             }
                             needs_image = false;
-                            pipeline_pre_process.add_step(step_id, scope, algo);
+                            pipeline_pre_process.add_step(step_id, place, algo);
                             let index = pipeline_pre_process.commands.len() - 1;
                             last_tile.extend(uses.iter().map(|id| (*id, index)));
                         }
                         ExecutionScope::WholeImage => {
-                            pipeline_post_process.add_step(step_id, scope, algo);
+                            pipeline_post_process.add_step(step_id, place, algo);
                             let index = pipeline_post_process.commands.len() - 1;
                             last_whole_image.extend(uses.iter().map(|id| (*id, index)));
                         }
@@ -743,7 +750,7 @@ fn end_uses(
                 index + 1,
                 (
                     StepId::UNASSIGNED,
-                    Scope::Global,
+                    StepPlace::GLOBAL,
                     Box::new(EndScope {
                         end: end.clone(),
                         phase,
@@ -1548,6 +1555,53 @@ mod tests {
             command_names(&job.pipelines_pre_process[&PipelineId(1)]),
             command_names(&job.pipelines_post_process[&PipelineId(1)]),
         )
+    }
+
+    /// Each built step carries the role it runs in: Morphological on the
+    /// image before the threshold, on the mask after it - a disabled step
+    /// doesn't count, a utility step is looked past.
+    #[test]
+    fn each_step_runs_in_its_role() {
+        use evanalyzer_cfg::settings::pipeline_settings::StepContent;
+        let step = |id: u32, key: &str, enabled: bool| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(id),
+            enabled,
+            content: StepContent::Command(PipelineCommand::default_for_key(key).unwrap()),
+        };
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(
+                1,
+                true,
+                vec![
+                    step(1, "morphological_command", true),
+                    step(2, "threshold", true),
+                    step(3, "save_image", true),
+                    step(4, "morphological_command", true),
+                    step(5, "threshold", false),
+                    step(6, "connected_components", true),
+                ],
+            )],
+        );
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, _) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
+        let roles: Vec<_> = job.pipelines_pre_process[&PipelineId(1)]
+            .commands
+            .iter()
+            .map(|(_, place, _)| place.role)
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                Some(CommandCategory::Preprocess),
+                Some(CommandCategory::Segment),
+                Some(CommandCategory::Utility),
+                Some(CommandCategory::InstanceSegmentation),
+                Some(CommandCategory::InstanceSegmentation),
+            ]
+        );
     }
 
     #[test]

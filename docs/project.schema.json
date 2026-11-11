@@ -2867,7 +2867,7 @@
       ]
     },
     "MorphologicalCommandSettings": {
-      "description": "A filter that applies mathematical morphology to an image.\n\nMorphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.",
+      "description": "A filter that applies mathematical morphology to an image.\n\nMorphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\nIts place in the pipeline decides what it works on: before a\nsegmentation on the image, after one (e.g. a Threshold) on the\nsegmentation mask - every class transformed as its own mask: classes grow\ninto background only (Dilate) and touching classes shrink away from each\nother equally (Erode), whatever their class numbers.",
       "type": "object",
       "properties": {
         "kernelShape": {
@@ -2887,11 +2887,6 @@
           "description": "The transformation type (e.g., Dilate, Erode).",
           "$ref": "#/$defs/MorphologyMorphologicalTransformationMorphOpsSettings",
           "default": "DILATE"
-        },
-        "useGrayscale": {
-          "description": "If set the grayscale image instead of the labeled image is taken to perform a morphological transform.\n\nOn the labeled image every class is transformed as its own mask: classes\ngrow into background only (Dilate) and touching classes shrink away from\neach other equally (Erode), whatever their class numbers.",
-          "type": "boolean",
-          "default": false
         }
       }
     },

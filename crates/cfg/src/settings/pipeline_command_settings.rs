@@ -1494,19 +1494,6 @@ impl Default for IlluminationCorrectionSettings {
     }
 }
 
-/// A filter that acts as a synchronization point between the pipeline and a storage backend.
-///
-/// `ImageCache` allows the pipeline to branch or "undo" operations by saving
-/// states to a named address and reloading them as needed.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageCacheSettings {
-    /// Whether to save the current state to the cache or load a state from it.
-    pub mode: MathImageCacheImageCacheModeSettings,
-    /// The unique identifier or memory slot where the image is stored.
-    pub address: ImageAddress,
-}
-
 /// A filter that performs pixel-wise mathematical operations between the current
 /// pipeline image and a secondary image stored in the cache.
 ///
@@ -1634,6 +1621,12 @@ pub struct MedianSubtractSettings {
 ///
 /// Morphological operations use a structuring element (kernel) to probe
 /// and modify the shapes within an image.
+///
+/// Its place in the pipeline decides what it works on: before a
+/// segmentation on the image, after one (e.g. a Threshold) on the
+/// segmentation mask - every class transformed as its own mask: classes grow
+/// into background only (Dilate) and touching classes shrink away from each
+/// other equally (Erode), whatever their class numbers.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
@@ -1647,12 +1640,6 @@ pub struct MorphologicalCommandSettings {
     pub kernel_size: usize,
     /// The geometric profile of the structuring element.
     pub kernel_shape: MorphologyMorphologicalTransformationKernelShapesSettings,
-    /// If set the grayscale image instead of the labeled image is taken to perform a morphological transform.
-    ///
-    /// On the labeled image every class is transformed as its own mask: classes
-    /// grow into background only (Dilate) and touching classes shrink away from
-    /// each other equally (Erode), whatever their class numbers.
-    pub use_grayscale: bool,
 }
 
 impl Default for MorphologicalCommandSettings {
@@ -1661,7 +1648,6 @@ impl Default for MorphologicalCommandSettings {
             op: MorphologyMorphologicalTransformationMorphOpsSettings::default(),
             kernel_size: 3usize,
             kernel_shape: MorphologyMorphologicalTransformationKernelShapesSettings::default(),
-            use_grayscale: bool::default(),
         }
     }
 }
@@ -1716,89 +1702,6 @@ impl Default for RollingBallSettings {
             radius: 4.0f64,
             ball_type: FiltersRollingBallBallTypeSettings::default(),
             pre_smooth: bool::default(),
-        }
-    }
-}
-
-/// A command that exports the current image to a persistent file on disk.
-///
-/// This is a **transparent command**: it does not modify the image data in the
-/// pipeline context, nor does it perform a buffer swap. It acts as a tap
-/// to view the state of the image at a specific point in the pipeline.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[serde(default)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveImageSettings {
-    /// Name the image should be stord under
-    pub name: String,
-    /// Shows the selected classes in the image
-    pub display_classes: Vec<ObjectClass>,
-    /// Which image from the pipeline should be stored
-    pub source: MathSaveImageImageSourceSettings,
-    /// Opacity in percent of the filled `display_classes` objects (0 = only
-    /// the contours, 100 = solid). Contours are always drawn opaque.
-    #[schemars(range(min = 0, max = 100))]
-    pub opacity: u32,
-}
-
-impl Default for SaveImageSettings {
-    fn default() -> Self {
-        Self {
-            name: String::default(),
-            display_classes: vec![],
-            source: MathSaveImageImageSourceSettings::Image,
-            opacity: 50u32,
-        }
-    }
-}
-
-fn _serde_default_script_classes() -> Vec<ObjectClass> {
-    vec![]
-}
-fn _serde_default_script_values() -> BTreeMap<String, ParamValue> {
-    <BTreeMap<String, ParamValue>>::default()
-}
-/// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
-///
-/// The script sees the current tile as read-only constants:
-/// `image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.
-/// `print(...)` writes to the log. `run(command, #{ params })` runs a
-/// pipeline command on the current image, with the parameter names of the
-/// step settings.
-///
-/// # Examples
-///
-/// ```rhai
-/// print(`Hello world from a ${image_width}x${image_height} tile`);
-/// run("gaussian_blur", #{ kernel_size: 5 });
-/// ```
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[serde(default)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptSettings {
-    /// Object classes the script creates or uses. Commands the script runs
-    /// may only use these classes, so the pipeline knows them without
-    /// running the script.
-    #[serde(default = "_serde_default_script_classes")]
-    pub classes: Vec<ObjectClass>,
-    /// Script source code
-    pub source: String,
-    /// The values set for the script's `param`s, by name - only those that
-    /// differ from the default the script gives. The script declares its
-    /// params (`param max_rounds = 10;`); a value for a name it doesn't
-    /// declare is ignored.
-    #[serde(default = "_serde_default_script_values")]
-    pub values: BTreeMap<String, ParamValue>,
-}
-
-impl Default for ScriptSettings {
-    fn default() -> Self {
-        Self {
-            classes: vec![],
-            source: String::from(
-                "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
-            ),
-            values: <BTreeMap<String, ParamValue>>::default(),
         }
     }
 }
@@ -4080,6 +3983,104 @@ impl Default for TrackOverlapSettings {
             splitting: bool::default(),
             merge_split_amount: LibsLinkingMergeSplitAmountSettings::Area,
             channel: ImageChannelIdx::default(),
+        }
+    }
+}
+
+// ============ UTILITY ============
+
+/// A filter that acts as a synchronization point between the pipeline and a storage backend.
+///
+/// `ImageCache` allows the pipeline to branch or "undo" operations by saving
+/// states to a named address and reloading them as needed.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCacheSettings {
+    /// Whether to save the current state to the cache or load a state from it.
+    pub mode: MathImageCacheImageCacheModeSettings,
+    /// The unique identifier or memory slot where the image is stored.
+    pub address: ImageAddress,
+}
+
+/// A command that exports the current image to a persistent file on disk.
+///
+/// This is a **transparent command**: it does not modify the image data in the
+/// pipeline context, nor does it perform a buffer swap. It acts as a tap
+/// to view the state of the image at a specific point in the pipeline.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveImageSettings {
+    /// Name the image should be stord under
+    pub name: String,
+    /// Shows the selected classes in the image
+    pub display_classes: Vec<ObjectClass>,
+    /// Which image from the pipeline should be stored
+    pub source: MathSaveImageImageSourceSettings,
+    /// Opacity in percent of the filled `display_classes` objects (0 = only
+    /// the contours, 100 = solid). Contours are always drawn opaque.
+    #[schemars(range(min = 0, max = 100))]
+    pub opacity: u32,
+}
+
+impl Default for SaveImageSettings {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            display_classes: vec![],
+            source: MathSaveImageImageSourceSettings::Image,
+            opacity: 50u32,
+        }
+    }
+}
+
+fn _serde_default_script_classes() -> Vec<ObjectClass> {
+    vec![]
+}
+fn _serde_default_script_values() -> BTreeMap<String, ParamValue> {
+    <BTreeMap<String, ParamValue>>::default()
+}
+/// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
+///
+/// The script sees the current tile as read-only constants:
+/// `image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.
+/// `print(...)` writes to the log. `run(command, #{ params })` runs a
+/// pipeline command on the current image, with the parameter names of the
+/// step settings.
+///
+/// # Examples
+///
+/// ```rhai
+/// print(`Hello world from a ${image_width}x${image_height} tile`);
+/// run("gaussian_blur", #{ kernel_size: 5 });
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptSettings {
+    /// Object classes the script creates or uses. Commands the script runs
+    /// may only use these classes, so the pipeline knows them without
+    /// running the script.
+    #[serde(default = "_serde_default_script_classes")]
+    pub classes: Vec<ObjectClass>,
+    /// Script source code
+    pub source: String,
+    /// The values set for the script's `param`s, by name - only those that
+    /// differ from the default the script gives. The script declares its
+    /// params (`param max_rounds = 10;`); a value for a name it doesn't
+    /// declare is ignored.
+    #[serde(default = "_serde_default_script_values")]
+    pub values: BTreeMap<String, ParamValue>,
+}
+
+impl Default for ScriptSettings {
+    fn default() -> Self {
+        Self {
+            classes: vec![],
+            source: String::from(
+                "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
+            ),
+            values: <BTreeMap<String, ParamValue>>::default(),
         }
     }
 }

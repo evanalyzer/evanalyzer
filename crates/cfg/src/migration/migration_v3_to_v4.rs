@@ -35,6 +35,10 @@
 //! Objects' `minColocArea` become `minSize`, `maxSize`, `minIntersectionSize`,
 //! `minOverlapSize` and `minColocSize`; module bindings follow.
 //!
+//! Morphological's `useGrayscale` goes: its place in the pipeline decides
+//! whether it works on the image or the segmentation mask (see
+//! `step_roles`). A module parameter bound to it loses that binding.
+//!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-15
 //!
@@ -291,10 +295,81 @@ fn drop_object_relation_fields(raw: &mut Value) {
     }
 }
 
+/// Whether `command_type` (any spelling serde accepts) is Morphological.
+fn is_morphological(command_type: &str) -> bool {
+    command_type
+        .replace(['_', '-'], "")
+        .eq_ignore_ascii_case("morphologicalcommand")
+}
+
+/// Drops `useGrayscale` from the Morphological commands of `steps`.
+fn drop_use_grayscale_in(steps: Option<&mut Value>) {
+    let Some(Value::Array(steps)) = steps else {
+        return;
+    };
+    for command in steps.iter_mut().filter_map(|s| s.get_mut("command")) {
+        if command
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(is_morphological)
+            && let Value::Object(settings) = command
+        {
+            settings.remove("useGrayscale");
+        }
+    }
+}
+
+/// Drops the bindings of `module`'s parameters to a Morphological step's
+/// `use_grayscale`.
+fn drop_use_grayscale_bindings(module: &mut Value) {
+    let morphological: Vec<Value> = module
+        .get("steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|step| {
+            step.get("command")
+                .and_then(|c| c.get("type"))
+                .and_then(Value::as_str)
+                .is_some_and(is_morphological)
+        })
+        .filter_map(|step| step.get("id").cloned())
+        .collect();
+    let Some(Value::Array(parameters)) = module.get_mut("parameters") else {
+        return;
+    };
+    for parameter in parameters {
+        if let Some(Value::Array(bindings)) = parameter.get_mut("bindings") {
+            bindings.retain(|binding| {
+                let to_morphological = binding
+                    .get("step")
+                    .is_some_and(|step| morphological.contains(step));
+                !(to_morphological && binding.get("param") == Some(&json!("use_grayscale")))
+            });
+        }
+    }
+}
+
+/// Drops Morphological's `useGrayscale` in pipelines and modules.
+fn drop_morphological_use_grayscale(raw: &mut Value) {
+    if let Some(Value::Array(pipelines)) = raw.get_mut("pipelines") {
+        for pipeline in pipelines {
+            drop_use_grayscale_in(pipeline.get_mut("steps"));
+        }
+    }
+    if let Some(Value::Array(modules)) = raw.get_mut("modules") {
+        for module in modules {
+            drop_use_grayscale_bindings(module);
+            drop_use_grayscale_in(module.get_mut("steps"));
+        }
+    }
+}
+
 pub fn migrate_from_v3_to_v4(raw: &mut Value) {
     migrate_class_ids(raw);
     migrate_segmentation_class_settings(raw);
     drop_object_relation_fields(raw);
+    drop_morphological_use_grayscale(raw);
 }
 
 #[cfg(test)]
@@ -543,6 +618,53 @@ mod tests {
                 "min_coloc_size",
                 "min_area"
             ]
+        );
+    }
+
+    #[test]
+    fn morphological_loses_use_grayscale_in_pipelines_and_modules() {
+        let mut raw = json!({
+            "pipelines": [{ "steps": [
+                { "command": { "type": "MORPHOLOGICAL_COMMAND", "op": "dilate", "useGrayscale": true }},
+                { "command": { "type": "morphologicalCommand", "useGrayscale": false }},
+                { "command": { "type": "SAVE_IMAGE", "useGrayscale": true }}
+            ]}],
+            "modules": [{
+                "key": "M",
+                "steps": [
+                    { "id": 1, "command": { "type": "MORPHOLOGICAL_COMMAND", "useGrayscale": true }},
+                    { "id": 2, "command": { "type": "THRESHOLD", "thresholds": [] }}
+                ],
+                "parameters": [{ "bindings": [
+                    { "step": 1, "param": "use_grayscale" },
+                    { "step": 1, "param": "kernel_size" },
+                    { "step": 2, "param": "use_grayscale" }
+                ]}]
+            }]
+        });
+        migrate_from_v3_to_v4(&mut raw);
+        let steps = &raw["pipelines"][0]["steps"];
+        assert_eq!(
+            steps[0]["command"],
+            json!({ "type": "MORPHOLOGICAL_COMMAND", "op": "dilate" })
+        );
+        assert_eq!(
+            steps[1]["command"],
+            json!({ "type": "morphologicalCommand" })
+        );
+        // Only Morphological's.
+        assert_eq!(steps[2]["command"]["useGrayscale"], json!(true));
+        let module = &raw["modules"][0];
+        assert_eq!(
+            module["steps"][0]["command"],
+            json!({ "type": "MORPHOLOGICAL_COMMAND" })
+        );
+        assert_eq!(
+            module["parameters"][0]["bindings"],
+            json!([
+                { "step": 1, "param": "kernel_size" },
+                { "step": 2, "param": "use_grayscale" }
+            ])
         );
     }
 }

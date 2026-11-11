@@ -18,6 +18,7 @@ use crate::{
     pipeline::pipeline_context::PipelineContext,
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
+use evanalyzer_cfg::settings::pipeline_command::CommandCategory;
 use kernels::Kernel;
 use kornia_image::Image;
 use kornia_imgproc::padding::PaddingMode;
@@ -56,8 +57,14 @@ pub enum KernelShapes {
 ///
 /// Morphological operations use a structuring element (kernel) to probe
 /// and modify the shapes within an image.
+///
+/// Its place in the pipeline decides what it works on: before a
+/// segmentation on the image, after one (e.g. a Threshold) on the
+/// segmentation mask - every class transformed as its own mask: classes grow
+/// into background only (Dilate) and touching classes shrink away from each
+/// other equally (Erode), whatever their class numbers.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "Preprocessing")]
+#[cmdsmeta(category = "Preprocessing, instance_segmentation")]
 pub struct MorphologicalCommand {
     /// The transformation type (e.g., Dilate, Erode).
     pub op: MorphOps,
@@ -78,14 +85,6 @@ pub struct MorphologicalCommand {
     /// The geometric profile of the structuring element.
     #[cmdsmeta(visibility = Advanced)]
     pub kernel_shape: KernelShapes,
-
-    /// If set the grayscale image instead of the labeled image is taken to perform a morphological transform.
-    ///
-    /// On the labeled image every class is transformed as its own mask: classes
-    /// grow into background only (Dilate) and touching classes shrink away from
-    /// each other equally (Erode), whatever their class numbers.
-    #[cmdsmeta(visibility = Advanced)]
-    pub use_grayscale: bool,
 }
 impl ImageAlgorithm for MorphologicalCommand {
     /// Executes the specified morphological transformation on the image.
@@ -121,7 +120,9 @@ impl ImageAlgorithm for MorphologicalCommand {
                 self.kernel_size
             )));
         }
-        if !self.use_grayscale {
+        // The role the pipeline runs this step in (see `step_roles`): after a
+        // segmentation it works on the mask, else on the image.
+        if ctx.role == Some(CommandCategory::InstanceSegmentation) {
             let (labels, scratch) = ctx.get_segmentation_map_u32_buf()?;
             self.apply_morph_u32(labels, scratch)?;
             ctx.swap_scratch_with_segmentations()?;
@@ -254,7 +255,6 @@ mod tests {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true,
         };
 
         // 3. Setup Context
@@ -309,12 +309,12 @@ mod tests {
 
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.segmentation_map = Some(img);
+        ctx.role = Some(CommandCategory::InstanceSegmentation);
 
         let cmd = MorphologicalCommand {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: false,
         };
 
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
@@ -327,6 +327,41 @@ mod tests {
         assert_eq!(*labels.get_pixel(0, 0, 0).unwrap(), 0);
 
         Ok(())
+    }
+
+    /// Outside the Instance Segmentation role (before a segmentation, or
+    /// outside a pipeline) it works on the image and leaves the mask alone.
+    #[test]
+    fn without_the_mask_role_the_image_is_transformed_and_the_mask_kept() {
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
+        let mut img = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+        img.set_pixel(2, 2, 0, 1.0).unwrap();
+        for role in [None, Some(CommandCategory::Preprocess)] {
+            let mut ctx = PipelineContext::new_from_image_test(img.clone()).unwrap();
+            let mut labels = Image::<u32, 1>::from_size_val(size, 0).unwrap();
+            labels.set_pixel(2, 2, 0, 7).unwrap();
+            ctx.segmentation_map = Some(labels.clone());
+            ctx.role = role;
+            let cmd = MorphologicalCommand {
+                op: MorphOps::Dilate,
+                kernel_size: 3,
+                kernel_shape: KernelShapes::Box,
+            };
+            cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+                .unwrap();
+            let ImageContainer::F32Gray(out) = ctx.image.as_ref() else {
+                panic!("not F32Gray");
+            };
+            assert_eq!(*out.get_pixel(1, 1, 0).unwrap(), 1.0, "{role:?}: dilated");
+            assert_eq!(
+                ctx.segmentation_map.as_ref().unwrap().as_slice(),
+                labels.as_slice(),
+                "{role:?}: mask untouched"
+            );
+        }
     }
 
     /// Builds the same "single labeled pixel" fixture as
@@ -342,6 +377,7 @@ mod tests {
         img.set_pixel(2, 2, 0, 7).unwrap();
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.segmentation_map = Some(img);
+        ctx.role = Some(CommandCategory::InstanceSegmentation);
         ctx
     }
 
@@ -353,7 +389,6 @@ mod tests {
             op: MorphOps::Erode,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: false,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
@@ -371,7 +406,6 @@ mod tests {
             op: MorphOps::Open,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: false,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
@@ -389,7 +423,6 @@ mod tests {
             op: MorphOps::Close,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: false,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
@@ -418,7 +451,6 @@ mod tests {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Cross,
-            use_grayscale: true,
         };
         cmd_cross.execute(&mut ctx, &mut cache)?;
 
@@ -437,7 +469,6 @@ mod tests {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Ellipse,
-            use_grayscale: true,
         };
         cmd_ellipse.execute(&mut ctx, &mut cache)?;
 
@@ -467,7 +498,6 @@ mod tests {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true, // Forces F32 logic
         };
 
         let result = cmd.execute(&mut ctx, &mut cache);
@@ -492,7 +522,6 @@ mod tests {
             op: MorphOps::Erode,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
@@ -512,7 +541,6 @@ mod tests {
             op: MorphOps::Open,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
@@ -532,7 +560,6 @@ mod tests {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
@@ -552,7 +579,6 @@ mod tests {
             op: MorphOps::Close,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true,
         };
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
@@ -571,7 +597,6 @@ mod tests {
             op: MorphOps::Dilate,
             kernel_size: 3,
             kernel_shape: KernelShapes::Box,
-            use_grayscale: true,
         };
         assert_eq!(cmd.name(), "Morphological Transform");
     }
@@ -593,7 +618,6 @@ mod tests {
                 op: MorphOps::Dilate,
                 kernel_size: size,
                 kernel_shape: KernelShapes::Box,
-                use_grayscale: false,
             };
             let result = cmd.execute(&mut ctx, &mut GlobalPipelineCache::default());
             if ok {
@@ -645,6 +669,8 @@ mod tests {
         Threshold { thresholds }
             .execute(&mut ctx, &mut cache)
             .unwrap();
+        // After a threshold the pipeline runs it on the mask.
+        ctx.role = Some(CommandCategory::InstanceSegmentation);
         morph.execute(&mut ctx, &mut cache).unwrap();
         ctx.segmentation_map.as_ref().unwrap().as_slice().to_vec()
     }
@@ -685,7 +711,6 @@ mod tests {
                         op,
                         kernel_size,
                         kernel_shape: shape,
-                        use_grayscale: false,
                     };
                     let out = threshold_then_morph(img.clone(), &[(0.5, 1.0, 1)], &cmd);
                     for y in 0..n {
@@ -736,7 +761,6 @@ mod tests {
                 op,
                 kernel_size: 3,
                 kernel_shape: KernelShapes::Box,
-                use_grayscale: false,
             };
             threshold_then_morph(img.clone(), &ranges, &cmd)
         };
@@ -761,7 +785,6 @@ mod tests {
                 op: MorphOps::Dilate,
                 kernel_size: 1,
                 kernel_shape: KernelShapes::Box,
-                use_grayscale: false,
             },
         );
         assert_eq!(run(MorphOps::Close), threshold_only);

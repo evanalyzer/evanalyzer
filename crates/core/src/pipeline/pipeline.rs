@@ -21,6 +21,7 @@ use evanalyzer_cfg::core_types::{
     ImageAddress, InternalErrors, MemoryId, ObjectClass, ObjectId, PipelineId, SegmentationClass,
     StepId,
 };
+use evanalyzer_cfg::settings::pipeline_command::CommandCategory;
 use kornia_image::ImageSize;
 use log::info;
 use std::sync::Arc;
@@ -135,9 +136,27 @@ pub struct Pipeline {
     /// The commands, each paired with the id of the project step it came
     /// from (see `add_step`) - what a breakpoint targets, so it resolves
     /// correctly although `Tile` and `WholeImage` commands are split into
-    /// two separately-run lists - and with the scope it runs in (a command
-    /// module instance's, or `Global`).
-    pub commands: Vec<(StepId, Scope, Box<dyn ImageAlgorithm>)>,
+    /// two separately-run lists - and with where it runs (see [`StepPlace`]).
+    pub commands: Vec<(StepId, StepPlace, Box<dyn ImageAlgorithm>)>,
+}
+
+/// Where a command of a pipeline runs: in which scope and in which role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepPlace {
+    /// A module instance's scope, or `Global`.
+    pub scope: Scope,
+    /// The category the command works as at its place (see
+    /// `evanalyzer_cfg::settings::step_roles`) - `None` for a command that
+    /// isn't a project step (e.g. `TileMerge`).
+    pub role: Option<CommandCategory>,
+}
+
+impl StepPlace {
+    /// The global scope, no role: a command that isn't a project step.
+    pub const GLOBAL: StepPlace = StepPlace {
+        scope: Scope::Global,
+        role: None,
+    };
 }
 
 /// Pipeline execution pipeline implementation
@@ -163,16 +182,16 @@ impl Pipeline {
         }
     }
 
-    /// Adds the command of project step `id`, running in `scope`, to the
+    /// Adds the command of project step `id`, running at `place`, to the
     /// end of the pipeline.
-    pub fn add_step(&mut self, id: StepId, scope: Scope, command: Box<dyn ImageAlgorithm>) {
-        self.commands.push((id, scope, command));
+    pub fn add_step(&mut self, id: StepId, place: StepPlace, command: Box<dyn ImageAlgorithm>) {
+        self.commands.push((id, place, command));
     }
 
     /// Adds a command that isn't a project step (e.g. `TileMerge`), so no
-    /// breakpoint can target it. It runs in the global scope.
+    /// breakpoint can target it. It runs in the global scope, without a role.
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
-        self.add_step(StepId::UNASSIGNED, Scope::Global, command);
+        self.add_step(StepId::UNASSIGNED, StepPlace::GLOBAL, command);
     }
 
     // Add dependency
@@ -283,9 +302,10 @@ impl Pipeline {
         let mut prediction_capture: Option<PredictionCapture> = None;
         let mut object_prediction: Option<ObjectPredictionCapture> = None;
 
-        for (step_id, scope, command) in &self.commands {
+        for (step_id, place, command) in &self.commands {
             let step_id = *step_id;
-            ctx.scope = *scope;
+            ctx.scope = place.scope;
+            ctx.role = place.role;
             let wants_prediction =
                 step_id != StepId::UNASSIGNED && prediction_step == Some(step_id);
             if wants_prediction {
@@ -725,17 +745,17 @@ mod tests {
         );
         pipeline.add_step(
             StepId(1),
-            Scope::Global,
+            StepPlace::GLOBAL,
             Box::new(FakePredictor { marker: 1 }),
         );
         pipeline.add_step(
             StepId(2),
-            Scope::Global,
+            StepPlace::GLOBAL,
             Box::new(FakePredictor { marker: 2 }),
         );
         pipeline.add_step(
             StepId(3),
-            Scope::Global,
+            StepPlace::GLOBAL,
             Box::new(FakePredictor { marker: 3 }),
         );
         let run = |prediction_step: Option<StepId>| {

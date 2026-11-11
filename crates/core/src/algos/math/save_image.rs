@@ -32,7 +32,7 @@ pub enum ImageSource {
 /// pipeline context, nor does it perform a buffer swap. It acts as a tap
 /// to view the state of the image at a specific point in the pipeline.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "Preprocessing")]
+#[cmdsmeta(category = "utility")]
 pub struct SaveImage {
     /// Name the image should be stord under
     pub name: String,

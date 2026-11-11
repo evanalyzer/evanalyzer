@@ -3030,7 +3030,7 @@ mod full_run_integration_tests {
         // A project step (id 1): what the breakpoint tests target.
         pipeline.add_step(
             evanalyzer_cfg::core_types::StepId(1),
-            Scope::Global,
+            crate::pipeline::pipeline::StepPlace::GLOBAL,
             Box::new(Threshold {
                 thresholds: vec![ThresholdEntry {
                     method: ThresholdMethod::Manual,
@@ -3520,7 +3520,7 @@ mod full_run_integration_tests {
         );
         post.add_step(
             StepId(4),
-            Scope::Global,
+            crate::pipeline::pipeline::StepPlace::GLOBAL,
             Box::new(MeasureImageTexture {
                 id: "texture".into(),
                 channel: ImageChannelIdx(0),
@@ -3563,7 +3563,7 @@ mod full_run_integration_tests {
             );
             post.add_step(
                 evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                scope,
+                crate::pipeline::pipeline::StepPlace { scope, role: None },
                 Box::new(ClassifyObjects {
                     // The extracted objects have no class, only this.
                     origin_segmentation: vec![SegmentationClass(1)],
@@ -3602,7 +3602,7 @@ mod full_run_integration_tests {
                     0,
                     (
                         evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                        Scope::Global,
+                        crate::pipeline::pipeline::StepPlace::GLOBAL,
                         Box::new(LoadChannel {
                             channel: ImageChannelIdx(0),
                             projection: crate::algos::ChannelZProjection::Auto,
@@ -3640,7 +3640,7 @@ mod full_run_integration_tests {
             0,
             (
                 evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                Scope::Global,
+                crate::pipeline::pipeline::StepPlace::GLOBAL,
                 Box::new(load),
             ),
         );
@@ -4592,7 +4592,11 @@ mod full_run_integration_tests {
             job.pipelines_pre_process
                 .get_mut(&PipelineId(1))
                 .unwrap()
-                .add_step(step, Scope::Global, Box::new(Predicts));
+                .add_step(
+                    step,
+                    crate::pipeline::pipeline::StepPlace::GLOBAL,
+                    Box::new(Predicts),
+                );
             if with_target {
                 job.prediction = Some(PredictionTarget {
                     pipeline_id: PipelineId(1),
@@ -5051,7 +5055,7 @@ mod full_run_integration_tests {
             );
             pipeline.add_step(
                 evanalyzer_cfg::core_types::StepId(id * 10),
-                Scope::Global,
+                crate::pipeline::pipeline::StepPlace::GLOBAL,
                 Box::new(CountsWholeImageRuns(Arc::clone(counter))),
             );
             job.add_post_process_pipeline(pipeline);
@@ -5185,7 +5189,7 @@ mod tile_merge_end_to_end_tests {
         // A project step (id 1): what the breakpoint tests target.
         pipeline.add_step(
             evanalyzer_cfg::core_types::StepId(1),
-            Scope::Global,
+            crate::pipeline::pipeline::StepPlace::GLOBAL,
             Box::new(Threshold {
                 thresholds: vec![ThresholdEntry {
                     method: ThresholdMethod::Manual,
@@ -5745,7 +5749,7 @@ mod estimate_ram_per_worker_bytes_tests {
             let algorithm = crate::job::algos_from_config::into_algorithm(command).unwrap();
             pipeline.add_step(
                 evanalyzer_cfg::core_types::StepId(i as u32 + 1),
-                Scope::Global,
+                crate::pipeline::pipeline::StepPlace::GLOBAL,
                 algorithm,
             );
         }
@@ -5781,7 +5785,7 @@ mod estimate_ram_per_worker_bytes_tests {
                 let algorithm = crate::job::algos_from_config::into_algorithm(command).unwrap();
                 pipeline.add_step(
                     evanalyzer_cfg::core_types::StepId(1),
-                    Scope::Global,
+                    crate::pipeline::pipeline::StepPlace::GLOBAL,
                     algorithm,
                 );
                 job.add_pre_process_pipeline(pipeline);
@@ -5839,7 +5843,7 @@ mod estimate_ram_per_worker_bytes_tests {
                 let algorithm = crate::job::algos_from_config::into_algorithm(command).unwrap();
                 pipeline.add_step(
                     evanalyzer_cfg::core_types::StepId(1),
-                    Scope::Global,
+                    crate::pipeline::pipeline::StepPlace::GLOBAL,
                     algorithm,
                 );
                 job.add_pre_process_pipeline(pipeline);

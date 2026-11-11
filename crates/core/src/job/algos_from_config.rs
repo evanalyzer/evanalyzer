@@ -1137,7 +1137,6 @@ impl From<MorphologicalCommandSettings> for MorphologicalCommand {
             op: MorphOps::from(_s.op),
             kernel_size: _s.kernel_size,
             kernel_shape: KernelShapes::from(_s.kernel_shape),
-            use_grayscale: _s.use_grayscale,
         }
     }
 }

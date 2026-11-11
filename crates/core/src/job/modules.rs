@@ -1031,6 +1031,67 @@ mod tests {
         )
     }
 
+    /// The editor colours a step by its role (`step_roles`) from cfg's
+    /// `run_commands`, a run decides it from these expanded commands: both
+    /// must list the same commands in the same order - disabled steps left
+    /// out, modules opened up, nested ones too.
+    #[test]
+    fn cfg_run_commands_lists_what_a_run_expands() {
+        use evanalyzer_cfg::settings::step_roles::run_commands;
+        let key = |k: &str| PipelineCommand::default_for_key(k).unwrap();
+        let mut disabled = command_step(3, key("fill_holes"));
+        disabled.enabled = false;
+        let mut disabled_module = module_step(9, "INNER", &[]);
+        disabled_module.enabled = false;
+        let definitions = vec![
+            definition(
+                "INNER",
+                vec![command_step(1, key("threshold")), disabled.clone()],
+                vec![],
+            ),
+            definition(
+                "OUTER",
+                vec![
+                    command_step(1, key("gaussian_blur")),
+                    module_step(2, "INNER", &[]),
+                    command_step(4, key("morphological_command")),
+                ],
+                vec![],
+            ),
+        ];
+        let steps = vec![
+            command_step(1, key("load_channel")),
+            module_step(2, "OUTER", &[]),
+            disabled,
+            disabled_module,
+            command_step(4, key("connected_components")),
+            command_step(5, key("save_image")),
+        ];
+        let mut scopes = ScopeCounter::default();
+        let expanded: Vec<&str> = steps
+            .iter()
+            .filter(|s| s.enabled)
+            .flat_map(|s| expand_step(s, &definitions, &mut scopes).unwrap())
+            .map(|c| c.command.key())
+            .collect();
+        let listed: Vec<&str> = run_commands(&steps, &definitions)
+            .iter()
+            .map(|c| c.key())
+            .collect();
+        assert_eq!(listed, expanded);
+        assert_eq!(
+            listed,
+            [
+                "load_channel",
+                "gaussian_blur",
+                "threshold",
+                "morphological_command",
+                "connected_components",
+                "save_image"
+            ]
+        );
+    }
+
     /// Expands `step` with a fresh scope counter, like one job does.
     fn expand(
         step: &PipelineStepSettings,

@@ -270,12 +270,14 @@ fn command_category_helpers_cover_every_variant() {
         CommandCategory::Object,
         CommandCategory::Measure,
         CommandCategory::Dataset,
+        CommandCategory::Utility,
     ];
     for cat in categories {
         // These are `#[allow(dead_code)]` (unused outside tests currently),
         // which is exactly why they were at 0% coverage.
         let order = cat.display_order();
-        assert!(order <= 6);
+        assert!(order <= 7);
+        assert!(!cat.default_next().is_empty());
         let _ = cat.allowed_after();
         let _ = cat.suggested_next();
     }
@@ -393,6 +395,16 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a measurement and a dataset step
     // may too: they need extracted objects.
+    // A utility step fits anywhere, so every stage may follow it.
+    const ANY_STAGE: &[CommandCategory] = &[
+        Preprocess,
+        Segment,
+        InstanceSegmentation,
+        Extract,
+        Object,
+        Measure,
+        Dataset,
+    ];
     let expected: [(&str, &[CommandCategory]); 67] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
@@ -423,7 +435,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),
-        ("ImageCache", &[Segment, Preprocess]),
+        ("ImageCache", ANY_STAGE),
         ("LoadChannel", &[Segment, Preprocess]),
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
@@ -453,20 +465,8 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("RankFilter", &[Segment, Preprocess]),
         ("Skeletonize Objects", &[Object, Measure, Dataset]),
         ("Rolling Ball", &[Segment, Preprocess]),
-        ("SaveImage", &[Segment, Preprocess]),
-        // A script can sit at any stage, so every stage may follow it.
-        (
-            "Script",
-            &[
-                Preprocess,
-                Segment,
-                InstanceSegmentation,
-                Extract,
-                Object,
-                Measure,
-                Dataset,
-            ],
-        ),
+        ("SaveImage", ANY_STAGE),
+        ("Script", ANY_STAGE),
         // Only dataset steps may follow a dataset step.
         ("TrackNearestNeighbor", &[Dataset]),
         ("Track LAP", &[Dataset]),
