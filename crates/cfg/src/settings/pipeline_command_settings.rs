@@ -1634,18 +1634,36 @@ pub struct MedianSubtractSettings {
 ///
 /// Morphological operations use a structuring element (kernel) to probe
 /// and modify the shapes within an image.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct MorphologicalCommandSettings {
     /// The transformation type (e.g., Dilate, Erode).
     pub op: MorphologyMorphologicalTransformationMorphOpsSettings,
     /// The diameter of the structuring element in pixels.
-    /// Must be an odd number (e.g., 3, 5, 7).
+    /// Must be an odd number (e.g., 3, 5, 7), so the kernel has a centre
+    /// pixel and is symmetric - an even size would shift objects.
+    #[schemars(range(min = 3, max = 101))]
     pub kernel_size: usize,
     /// The geometric profile of the structuring element.
     pub kernel_shape: MorphologyMorphologicalTransformationKernelShapesSettings,
-    /// If set the grayscale image instead of the labeld image is taken to perform a morphological transform
+    /// If set the grayscale image instead of the labeled image is taken to perform a morphological transform.
+    ///
+    /// On the labeled image every class is transformed as its own mask: classes
+    /// grow into background only (Dilate) and touching classes shrink away from
+    /// each other equally (Erode), whatever their class numbers.
     pub use_grayscale: bool,
+}
+
+impl Default for MorphologicalCommandSettings {
+    fn default() -> Self {
+        Self {
+            op: MorphologyMorphologicalTransformationMorphOpsSettings::default(),
+            kernel_size: 3usize,
+            kernel_shape: MorphologyMorphologicalTransformationKernelShapesSettings::default(),
+            use_grayscale: bool::default(),
+        }
+    }
 }
 
 /// A filter that transforms pixels based on the statistical rank of their neighbors.

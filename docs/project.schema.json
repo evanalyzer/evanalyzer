@@ -2872,29 +2872,28 @@
       "properties": {
         "kernelShape": {
           "description": "The geometric profile of the structuring element.",
-          "$ref": "#/$defs/MorphologyMorphologicalTransformationKernelShapesSettings"
+          "$ref": "#/$defs/MorphologyMorphologicalTransformationKernelShapesSettings",
+          "default": "BOX"
         },
         "kernelSize": {
-          "description": "The diameter of the structuring element in pixels.\nMust be an odd number (e.g., 3, 5, 7).",
+          "description": "The diameter of the structuring element in pixels.\nMust be an odd number (e.g., 3, 5, 7), so the kernel has a centre\npixel and is symmetric - an even size would shift objects.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "default": 3,
+          "maximum": 101,
+          "minimum": 3
         },
         "op": {
           "description": "The transformation type (e.g., Dilate, Erode).",
-          "$ref": "#/$defs/MorphologyMorphologicalTransformationMorphOpsSettings"
+          "$ref": "#/$defs/MorphologyMorphologicalTransformationMorphOpsSettings",
+          "default": "DILATE"
         },
         "useGrayscale": {
-          "description": "If set the grayscale image instead of the labeld image is taken to perform a morphological transform",
-          "type": "boolean"
+          "description": "If set the grayscale image instead of the labeled image is taken to perform a morphological transform.\n\nOn the labeled image every class is transformed as its own mask: classes\ngrow into background only (Dilate) and touching classes shrink away from\neach other equally (Erode), whatever their class numbers.",
+          "type": "boolean",
+          "default": false
         }
-      },
-      "required": [
-        "op",
-        "kernelSize",
-        "kernelShape",
-        "useGrayscale"
-      ]
+      }
     },
     "MorphologyMorphologicalTransformationKernelShapesSettings": {
       "description": "The geometric structure of the kernel (structuring element).",

@@ -2237,6 +2237,40 @@ Nothing else in an analysis changed. The viewer shows a colour image's three
 curves only while its colours are linked (one more path per curve on that
 image; gray images unchanged).
 
+## Morphological Transform: centred ellipse, label-aware, own padding (2026-11-11)
+
+Fixes: the Ellipse kernel was centred half a pixel off (Open/Close shifted
+objects), even kernel sizes are rejected, and on the label map every class is
+transformed as its own mask (before: the window min/max let the class numbers
+decide where two classes touch). With one class (the usual case after a
+Threshold) the plain min/max run as before; the class check is fused into the
+padding copy (own constant padding: no fill pass for a 0 constant, rows copied
+on one thread - copying them in parallel was faster in wall time but cost
++7-19 % CPU, contended page faults).
+
+Command alone on a synthetic Threshold map (disks every 24 px), release,
+22 cores, old/new built in the same worktree and target dir, alternated, a
+fresh process per case (temporary harness, not in the repo). Kernel 3:
+
+| Case | 1 thread wall, old → new | 22 threads CPU, old → new | Peak RSS |
+|---|---|---|---|
+| 1024² Dilate Box, one class | 4.87 → 4.88 ms | 12.3 → 12.0 ms | 44 / 44 MB |
+| 2048² Dilate Box, one class | 25.3 → 25.4 ms | 46.8 → 45.8 ms | 127 / 127 MB |
+| 2048² Erode Cross, one class | 25.5 → 25.6 ms | 67.2 → 65.6 ms | 127 / 127 MB |
+| 2048² Close Box, one class | - | 86.0 → 82.3 ms | 127 / 127 MB |
+| 4096² Close Cross, one class (a slide tile) | - | 614 → 623 ms | 455 / 455 MB |
+| 2048² Dilate Ellipse 3 | 80.8 → 26.1 ms | 154 → 53 ms | allocated 16.1 / 16.0 MB |
+| 4096² Open Ellipse 7 | - | 8339 → 1365 ms | 327 / 326 MB |
+| 2048² Close Box, two classes | 44.8 → 80.2 ms | 82 → 183 ms | allocated 48 → 20 MB |
+
+Ellipse: 3-6× faster (the kernel's set pixels listed once instead of a
+bounds-checked `get_pixel` per kernel pixel); its result differs on purpose
+(the fixed kernel). Its process RSS was up to +16 MB at 2048² after 15
+back-to-back runs, but one run allocates the same (counting allocator) - glibc
+keeping freed blocks, not memory the command uses. Close with two or more
+classes is ~2× the CPU (each class closed as its own 1-byte mask; correct per
+class, before the class numbers decided) and needs less RAM.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

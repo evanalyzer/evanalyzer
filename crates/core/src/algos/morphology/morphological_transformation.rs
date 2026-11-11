@@ -63,14 +63,27 @@ pub struct MorphologicalCommand {
     pub op: MorphOps,
 
     /// The diameter of the structuring element in pixels.
-    /// Must be an odd number (e.g., 3, 5, 7).
+    /// Must be an odd number (e.g., 3, 5, 7), so the kernel has a centre
+    /// pixel and is symmetric - an even size would shift objects.
+    #[cmdsmeta(
+        default = 3,
+        min = 3,
+        max = 101,
+        step = 2,
+        display_name = "Kernel size",
+        summary = true
+    )]
     pub kernel_size: usize,
 
     /// The geometric profile of the structuring element.
     #[cmdsmeta(visibility = Advanced)]
     pub kernel_shape: KernelShapes,
 
-    /// If set the grayscale image instead of the labeld image is taken to perform a morphological transform
+    /// If set the grayscale image instead of the labeled image is taken to perform a morphological transform.
+    ///
+    /// On the labeled image every class is transformed as its own mask: classes
+    /// grow into background only (Dilate) and touching classes shrink away from
+    /// each other equally (Erode), whatever their class numbers.
     #[cmdsmeta(visibility = Advanced)]
     pub use_grayscale: bool,
 }
@@ -93,6 +106,8 @@ impl ImageAlgorithm for MorphologicalCommand {
     ///
     /// # Errors
     ///
+    /// Returns [`InternalErrors::InvalidArgument`] for an even `kernel_size`
+    /// (0 included): the kernel would have no centre pixel and shift objects.
     /// Returns [`InternalErrors::FormatMismatch`] if the image is not `F32Gray`,
     /// as morphological ops on floats require specific handling of infinity/NaN.
     fn execute(
@@ -100,6 +115,12 @@ impl ImageAlgorithm for MorphologicalCommand {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
+        if self.kernel_size % 2 == 0 {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Morphological Transform: the kernel size must be an odd number (3, 5, 7, ...), got {}",
+                self.kernel_size
+            )));
+        }
         if !self.use_grayscale {
             let (labels, scratch) = ctx.get_segmentation_map_u32_buf()?;
             self.apply_morph_u32(labels, scratch)?;
@@ -196,26 +217,16 @@ impl MorphologicalCommand {
         Ok(())
     }
 
-    /// Morphology for Unsigned Integers (Label/Mask images)
+    /// Morphology for label maps (class ids, 0 = background): every class
+    /// transformed as its own mask - see `ops::transform_labels`.
     fn apply_morph_u32(
         &self,
         input: &Image<u32, 1>,
         output: &mut Image<u32, 1>,
     ) -> Result<(), InternalErrors> {
         let kernel = self.get_kernel();
-        let pad_val: [u32; 1] = [0];
-
-        match self.op {
-            MorphOps::Dilate => ops::dilate(input, output, &kernel, PaddingMode::Constant, pad_val)
-                .map_err(InternalErrors::from_kornia)?,
-            MorphOps::Erode => ops::erode(input, output, &kernel, PaddingMode::Constant, pad_val)
-                .map_err(InternalErrors::from_kornia)?,
-            MorphOps::Open => ops::open(input, output, &kernel, PaddingMode::Constant, pad_val)
-                .map_err(InternalErrors::from_kornia)?,
-            MorphOps::Close => ops::close(input, output, &kernel, PaddingMode::Constant, pad_val)
-                .map_err(InternalErrors::from_kornia)?,
-        }
-        Ok(())
+        ops::transform_labels(self.op, input, output, &kernel, PaddingMode::Constant, [0])
+            .map_err(InternalErrors::from_kornia)
     }
 }
 
@@ -563,5 +574,196 @@ mod tests {
             use_grayscale: true,
         };
         assert_eq!(cmd.name(), "Morphological Transform");
+    }
+
+    // --- Kernel size, and Threshold followed by Morphological -------------
+
+    #[test]
+    fn even_kernel_sizes_are_rejected_odd_ones_run() {
+        for (size, ok) in [
+            (0, false),
+            (1, true),
+            (2, false),
+            (3, true),
+            (4, false),
+            (5, true),
+        ] {
+            let mut ctx = label_fixture();
+            let cmd = MorphologicalCommand {
+                op: MorphOps::Dilate,
+                kernel_size: size,
+                kernel_shape: KernelShapes::Box,
+                use_grayscale: false,
+            };
+            let result = cmd.execute(&mut ctx, &mut GlobalPipelineCache::default());
+            if ok {
+                assert!(result.is_ok(), "size {size}: {result:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(InternalErrors::InvalidArgument(_))),
+                    "size {size}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_settings_default_kernel_size_is_a_valid_odd_size() {
+        let settings =
+            evanalyzer_cfg::settings::pipeline_command_settings::MorphologicalCommandSettings::default();
+        assert_eq!(settings.kernel_size, 3);
+        let cmd = MorphologicalCommand::from(settings);
+        let mut ctx = label_fixture();
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+    }
+
+    /// Runs a manual Threshold (relative ranges → classes) on `img`, then
+    /// `morph` on its class map.
+    fn threshold_then_morph(
+        img: Image<f32, 1>,
+        ranges: &[(f32, f32, u32)],
+        morph: &MorphologicalCommand,
+    ) -> Vec<u32> {
+        use crate::algos::segmentation::threshold::{
+            Threshold, ThresholdEntry, ThresholdMethod, ThresholdValueSource,
+        };
+        use evanalyzer_cfg::core_types::{PixelUnits, SegmentationClass};
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let thresholds = ranges
+            .iter()
+            .map(|&(min, max, class)| ThresholdEntry {
+                method: ThresholdMethod::Manual,
+                min_threshold: min,
+                max_threshold: max,
+                segmentation_class: SegmentationClass(class),
+                unit: PixelUnits::Relative,
+                value_source: ThresholdValueSource::ActualImage,
+            })
+            .collect();
+        Threshold { thresholds }
+            .execute(&mut ctx, &mut cache)
+            .unwrap();
+        morph.execute(&mut ctx, &mut cache).unwrap();
+        ctx.segmentation_map.as_ref().unwrap().as_slice().to_vec()
+    }
+
+    #[test]
+    fn morphology_after_threshold_does_not_shift_objects() {
+        // A bright 7x7 square in the middle of a 21x21 image: every operation
+        // with every (symmetric) kernel must give a result that is still
+        // centred - mirror symmetric in x and y. The off-centre ellipse
+        // shifted it one pixel up-left in Open/Close.
+        let n = 21;
+        let mut img = Image::<f32, 1>::from_size_val(
+            ImageSize {
+                width: n,
+                height: n,
+            },
+            0.0,
+        )
+        .unwrap();
+        for y in 7..14 {
+            for x in 7..14 {
+                img.set_pixel(x, y, 0, 1.0).unwrap();
+            }
+        }
+        for op in [
+            MorphOps::Dilate,
+            MorphOps::Erode,
+            MorphOps::Open,
+            MorphOps::Close,
+        ] {
+            for shape in [
+                KernelShapes::Box,
+                KernelShapes::Cross,
+                KernelShapes::Ellipse,
+            ] {
+                for kernel_size in [3, 5, 7] {
+                    let cmd = MorphologicalCommand {
+                        op,
+                        kernel_size,
+                        kernel_shape: shape,
+                        use_grayscale: false,
+                    };
+                    let out = threshold_then_morph(img.clone(), &[(0.5, 1.0, 1)], &cmd);
+                    for y in 0..n {
+                        for x in 0..n {
+                            let v = out[y * n + x];
+                            assert_eq!(
+                                v,
+                                out[y * n + (n - 1 - x)],
+                                "{op:?} {shape:?} {kernel_size}: x shifted"
+                            );
+                            assert_eq!(
+                                v,
+                                out[(n - 1 - y) * n + x],
+                                "{op:?} {shape:?} {kernel_size}: y shifted"
+                            );
+                        }
+                    }
+                    // Open and Close of a square by a kernel smaller than it
+                    // keep its centre and never reach the image border.
+                    assert_eq!(out[10 * n + 10], 1, "{op:?} {shape:?} {kernel_size}");
+                    assert_eq!(out[0], 0, "{op:?} {shape:?} {kernel_size}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn morphology_after_a_threshold_with_two_touching_classes_treats_both_alike() {
+        // Left half of a block dim (class 2), right half bright (class 9).
+        let (w, h) = (14, 7);
+        let mut img = Image::<f32, 1>::from_size_val(
+            ImageSize {
+                width: w,
+                height: h,
+            },
+            0.0,
+        )
+        .unwrap();
+        for y in 1..6 {
+            for x in 1..13 {
+                img.set_pixel(x, y, 0, if x < 7 { 0.4 } else { 0.9 })
+                    .unwrap();
+            }
+        }
+        let ranges = [(0.2, 0.6, 2), (0.6, 1.0, 9)];
+        let run = |op| {
+            let cmd = MorphologicalCommand {
+                op,
+                kernel_size: 3,
+                kernel_shape: KernelShapes::Box,
+                use_grayscale: false,
+            };
+            threshold_then_morph(img.clone(), &ranges, &cmd)
+        };
+        let row = |v: &[u32]| v[3 * w..4 * w].to_vec();
+        // Erode: both classes give up the column at their shared border
+        // (the window minimum let class 2 eat into class 9).
+        assert_eq!(
+            row(&run(MorphOps::Erode)),
+            [0, 0, 2, 2, 2, 2, 0, 0, 9, 9, 9, 9, 0, 0]
+        );
+        // Dilate: both grow into the background only (the window maximum let
+        // class 9 overwrite a column of class 2).
+        assert_eq!(
+            row(&run(MorphOps::Dilate)),
+            [2, 2, 2, 2, 2, 2, 2, 9, 9, 9, 9, 9, 9, 9]
+        );
+        // Close: no gap opened between them, nothing overwritten.
+        let threshold_only = threshold_then_morph(
+            img.clone(),
+            &ranges,
+            &MorphologicalCommand {
+                op: MorphOps::Dilate,
+                kernel_size: 1,
+                kernel_shape: KernelShapes::Box,
+                use_grayscale: false,
+            },
+        );
+        assert_eq!(run(MorphOps::Close), threshold_only);
     }
 }

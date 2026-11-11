@@ -235,10 +235,16 @@ pub fn cross_kernel(size: usize) -> Kernel {
 /// # Returns
 ///
 /// A [`Kernel`] with 1s inside the ellipse boundary.
+///
+/// The ellipse is centred on the kernel's centre pixel (`(n - 1) / 2`, the
+/// origin the operations use for odd sizes - see [`Kernel::pad`]) and has
+/// the radii `width / 2` and `height / 2`, measured to pixel centres. A
+/// centre at `n / 2` (half a pixel too far right/down) made the kernel
+/// asymmetric, which shifted objects in Open/Close.
 pub fn ellipse_kernel(width: usize, height: usize) -> Kernel {
     let mut data = vec![0u8; width * height];
-    let cx = width as f32 / 2.0;
-    let cy = height as f32 / 2.0;
+    let cx = (width as f32 - 1.0) / 2.0;
+    let cy = (height as f32 - 1.0) / 2.0;
     let rx = width as f32 / 2.0;
     let ry = height as f32 / 2.0;
 
