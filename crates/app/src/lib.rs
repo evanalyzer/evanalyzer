@@ -30,6 +30,12 @@ pub mod ai {
     pub use evanalyzer_core::ai_devices::parse_gpu_slots;
 }
 
+/// One stored object's solidity and Feret diameters, as the results
+/// columns compute them - for the selected object's card.
+pub mod object_shape {
+    pub use evanalyzer_core::{StoredObjectShape, stored_object_shape};
+}
+
 /// A step's settings as the editor shows and changes them - the generated
 /// ones, and a Script step's `param`s (declared in its script).
 pub mod settings_of {

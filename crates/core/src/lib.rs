@@ -34,6 +34,7 @@ static ALLOCATOR: tests::counting_allocator::CountingAllocator =
 pub use crate::job::job_generator::{check_image_paths, random_job_name};
 pub use crate::memory::analysis::{MAX_TILE_SIZE, estimate_ram_budget, recommended_parallelism};
 pub use crate::memory::{SystemDiagnostics, cpu_ram_diagnostics, system_diagnostics};
+pub use crate::object::shape::{StoredObjectShape, stored_object_shape};
 pub use crate::storage::duckdb::shared_connection as open_results_database;
 pub use crate::storage::duckdb::{RESULTS_SCHEMA_VERSION, ResultsConnection, reject_newer_results};
 pub use crate::storage::mask_codec::{decode_mask, encode_mask};

@@ -1,7 +1,7 @@
 //! # object_card
 //!
 //! The selected object's card (`ui/editor/object_details.slint`), by
-//! section: size and shape (from its mask), intensity per channel (a colour
+//! section: size and shape (from its mask; area and circularity as tiles), intensity per channel (a colour
 //! image: one row, its brightness), the values the preview's Measure steps
 //! gave it, and its relations. Built for the selected object only, when it
 //! is selected - nothing for the other objects.
@@ -55,8 +55,15 @@ pub(crate) fn object_card(
         .chain((context.label_count > 1).then(|| format!("{} same label", context.label_count)))
         .collect::<Vec<_>>()
         .join(" · ");
+    let um = micrometers_per_pixel(&pixel_sizes);
+    let (area, area_extra) = area_tile(object, um);
+    let (circularity, circularity_fraction) = circularity_tile(object);
     ObjectCardSlint {
-        shape: model(shape(object, &pixel_sizes)),
+        area: area.into(),
+        area_extra: area_extra.into(),
+        circularity: circularity.into(),
+        circularity_fraction,
+        shape: model(shape(object, um)),
         intensity_rows: model(intensity_rows(object, project, rgb, context.nr_of_bits)),
         step_groups: model(step_groups),
         step_count: step_count as i32,
@@ -83,16 +90,47 @@ fn micrometers_per_pixel(pixel_sizes: &PixelSizeSettings) -> Option<(f64, f64)> 
         .then(|| (pixel_sizes.x as f64 / 1000.0, pixel_sizes.y as f64 / 1000.0))
 }
 
-/// Size and shape, from the mask: area, perimeter, circularity, the fitted
-/// ellipse, centre, box, plane - µm beside px once the pixel size is known.
-fn shape(object: &ObjectMetricSettings, pixel_sizes: &PixelSizeSettings) -> Vec<CardFact> {
-    let um = micrometers_per_pixel(pixel_sizes);
-    let mut facts = vec![fact(
-        "Area",
+/// The area tile: px², and µm² once the pixel size is known.
+fn area_tile(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> (String, String) {
+    (
         format!("{} px²", object.area),
         um.map(|(x, y)| format!("{} µm²", number(object.area as f64 * x * y)))
             .unwrap_or_default(),
-    )];
+    )
+}
+
+/// The circularity tile: the value and 0..1 for its bar - "–" without a
+/// perimeter.
+fn circularity_tile(object: &ObjectMetricSettings) -> (String, f32) {
+    if object.perimeter <= 0.0 {
+        return ("–".into(), 0.0);
+    }
+    let p = object.perimeter as f64;
+    let circularity = (4.0 * std::f64::consts::PI * object.area as f64 / (p * p)).min(1.0);
+    (format!("{circularity:.2}"), circularity as f32)
+}
+
+/// Size and shape below the tiles, from the mask: solidity, aspect ratio,
+/// perimeter, max and min Feret, the fitted ellipse, centre, box, plane -
+/// µm beside px once the pixel size is known. Solidity, aspect ratio and
+/// Feret as the results columns compute them.
+fn shape(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> Vec<CardFact> {
+    let mut facts = Vec::new();
+    let ellipse = ellipse(object);
+    let outline =
+        (object.area > 0).then(|| evanalyzer_app::object_shape::stored_object_shape(object));
+    if let Some(outline) = outline {
+        facts.push(fact("Solidity", format!("{:.2}", outline.solidity), ""));
+    }
+    if let Some((major, minor, _)) = ellipse {
+        // As `Object::get_aspect_ratio` (the results column): 1 for a line.
+        let aspect_ratio = if minor > 0.0 { major / minor } else { 1.0 };
+        facts.push(fact(
+            "Aspect ratio",
+            format!("{aspect_ratio:.2}"),
+            "major / minor",
+        ));
+    }
     if object.perimeter > 0.0 {
         let p = object.perimeter as f64;
         facts.push(fact(
@@ -101,14 +139,23 @@ fn shape(object: &ObjectMetricSettings, pixel_sizes: &PixelSizeSettings) -> Vec<
             um.map(|(x, y)| format!("{} µm", number(p * (x + y) / 2.0)))
                 .unwrap_or_default(),
         ));
-        let circularity = 4.0 * std::f64::consts::PI * object.area as f64 / (p * p);
-        facts.push(fact(
-            "Circularity",
-            format!("{:.2}", circularity.min(1.0)),
-            "",
-        ));
     }
-    if let Some((major, minor, eccentricity)) = ellipse(object) {
+    if let Some(outline) = outline {
+        // Two rows, as the results columns: both on one row don't fit
+        // the card with µm.
+        for (label, px) in [
+            ("Max Feret", outline.max_feret),
+            ("Min Feret", outline.min_feret),
+        ] {
+            facts.push(fact(
+                label,
+                format!("{} px", number(px)),
+                um.map(|(x, y)| format!("{} µm", number(px * (x + y) / 2.0)))
+                    .unwrap_or_default(),
+            ));
+        }
+    }
+    if let Some((major, minor, eccentricity)) = ellipse {
         facts.push(fact(
             "Ellipse",
             format!("{} × {} px", number(major), number(minor)),
@@ -356,25 +403,57 @@ mod tests {
             sum_x2: s2 * side,
             sum_y2: s2 * side,
             sum_xy: s * s,
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; n as usize],
             ..Default::default()
         }
     }
 
     #[test]
-    fn the_shape_has_area_perimeter_ellipse_centre_and_box() {
-        let unknown = PixelSizeSettings {
-            x: 0.0,
-            y: 0.0,
-            z: None,
+    fn area_and_circularity_are_tiles_the_rest_rows() {
+        let (area, extra) = area_tile(&square(10), None);
+        assert_eq!(area, "100 px²");
+        assert_eq!(extra, "", "no µm while the pixel size is unknown");
+        let (_, extra) = area_tile(&square(10), Some((0.5, 0.5)));
+        assert_eq!(extra, "25.0 µm²");
+
+        // 4π·100 / 40² = 0.785.
+        let (circularity, fraction) = circularity_tile(&square(10));
+        assert_eq!(circularity, "0.79");
+        assert!((fraction - 0.785).abs() < 1e-3);
+        let no_perimeter = ObjectMetricSettings {
+            perimeter: 0.0,
+            ..square(10)
         };
-        let facts = shape(&square(10), &unknown);
-        let get = |label: &str| facts.iter().find(|f| f.label == label).cloned().unwrap();
-        assert_eq!(get("Area").value, "100 px²");
+        assert_eq!(circularity_tile(&no_perimeter), ("–".into(), 0.0));
+
+        let facts = shape(&square(10), None);
+        let labels: Vec<_> = facts.iter().map(|f| f.label.to_string()).collect();
         assert_eq!(
-            get("Area").extra,
-            "",
-            "no µm while the pixel size is unknown"
+            labels,
+            [
+                "Solidity",
+                "Aspect ratio",
+                "Perimeter",
+                "Max Feret",
+                "Min Feret",
+                "Ellipse",
+                "Centre",
+                "Box",
+                "Plane"
+            ]
         );
+    }
+
+    #[test]
+    fn the_rows_have_solidity_aspect_ratio_feret_perimeter_ellipse_centre_and_box() {
+        let facts = shape(&square(10), None);
+        let get = |label: &str| facts.iter().find(|f| f.label == label).cloned().unwrap();
+        assert_eq!(get("Solidity").value, "1.00", "a square is convex");
+        assert_eq!(get("Aspect ratio").value, "1.00");
+        // Over the pixel centres: the diagonal 9·√2 and the side 9.
+        assert_eq!(get("Max Feret").value, "12.7 px");
+        assert_eq!(get("Min Feret").value, "9.00 px");
+        assert_eq!(get("Max Feret").extra, "");
         assert_eq!(get("Perimeter").value, "40.0 px");
         assert_eq!(get("Centre").value, "x 4 · y 4");
         assert_eq!(get("Box").value, "10 × 10 px");
@@ -383,13 +462,11 @@ mod tests {
             "a square: round"
         );
 
-        let known = PixelSizeSettings {
-            x: 500.0,
-            y: 500.0,
-            z: None,
-        };
-        let facts = shape(&square(10), &known);
-        assert_eq!(facts[0].extra, "25.0 µm²");
+        let facts = shape(&square(10), Some((0.5, 0.5)));
+        let get = |label: &str| facts.iter().find(|f| f.label == label).cloned().unwrap();
+        assert_eq!(get("Max Feret").extra, "6.36 µm");
+        assert_eq!(get("Min Feret").extra, "4.50 µm");
+        assert_eq!(get("Perimeter").extra, "20.0 µm");
     }
 
     #[test]

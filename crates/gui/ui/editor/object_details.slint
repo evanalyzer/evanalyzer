@@ -3,8 +3,9 @@
 
 // editor/object_details.slint — the selected object's details, in a card
 // beside the Objects panel (left of it, level with the list's selected
-// line): its classes (removable on a manual one), area, circularity, and
-// the mean and sum of each channel. Its actions are in the list's line.
+// line): its classes (removable on a manual one), area and circularity
+// as tiles, the other shape values, and the mean and sum of each channel.
+// Its actions are in the list's line.
 
 import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
 import { Ink, InkCaption, InkChip, InkIconButton, InkIcons, InkFact } from "../ink/ink.slint";
@@ -61,6 +62,61 @@ component CardSection inherits Rectangle {
                     root.action-clicked();
                 }
             }
+        }
+    }
+}
+
+// A tile of the size & shape section: a most-used value, large, with a
+// caption above and below it either a second unit (`extra`) or a 0..1
+// bar (`bar`, `fraction`).
+component CardTile inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> extra;
+    in property <bool> bar;
+    in property <float> fraction;
+
+    horizontal-stretch: 1;
+    background: Ink.raised;
+    border-radius: Ink.radius-md;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        Text {
+            text: root.label;
+            font-size: Ink.fs-caption;
+            color: Ink.text-dim;
+        }
+        Text {
+            text: root.value;
+            font-size: Ink.fs-title;
+            font-family: Ink.font-mono;
+            color: Ink.text;
+            overflow: elide;
+        }
+        if root.bar: VerticalLayout {
+            alignment: center;
+            height: 14px;
+            Rectangle {
+                height: 4px;
+                border-radius: 2px;
+                background: Ink.border;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(root.fraction, 0, 1);
+                    border-radius: 2px;
+                    background: Ink.focus;
+                }
+            }
+        }
+        if !root.bar: Text {
+            height: 14px;
+            text: root.extra;
+            font-size: Ink.fs-caption;
+            font-family: Ink.font-mono;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
         }
     }
 }
@@ -181,13 +237,31 @@ export component ObjectDetails inherits Rectangle {
         CardSection {
             title: "SIZE & SHAPE";
             open: ObjectListState.card-shape-open;
+            summary: ObjectListState.selected-card.area + " · circ. " + ObjectListState.selected-card.circularity;
             toggled => {
                 ObjectListState.card-shape-open = !ObjectListState.card-shape-open;
             }
         }
         if ObjectListState.card-shape-open: VerticalLayout {
             spacing: 0px;
+            // The two most-used values as tiles, the others as rows.
+            HorizontalLayout {
+                spacing: 6px;
+                padding-bottom: 6px;
+                CardTile {
+                    label: "Area";
+                    value: ObjectListState.selected-card.area;
+                    extra: ObjectListState.selected-card.area-extra;
+                }
+                CardTile {
+                    label: "Circularity";
+                    value: ObjectListState.selected-card.circularity;
+                    bar: true;
+                    fraction: ObjectListState.selected-card.circularity-fraction;
+                }
+            }
             for f in ObjectListState.selected-card.shape: InkFact {
+                label-width: 84px;
                 label: f.label;
                 value: f.value;
                 extra: f.extra;

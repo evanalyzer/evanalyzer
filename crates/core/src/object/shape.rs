@@ -12,7 +12,34 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use super::Object;
+use super::{Object, ObjectInit};
+use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+
+/// A stored object's solidity and Feret diameters, as the results columns
+/// compute them (`Object::get_solidity`, `Object::feret_diameters`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StoredObjectShape {
+    pub solidity: f32,
+    pub min_feret: f64,
+    pub max_feret: f64,
+}
+
+/// [`StoredObjectShape`] of one stored object - for showing a single
+/// object (the selected object's card), not for many: it copies the mask.
+pub fn stored_object_shape(object: &ObjectMetricSettings) -> StoredObjectShape {
+    let object = Object::new(ObjectInit {
+        area: object.area,
+        bbox: object.bbox,
+        mask_data: object.mask_data.clone(),
+        ..Default::default()
+    });
+    let (min_feret, max_feret) = object.feret_diameters();
+    StoredObjectShape {
+        solidity: object.get_solidity(),
+        min_feret,
+        max_feret,
+    }
+}
 
 /// The radii of an object: the distances of its pixels to the nearest
 /// pixel outside it.
@@ -705,6 +732,33 @@ mod tests {
     use crate::object::ObjectInit;
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::ObjectId;
+
+    #[test]
+    fn a_stored_objects_shape_is_the_results_columns_shape() {
+        // An L (concave): 4 × 4 box, the top right 2 × 2 cut out.
+        let mut mask = bitvec![u64, Lsb0; 1; 16];
+        for i in [2, 3, 6, 7] {
+            mask.set(i, false);
+        }
+        let stored = ObjectMetricSettings {
+            area: 12,
+            bbox: [10, 20, 13, 23],
+            mask_data: mask.clone(),
+            ..Default::default()
+        };
+        let object = Object::new(ObjectInit {
+            area: 12,
+            bbox: [10, 20, 13, 23],
+            mask_data: mask,
+            ..Default::default()
+        });
+        let shape = stored_object_shape(&stored);
+        assert_eq!(shape.solidity, object.get_solidity());
+        assert!(shape.solidity < 1.0, "an L is concave");
+        let (min, max) = object.feret_diameters();
+        assert_eq!((shape.min_feret, shape.max_feret), (min, max));
+        assert!(max > 0.0);
+    }
 
     #[derive(serde::Deserialize)]
     struct Case {

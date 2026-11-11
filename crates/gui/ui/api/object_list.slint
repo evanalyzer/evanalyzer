@@ -69,6 +69,14 @@ export struct CardStepGroup {
 // The selected object's card, by section - filled for the selected object
 // only.
 export struct ObjectCardSlint {
+    // The two most-used values, as tiles: the area ("1284 px²", µm² in
+    // `area-extra` once the pixel size is known) and the circularity
+    // ("0.80"; "–" without a perimeter) with 0..1 for its bar.
+    area: string,
+    area-extra: string,
+    circularity: string,
+    circularity-fraction: float,
+    // The other size and shape values, as rows.
     shape: [CardFact],
     intensity-rows: [CardIntensityRow],
     step-groups: [CardStepGroup],
