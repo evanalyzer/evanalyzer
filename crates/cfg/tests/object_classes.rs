@@ -52,15 +52,6 @@ fn object_commands_report_inputs_filters_and_outputs() {
 }
 
 #[test]
-fn save_image_reports_its_display_classes() {
-    let save = PipelineCommand::SaveImage(SaveImageSettings {
-        display_classes: vec![ObjectClass::Global(2), ObjectClass::Global(5)],
-        ..Default::default()
-    });
-    assert_eq!(save.object_classes(), [2, 5].map(ObjectClass::Global));
-}
-
-#[test]
 fn classes_inside_an_enum_variant_are_reported() {
     let coloc = PipelineCommand::ColocalizeObjects(ColocalizeObjectsSettings {
         multiplicity: ObjectColocObjectsColocMultiplicitySettings::MultiFor(vec![
@@ -181,4 +172,16 @@ fn object_commands_report_all_their_classes() {
 fn image_filters_have_no_classes() {
     let blur = PipelineCommand::GaussianBlur(GaussianBlurSettings::default());
     assert!(blur.object_classes().is_empty());
+}
+
+/// Save Image no longer draws classes (removed 2026-11-11 - objects are drawn
+/// by Results › Export › Images with objects drawn): a project saved with
+/// them still loads, its classes no longer counted.
+#[test]
+fn a_save_image_with_the_old_display_classes_still_loads() {
+    let save: PipelineCommand = serde_json::from_str(
+        r#"{ "type": "SAVE_IMAGE", "name": "control", "displayClasses": ["G2"], "opacity": 30 }"#,
+    )
+    .expect("loads");
+    assert!(save.object_classes().is_empty());
 }

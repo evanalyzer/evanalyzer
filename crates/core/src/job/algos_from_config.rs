@@ -1221,9 +1221,7 @@ impl From<SaveImageSettings> for SaveImage {
     fn from(_s: SaveImageSettings) -> Self {
         SaveImage {
             name: _s.name,
-            display_classes: _s.display_classes.into_iter().map(|v| v.into()).collect(),
             source: ImageSource::from(_s.source),
-            opacity: _s.opacity,
         }
     }
 }

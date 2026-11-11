@@ -4013,23 +4013,15 @@ pub struct ImageCacheSettings {
 pub struct SaveImageSettings {
     /// Name the image should be stord under
     pub name: String,
-    /// Shows the selected classes in the image
-    pub display_classes: Vec<ObjectClass>,
     /// Which image from the pipeline should be stored
     pub source: MathSaveImageImageSourceSettings,
-    /// Opacity in percent of the filled `display_classes` objects (0 = only
-    /// the contours, 100 = solid). Contours are always drawn opaque.
-    #[schemars(range(min = 0, max = 100))]
-    pub opacity: u32,
 }
 
 impl Default for SaveImageSettings {
     fn default() -> Self {
         Self {
             name: String::default(),
-            display_classes: vec![],
             source: MathSaveImageImageSourceSettings::Image,
-            opacity: 50u32,
         }
     }
 }

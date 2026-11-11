@@ -537,19 +537,19 @@ mod tests {
 
     #[test]
     fn a_modules_own_class_from_a_param_reaches_a_command() {
-        // Save Image needs an output folder the test doesn't have - what
+        // Extract Objects needs a segmentation the test doesn't have - what
         // matters is that the class got past the checks.
         let result = run_with(
             r#"
             param cell: class = 1;
-            run("save_image", #{ "display_classes": [cell] });
+            run("extract_objects", #{ "class_mapping.0.object_class": cell });
         "#,
             vec![param("cell", ParamValue::Text("L1".into()))],
         );
         if let Err(e) = result {
             let e = e.to_string();
             assert!(
-                e.contains("No output path"),
+                !e.contains("class"),
                 "\"L1\" must be a class a command takes: {e}"
             );
         }
